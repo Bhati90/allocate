@@ -1,11 +1,14 @@
 from rest_framework import viewsets, parsers, status, permissions
 from rest_framework.response import Response
 from .models import Mukkadam,ActivityLog,Allocation
-from .serializers import MukkadamFullSerializer, MukkadamListSerializer,MukkadamDropdownSerializer,AllocationSerializer
+from .serializers import MukkadamFullSerializer,MukkadamQuickRegistrationSerializer, MukkadamListSerializer,MukkadamDropdownSerializer,AllocationSerializer
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import action
 from rest_framework.response import Response
 import json
+
+from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
+
 
 class MukkadamManagementViewSet(viewsets.ModelViewSet):
     queryset = Mukkadam.objects.all().order_by('-updated_at')
@@ -101,6 +104,60 @@ class MukkadamManagementViewSet(viewsets.ModelViewSet):
             'village', 'crew_size', 'has_smartphone','preferred_work_locations', 'work_mode'
         )
         return Response(list(mukkadams))
+    
+
+    @action(
+    detail=False,
+    methods=['post'],
+    permission_classes=[AllowAny],
+    parser_classes=[JSONParser]   # ✅ THIS FIXES IT
+    )
+    def quick_register(self, request):
+        serializer = MukkadamQuickRegistrationSerializer(data=request.data)
+
+        if serializer.is_valid():
+            existing = Mukkadam.objects.filter(
+                mobile_numbers=serializer.validated_data['mobile_numbers']
+            ).first()
+
+            if existing:
+                return Response(
+                    {
+                        'error': 'Mukkadam with this mobile number already exists',
+                        'existing_mukkadam': {
+                            'id': existing.id,
+                            'name': existing.mukkadam_name,
+                            'village': existing.village
+                        }
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            mukkadam = serializer.save(
+                has_smartphone='no',
+                transport_mode='no_vehicle',
+                work_mode='daily_up_down',
+                created_by=request.user if request.user.is_authenticated else None
+            )
+
+            ActivityLog.objects.create(
+                mukkadam=mukkadam,
+                user=request.user if request.user.is_authenticated else None,
+                action_type="Quick Registration",
+                details=f"Quick registered with {mukkadam.crew_size} workers"
+            )
+
+            return Response(
+                {
+                    'message': 'Mukkadam registered successfully',
+                    'data': serializer.data
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
     
 
 from rest_framework import viewsets, status, filters

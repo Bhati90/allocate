@@ -30,6 +30,9 @@ class Mukkadam(models.Model):
     deputy_mukkadam_name = models.CharField(max_length=255, blank=True, null=True)
     deputy_mukkadam_mobile = models.CharField(max_length=20, blank=True, null=True)
 
+
+    is_permanent = models.BooleanField(default=False, help_text="Is this mukkadam permanent with us?")
+
     # --- 2a. Team Members (Nested Array) ---
     # Stores: [{"name": "...", "mobile": "..."}]
     team_members = models.JSONField(default=list, blank=True)

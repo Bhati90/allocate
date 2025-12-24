@@ -53,6 +53,24 @@ class MukkadamMinimalSerializer(serializers.ModelSerializer):
         ]
 
 
+class MukkadamQuickRegistrationSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for quick mukkadam registration
+    Only requires: name, village, mobile, crew_size, is_permanent
+    """
+    class Meta:
+        model = Mukkadam
+        fields = [
+            'id',
+            'mukkadam_name',
+            'village',
+            'mobile_numbers',
+            'crew_size',
+            'is_permanent',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+        
 from rest_framework import serializers
 from .models import Job, JobAssignment, Mukkadam, AssignmentLog
 
