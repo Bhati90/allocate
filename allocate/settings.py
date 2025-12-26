@@ -35,7 +35,7 @@ INSTALLED_APPS = [
 
     'corsheaders',
     
-    'core',
+    'data',
   
     'storages',
     'rest_framework',
@@ -44,6 +44,16 @@ INSTALLED_APPS = [
 
 ]
 
+# REST Framework Configuration
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',  # Default is open, views can override
+    ],
+}
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',  # Add this for static files
@@ -73,6 +83,7 @@ TEMPLATES = [
         },
     },
 ]
+# In settings.py, add:
 
 # settings.py
 
