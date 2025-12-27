@@ -1,7 +1,7 @@
-# serializers.py
+# allocation_app/serializers.py
 
 from rest_framework import serializers
-from .models import Job, JobActivity, Allocation, AllocationStats
+from .models import JobActivity, Allocation, AllocationStats
 from django.contrib.auth.models import User
 
 
@@ -20,47 +20,44 @@ class UserSerializer(serializers.ModelSerializer):
 class JobActivitySerializer(serializers.ModelSerializer):
     remaining_area = serializers.ReadOnlyField()
     is_fully_allocated = serializers.ReadOnlyField()
-    activity_display = serializers.CharField(source='get_activity_type_display', read_only=True)
     
     class Meta:
         model = JobActivity
         fields = [
             'id',
+            'job_id',
+            'activity_id',
+            'activity_name',
             'activity_type',
-            'activity_display',
             'location',
             'total_area',
             'allocated_area',
             'remaining_area',
-            'scheduled_date',
-            'estimated_workers_needed',
+            'scheduled_datetime',
+            'estimated_workers',
             'rate_per_acre',
-            'is_fully_allocated'
-        ]
-
-
-class JobSerializer(serializers.ModelSerializer):
-    activities = JobActivitySerializer(many=True, read_only=True)
-    
-    class Meta:
-        model = Job
-        fields = [
-            'id',
-            'job_id',
-            'farmer_name',
-            'farmer_contact',
+            'total_price',
+            'transport_cost',
+            'other_cost',
+            'subtotal',
+            'is_fully_allocated',
             'created_at',
-            'updated_at',
-            'status',
-            'notes',
-            'activities'
+            'updated_at'
         ]
-        
+        read_only_fields = ['id', 'remaining_area', 'is_fully_allocated', 'created_at', 'updated_at']
+
+
 class AllocationSerializer(serializers.ModelSerializer):
     allocated_by = UserSerializer(read_only=True)
     created_by = serializers.SerializerMethodField()
-    activity_name = serializers.CharField(source='job_activity.get_activity_type_display', read_only=True)
-    job_id = serializers.CharField(source='job_activity.job.job_id', read_only=True)
+    activity_name = serializers.CharField(
+        source='job_activity.activity_name', 
+        read_only=True
+    )
+    job_id = serializers.CharField(
+        source='job_activity.job_id', 
+        read_only=True
+    )
     total_cost = serializers.ReadOnlyField()
     
     job_activity = serializers.PrimaryKeyRelatedField(
@@ -80,7 +77,7 @@ class AllocationSerializer(serializers.ModelSerializer):
             'mukkadam_id',
             'allocated_area',
             'work_date',
-            'crew_size',  # ✅ ADD THIS
+            'crew_size',
             'mukkadam_price',
             'transport_type',
             'transport_provider_id',
@@ -94,13 +91,23 @@ class AllocationSerializer(serializers.ModelSerializer):
             'status',
             'notes',
         ]
-        read_only_fields = ['id', 'allocated_at', 'completed_at', 'allocated_by', 'total_cost']
+        read_only_fields = [
+            'id', 
+            'allocated_at', 
+            'completed_at', 
+            'allocated_by', 
+            'total_cost',
+            'farmer_work_id',
+            'job_id',
+            'activity_name'
+        ]
     
     def get_created_by(self, obj):
         if obj.allocated_by:
             return UserSerializer(obj.allocated_by).data
         return None
-    
+
+
 class AllocationStatsSerializer(serializers.ModelSerializer):
     class Meta:
         model = AllocationStats
