@@ -1,0 +1,1696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorkCrop - Complete Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes slideDown {
+            from { opacity: 0; max-height: 0; }
+            to { opacity: 1; max-height: 3000px; }
+        }
+        .slide-down {
+            animation: slideDown 0.3s ease-out;
+        }
+        .rotate-180 {
+            transform: rotate(180deg);
+        }
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .filter-chip {
+            transition: all 0.2s;
+        }
+        .filter-chip:hover {
+            transform: scale(1.05);
+        }
+        .logic-toggle {
+            transition: all 0.2s;
+        }
+        .logic-and {
+            background: #3B82F6;
+            color: white;
+        }
+        .logic-or {
+            background: #10B981;
+            color: white;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <!-- Mobile Header -->
+    <header class="bg-gradient-to-r from-green-600 to-blue-600 shadow-lg sticky top-0 z-50">
+        <div class="px-4 py-3">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-2">
+                    <div class="bg-white p-1.5 rounded-lg">
+                        <span class="text-xl">🌾</span>
+                    </div>
+                    <div class="text-white">
+                        <h1 class="text-lg font-bold">WorkCrop</h1>
+                        <p class="text-xs text-green-100">मुक्कादम व्यवस्थापन</p>
+                    </div>
+                </div>
+                <button onclick="toggleMenu()" class="text-white p-2">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Mobile Navigation -->
+        <div id="mobileMenu" class="hidden border-t border-green-500">
+            <div class="flex overflow-x-auto px-4 py-2 space-x-2 scrollbar-hide">
+                <button onclick="showView('dashboard')" class="view-btn active flex-shrink-0 px-4 py-2 bg-white text-green-700 rounded-lg font-semibold text-sm">
+                    📊 Dashboard
+                </button>
+                <button onclick="showView('availability')" class="view-btn flex-shrink-0 px-4 py-2 text-white hover:bg-white hover:bg-opacity-20 rounded-lg font-semibold text-sm">
+                    📅 Manage Availability
+                </button>
+                <button onclick="showView('profile')" class="view-btn flex-shrink-0 px-4 py-2 text-white hover:bg-white hover:bg-opacity-20 rounded-lg font-semibold text-sm">
+                    👤 Profile
+                </button>
+                <button onclick="showView('villages')" class="view-btn flex-shrink-0 px-4 py-2 text-white hover:bg-white hover:bg-opacity-20 rounded-lg font-semibold text-sm">
+                    🏘️ Villages
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Dashboard View -->
+    <div id="view-dashboard" class="view-content">
+        <!-- Quick Stats -->
+        <div class="bg-white border-b shadow-sm">
+            <div class="px-4 py-3">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                    <div class="bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-lg">
+                        <p class="text-xs text-gray-600 font-medium">Total</p>
+                        <p class="text-2xl font-bold text-gray-800" id="stat-total">1,248</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-green-50 to-green-100 p-3 rounded-lg">
+                        <p class="text-xs text-green-700 font-medium">Active</p>
+                        <p class="text-2xl font-bold text-green-600" id="stat-active">892</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-purple-50 to-purple-100 p-3 rounded-lg">
+                        <p class="text-xs text-purple-700 font-medium">Workers</p>
+                        <p class="text-2xl font-bold text-purple-600" id="stat-workers">18.4K</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-orange-50 to-orange-100 p-3 rounded-lg">
+                        <p class="text-xs text-orange-700 font-medium">Avg Crew</p>
+                        <p class="text-2xl font-bold text-orange-600" id="stat-avg-crew">14.7</p>
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                    <div class="bg-gradient-to-br from-cyan-50 to-cyan-100 p-2 rounded-lg text-center">
+                        <p class="text-xs text-cyan-700 font-medium">Avg Crew Size</p>
+                        <p class="text-xl font-bold text-cyan-600" id="stat-avg-crew-size">14.7</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-teal-50 to-teal-100 p-2 rounded-lg text-center">
+                        <p class="text-xs text-teal-700 font-medium">Working Today</p>
+                        <p class="text-xl font-bold text-teal-600" id="stat-working-today">342</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-indigo-50 to-indigo-100 p-2 rounded-lg text-center">
+                        <p class="text-xs text-indigo-700 font-medium">Available Today</p>
+                        <p class="text-xl font-bold text-indigo-600" id="stat-available-today">550</p>
+                    </div>
+                    <div class="bg-gradient-to-br from-pink-50 to-pink-100 p-2 rounded-lg text-center">
+                        <p class="text-xs text-pink-700 font-medium">Villages</p>
+                        <p class="text-xl font-bold text-pink-600" id="stat-villages">148</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Compact Filters - Collapsible -->
+        <div class="bg-white border-b shadow-sm">
+            <div class="px-4 py-2">
+                <button onclick="toggleFilters()" class="w-full flex items-center justify-between py-2">
+                    <span class="text-sm font-bold text-gray-800">🎯 Filters (Real-time)</span>
+                    <svg id="filter-arrow" class="w-5 h-5 text-gray-600 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                    </svg>
+                </button>
+                
+                <div id="filters-section" class="space-y-3 pb-3 hidden">
+                    <!-- Village Filter -->
+                    <div class="border-l-4 border-blue-500 pl-3">
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="text-xs font-semibold text-gray-700">📍 Village</label>
+                            <div class="flex gap-1">
+                                <button onclick="toggleLogic('village', 'or')" id="village-or-btn" class="logic-toggle logic-or px-2 py-0.5 rounded text-xs font-bold">OR</button>
+                                <button onclick="toggleLogic('village', 'and')" id="village-and-btn" class="logic-toggle bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs font-bold">AND</button>
+                            </div>
+                        </div>
+                        <input type="text" id="villageFilter" placeholder="Type & press Enter..." class="w-full px-2 py-1 border rounded text-xs" onkeypress="if(event.key==='Enter') addVillageFilter()">
+                        <div id="villageChips" class="flex flex-wrap gap-1 mt-1"></div>
+                    </div>
+
+                    <!-- Activity Filter -->
+                    <div class="border-l-4 border-green-500 pl-3">
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="text-xs font-semibold text-gray-700">🔧 Activity</label>
+                            <div class="flex gap-1">
+                                <button onclick="toggleLogic('activity', 'or')" id="activity-or-btn" class="logic-toggle logic-or px-2 py-0.5 rounded text-xs font-bold">OR</button>
+                                <button onclick="toggleLogic('activity', 'and')" id="activity-and-btn" class="logic-toggle bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs font-bold">AND</button>
+                            </div>
+                        </div>
+                        <input type="text" id="activityFilter" placeholder="Type & press Enter..." class="w-full px-2 py-1 border rounded text-xs" onkeypress="if(event.key==='Enter') addActivityFilter()">
+                        <div id="activityChips" class="flex flex-wrap gap-1 mt-1"></div>
+                        <div class="flex flex-wrap gap-1 mt-1">
+                            <button onclick="quickAddActivity('Fail Foot')" class="px-2 py-0.5 bg-gray-100 rounded text-xs">Fail Foot</button>
+                            <button onclick="quickAddActivity('Dipping')" class="px-2 py-0.5 bg-gray-100 rounded text-xs">Dipping</button>
+                            <button onclick="quickAddActivity('Thinning')" class="px-2 py-0.5 bg-gray-100 rounded text-xs">Thinning</button>
+                        </div>
+                    </div>
+
+                    <!-- Price Range -->
+                    <div class="border-l-4 border-yellow-500 pl-3">
+                        <label class="text-xs font-semibold text-gray-700">💰 Price (₹)</label>
+                        <div class="grid grid-cols-2 gap-1 mt-1">
+                            <input type="number" id="priceMin" placeholder="Min" class="px-2 py-1 border rounded text-xs" oninput="applyFilters()">
+                            <input type="number" id="priceMax" placeholder="Max" class="px-2 py-1 border rounded text-xs" oninput="applyFilters()">
+                        </div>
+                    </div>
+
+                    <!-- Crew Size -->
+                    <div class="border-l-4 border-purple-500 pl-3">
+                        <label class="text-xs font-semibold text-gray-700">👷 Crew Size</label>
+                        <div class="grid grid-cols-2 gap-1 mt-1">
+                            <input type="number" id="crewMin" placeholder="Min" class="px-2 py-1 border rounded text-xs" oninput="applyFilters()">
+                            <input type="number" id="crewMax" placeholder="Max" class="px-2 py-1 border rounded text-xs" oninput="applyFilters()">
+                        </div>
+                    </div>
+
+                    <!-- Rating -->
+                    <div class="border-l-4 border-orange-500 pl-3">
+                        <label class="text-xs font-semibold text-gray-700">⭐ Rating</label>
+                        <input type="range" id="minRating" min="0" max="5" step="0.1" value="0" class="w-full mt-1" oninput="document.getElementById('ratingValue').textContent = this.value; applyFilters()">
+                        <div class="text-xs text-center"><span id="ratingValue">0</span>+</div>
+                    </div>
+
+                    <!-- Availability -->
+                    <div class="border-l-4 border-teal-500 pl-3">
+                        <label class="text-xs font-semibold text-gray-700">📅 Availability</label>
+                        <div class="flex gap-1 mt-1">
+                            <label class="flex-1 flex items-center px-2 py-1 border rounded text-xs cursor-pointer hover:bg-gray-50">
+                                <input type="checkbox" id="availableToday" class="mr-1" onchange="applyFilters()">
+                                <span>Today</span>
+                            </label>
+                            <label class="flex-1 flex items-center px-2 py-1 border rounded text-xs cursor-pointer hover:bg-gray-50">
+                                <input type="checkbox" id="availableThisWeek" class="mr-1" onchange="applyFilters()">
+                                <span>This Week</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Custom Date Range -->
+                    <div class="border-l-4 border-pink-500 pl-3">
+                        <label class="text-xs font-semibold text-gray-700">📅 Custom Date Range</label>
+                        <div class="grid grid-cols-2 gap-1 mt-1">
+                            <input type="date" id="customDateFrom" placeholder="From" class="px-2 py-1 border rounded text-xs" onchange="applyFilters()">
+                            <input type="date" id="customDateTo" placeholder="To" class="px-2 py-1 border rounded text-xs" onchange="applyFilters()">
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">Show mukkadams available in this range</p>
+                    </div>
+
+                    <!-- Transport -->
+                    <div class="border-l-4 border-indigo-500 pl-3">
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="text-xs font-semibold text-gray-700">🚗 Transport</label>
+                            <div class="flex gap-1">
+                                <button onclick="toggleLogic('transport', 'or')" id="transport-or-btn" class="logic-toggle logic-or px-2 py-0.5 rounded text-xs font-bold">OR</button>
+                                <button onclick="toggleLogic('transport', 'and')" id="transport-and-btn" class="logic-toggle bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs font-bold">AND</button>
+                            </div>
+                        </div>
+                        <div class="flex gap-1 mb-2">
+                            <label class="flex-1 flex items-center px-2 py-1 border rounded text-xs cursor-pointer hover:bg-gray-50">
+                                <input type="checkbox" id="transportBike" class="mr-1" onchange="applyFilters()">
+                                <span>🏍️ Bike</span>
+                            </label>
+                            <label class="flex-1 flex items-center px-2 py-1 border rounded text-xs cursor-pointer hover:bg-gray-50">
+                                <input type="checkbox" id="transportPickup" class="mr-1" onchange="applyFilters()">
+                                <span>🚗 Pickup</span>
+                            </label>
+                            <label class="flex-1 flex items-center px-2 py-1 border rounded text-xs cursor-pointer hover:bg-gray-50">
+                                <input type="checkbox" id="transportNone" class="mr-1" onchange="applyFilters()">
+                                <span>🚶 None</span>
+                            </label>
+                        </div>
+                        
+                        <!-- Transport Pricing Filter -->
+                        <div class="mt-2 p-2 bg-amber-50 rounded border border-amber-200">
+                            <p class="text-xs font-semibold text-gray-700 mb-2">💰 Transport Cost Filter</p>
+                            <div class="space-y-2">
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">Farm Distance (km)</label>
+                                    <input 
+                                        type="number" 
+                                        id="farmDistance" 
+                                        placeholder="e.g., 15"
+                                        min="0"
+                                        class="w-full px-2 py-1 border rounded text-xs" 
+                                        oninput="applyFilters()"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">Max Transport Budget (₹)</label>
+                                    <input 
+                                        type="number" 
+                                        id="maxTransportCost" 
+                                        placeholder="e.g., 500"
+                                        min="0"
+                                        step="100"
+                                        class="w-full px-2 py-1 border rounded text-xs" 
+                                        oninput="applyFilters()"
+                                    />
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <label class="flex-1 flex items-center px-2 py-1 border rounded text-xs cursor-pointer hover:bg-gray-50">
+                                        <input type="checkbox" id="onlyFreeTransport" class="mr-1" onchange="applyFilters()">
+                                        <span>Only Free Transport</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-2">📌 Filters mukkadams whose transport cost fits your budget for the given distance</p>
+                        </div>
+                    </div>
+
+                    <!-- Reset Button -->
+                    <button onclick="resetAllFilters()" class="w-full px-3 py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 font-semibold text-sm">
+                        🔄 Reset All
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Info -->
+        <div class="px-4 py-2 bg-blue-50 border-b">
+            <p class="text-xs text-gray-700">
+                Showing <span class="font-bold" id="showingFrom">1</span>-<span class="font-bold" id="showingTo">20</span> 
+                of <span class="font-bold" id="totalResults">1,248</span>
+            </p>
+        </div>
+
+        <!-- Team Grid -->
+        <div id="teamList" class="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3"></div>
+
+        <!-- Pagination -->
+        <div class="px-4 py-3 bg-white border-t sticky bottom-0">
+            <div class="flex items-center justify-between">
+                <button onclick="previousPage()" id="prevBtn" class="px-3 py-1.5 bg-gray-200 text-gray-700 rounded text-xs font-semibold">← Prev</button>
+                <div class="flex items-center space-x-1" id="pageNumbers"></div>
+                <button onclick="nextPage()" id="nextBtn" class="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-semibold">Next →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Availability Management View -->
+    <div id="view-availability" class="view-content hidden">
+        <div class="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
+            <div class="max-w-6xl mx-auto px-4 py-6">
+                <div class="bg-white rounded-xl shadow-lg p-6">
+                    <h2 class="text-2xl font-bold text-gray-800 mb-6">📅 Manage Availability</h2>
+
+                    <div class="mb-6">
+                        <label class="block text-sm font-bold text-gray-700 mb-2">🔍 Search Mukkadam</label>
+                        <input type="text" id="availSearchInput" placeholder="Enter name or mobile number..." class="w-full px-4 py-3 border rounded-lg text-sm" oninput="searchMukkadam()">
+                    </div>
+
+                    <div id="searchResults" class="mb-6 hidden"></div>
+
+                    <div id="selectedMukkadamSection" class="hidden">
+                        <div class="bg-gradient-to-r from-green-50 to-blue-50 rounded-lg p-4 mb-6 border-2 border-green-300">
+                            <h3 class="text-lg font-bold text-gray-800 mb-2">✅ Selected Mukkadam</h3>
+                            <div id="selectedMukkadamInfo"></div>
+                        </div>
+
+                        <div class="mb-6">
+                            <h3 class="text-lg font-bold text-gray-800 mb-3">📋 Current Availabilities (Click to Edit)</h3>
+                            <div id="currentAvailabilities" class="space-y-2"></div>
+                        </div>
+
+                        <div class="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                            <h3 class="text-lg font-bold text-gray-800 mb-3" id="formTitle">➕ Add New Availability</h3>
+                            <div class="space-y-3">
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="block text-xs font-semibold text-gray-700 mb-1">From Date</label>
+                                        <input type="date" id="newAvailFrom" class="w-full px-3 py-2 border rounded-lg text-sm">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs font-semibold text-gray-700 mb-1">To Date</label>
+                                        <input type="date" id="newAvailTo" class="w-full px-3 py-2 border rounded-lg text-sm">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-700 mb-1">Status</label>
+                                    <select id="newAvailStatus" class="w-full px-3 py-2 border rounded-lg text-sm">
+                                        <option value="available">✅ Available</option>
+                                        <option value="busy">⏳ Busy</option>
+                                        <option value="on-leave">🏖️ On Leave</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-700 mb-1">Notes</label>
+                                    <input type="text" id="newAvailNotes" placeholder="e.g., Booked for Farm X" class="w-full px-3 py-2 border rounded-lg text-sm">
+                                </div>
+                                <div class="flex gap-2">
+                                    <button onclick="saveAvailability()" class="flex-1 px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold">✅ Save</button>
+                                    <button onclick="cancelEdit()" class="px-4 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile View -->
+    <div id="view-profile" class="view-content hidden">
+        <div class="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-purple-50">
+            <div class="max-w-5xl mx-auto px-4 py-8">
+                <div class="bg-white rounded-xl shadow-xl p-8 mb-8">
+                    <div class="flex flex-col md:flex-row items-center md:items-start gap-6">
+                        <div class="w-32 h-32 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full flex items-center justify-center text-6xl shadow-lg">
+                            👤
+                        </div>
+                        <div class="flex-1 text-center md:text-left">
+                            <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-3">
+                                <div>
+                                    <h1 class="text-3xl font-bold text-gray-800 mb-1" id="profile-name">Ramesh Patil</h1>
+                                    <p class="text-xl text-gray-600 mb-2" id="profile-name-marathi">रमेश पाटील</p>
+                                    <p class="text-gray-500">मुक्कादम / Mukkadam</p>
+                                </div>
+                                <span class="px-6 py-3 rounded-full text-lg font-bold shadow-md bg-green-100 text-green-700 mt-4 md:mt-0" id="profile-status">✅ ACTIVE</span>
+                            </div>
+                            <div class="space-y-2 mb-4" id="profile-contact-info">
+                                <p class="text-gray-700">📱 9876543210</p>
+                                <p class="text-gray-700">📍 Nashik, Maharashtra</p>
+                                <div class="flex items-center justify-center md:justify-start space-x-2">
+                                    <span class="text-yellow-500 text-xl">⭐</span>
+                                    <span class="font-bold text-gray-800">4.8/5</span>
+                                    <span class="text-gray-500">(24 Reviews)</span>
+                                </div>
+                            </div>
+                            <div class="flex flex-wrap gap-2 justify-center md:justify-start">
+                                <button onclick="toggleMukkadamStatus()" class="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition font-semibold shadow-md">🟢 Mark Inactive</button>
+                                <button onclick="callMukkadam(selectedMukkadam.mobile)" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-semibold shadow-md">📞 Call</button>
+                                <button class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold shadow-md">💬 WhatsApp</button>
+                                <button class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition font-semibold shadow-md">✉️ SMS</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Referral Info -->
+                <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                        <span class="mr-2">🤝</span> Referral Information
+                    </h3>
+                    <div class="grid md:grid-cols-2 gap-4">
+                        <div class="bg-blue-50 rounded-lg p-4 border-l-4 border-blue-500">
+                            <p class="text-xs text-gray-600 mb-1">Referred By</p>
+                            <p class="font-bold text-gray-800">Suresh Jadhav</p>
+                            <p class="text-sm text-gray-600">📱 9988776655</p>
+                            <p class="text-xs text-gray-500 mt-1">📅 Joined: Nov 10, 2023</p>
+                        </div>
+                        <div class="bg-green-50 rounded-lg p-4 border-l-4 border-green-500">
+                            <p class="text-xs text-gray-600 mb-1">Has Referred</p>
+                            <p class="font-bold text-gray-800">3 Mukkadams</p>
+                            <p class="text-sm text-gray-600">Ganesh, Vijay, Mahesh</p>
+                            <p class="text-xs text-gray-500 mt-1">💰 Earned: ₹4,500</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Availability Calendar -->
+                <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                        <span class="mr-2">📅</span> Availability Calendar
+                    </h3>
+                    <div class="space-y-3" id="profile-availability-calendar">
+                        <div class="bg-green-50 rounded-lg p-4 border-l-4 border-green-500">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="font-bold text-green-700">✅ AVAILABLE</p>
+                                    <p class="text-sm text-gray-700 mt-1">📅 Nov 20, 2025 - Nov 30, 2025</p>
+                                    <p class="text-xs text-gray-600 mt-1">📝 Ready for work</p>
+                                </div>
+                                <span class="text-2xl">✅</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Crew Details -->
+                <div class="bg-white rounded-lg shadow-md mb-4 overflow-hidden">
+                    <div class="px-6 py-4 bg-gray-50 border-b">
+                        <h3 class="font-bold text-gray-800 text-lg">🔹 Crew Details</h3>
+                    </div>
+                    <div class="px-6 py-4">
+                        <div class="space-y-3" id="profile-crew-details">
+                            <p>• Current Crew Size: <span class="font-semibold">15 workers</span></p>
+                            <p>• Maximum Capacity: <span class="font-semibold">20 workers</span></p>
+                            <p>• Deputy Mukkadam: <span class="font-semibold">Sunil Patil (📱 9123456789)</span></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Transport & Pricing -->
+                <div class="bg-white rounded-lg shadow-md mb-4 overflow-hidden">
+                    <div class="px-6 py-4 bg-gray-50 border-b">
+                        <h3 class="font-bold text-gray-800 text-lg">🔹 Transport & Pricing</h3>
+                    </div>
+                    <div class="px-6 py-4">
+                        <div class="space-y-4" id="profile-transport-pricing">
+                            <div class="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">
+                                <div class="flex items-center justify-between mb-2">
+                                    <h4 class="font-semibold text-gray-800">🏍️ Own Bike</h4>
+                                    <span class="px-3 py-1 bg-blue-600 text-white rounded-full text-xs font-bold">Available</span>
+                                </div>
+                                <div class="space-y-2 text-sm">
+                                    <p>• Free: <span class="font-semibold">Up to 10 km</span></p>
+                                    <p>• After 10 km: <span class="font-semibold text-green-600">₹500/bike</span></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Rate Card -->
+                <div class="bg-white rounded-lg shadow-md mb-4 overflow-hidden">
+                    <div class="px-6 py-4 bg-gray-50 border-b">
+                        <h3 class="font-bold text-gray-800 text-lg">🔹 Rate Card / दर तक्ता</h3>
+                    </div>
+                    <div class="px-6 py-4">
+                        <div class="grid grid-cols-2 gap-3" id="profile-rate-card">
+                            <div class="bg-yellow-50 p-3 rounded">
+                                <p class="text-sm text-gray-600">Fail Foot</p>
+                                <p class="font-bold text-gray-800">₹500</p>
+                            </div>
+                            <div class="bg-yellow-50 p-3 rounded">
+                                <p class="text-sm text-gray-600">Second Fail</p>
+                                <p class="font-bold text-gray-800">₹450</p>
+                            </div>
+                            <div class="bg-yellow-50 p-3 rounded">
+                                <p class="text-sm text-gray-600">Dipping</p>
+                                <p class="font-bold text-gray-800">₹400</p>
+                            </div>
+                            <div class="bg-yellow-50 p-3 rounded">
+                                <p class="text-sm text-gray-600">Thinning</p>
+                                <p class="font-bold text-gray-800">₹350</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Work History -->
+                <div class="bg-white rounded-xl shadow-md p-6 mb-8">
+                    <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                        <span class="mr-2">📊</span> Work History
+                    </h3>
+                    <div class="space-y-3" id="profile-work-history">
+                        <div class="bg-gray-50 p-4 rounded-lg border-l-4 border-blue-500">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="font-bold text-gray-800">Nov 2025</span>
+                                <div class="flex items-center space-x-1">
+                                    <span class="text-yellow-500">⭐</span>
+                                    <span class="font-semibold">5/5</span>
+                                </div>
+                            </div>
+                            <p class="text-sm text-gray-600">Farmer: Rajesh Kumar</p>
+                            <p class="text-sm text-gray-600">Task: Fail Foot | Location: Nashik</p>
+                        </div>
+                        <div class="bg-gray-50 p-4 rounded-lg border-l-4 border-green-500">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="font-bold text-gray-800">Oct 2025</span>
+                                <div class="flex items-center space-x-1">
+                                    <span class="text-yellow-500">⭐</span>
+                                    <span class="font-semibold">4.5/5</span>
+                                </div>
+                            </div>
+                            <p class="text-sm text-gray-600">Farmer: Suresh Patil</p>
+                            <p class="text-sm text-gray-600">Task: Dipping | Location: Pune</p>
+                        </div>
+                        <div class="bg-gray-50 p-4 rounded-lg border-l-4 border-purple-500">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="font-bold text-gray-800">Sep 2025</span>
+                                <div class="flex items-center space-x-1">
+                                    <span class="text-yellow-500">⭐</span>
+                                    <span class="font-semibold">4.8/5</span>
+                                </div>
+                            </div>
+                            <p class="text-sm text-gray-600">Farmer: Mahesh Jadhav</p>
+                            <p class="text-sm text-gray-600">Task: Thinning | Location: Satara</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Villages View -->
+    <div id="view-villages" class="view-content hidden">
+        <div class="p-4">
+            <input type="text" id="villageSearch" placeholder="🔍 Search villages..." onkeyup="searchVillages()" class="w-full px-3 py-2 border rounded-lg text-sm mb-3">
+            <div id="villagesList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentPage = 1;
+        let pageSize = 20;
+        let filterLogic = { village: 'or', activity: 'or', transport: 'or' };
+        let filters = {
+            villages: [], activities: [], priceMin: null, priceMax: null,
+            availableToday: false, availableThisWeek: false, 
+            customDateFrom: null, customDateTo: null,
+            transport: [],
+            farmDistance: null, maxTransportCost: null, onlyFreeTransport: false,
+            crewMin: null, crewMax: null, minRating: 0
+        };
+
+        let selectedMukkadam = null;
+        let editingAvailabilityIndex = null;
+        let mukkadamAvailabilities = {};
+
+        const villages = ['Nashik', 'Satara', 'Pune', 'Solapur', 'Sangli'];
+        const names = ['Ramesh', 'Suresh', 'Ganesh', 'Prakash', 'Vijay'];
+        const surnames = ['Patil', 'Jadhav', 'Desai', 'Shinde', 'Pawar'];
+        const activities = ['Fail Foot', 'Second Fail', 'Dipping', 'Thinning', 'Shoot Tying'];
+        const transports = ['Own Bike', 'Own Pickup', 'No Vehicle'];
+
+        function generateMockData(count) {
+            const data = [];
+            for (let i = 1; i <= count; i++) {
+                const name = `${names[Math.floor(Math.random() * names.length)]} ${surnames[Math.floor(Math.random() * surnames.length)]}`;
+                const status = Math.random() > 0.28 ? 'active' : 'inactive';
+                const crewSize = Math.floor(Math.random() * 18) + 8;
+                const rating = parseFloat((4 + Math.random()).toFixed(1));
+                const village = villages[Math.floor(Math.random() * villages.length)];
+                const mobile = `98765${String(i).padStart(5, '0')}`;
+                const activity = activities[Math.floor(Math.random() * activities.length)];
+                const transport = transports[Math.floor(Math.random() * transports.length)];
+                const pricePerWorker = Math.floor(Math.random() * 300) + 300;
+                
+                let transportPricing = { freeUptoKm: 0, pricePerKm: 0 };
+                if (transport === 'Own Bike') {
+                    transportPricing = { freeUptoKm: 10, pricePerBike: 500 };
+                } else if (transport === 'Own Pickup') {
+                    transportPricing = { freeUptoKm: 20, pricePerPickup: 1000 };
+                }
+                
+                data.push({ 
+                    id: i, name, status, crewSize, rating, village, mobile,
+                    activity, transport, pricePerWorker, transportPricing,
+                    isAvailableToday: Math.random() > 0.38,
+                    isWorkingToday: Math.random() > 0.72
+                });
+
+                mukkadamAvailabilities[i] = [
+                    { from: '2025-11-20', to: '2025-11-30', status: 'available', notes: 'Ready for work' }
+                ];
+            }
+            return data;
+        }
+
+        const allMukkadams = generateMockData(1248);
+
+        function calculateTransportCost(mukkadam, distanceKm) {
+            if (mukkadam.transport === 'No Vehicle') {
+                return { cost: 0, breakdown: 'No transport - Farmer arranges' };
+            }
+            
+            if (mukkadam.transport === 'Own Bike') {
+                const freeKm = mukkadam.transportPricing.freeUptoKm;
+                const pricePerBike = mukkadam.transportPricing.pricePerBike;
+                
+                if (distanceKm <= freeKm) {
+                    return { cost: 0, breakdown: `Free (within ${freeKm}km)` };
+                } else {
+                    return { cost: pricePerBike, breakdown: `₹${pricePerBike}/bike (beyond ${freeKm}km)` };
+                }
+            }
+            
+            if (mukkadam.transport === 'Own Pickup') {
+                const freeKm = mukkadam.transportPricing.freeUptoKm;
+                const pricePerPickup = mukkadam.transportPricing.pricePerPickup;
+                
+                if (distanceKm <= freeKm) {
+                    return { cost: 0, breakdown: `Free (within ${freeKm}km)` };
+                } else {
+                    return { cost: pricePerPickup, breakdown: `₹${pricePerPickup}/pickup (beyond ${freeKm}km)` };
+                }
+            }
+            
+            return { cost: 0, breakdown: 'No transport' };
+        }
+
+        function toggleFilters() {
+            const section = document.getElementById('filters-section');
+            const arrow = document.getElementById('filter-arrow');
+            section.classList.toggle('hidden');
+            arrow.classList.toggle('rotate-180');
+        }
+
+        function toggleLogic(filterType, logic) {
+            filterLogic[filterType] = logic;
+            document.getElementById(`${filterType}-or-btn`).className = 
+                logic === 'or' ? 'logic-toggle logic-or px-2 py-0.5 rounded text-xs font-bold' : 'logic-toggle bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs font-bold';
+            document.getElementById(`${filterType}-and-btn`).className = 
+                logic === 'and' ? 'logic-toggle logic-and px-2 py-0.5 rounded text-xs font-bold' : 'logic-toggle bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs font-bold';
+            applyFilters();
+        }
+
+        function addVillageFilter() {
+            const input = document.getElementById('villageFilter');
+            const value = input.value.trim().toLowerCase();
+            if (value && !filters.villages.some(v => v.toLowerCase() === value)) {
+                filters.villages.push(value);
+                renderVillageChips();
+                input.value = '';
+                applyFilters();
+            }
+        }
+
+        function renderVillageChips() {
+            document.getElementById('villageChips').innerHTML = filters.villages.map(v => `
+                <span class="filter-chip inline-flex items-center px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-semibold">
+                    ${v} <button onclick="removeVillage('${v}')" class="ml-1 font-bold">×</button>
+                </span>
+            `).join('');
+        }
+
+        function removeVillage(village) {
+            filters.villages = filters.villages.filter(v => v.toLowerCase() !== village.toLowerCase());
+            renderVillageChips();
+            applyFilters();
+        }
+
+        function addActivityFilter() {
+            const input = document.getElementById('activityFilter');
+            const value = input.value.trim().toLowerCase();
+            if (value && !filters.activities.some(a => a.toLowerCase() === value)) {
+                filters.activities.push(value);
+                renderActivityChips();
+                input.value = '';
+                applyFilters();
+            }
+        }
+
+        function quickAddActivity(activity) {
+            if (!filters.activities.some(a => a.toLowerCase() === activity.toLowerCase())) {
+                filters.activities.push(activity.toLowerCase());
+                renderActivityChips();
+                applyFilters();
+            }
+        }
+
+        function renderActivityChips() {
+            document.getElementById('activityChips').innerHTML = filters.activities.map(a => `
+                <span class="filter-chip inline-flex items-center px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-semibold">
+                    ${a} <button onclick="removeActivity('${a}')" class="ml-1 font-bold">×</button>
+                </span>
+            `).join('');
+        }
+
+        function removeActivity(activity) {
+            filters.activities = filters.activities.filter(a => a.toLowerCase() !== activity.toLowerCase());
+            renderActivityChips();
+            applyFilters();
+        }
+
+        function applyFilters() {
+            filters.priceMin = document.getElementById('priceMin').value ? parseInt(document.getElementById('priceMin').value) : null;
+            filters.priceMax = document.getElementById('priceMax').value ? parseInt(document.getElementById('priceMax').value) : null;
+            filters.availableToday = document.getElementById('availableToday').checked;
+            filters.availableThisWeek = document.getElementById('availableThisWeek').checked;
+            filters.customDateFrom = document.getElementById('customDateFrom').value || null;
+            filters.customDateTo = document.getElementById('customDateTo').value || null;
+            
+            filters.transport = [];
+            if (document.getElementById('transportBike').checked) filters.transport.push('Own Bike');
+            if (document.getElementById('transportPickup').checked) filters.transport.push('Own Pickup');
+            if (document.getElementById('transportNone').checked) filters.transport.push('No Vehicle');
+            
+            // Transport Pricing Filters
+            filters.farmDistance = document.getElementById('farmDistance').value ? parseInt(document.getElementById('farmDistance').value) : null;
+            filters.maxTransportCost = document.getElementById('maxTransportCost').value ? parseInt(document.getElementById('maxTransportCost').value) : null;
+            filters.onlyFreeTransport = document.getElementById('onlyFreeTransport').checked;
+            
+            filters.crewMin = document.getElementById('crewMin').value ? parseInt(document.getElementById('crewMin').value) : null;
+            filters.crewMax = document.getElementById('crewMax').value ? parseInt(document.getElementById('crewMax').value) : null;
+            filters.minRating = parseFloat(document.getElementById('minRating').value);
+
+            currentPage = 1;
+            renderTeamList();
+        }
+
+        function getFilteredData() {
+            let filtered = allMukkadams;
+
+            if (filters.villages.length > 0) {
+                if (filterLogic.village === 'and') {
+                    filtered = filtered.filter(m => filters.villages.every(v => m.village.toLowerCase() === v.toLowerCase()));
+                } else {
+                    filtered = filtered.filter(m => filters.villages.some(v => m.village.toLowerCase() === v.toLowerCase()));
+                }
+            }
+
+            if (filters.activities.length > 0) {
+                if (filterLogic.activity === 'and') {
+                    filtered = filtered.filter(m => filters.activities.every(a => m.activity.toLowerCase() === a.toLowerCase()));
+                } else {
+                    filtered = filtered.filter(m => filters.activities.some(a => m.activity.toLowerCase() === a.toLowerCase()));
+                }
+            }
+
+            if (filters.priceMin !== null) filtered = filtered.filter(m => m.pricePerWorker >= filters.priceMin);
+            if (filters.priceMax !== null) filtered = filtered.filter(m => m.pricePerWorker <= filters.priceMax);
+
+            // Crew Size filters
+            if (filters.crewMin !== null) filtered = filtered.filter(m => m.crewSize >= filters.crewMin);
+            if (filters.crewMax !== null) filtered = filtered.filter(m => m.crewSize <= filters.crewMax);
+
+            // Rating filter
+            if (filters.minRating > 0) filtered = filtered.filter(m => m.rating >= filters.minRating);
+
+            // Availability filters
+            if (filters.availableToday) {
+                filtered = filtered.filter(m => m.isAvailableToday);
+            }
+
+            // Custom Date Range Filter
+            if (filters.customDateFrom && filters.customDateTo) {
+                const fromDate = new Date(filters.customDateFrom);
+                const toDate = new Date(filters.customDateTo);
+                
+                filtered = filtered.filter(m => {
+                    const availabilities = mukkadamAvailabilities[m.id] || [];
+                    return availabilities.some(avail => {
+                        if (avail.status !== 'available') return false;
+                        const availFrom = new Date(avail.from);
+                        const availTo = new Date(avail.to);
+                        return availFrom <= toDate && availTo >= fromDate;
+                    });
+                });
+            }
+
+            if (filters.transport.length > 0) {
+                if (filterLogic.transport === 'and') {
+                    filtered = filtered.filter(m => filters.transport.every(t => m.transport === t));
+                } else {
+                    filtered = filtered.filter(m => filters.transport.includes(m.transport));
+                }
+            }
+
+            // Transport Pricing Filter
+            if (filters.farmDistance !== null) {
+                filtered = filtered.filter(m => {
+                    const cost = calculateTransportCost(m, filters.farmDistance);
+                    
+                    // If "Only Free Transport" is checked
+                    if (filters.onlyFreeTransport && cost.cost > 0) {
+                        return false;
+                    }
+                    
+                    // If max transport cost is set
+                    if (filters.maxTransportCost !== null && cost.cost > filters.maxTransportCost) {
+                        return false;
+                    }
+                    
+                    return true;
+                });
+            } else if (filters.onlyFreeTransport) {
+                // If only free transport checked but no distance given, show only No Vehicle
+                filtered = filtered.filter(m => m.transport === 'No Vehicle');
+            }
+
+            return filtered;
+        }
+
+        function resetAllFilters() {
+            filters = {
+                villages: [], activities: [], priceMin: null, priceMax: null,
+                availableToday: false, availableThisWeek: false,
+                customDateFrom: null, customDateTo: null,
+                transport: [],
+                farmDistance: null, maxTransportCost: null, onlyFreeTransport: false,
+                crewMin: null, crewMax: null, minRating: 0
+            };
+
+            document.getElementById('villageFilter').value = '';
+            document.getElementById('activityFilter').value = '';
+            document.getElementById('priceMin').value = '';
+            document.getElementById('priceMax').value = '';
+            document.getElementById('availableToday').checked = false;
+            document.getElementById('availableThisWeek').checked = false;
+            document.getElementById('customDateFrom').value = '';
+            document.getElementById('customDateTo').value = '';
+            document.getElementById('transportBike').checked = false;
+            document.getElementById('transportPickup').checked = false;
+            document.getElementById('transportNone').checked = false;
+            document.getElementById('farmDistance').value = '';
+            document.getElementById('maxTransportCost').value = '';
+            document.getElementById('onlyFreeTransport').checked = false;
+            document.getElementById('crewMin').value = '';
+            document.getElementById('crewMax').value = '';
+            document.getElementById('minRating').value = '0';
+            document.getElementById('ratingValue').textContent = '0';
+
+            renderVillageChips();
+            renderActivityChips();
+            applyFilters();
+        }
+
+        function renderTeamList() {
+            const filtered = getFilteredData();
+            const startIdx = (currentPage - 1) * pageSize;
+            const endIdx = Math.min(startIdx + pageSize, filtered.length);
+            const pageData = filtered.slice(startIdx, endIdx);
+
+            const listEl = document.getElementById('teamList');
+            listEl.innerHTML = '';
+
+            if (pageData.length === 0) {
+                listEl.innerHTML = `
+                    <div class="col-span-full text-center py-12">
+                        <p class="text-gray-500 text-lg">😔 No mukkadams found</p>
+                        <button onclick="resetAllFilters()" class="mt-4 px-6 py-2 bg-blue-600 text-white rounded-lg">Clear Filters</button>
+                    </div>
+                `;
+            } else {
+                pageData.forEach(m => listEl.appendChild(createBoxCard(m)));
+            }
+
+            updatePagination(filtered.length);
+            updateResultsInfo(startIdx + 1, endIdx, filtered.length);
+            updateStats(filtered);
+        }
+
+        function createBoxCard(m) {
+            const div = document.createElement('div');
+            div.className = 'bg-white rounded-lg shadow hover:shadow-lg transition border border-gray-200';
+            
+            const transportCost = calculateTransportCost(m, 15);
+            const availabilities = mukkadamAvailabilities[m.id] || [];
+            const currentAvail = availabilities.length > 0 ? availabilities[0] : null;
+            
+            div.innerHTML = `
+                <div onclick="toggleDetail(${m.id})" class="p-3 cursor-pointer">
+                    <div class="flex items-start justify-between mb-2">
+                        <div class="flex-1 min-w-0">
+                            <span class="px-2 py-0.5 rounded text-xs font-bold ${m.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}">
+                                ${m.status === 'active' ? '✅' : '⏸️'}
+                            </span>
+                            <h4 class="font-bold text-base text-gray-800 mt-1">${m.name}</h4>
+                        </div>
+                        <svg id="arrow-${m.id}" class="w-4 h-4 text-gray-400 transition-transform flex-shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </div>
+                    
+                    <!-- Minimal Info - Always Visible -->
+                    <div class="space-y-1 text-sm text-gray-700">
+                        <p>📍 ${m.village}</p>
+                        <p>👷 ${m.crewSize} workers</p>
+                    </div>
+                </div>
+
+                <!-- Full Details - Show on Click -->
+                <div id="detail-${m.id}" class="hidden border-t bg-gray-50 p-3 slide-down">
+                    <div class="space-y-3">
+                        <!-- More Details -->
+                        <div class="grid grid-cols-2 gap-2 text-xs">
+                            <div class="bg-white p-2 rounded">
+                                <p class="text-gray-500 mb-1">Activity</p>
+                                <p class="font-semibold">🔧 ${m.activity}</p>
+                            </div>
+                            <div class="bg-white p-2 rounded">
+                                <p class="text-gray-500 mb-1">Rating</p>
+                                <p class="font-semibold">⭐ ${m.rating}/5</p>
+                            </div>
+                            <div class="bg-white p-2 rounded">
+                                <p class="text-gray-500 mb-1">Price/Day</p>
+                                <p class="font-semibold text-green-700">₹${m.pricePerWorker}</p>
+                            </div>
+                            <div class="bg-white p-2 rounded">
+                                <p class="text-gray-500 mb-1">Mobile</p>
+                                <p class="font-semibold text-xs">📱 ${m.mobile}</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Availability Status -->
+                        ${currentAvail ? `
+                        <div class="p-3 rounded-lg ${
+                            currentAvail.status === 'available' ? 'bg-green-50 border-2 border-green-300' :
+                            currentAvail.status === 'busy' ? 'bg-yellow-50 border-2 border-yellow-300' :
+                            'bg-red-50 border-2 border-red-300'
+                        }">
+                            <p class="text-xs font-bold mb-1">📅 Availability</p>
+                            <p class="text-xs font-semibold">${
+                                currentAvail.status === 'available' ? '✅ Available' :
+                                currentAvail.status === 'busy' ? '⏳ Busy' : '🏖️ On Leave'
+                            }</p>
+                            <p class="text-xs mt-1">${currentAvail.from} to ${currentAvail.to}</p>
+                            ${currentAvail.notes ? `<p class="text-xs text-gray-600 mt-1">📝 ${currentAvail.notes}</p>` : ''}
+                        </div>
+                        ` : `
+                        <div class="p-3 rounded-lg bg-gray-100 border border-gray-300">
+                            <p class="text-xs text-gray-600">No availability set</p>
+                        </div>
+                        `}
+                        
+                        <!-- Transport Pricing -->
+                        <div class="p-3 rounded-lg bg-indigo-50 border border-indigo-300">
+                            <p class="text-xs font-bold mb-1">🚗 Transport</p>
+                            <p class="text-xs font-semibold">${m.transport === 'Own Bike' ? '🏍️ Bike' : m.transport === 'Own Pickup' ? '🚗 Pickup' : '🚶 None'}</p>
+                            <p class="text-xs text-gray-600 mt-1">${transportCost.breakdown}</p>
+                        </div>
+                        
+                        <!-- Action Buttons -->
+                        <div class="grid grid-cols-3 gap-2">
+                            <button onclick="event.stopPropagation(); viewMukkadamProfile(${m.id})" class="bg-blue-600 text-white py-2 rounded text-xs font-semibold hover:bg-blue-700">
+                                Profile
+                            </button>
+                            <button onclick="event.stopPropagation(); callMukkadam('${m.mobile}')" class="bg-green-600 text-white py-2 rounded text-xs font-semibold hover:bg-green-700">
+                                📞 Call
+                            </button>
+                            <button onclick="event.stopPropagation(); assignMukkadam(${m.id})" class="bg-purple-600 text-white py-2 rounded text-xs font-semibold hover:bg-purple-700">
+                                Assign
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return div;
+        }
+
+        function toggleDetail(id) {
+            const detail = document.getElementById(`detail-${id}`);
+            const arrow = document.getElementById(`arrow-${id}`);
+            
+            if (detail.classList.contains('hidden')) {
+                detail.classList.remove('hidden');
+                arrow.classList.add('rotate-180');
+            } else {
+                detail.classList.add('hidden');
+                arrow.classList.remove('rotate-180');
+            }
+        }
+
+        function viewMukkadamProfile(mukkadamId) {
+            const mukkadam = allMukkadams.find(m => m.id === mukkadamId);
+            if (mukkadam) {
+                selectedMukkadam = mukkadam;
+                showView('profile');
+                updateProfileView(mukkadam);
+            }
+        }
+
+        function callMukkadam(mobile) {
+            window.location.href = `tel:${mobile}`;
+        }
+
+        function assignMukkadam(mukkadamId) {
+            alert(`Assigning mukkadam ID: ${mukkadamId} to a farm`);
+        }
+
+        function updateProfileView(mukkadam) {
+            const availabilities = mukkadamAvailabilities[mukkadam.id] || [];
+            
+            document.getElementById('profile-name').textContent = mukkadam.name;
+            document.getElementById('profile-name-marathi').textContent = mukkadam.name;
+            document.getElementById('profile-status').innerHTML = mukkadam.status === 'active' ? '✅ ACTIVE' : '⏸️ INACTIVE';
+            
+            document.getElementById('profile-contact-info').innerHTML = `
+                <p class="text-gray-700">📱 ${mukkadam.mobile}</p>
+                <p class="text-gray-700">📍 ${mukkadam.village}, Maharashtra</p>
+                <div class="flex items-center justify-center md:justify-start space-x-2">
+                    <span class="text-yellow-500 text-xl">⭐</span>
+                    <span class="font-bold text-gray-800">${mukkadam.rating}/5</span>
+                    <span class="text-gray-500">(24 Reviews)</span>
+                </div>
+            `;
+            
+            document.getElementById('profile-crew-details').innerHTML = `
+                <p>• Current Crew Size: <span class="font-semibold">${mukkadam.crewSize} workers</span></p>
+                <p>• Maximum Capacity: <span class="font-semibold">${mukkadam.crewSize + 5} workers</span></p>
+            `;
+            
+            if (availabilities.length > 0) {
+                const colors = {
+                    'available': 'bg-green-50 border-green-500 text-green-700',
+                    'busy': 'bg-yellow-50 border-yellow-500 text-yellow-700',
+                    'on-leave': 'bg-red-50 border-red-500 text-red-700'
+                };
+                const icons = { 'available': '✅', 'busy': '⏳', 'on-leave': '🏖️' };
+                
+                document.getElementById('profile-availability-calendar').innerHTML = availabilities.map(avail => `
+                    <div class="${colors[avail.status]} rounded-lg p-4 border-l-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="font-bold">${icons[avail.status]} ${avail.status.toUpperCase()}</p>
+                                <p class="text-sm mt-1">📅 ${avail.from} - ${avail.to}</p>
+                                ${avail.notes ? `<p class="text-xs mt-1">📝 ${avail.notes}</p>` : ''}
+                            </div>
+                            <span class="text-2xl">${icons[avail.status]}</span>
+                        </div>
+                    </div>
+                `).join('');
+            }
+            
+            const transportIcon = mukkadam.transport === 'Own Bike' ? '🏍️' : mukkadam.transport === 'Own Pickup' ? '🚗' : '🚶';
+            const transportText = mukkadam.transport;
+            let transportDetails = '';
+            
+            if (mukkadam.transport === 'Own Bike') {
+                transportDetails = `
+                    <p>• Free: <span class="font-semibold">Up to ${mukkadam.transportPricing.freeUptoKm} km</span></p>
+                    <p>• After ${mukkadam.transportPricing.freeUptoKm} km: <span class="font-semibold text-green-600">₹${mukkadam.transportPricing.pricePerBike}/bike</span></p>
+                `;
+            } else if (mukkadam.transport === 'Own Pickup') {
+                transportDetails = `
+                    <p>• Free: <span class="font-semibold">Up to ${mukkadam.transportPricing.freeUptoKm} km</span></p>
+                    <p>• After ${mukkadam.transportPricing.freeUptoKm} km: <span class="font-semibold text-green-600">₹${mukkadam.transportPricing.pricePerPickup}/pickup</span></p>
+                `;
+            } else {
+                transportDetails = `<p>• <span class="font-semibold text-red-600">No transport available</span></p>`;
+            }
+            
+            document.getElementById('profile-transport-pricing').innerHTML = `
+                <div class="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="font-semibold text-gray-800">${transportIcon} ${transportText}</h4>
+                        <span class="px-3 py-1 bg-blue-600 text-white rounded-full text-xs font-bold">Available</span>
+                    </div>
+                    <div class="space-y-2 text-sm">
+                        ${transportDetails}
+                    </div>
+                </div>
+            `;
+            
+            // Update Rate Card with mukkadam's activity pricing
+            const rateCardActivities = ['Fail Foot', 'Second Fail', 'Dipping', 'Thinning', 'Shoot Tying', 'Cane Tying'];
+            document.getElementById('profile-rate-card').innerHTML = rateCardActivities.map(activity => {
+                // Base price with some variation
+                const basePrice = mukkadam.pricePerWorker;
+                let activityPrice = basePrice;
+                
+                // Adjust prices for different activities
+                if (activity === 'Fail Foot') activityPrice = basePrice + 50;
+                else if (activity === 'Second Fail') activityPrice = basePrice;
+                else if (activity === 'Dipping') activityPrice = basePrice - 50;
+                else if (activity === 'Thinning') activityPrice = basePrice - 100;
+                else if (activity === 'Shoot Tying') activityPrice = basePrice - 20;
+                else if (activity === 'Cane Tying') activityPrice = basePrice + 20;
+                
+                return `
+                    <div class="bg-yellow-50 p-3 rounded border ${mukkadam.activity === activity ? 'border-2 border-yellow-500' : 'border-yellow-200'}">
+                        <p class="text-sm text-gray-600">${activity}</p>
+                        <p class="font-bold text-gray-800">₹${activityPrice}</p>
+                        ${mukkadam.activity === activity ? '<p class="text-xs text-yellow-700 font-semibold mt-1">⭐ Primary</p>' : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            // Update Work History (mock data for now)
+            document.getElementById('profile-work-history').innerHTML = `
+                <div class="bg-gray-50 p-4 rounded-lg border-l-4 border-blue-500">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="font-bold text-gray-800">Nov 2025</span>
+                        <div class="flex items-center space-x-1">
+                            <span class="text-yellow-500">⭐</span>
+                            <span class="font-semibold">5/5</span>
+                        </div>
+                    </div>
+                    <p class="text-sm text-gray-600">Farmer: Rajesh Kumar</p>
+                    <p class="text-sm text-gray-600">Task: ${mukkadam.activity} | Location: ${mukkadam.village}</p>
+                </div>
+                <div class="bg-gray-50 p-4 rounded-lg border-l-4 border-green-500">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="font-bold text-gray-800">Oct 2025</span>
+                        <div class="flex items-center space-x-1">
+                            <span class="text-yellow-500">⭐</span>
+                            <span class="font-semibold">${mukkadam.rating}/5</span>
+                        </div>
+                    </div>
+                    <p class="text-sm text-gray-600">Farmer: Suresh Patil</p>
+                    <p class="text-sm text-gray-600">Task: ${mukkadam.activity} | Location: Pune</p>
+                </div>
+                <div class="bg-gray-50 p-4 rounded-lg border-l-4 border-purple-500">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="font-bold text-gray-800">Sep 2025</span>
+                        <div class="flex items-center space-x-1">
+                            <span class="text-yellow-500">⭐</span>
+                            <span class="font-semibold">4.8/5</span>
+                        </div>
+                    </div>
+                    <p class="text-sm text-gray-600">Farmer: Mahesh Jadhav</p>
+                    <p class="text-sm text-gray-600">Task: Dipping | Location: Satara</p>
+                </div>
+            `;
+        }
+
+        function updateStats(filtered) {
+            const active = filtered.filter(m => m.status === 'active').length;
+            const totalWorkers = filtered.reduce((sum, m) => sum + m.crewSize, 0);
+            const avgCrewSize = filtered.length > 0 ? (totalWorkers / filtered.length).toFixed(1) : 0;
+            const workingToday = filtered.filter(m => m.isWorkingToday).length;
+            const availableToday = filtered.filter(m => m.isAvailableToday && m.status === 'active').length;
+            const uniqueVillages = new Set(filtered.map(m => m.village)).size;
+
+            document.getElementById('stat-total').textContent = filtered.length;
+            document.getElementById('stat-active').textContent = active;
+            document.getElementById('stat-workers').textContent = totalWorkers > 1000 ? (totalWorkers/1000).toFixed(1) + 'K' : totalWorkers;
+            document.getElementById('stat-avg-crew').textContent = avgCrewSize;
+            document.getElementById('stat-avg-crew-size').textContent = avgCrewSize;
+            document.getElementById('stat-working-today').textContent = workingToday;
+            document.getElementById('stat-available-today').textContent = availableToday;
+            document.getElementById('stat-villages').textContent = uniqueVillages;
+        }
+
+        function updatePagination(total) {
+            const totalPages = Math.ceil(total / pageSize);
+            const pagesEl = document.getElementById('pageNumbers');
+            pagesEl.innerHTML = '';
+
+            if (totalPages === 0) return;
+
+            for (let i = Math.max(1, currentPage - 2); i <= Math.min(totalPages, currentPage + 2); i++) {
+                const btn = document.createElement('button');
+                btn.textContent = i;
+                btn.className = `px-2 py-1 rounded text-xs ${i === currentPage ? 'bg-blue-600 text-white' : 'bg-gray-200'}`;
+                btn.onclick = () => { currentPage = i; renderTeamList(); };
+                pagesEl.appendChild(btn);
+            }
+
+            document.getElementById('prevBtn').disabled = currentPage === 1;
+            document.getElementById('nextBtn').disabled = currentPage === totalPages;
+        }
+
+        function updateResultsInfo(from, to, total) {
+            document.getElementById('showingFrom').textContent = from;
+            document.getElementById('showingTo').textContent = to;
+            document.getElementById('totalResults').textContent = total;
+        }
+
+        function previousPage() {
+            if (currentPage > 1) { currentPage--; renderTeamList(); }
+        }
+
+        function nextPage() {
+            const total = Math.ceil(getFilteredData().length / pageSize);
+            if (currentPage < total) { currentPage++; renderTeamList(); }
+        }
+
+        // Availability Management
+        function searchMukkadam() {
+            const query = document.getElementById('availSearchInput').value.trim().toLowerCase();
+            const resultsDiv = document.getElementById('searchResults');
+            
+            if (!query) {
+                resultsDiv.classList.add('hidden');
+                return;
+            }
+
+            const isMobile = /^\d+$/.test(query);
+            let matches = isMobile 
+                ? allMukkadams.filter(m => m.mobile.includes(query))
+                : allMukkadams.filter(m => m.name.toLowerCase().includes(query));
+
+            if (matches.length === 0) {
+                resultsDiv.innerHTML = '<div class="bg-red-50 border border-red-200 rounded-lg p-4"><p class="text-red-700 font-semibold">❌ No mukkadam found</p></div>';
+                resultsDiv.classList.remove('hidden');
+            } else if (matches.length === 1) {
+                selectMukkadam(matches[0]);
+                resultsDiv.classList.add('hidden');
+            } else {
+                showDisambiguation(matches, 'village');
+            }
+        }
+
+        function showDisambiguation(matches, step) {
+            const resultsDiv = document.getElementById('searchResults');
+            
+            if (step === 'village') {
+                const byVillage = {};
+                matches.forEach(m => {
+                    if (!byVillage[m.village]) byVillage[m.village] = [];
+                    byVillage[m.village].push(m);
+                });
+
+                if (Object.keys(byVillage).length === 1) {
+                    showDisambiguation(matches, 'crewSize');
+                    return;
+                }
+
+                resultsDiv.innerHTML = `
+                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <p class="font-semibold text-gray-800 mb-3">🔍 Select Village:</p>
+                        <div class="space-y-2">
+                            ${Object.entries(byVillage).map(([village, items]) => `
+                                <button onclick='disambiguateByVillage(${JSON.stringify(items)})' class="w-full text-left px-4 py-2 bg-white border rounded hover:bg-blue-50">
+                                    📍 ${village} <span class="text-gray-500">(${items.length})</span>
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                resultsDiv.classList.remove('hidden');
+            } else if (step === 'crewSize') {
+                const byCrewSize = {};
+                matches.forEach(m => {
+                    if (!byCrewSize[m.crewSize]) byCrewSize[m.crewSize] = [];
+                    byCrewSize[m.crewSize].push(m);
+                });
+
+                if (Object.keys(byCrewSize).length === 1) {
+                    showDisambiguation(matches, 'mobile');
+                    return;
+                }
+
+                resultsDiv.innerHTML = `
+                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <p class="font-semibold text-gray-800 mb-3">🔍 Select Crew Size:</p>
+                        <div class="space-y-2">
+                            ${Object.entries(byCrewSize).map(([size, items]) => `
+                                <button onclick='disambiguateByCrewSize(${JSON.stringify(items)})' class="w-full text-left px-4 py-2 bg-white border rounded hover:bg-blue-50">
+                                    👷 ${size} workers <span class="text-gray-500">(${items.length})</span>
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                resultsDiv.classList.remove('hidden');
+            } else if (step === 'mobile') {
+                resultsDiv.innerHTML = `
+                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <p class="font-semibold text-gray-800 mb-3">🔍 Select by Mobile:</p>
+                        <div class="space-y-2">
+                            ${matches.map(m => `
+                                <button onclick='selectMukkadamById(${m.id})' class="w-full text-left px-4 py-2 bg-white border rounded hover:bg-blue-50">
+                                    <div class="font-semibold">${m.name}</div>
+                                    <div class="text-xs text-gray-600">📍 ${m.village} | 👷 ${m.crewSize} | 📱 ${m.mobile}</div>
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                resultsDiv.classList.remove('hidden');
+            }
+        }
+
+        function disambiguateByVillage(matches) { showDisambiguation(matches, 'crewSize'); }
+        function disambiguateByCrewSize(matches) { showDisambiguation(matches, 'mobile'); }
+        function selectMukkadamById(id) { selectMukkadam(allMukkadams.find(m => m.id === id)); }
+
+        function selectMukkadam(mukkadam) {
+            selectedMukkadam = mukkadam;
+            
+            document.getElementById('selectedMukkadamInfo').innerHTML = `
+                <div class="flex justify-between">
+                    <div>
+                        <p class="font-bold text-lg">${mukkadam.name}</p>
+                        <p class="text-gray-600">📱 ${mukkadam.mobile} | 📍 ${mukkadam.village}</p>
+                    </div>
+                    <button onclick="clearSelection()" class="px-3 py-1 bg-red-100 text-red-700 rounded text-xs font-semibold">Clear</button>
+                </div>
+            `;
+            
+            document.getElementById('selectedMukkadamSection').classList.remove('hidden');
+            renderCurrentAvailabilities();
+        }
+
+        function clearSelection() {
+            selectedMukkadam = null;
+            editingAvailabilityIndex = null;
+            document.getElementById('selectedMukkadamSection').classList.add('hidden');
+            document.getElementById('availSearchInput').value = '';
+            document.getElementById('searchResults').classList.add('hidden');
+            cancelEdit();
+        }
+
+        function renderCurrentAvailabilities() {
+            const availabilities = mukkadamAvailabilities[selectedMukkadam.id] || [];
+            const container = document.getElementById('currentAvailabilities');
+            
+            if (availabilities.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 text-sm">No availabilities set.</p>';
+            } else {
+                const statusColors = {
+                    'available': 'bg-green-50 border-green-300 text-green-700',
+                    'busy': 'bg-yellow-50 border-yellow-300 text-yellow-700',
+                    'on-leave': 'bg-red-50 border-red-300 text-red-700'
+                };
+                const statusIcons = { 'available': '✅', 'busy': '⏳', 'on-leave': '🏖️' };
+                
+                container.innerHTML = availabilities.map((avail, index) => `
+                    <div class="border-2 rounded-lg p-3 ${statusColors[avail.status]} cursor-pointer hover:shadow-md transition" onclick="editAvailability(${index})">
+                        <div class="flex justify-between">
+                            <div class="flex-1">
+                                <p class="font-semibold">${statusIcons[avail.status]} ${avail.status.toUpperCase()}</p>
+                                <p class="text-sm mt-1">📅 ${avail.from} to ${avail.to}</p>
+                                ${avail.notes ? `<p class="text-xs mt-1">📝 ${avail.notes}</p>` : ''}
+                            </div>
+                            <button onclick="event.stopPropagation(); deleteAvailability(${index})" class="px-2 py-1 bg-red-500 text-white rounded text-xs h-fit">Delete</button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function editAvailability(index) {
+            if (!selectedMukkadam) return;
+            
+            editingAvailabilityIndex = index;
+            const avail = mukkadamAvailabilities[selectedMukkadam.id][index];
+            
+            document.getElementById('formTitle').textContent = '✏️ Edit Availability';
+            document.getElementById('newAvailFrom').value = avail.from;
+            document.getElementById('newAvailTo').value = avail.to;
+            document.getElementById('newAvailStatus').value = avail.status;
+            document.getElementById('newAvailNotes').value = avail.notes || '';
+            
+            window.scrollTo(0, document.body.scrollHeight);
+        }
+
+        function saveAvailability() {
+            if (!selectedMukkadam) return;
+
+            const from = document.getElementById('newAvailFrom').value;
+            const to = document.getElementById('newAvailTo').value;
+            const status = document.getElementById('newAvailStatus').value;
+            const notes = document.getElementById('newAvailNotes').value;
+
+            if (!from || !to) {
+                alert('Please select both dates');
+                return;
+            }
+
+            if (new Date(from) > new Date(to)) {
+                alert('From date must be before To date');
+                return;
+            }
+
+            if (!mukkadamAvailabilities[selectedMukkadam.id]) {
+                mukkadamAvailabilities[selectedMukkadam.id] = [];
+            }
+
+            if (editingAvailabilityIndex !== null) {
+                // SMART DATE SPLITTING LOGIC
+                const original = mukkadamAvailabilities[selectedMukkadam.id][editingAvailabilityIndex];
+                const originalFrom = new Date(original.from);
+                const originalTo = new Date(original.to);
+                const newFrom = new Date(from);
+                const newTo = new Date(to);
+
+                mukkadamAvailabilities[selectedMukkadam.id].splice(editingAvailabilityIndex, 1);
+
+                const results = [];
+
+                if (newFrom > originalFrom && newTo < originalTo) {
+                    const dayBeforeNewFrom = new Date(newFrom);
+                    dayBeforeNewFrom.setDate(dayBeforeNewFrom.getDate() - 1);
+                    results.push({
+                        from: original.from,
+                        to: dayBeforeNewFrom.toISOString().split('T')[0],
+                        status: original.status,
+                        notes: original.notes
+                    });
+
+                    results.push({ from, to, status, notes });
+
+                    const dayAfterNewTo = new Date(newTo);
+                    dayAfterNewTo.setDate(dayAfterNewTo.getDate() + 1);
+                    results.push({
+                        from: dayAfterNewTo.toISOString().split('T')[0],
+                        to: original.to,
+                        status: original.status,
+                        notes: original.notes
+                    });
+                } else if (newFrom > originalFrom && newFrom <= originalTo) {
+                    const dayBeforeNewFrom = new Date(newFrom);
+                    dayBeforeNewFrom.setDate(dayBeforeNewFrom.getDate() - 1);
+                    results.push({
+                        from: original.from,
+                        to: dayBeforeNewFrom.toISOString().split('T')[0],
+                        status: original.status,
+                        notes: original.notes
+                    });
+                    results.push({ from, to, status, notes });
+                } else if (newTo < originalTo && newTo >= originalFrom) {
+                    results.push({ from, to, status, notes });
+                    const dayAfterNewTo = new Date(newTo);
+                    dayAfterNewTo.setDate(dayAfterNewTo.getDate() + 1);
+                    results.push({
+                        from: dayAfterNewTo.toISOString().split('T')[0],
+                        to: original.to,
+                        status: original.status,
+                        notes: original.notes
+                    });
+                } else {
+                    results.push({ from, to, status, notes });
+                }
+
+                results.forEach(r => mukkadamAvailabilities[selectedMukkadam.id].push(r));
+                mukkadamAvailabilities[selectedMukkadam.id].sort((a, b) => new Date(a.from) - new Date(b.from));
+
+                alert('✅ Availability updated with smart splitting!');
+            } else {
+                mukkadamAvailabilities[selectedMukkadam.id].push({ from, to, status, notes });
+                mukkadamAvailabilities[selectedMukkadam.id].sort((a, b) => new Date(a.from) - new Date(b.from));
+                alert('✅ Availability added!');
+            }
+
+            renderCurrentAvailabilities();
+            cancelEdit();
+        }
+
+        function deleteAvailability(index) {
+            if (!selectedMukkadam) return;
+            
+            if (confirm('Delete this availability?')) {
+                mukkadamAvailabilities[selectedMukkadam.id].splice(index, 1);
+                renderCurrentAvailabilities();
+            }
+        }
+
+        function cancelEdit() {
+            editingAvailabilityIndex = null;
+            document.getElementById('formTitle').textContent = '➕ Add New Availability';
+            document.getElementById('newAvailFrom').value = '';
+            document.getElementById('newAvailTo').value = '';
+            document.getElementById('newAvailStatus').value = 'available';
+            document.getElementById('newAvailNotes').value = '';
+        }
+
+        // Villages view
+        function loadVillagesView() {
+            const districts = {};
+            allMukkadams.forEach(m => {
+                if (!districts[m.village]) districts[m.village] = [];
+                districts[m.village].push(m);
+            });
+
+            const listEl = document.getElementById('villagesList');
+            listEl.innerHTML = '';
+
+            Object.entries(districts).sort().forEach(([village, teams]) => {
+                const active = teams.filter(t => t.status === 'active').length;
+                const workers = teams.reduce((sum, t) => sum + t.crewSize, 0);
+
+                const div = document.createElement('div');
+                div.className = 'bg-white rounded-lg shadow hover:shadow-lg transition border border-gray-200 village-box';
+                div.innerHTML = `
+                    <div onclick="toggleVillage('${village.replace(/'/g, "\\'")}')" class="p-4 cursor-pointer">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-2xl">📍</span>
+                                <h4 class="font-bold text-lg text-gray-800">${village}</h4>
+                            </div>
+                            <svg id="v-arrow-${village}" class="w-5 h-5 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                        </div>
+                        <div class="grid grid-cols-3 gap-4 text-center">
+                            <div class="bg-blue-50 p-3 rounded-lg">
+                                <p class="text-xs text-gray-600 mb-1">Teams</p>
+                                <p class="text-2xl font-bold text-blue-600">${teams.length}</p>
+                            </div>
+                            <div class="bg-green-50 p-3 rounded-lg">
+                                <p class="text-xs text-green-600 mb-1">Active</p>
+                                <p class="text-2xl font-bold text-green-600">${active}</p>
+                            </div>
+                            <div class="bg-purple-50 p-3 rounded-lg">
+                                <p class="text-xs text-gray-600 mb-1">Workers</p>
+                                <p class="text-2xl font-bold text-purple-600">${workers}</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="v-detail-${village}" class="hidden border-t bg-gray-50 p-4 slide-down">
+                        <div class="space-y-3 max-h-96 overflow-y-auto">
+                            ${teams.map(t => {
+                                const transportCost = calculateTransportCost(t, 15);
+                                const availabilities = mukkadamAvailabilities[t.id] || [];
+                                const currentAvail = availabilities.length > 0 ? availabilities[0] : null;
+                                
+                                return `
+                                <div class="bg-white rounded-lg border-l-4 ${t.status === 'active' ? 'border-green-500' : 'border-gray-400'} hover:shadow-md transition">
+                                    <div onclick="toggleVillageMukkadam(${t.id})" class="p-3 cursor-pointer">
+                                        <div class="flex items-start justify-between mb-2">
+                                            <div class="flex-1">
+                                                <h5 class="font-bold text-gray-800">${t.name}</h5>
+                                                <p class="text-sm text-gray-600">👷 ${t.crewSize} workers</p>
+                                            </div>
+                                            <div class="flex flex-col items-end space-y-1">
+                                                <span class="px-2 py-1 rounded-full text-xs font-bold ${t.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}">
+                                                    ${t.status === 'active' ? '✅' : '⏸️'}
+                                                </span>
+                                                <svg id="v-mukkadam-arrow-${t.id}" class="w-4 h-4 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                                </svg>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Full Details - Hidden Initially -->
+                                    <div id="v-mukkadam-detail-${t.id}" class="hidden border-t bg-gray-50 p-3 slide-down">
+                                        <p class="text-sm text-gray-600 mb-3">📱 ${t.mobile}</p>
+                                        
+                                        <div class="grid grid-cols-2 gap-3 mb-3 text-sm">
+                                            <div class="bg-white p-2 rounded">
+                                                <p class="text-xs text-gray-600">Activity</p>
+                                                <p class="font-bold text-gray-800">🔧 ${t.activity}</p>
+                                            </div>
+                                            <div class="bg-white p-2 rounded">
+                                                <p class="text-xs text-gray-600">Rating</p>
+                                                <p class="font-bold text-gray-800">⭐ ${t.rating}/5</p>
+                                            </div>
+                                            <div class="bg-white p-2 rounded">
+                                                <p class="text-xs text-gray-600">Price/Day</p>
+                                                <p class="font-bold text-gray-800">💰 ₹${t.pricePerWorker}</p>
+                                            </div>
+                                            <div class="bg-white p-2 rounded">
+                                                <p class="text-xs text-gray-600">Crew Size</p>
+                                                <p class="font-bold text-gray-800">👷 ${t.crewSize}</p>
+                                            </div>
+                                        </div>
+                                        
+                                        ${currentAvail ? `
+                                        <div class="mb-3 p-2 rounded-lg ${
+                                            currentAvail.status === 'available' ? 'bg-green-50 border border-green-200' :
+                                            currentAvail.status === 'busy' ? 'bg-yellow-50 border border-yellow-200' :
+                                            'bg-red-50 border border-red-200'
+                                        }">
+                                            <p class="text-xs font-semibold mb-1">📅 Availability:</p>
+                                            <p class="text-xs">${currentAvail.from} to ${currentAvail.to}</p>
+                                            <p class="text-xs font-semibold mt-1">${
+                                                currentAvail.status === 'available' ? '✅ Available' :
+                                                currentAvail.status === 'busy' ? '⏳ Busy' : '🏖️ On Leave'
+                                            }</p>
+                                        </div>
+                                        ` : ''}
+                                        
+                                        <div class="mb-3 p-2 bg-indigo-50 rounded-lg border border-indigo-200">
+                                            <p class="text-xs font-semibold mb-1">🚗 Transport:</p>
+                                            <p class="text-xs">${t.transport === 'Own Bike' ? '🏍️ Own Bike' : t.transport === 'Own Pickup' ? '🚗 Own Pickup' : '🚶 No Vehicle'}</p>
+                                            <p class="text-xs text-gray-600 mt-1">${transportCost.breakdown}</p>
+                                        </div>
+                                        
+                                        <div class="grid grid-cols-3 gap-2">
+                                            <button onclick="viewMukkadamProfile(${t.id})" class="bg-blue-600 text-white px-2 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700">
+                                                Profile
+                                            </button>
+                                            <button onclick="callMukkadam('${t.mobile}')" class="bg-green-600 text-white px-2 py-2 rounded-lg text-sm font-semibold hover:bg-green-700">
+                                                📞 Call
+                                            </button>
+                                            <button onclick="assignMukkadam(${t.id})" class="bg-purple-600 text-white px-2 py-2 rounded-lg text-sm font-semibold hover:bg-purple-700">
+                                                Assign
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            `}).join('')}
+                        </div>
+                    </div>
+                `;
+                listEl.appendChild(div);
+            });
+        }
+
+        function toggleVillage(village) {
+            const detail = document.getElementById(`v-detail-${village}`);
+            const arrow = document.getElementById(`v-arrow-${village}`);
+            
+            if (detail.classList.contains('hidden')) {
+                detail.classList.remove('hidden');
+                arrow.classList.add('rotate-180');
+            } else {
+                detail.classList.add('hidden');
+                arrow.classList.remove('rotate-180');
+            }
+        }
+
+        function toggleVillageMukkadam(mukkadamId) {
+            const detail = document.getElementById(`v-mukkadam-detail-${mukkadamId}`);
+            const arrow = document.getElementById(`v-mukkadam-arrow-${mukkadamId}`);
+            
+            if (detail.classList.contains('hidden')) {
+                detail.classList.remove('hidden');
+                arrow.classList.add('rotate-180');
+            } else {
+                detail.classList.add('hidden');
+                arrow.classList.remove('rotate-180');
+            }
+        }
+
+        function searchVillages() {
+            const query = document.getElementById('villageSearch').value.toLowerCase();
+            document.querySelectorAll('.village-box').forEach(box => {
+                box.style.display = box.textContent.toLowerCase().includes(query) ? 'block' : 'none';
+            });
+        }
+
+        function showView(view) {
+            document.querySelectorAll('.view-content').forEach(v => v.classList.add('hidden'));
+            document.getElementById(`view-${view}`).classList.remove('hidden');
+            
+            document.querySelectorAll('.view-btn').forEach(btn => {
+                btn.classList.remove('bg-white', 'text-green-700');
+                btn.classList.add('text-white');
+            });
+            
+            const activeBtn = document.querySelector(`button[onclick*="showView('${view}')"]`);
+            if (activeBtn && activeBtn.classList.contains('view-btn')) {
+                activeBtn.classList.remove('text-white');
+                activeBtn.classList.add('bg-white', 'text-green-700');
+            }
+            
+            if (view === 'villages') {
+                loadVillagesView();
+            } else if (view === 'profile' && selectedMukkadam) {
+                updateProfileView(selectedMukkadam);
+            }
+        }
+
+        function toggleMenu() {
+            document.getElementById('mobileMenu').classList.toggle('hidden');
+        }
+
+        function toggleMukkadamStatus() {
+            if (selectedMukkadam) {
+                selectedMukkadam.status = selectedMukkadam.status === 'active' ? 'inactive' : 'active';
+                updateProfileView(selectedMukkadam);
+                alert(`Status changed to ${selectedMukkadam.status.toUpperCase()}`);
+            }
+        }
+
+        renderTeamList();
+    </script>
+</body>
+</html>

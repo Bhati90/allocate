@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 48 20% 98%;
+    --foreground: 140 45% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 140 45% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 140 45% 12%;
+
+    --primary: 142 76% 36%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 48 100% 96%;
+    --secondary-foreground: 140 45% 12%;
+
+    --muted: 48 20% 95%;
+    --muted-foreground: 140 20% 45%;
+
+    --accent: 43 96% 56%;
+    --accent-foreground: 140 45% 12%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 43 96% 56%;
+    --warning-foreground: 140 45% 12%;
+
+    --border: 48 20% 88%;
+    --input: 48 20% 88%;
+    --ring: 142 76% 36%;
+
+    --radius: 0.75rem;
+
+    --chart-1: 142 76% 36%;
+    --chart-2: 43 96% 56%;
+    --chart-3: 162 63% 41%;
+    --chart-4: 28 80% 52%;
+    --chart-5: 48 96% 89%;
+
+    --gradient-farm: linear-gradient(135deg, hsl(142 76% 36%), hsl(162 63% 41%));
+    --gradient-harvest: linear-gradient(135deg, hsl(43 96% 56%), hsl(28 80% 52%));
+    
+    --shadow-soft: 0 2px 8px -2px hsl(140 45% 12% / 0.08);
+    --shadow-medium: 0 8px 16px -4px hsl(140 45% 12% / 0.12);
+  }
+
+  .dark {
+    --background: 140 40% 8%;
+    --foreground: 48 20% 95%;
+
+    --card: 140 35% 12%;
+    --card-foreground: 48 20% 95%;
+
+    --popover: 140 35% 12%;
+    --popover-foreground: 48 20% 95%;
+
+    --primary: 142 70% 45%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 140 30% 18%;
+    --secondary-foreground: 48 20% 95%;
+
+    --muted: 140 30% 18%;
+    --muted-foreground: 48 15% 65%;
+
+    --accent: 43 90% 60%;
+    --accent-foreground: 140 40% 8%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 70% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 43 90% 60%;
+    --warning-foreground: 140 40% 8%;
+
+    --border: 140 30% 22%;
+    --input: 140 30% 22%;
+    --ring: 142 70% 45%;
+
+    --chart-1: 142 70% 45%;
+    --chart-2: 43 90% 60%;
+    --chart-3: 162 60% 50%;
+    --chart-4: 28 75% 60%;
+    --chart-5: 48 80% 70%;
+
+    --gradient-farm: linear-gradient(135deg, hsl(142 70% 45%), hsl(162 60% 50%));
+    --gradient-harvest: linear-gradient(135deg, hsl(43 90% 60%), hsl(28 75% 60%));
+    
+    --shadow-soft: 0 2px 8px -2px hsl(0 0% 0% / 0.3);
+    --shadow-medium: 0 8px 16px -4px hsl(0 0% 0% / 0.4);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
