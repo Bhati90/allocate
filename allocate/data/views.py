@@ -211,6 +211,12 @@ def jobs_list(request):
             # Use activity data from API
             total_area = float(api_activity.get('acres', 0))
             remaining_area = total_area - allocated_area
+
+            def safe_date(value):
+                if not value:
+                    return ''
+                return str(value).split('T')[0]
+
             
             activities_data.append({
                 'id': db_activity.id if db_activity else None,
@@ -221,7 +227,13 @@ def jobs_list(request):
                 'total_area': total_area,
                 'allocated_area': allocated_area,
                 'remaining_area': remaining_area,
-                'scheduled_date': api_activity.get('scheduled_date', job.get('scheduled_date', '')).split('T')[0],
+
+                # ✅ SAFE DATE HANDLING
+                'scheduled_date': safe_date(
+                    api_activity.get('scheduled_date') 
+                    or job.get('scheduled_date')
+                ),
+
                 'scheduled_time': api_activity.get('scheduled_time', ''),
                 'estimated_workers': api_activity.get('estimated_workers', 10),
                 'rate_per_acre': float(api_activity.get('rate_per_acre', 0)),
@@ -229,6 +241,7 @@ def jobs_list(request):
                 'is_fully_allocated': allocated_area >= total_area,
                 'allocations': allocations_data
             })
+
         
         # Calculate job status based on activities
         def calculate_status(activities):
