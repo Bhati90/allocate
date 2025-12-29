@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-const API_BASE_URL_A = import.meta.env.VITE_API_BASE_URL_SUPPLY;
+const API_BASE_URL_A = import.meta.env.VITE_API_BASE_URL_ALLOCATION;
 const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -14,7 +14,7 @@ const Login = () => {
     
     try {
       console.log('🔐 Attempting login...');
-      const res = await axios.post(`${API_BASE_URL_A}/api/login/`, { 
+      const res = await axios.post(`${API_BASE_URL_A}/ap/login/`, { 
         username, 
         password 
       });
