@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-const API_BASE_URL_A = import.meta.env.VITE_API_BASE_URL_ALLOCATE;
+const API_BASE_URL_A = import.meta.env.VITE_API_BASE_URL_ALLOCATION;
 const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
