@@ -4,6 +4,58 @@ from django.db import models
 from django.contrib.auth.models import User
 from decimal import Decimal
 
+from django.db import models
+from django.contrib.auth.models import User
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+class UserProfile(models.Model):
+    """
+    Company team member profile
+    Links mobile number to Django User for mobile app login
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    mobile_number = models.CharField(max_length=15, unique=True, db_index=True)
+    full_name = models.CharField(max_length=255, blank=True, null=True)
+    role = models.CharField(
+        max_length=50,
+        choices=[
+            ('admin', 'Admin'),
+            ('manager', 'Manager'),
+            ('supervisor', 'Field Supervisor'),
+            ('staff', 'Staff')
+        ],
+        default='staff'
+    )
+    
+    is_mobile_verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['mobile_number']),
+        ]
+    
+    def __str__(self):
+        return f"{self.full_name or self.user.username} - {self.mobile_number}"
+
+
+
+# Auto-create profile when User is created
+@receiver(post_save, sender=User)
+def create_user_profile(sender, instance, created, **kwargs):
+    if created and not hasattr(instance, 'profile'):
+        UserProfile.objects.create(user=instance)
+
+
+
+@receiver(post_save, sender=User)
+def save_user_profile(sender, instance, **kwargs):
+    if hasattr(instance, 'profile'):
+        instance.profile.save()
+
+
 class JobActivity(models.Model):
     """
     Activity within a Job - Job details come from external API
