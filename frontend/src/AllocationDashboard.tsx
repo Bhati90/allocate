@@ -169,7 +169,7 @@ const toggleSection = (section: 'complexJobs' | 'activityTypes' | 'crewDistribut
     console.log('🔑 Token:', token ? 'EXISTS' : 'NOT FOUND');
     const config = getAuthConfig();
 
-    const t = 'Token aaec365adef48dae27067536987eded8968c982c'
+    const t = 'Token 53942f5d4e74ad0f0202c0c409dfe9e0a2456803'
     
     try {
       const [jobsRes, allocationsRes, mukkadamRes, transportRes] = await Promise.all([
