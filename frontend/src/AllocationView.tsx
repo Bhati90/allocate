@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { 
   ArrowLeft, Users, Truck, DollarSign, 
-  Calendar, FileText, ExternalLink, Car, XCircle
+  Calendar, FileText, ExternalLink, Car, XCircle,CheckCircle,
+  MapPin, Phone, TrendingUp, TrendingDown, AlertCircle
 } from 'lucide-react';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL_SUPPLY;
 const API_BASE_URL_A = import.meta.env.VITE_API_BASE_URL_ALLOCATION;
@@ -16,6 +17,8 @@ const AllocationView: React.FC = () => {
   const [data, setData] = useState<any>(null);
   const [mukkadam, setMukkadam] = useState<any>(null);
   const [provider, setProvider] = useState<any>(null);
+  const [farmer, setFarmer] = useState<any>(null);
+  const [jobActivity, setJobActivity] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -51,6 +54,40 @@ const AllocationView: React.FC = () => {
           }
         }
 
+        // ✅ FETCH JOB DETAILS TO GET FARMER_ID AND ACTIVITY REVENUE
+        if (allocationRes.data.job_id) {
+          try {
+            const jobsRes = await axios.get(`${API_BASE_URL_A}/ap/jobs/`, config);
+            const job = jobsRes.data.find((j: any) => j.work_id === allocationRes.data.job_id);
+            
+            if (job) {
+              // Find the specific activity
+              const activity = job.activities?.find((a: any) => 
+                a.activity_name === allocationRes.data.activity_name
+              );
+              
+              if (activity) {
+                setJobActivity(activity);
+              }
+
+              // ✅ FETCH FARMER DETAILS
+              if (job.farmer_id) {
+                try {
+                  const farmerRes = await axios.get(
+                    `https://sahyadri.kisanmitra.ai/fir/api/get_farmer_details/${job.farmer_id}/`
+                  );
+                  setFarmer(farmerRes.data);
+                } catch (error) {
+                  console.error('Failed to fetch farmer:', error);
+                  setFarmer(null);
+                }
+              }
+            }
+          } catch (error) {
+            console.error('Failed to fetch job details:', error);
+          }
+        }
+
         setLoading(false);
       } catch (error) {
         console.error('Failed to fetch allocation:', error);
@@ -74,6 +111,11 @@ const AllocationView: React.FC = () => {
   }
 
   const totalCost = parseFloat(data.mukkadam_price || 0) + parseFloat(data.transport_price || 0);
+  
+  // ✅ CALCULATE P/L
+  const revenue = jobActivity?.total_price || 0;
+  const profit = revenue - totalCost;
+  const profitMargin = revenue > 0 ? (profit / revenue) * 100 : 0;
 
   // Determine transport display info
   const getTransportDisplay = () => {
@@ -115,7 +157,7 @@ const AllocationView: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-100 p-6">
-      <div className="max-w-5xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         
         <button 
           onClick={() => navigate('/allocations')} 
@@ -158,6 +200,170 @@ const AllocationView: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* ✅ FARMER DETAILS CARD */}
+        {farmer && (
+          <div className="bg-gradient-to-br from-purple-50 to-indigo-50 p-6 rounded-xl shadow-lg border-l-4 border-purple-500">
+            <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center">
+              <Users className="mr-2 text-purple-600"/> Farmer Details
+            </h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-xs text-gray-500 uppercase font-bold">Name</p>
+                <p className="text-lg font-semibold text-gray-900">{farmer.farmer_name}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 uppercase font-bold">Phone Number</p>
+                <div className="flex items-center">
+                  <Phone size={14} className="mr-2 text-gray-500" />
+                  <p className="text-sm text-gray-700">{farmer.phone_number}</p>
+                </div>
+              </div>
+              <div className="col-span-2">
+                <p className="text-xs text-gray-500 uppercase font-bold">Location</p>
+                <div className="flex items-center">
+                  <MapPin size={14} className="mr-2 text-gray-500" />
+                  <p className="text-sm text-gray-700">
+                    {farmer.village}, {farmer.taluka}, {farmer.district}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ✅ P/L ANALYSIS CARD */}
+        {jobActivity && (
+          <div className={`p-6 rounded-xl shadow-lg border-2 ${
+            profit >= 0 ? 'bg-gradient-to-br from-green-50 to-emerald-50 border-green-300' : 'bg-gradient-to-br from-red-50 to-pink-50 border-red-300'
+          }`}>
+            <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center">
+              <DollarSign className={`mr-2 ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}/> 
+              Profit/Loss Analysis
+            </h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              {/* Revenue */}
+              <div className="bg-white p-4 rounded-lg border border-gray-200">
+                <p className="text-xs text-gray-500 uppercase font-bold mb-1">Farmer Payment (Revenue)</p>
+                <p className="text-2xl font-bold text-green-600">₹{revenue.toLocaleString()}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {jobActivity.total_area} acres @ ₹{jobActivity.rate_per_acre}/acre
+                </p>
+              </div>
+
+              {/* Mukkadam Cost */}
+              <div className="bg-white p-4 rounded-lg border border-gray-200">
+                <p className="text-xs text-gray-500 uppercase font-bold mb-1">Mukkadam Cost</p>
+                <p className="text-2xl font-bold text-blue-600">₹{parseFloat(data.mukkadam_price).toLocaleString()}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {data.allocated_area} acres allocated
+                </p>
+              </div>
+
+              {/* Transport Cost */}
+              <div className="bg-white p-4 rounded-lg border border-gray-200">
+                <p className="text-xs text-gray-500 uppercase font-bold mb-1">Transport Cost</p>
+                <p className="text-2xl font-bold text-orange-600">
+                  ₹{parseFloat(data.transport_price || 0).toLocaleString()}
+                </p>
+                <p className="text-xs text-gray-500 mt-1 capitalize">
+                  {data.transport_type} transport
+                </p>
+              </div>
+
+              {/* Net Profit */}
+              <div className={`p-4 rounded-lg border-2 ${
+                profit >= 0 ? 'bg-green-100 border-green-400' : 'bg-red-100 border-red-400'
+              }`}>
+                <p className="text-xs text-gray-700 uppercase font-bold mb-1 flex items-center">
+                  {profit >= 0 ? (
+                    <TrendingUp size={14} className="mr-1" />
+                  ) : (
+                    <TrendingDown size={14} className="mr-1" />
+                  )}
+                  Net Profit/Loss
+                </p>
+                <p className={`text-3xl font-bold ${profit >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                  {profit >= 0 ? '+' : ''}₹{profit.toLocaleString()}
+                </p>
+                <p className={`text-sm font-semibold mt-1 ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {profitMargin.toFixed(1)}% margin
+                </p>
+              </div>
+            </div>
+
+            {/* Detailed Breakdown */}
+            <div className="mt-4 bg-white p-4 rounded-lg border border-gray-200">
+              <h4 className="font-bold text-gray-700 mb-3 text-sm">Financial Breakdown:</h4>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Revenue (Farmer Payment):</span>
+                  <span className="font-bold text-green-600">+ ₹{revenue.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Mukkadam Payment:</span>
+                  <span className="font-bold text-blue-600">- ₹{parseFloat(data.mukkadam_price).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Transport Payment:</span>
+                  <span className="font-bold text-orange-600">- ₹{parseFloat(data.transport_price || 0).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t-2 border-gray-300">
+                  <span className="font-bold text-gray-800">Total Cost:</span>
+                  <span className="font-bold text-gray-800">₹{totalCost.toLocaleString()}</span>
+                </div>
+                <div className={`flex justify-between items-center pt-2 border-t-2 ${
+                  profit >= 0 ? 'border-green-400' : 'border-red-400'
+                }`}>
+                  <span className="font-bold text-gray-900">Net Profit/Loss:</span>
+                  <span className={`text-xl font-bold ${profit >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                    {profit >= 0 ? '+' : ''}₹{profit.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* ✅ PROFIT/LOSS WARNINGS */}
+            {profit < 0 && (
+              <div className="mt-4 bg-red-100 border-2 border-red-400 rounded-lg p-4 flex items-start">
+                <AlertCircle className="text-red-600 mr-3 flex-shrink-0 mt-0.5" size={20} />
+                <div>
+                  <p className="font-bold text-red-800 mb-1">Loss Making Allocation</p>
+                  <p className="text-sm text-red-700">
+                    This allocation resulted in a loss of ₹{Math.abs(profit).toLocaleString()}. 
+                    Review pricing or negotiate better rates for future allocations.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {profit >= 0 && profitMargin < 20 && (
+              <div className="mt-4 bg-yellow-100 border-2 border-yellow-400 rounded-lg p-4 flex items-start">
+                <AlertCircle className="text-yellow-600 mr-3 flex-shrink-0 mt-0.5" size={20} />
+                <div>
+                  <p className="font-bold text-yellow-800 mb-1">Low Profit Margin</p>
+                  <p className="text-sm text-yellow-700">
+                    Profit margin is {profitMargin.toFixed(1)}% (target: 20%+). Consider optimizing costs for better margins.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {profit >= 0 && profitMargin >= 20 && (
+              <div className="mt-4 bg-green-100 border-2 border-green-400 rounded-lg p-4 flex items-start">
+                <CheckCircle className="text-green-600 mr-3 flex-shrink-0 mt-0.5" size={20} />
+                <div>
+                  <p className="font-bold text-green-800 mb-1">Healthy Profit Margin</p>
+                  <p className="text-sm text-green-700">
+                    Excellent! This allocation achieved a {profitMargin.toFixed(1)}% profit margin.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           
@@ -216,8 +422,9 @@ const AllocationView: React.FC = () => {
             )}
           </div>
 
-          {/* Transport Details - Conditional Rendering */}
+          {/* Transport Details - Keep existing code */}
           <div className={`bg-white p-6 rounded-xl shadow-lg border-l-4 ${transportDisplay.borderColor}`}>
+            {/* ... rest of your existing transport section ... */}
             <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center">
               <TransportIcon className={`mr-2 ${transportDisplay.iconColor}`}/> 
               {transportDisplay.title}
@@ -314,7 +521,7 @@ const AllocationView: React.FC = () => {
             )}
           </div>
 
-          {/* Work Details */}
+          {/* Work Details - Keep existing code */}
           <div className="bg-white p-6 rounded-xl shadow-lg lg:col-span-2">
             <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center">
               <FileText className="mr-2 text-green-500"/> Work & Allocation Details
@@ -374,37 +581,6 @@ const AllocationView: React.FC = () => {
                 <span className="inline-block px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold">
                   {data.status?.toUpperCase() || 'ALLOCATED'}
                 </span>
-              </div>
-            </div>
-
-            {/* Payment Breakdown */}
-            <div className="mt-6 pt-6 border-t-2 bg-gradient-to-br from-green-50 to-blue-50 p-6 rounded-lg">
-              <h4 className="font-bold text-gray-800 mb-4 text-lg">Payment Breakdown</h4>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-700 font-medium">Mukkadam Payment:</span>
-                  <span className="font-bold text-blue-600 text-lg">
-                    ₹{parseFloat(data.mukkadam_price).toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-700 font-medium">
-                    Transport Payment ({data.transport_type}):
-                  </span>
-                  <span className={`font-bold text-lg ${
-                    data.transport_type === 'none' ? 'text-gray-500' :
-                    data.transport_type === 'own' ? 'text-blue-600' :
-                    'text-orange-600'
-                  }`}>
-                    ₹{parseFloat(data.transport_price || 0).toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center pt-3 border-t-2 border-green-300">
-                  <span className="font-bold text-gray-800 text-lg">Total Cost:</span>
-                  <span className="text-3xl font-bold text-green-600">
-                    ₹{totalCost.toLocaleString()}
-                  </span>
-                </div>
               </div>
             </div>
 
