@@ -99,8 +99,8 @@ TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
         'DIRS': [
-            os.path.join(BASE_DIR, 'frontend', 'dist'),  # ✅ For index.html
-        ],
+		f"{BASE_DIR}/allocate/static",
+	],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -160,10 +160,10 @@ DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',  # use this for normal Postgres
-        'NAME': 'registration_db',
+        'NAME': 'postgres',
         'USER': 'postgres',
-        'PASSWORD': 'new_password',
-        'HOST': 'localhost',
+        'PASSWORD': 'Agrointel45677Kishan',
+        'HOST': 'allocation.c12ggig2u4ig.ap-south-1.rds.amazonaws.com',
         'PORT': '5432',
         'OPTIONS': {
             'client_encoding': 'UTF8',
@@ -282,3 +282,5 @@ LOGGING = {
 }
 
 
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
