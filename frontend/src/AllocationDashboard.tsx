@@ -178,8 +178,8 @@ const toggleSection = (section: 'complexJobs' | 'activityTypes' | 'crewDistribut
     //   headers: { Authorization: `Token ${t}` }
     // }),
         axios.get(`${API_BASE_URL_A}/ap/allocations/`, config),
-        axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`, {headers: { Authorization: `Token ${t}` }}),
-        axios.get(`${API_BASE_URL}/api/transport-providers/dropdown_list/`, {headers: { Authorization: `Token ${t}` }})
+        axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`),
+        axios.get(`${API_BASE_URL}/api/transport-providers/dropdown_list/`)
       ]);
 
       setJobs(jobsRes.data);
