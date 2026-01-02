@@ -41,8 +41,8 @@ from .serializers import (
 # External API base URL
 EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
 
-# SUPPLY_APP_URL = 'https://supply.bharatintelligence.ai'  # Change to your actual Supply App URL
-SUPPLY_APP_URL = 'http://localhost:8000'  # Local for testing
+SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'  # Change to your actual Supply App URL
+
 def about(request):
     return render(request,'data/index.html')
 
@@ -211,7 +211,7 @@ def jobs_list(request):
                     # Fetch mukkadam name
                     try:
                         mukkadam_response = requests.get(
-                            f'{SUPPLY_API_BASE}/api/mukkadam/{alloc.mukkadam_id}/',
+                            f'{SUPPLY_API_URL}/api/mukkadam/{alloc.mukkadam_id}/',
                             timeout=2
                         )
                         mukkadam_data = mukkadam_response.json()
