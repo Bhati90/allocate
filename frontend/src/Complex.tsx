@@ -29,9 +29,6 @@ interface ComplexAllocationModalProps {
 }
 
 
-
-
-
 const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
   job,
   onClose,
@@ -237,138 +234,218 @@ useEffect(() => {
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-green-600 to-blue-600 px-6 py-4 flex justify-between items-center sticky top-0 z-10">
-          <div>
-            <h2 className="text-2xl font-bold text-white">Allocate Complex Job</h2>
-            <p className="text-white text-sm opacity-90">{job.work_id} - {job.title}</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-white hover:bg-white hover:bg-opacity-20 p-2 rounded-full transition"
-          >
-            <X size={24} />
-          </button>
+      {/* Header */}
+      <div className="bg-gradient-to-r from-green-600 to-blue-600 px-6 py-4 flex justify-between items-center sticky top-0 z-10">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Allocate Complex Job</h2>
+          <p className="text-white text-sm opacity-90">{job.work_id} - {job.title}</p>
         </div>
+        <button
+          onClick={onClose}
+          className="text-white hover:bg-white hover:bg-opacity-20 p-2 rounded-full transition"
+        >
+          <X size={24} />
+        </button>
+      </div>
 
-        <div className="p-6">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            
-            {/* Left: Activities List */}
-            <div className="lg:col-span-1">
-              <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
-                <Layers className="mr-2 text-blue-600" />
-                Activities ({job.activities?.length || 0})
-              </h3>
-              
-              <div className="space-y-3">
-                {job.activities?.map((activity) => (
-                  <button
-                    key={activity.id}
-                    onClick={() => handleActivitySelect(activity)}
-                    className={`w-full text-left p-4 rounded-lg border-2 transition ${
-                      selectedActivity?.id === activity.id
-                        ? 'border-blue-500 bg-blue-50'
-                        : activity.is_fully_allocated
-                        ? 'border-green-300 bg-green-50'
-                        : 'border-gray-200 bg-white hover:border-blue-300'
-                    }`}
-                    disabled={activity.is_fully_allocated}
-                  >
-                    <div className="flex items-start justify-between mb-2">
-                      <span className="font-semibold text-gray-900 text-sm">
-                        {activity.activity_name}
-                      </span>
-                      {activity.is_fully_allocated ? (
-                        <CheckCircle size={18} className="text-green-600 flex-shrink-0" />
-                      ) : (
-                        <AlertCircle size={18} className="text-yellow-600 flex-shrink-0" />
-                      )}
-                    </div>
-                    
-                    <div className="space-y-1 text-xs text-gray-600">
-                      <div className="flex items-center">
-                        <MapPin size={12} className="mr-1" />
-                        {activity.location}
-                      </div>
-                      <div className="flex items-center">
-                        <Calendar size={12} className="mr-1" />
-                        {new Date(activity.scheduled_date).toLocaleDateString()}
-                      </div>
-                      <div className="flex items-center">
-                        <TrendingUp size={12} className="mr-1" />
-                        {activity.allocated_area}/{activity.total_area} acres
-                      </div>
-                    </div>
-
-                    {!activity.is_fully_allocated && (
-                      <div className="mt-2">
-                        <div className="bg-gray-200 rounded-full h-2">
-                          <div
-                            className="bg-blue-500 h-2 rounded-full transition-all"
-                            style={{
-                              width: `${(activity.allocated_area / activity.total_area) * 100}%`
-                            }}
-                          />
-                        </div>
-                        <p className="text-xs text-gray-600 mt-1">
-                          {activity.remaining_area.toFixed(2)} acres remaining
-                        </p>
-                      </div>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Right: Allocation Form */}
-            <div className="lg:col-span-2">
-              {!selectedActivity ? (
-                <div className="flex items-center justify-center h-full text-gray-500">
-                  <div className="text-center">
-                    <Layers size={48} className="mx-auto mb-4 opacity-50" />
-                    <p>Select an activity to allocate</p>
+      <div className="p-6">
+        {/* ✅ ADD FARMER DETAILS SECTION AT TOP */}
+        {job.farmer && (
+          <div className="mb-6 bg-gradient-to-r from-purple-50 to-indigo-50 p-4 rounded-xl border-2 border-purple-200">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-gray-900 mb-2 flex items-center">
+                  <Users className="mr-2 text-purple-600" size={20} />
+                  Farmer Details
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                  <div>
+                    <p className="text-gray-600">Name</p>
+                    <p className="font-semibold text-gray-900">{job.farmer.farmer_name}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Phone</p>
+                    <p className="font-semibold text-gray-900">{job.farmer.phone_number}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-gray-600">Location</p>
+                    <p className="font-semibold text-gray-900">{job.farmer.location}</p>
                   </div>
                 </div>
-              ) : (
-                <form onSubmit={handleSubmit} className="space-y-6">
+              </div>
+              
+              {/* ✅ JOB FINANCIAL SUMMARY */}
+              <div className="ml-4 bg-white p-4 rounded-lg border-2 border-green-300 min-w-[200px]">
+                <p className="text-xs text-gray-600 mb-1">Total Job Value</p>
+                <p className="text-2xl font-bold text-green-600">
+                  ₹{(job.booking?.total_amount || 0).toLocaleString()}
+                </p>
+                <div className="mt-2 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Advance:</span>
+                    <span className="font-semibold text-blue-600">
+                      ₹{(job.booking?.advance_paid || 0).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between mt-1">
+                    <span className="text-gray-600">Balance:</span>
+                    <span className="font-semibold text-orange-600">
+                      ₹{(job.booking?.balance || 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          
+          {/* Left: Activities List */}
+          <div className="lg:col-span-1">
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+              <Layers className="mr-2 text-blue-600" />
+              Activities ({job.activities?.length || 0})
+            </h3>
+            
+            <div className="space-y-3">
+              {job.activities?.map((activity) => (
+                <button
+                  key={activity.id}
+                  onClick={() => handleActivitySelect(activity)}
+                  className={`w-full text-left p-4 rounded-lg border-2 transition ${
+                    selectedActivity?.id === activity.id
+                      ? 'border-blue-500 bg-blue-50'
+                      : activity.is_fully_allocated
+                      ? 'border-green-300 bg-green-50'
+                      : 'border-gray-200 bg-white hover:border-blue-300'
+                  }`}
+                  disabled={activity.is_fully_allocated}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <span className="font-semibold text-gray-900 text-sm">
+                      {activity.activity_name}
+                    </span>
+                    {activity.is_fully_allocated ? (
+                      <CheckCircle size={18} className="text-green-600 flex-shrink-0" />
+                    ) : (
+                      <AlertCircle size={18} className="text-yellow-600 flex-shrink-0" />
+                    )}
+                  </div>
                   
-                  {/* Activity Info */}
-                  <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                    <h4 className="font-bold text-blue-900 mb-2">
-                      {selectedActivity.activity_name}
-                    </h4>
-                    <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div>
-                        <span className="text-gray-600">Location:</span>
-                        <span className="font-semibold ml-2">{selectedActivity.location}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Date:</span>
-                        <span className="font-semibold ml-2">
-                          {new Date(selectedActivity.scheduled_date).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Total Area:</span>
-                        <span className="font-semibold ml-2">{selectedActivity.total_area} acres</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Remaining:</span>
-                        <span className="font-semibold ml-2 text-orange-600">
-                          {selectedActivity.remaining_area.toFixed(2)} acres
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Rate:</span>
-                        <span className="font-semibold ml-2">₹{selectedActivity.rate_per_acre}/acre</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Workers Needed:</span>
-                        <span className="font-semibold ml-2">{selectedActivity.estimated_workers}</span>
-                      </div>
+                  <div className="space-y-1 text-xs text-gray-600">
+                    <div className="flex items-center">
+                      <MapPin size={12} className="mr-1" />
+                      {activity.location}
+                    </div>
+                    <div className="flex items-center">
+                      <Calendar size={12} className="mr-1" />
+                      {new Date(activity.scheduled_date).toLocaleDateString()}
+                    </div>
+                    <div className="flex items-center">
+                      <TrendingUp size={12} className="mr-1" />
+                      {activity.allocated_area}/{activity.total_area} acres
+                    </div>
+                    {/* ✅ ADD REVENUE INFO */}
+                    <div className="flex items-center justify-between pt-1 border-t border-gray-300">
+                      <span className="text-green-600 font-semibold">₹{activity.total_price?.toLocaleString() || 0}</span>
                     </div>
                   </div>
+
+                  {!activity.is_fully_allocated && (
+                    <div className="mt-2">
+                      <div className="bg-gray-200 rounded-full h-2">
+                        <div
+                          className="bg-blue-500 h-2 rounded-full transition-all"
+                          style={{
+                            width: `${(activity.allocated_area / activity.total_area) * 100}%`
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs text-gray-600 mt-1">
+                        {activity.remaining_area.toFixed(2)} acres remaining
+                      </p>
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Right: Allocation Form */}
+          <div className="lg:col-span-2">
+            {!selectedActivity ? (
+              <div className="flex items-center justify-center h-full text-gray-500">
+                <div className="text-center">
+                  <Layers size={48} className="mx-auto mb-4 opacity-50" />
+                  <p>Select an activity to allocate</p>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-6">
+                
+                {/* ✅ ENHANCED Activity Info with Financial Details */}
+                <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                  <h4 className="font-bold text-blue-900 mb-3 flex items-center justify-between">
+                    <span>{selectedActivity.activity_name}</span>
+                    <span className="text-sm bg-green-100 text-green-700 px-3 py-1 rounded-full">
+                      Revenue: ₹{selectedActivity.total_price?.toLocaleString() || 0}
+                    </span>
+                  </h4>
+                  
+                  <div className="grid grid-cols-2 gap-3 text-sm mb-3">
+                    <div>
+                      <span className="text-gray-600">Location:</span>
+                      <span className="font-semibold ml-2">{selectedActivity.location}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Date:</span>
+                      <span className="font-semibold ml-2">
+                        {new Date(selectedActivity.scheduled_date).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Total Area:</span>
+                      <span className="font-semibold ml-2">{selectedActivity.total_area} acres</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Remaining:</span>
+                      <span className="font-semibold ml-2 text-orange-600">
+                        {selectedActivity.remaining_area.toFixed(2)} acres
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Rate:</span>
+                      <span className="font-semibold ml-2">₹{selectedActivity.rate_per_acre}/acre</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Workers Needed:</span>
+                      <span className="font-semibold ml-2">{selectedActivity.estimated_workers}</span>
+                    </div>
+                  </div>
+
+                  {/* ✅ EXPECTED COSTS FROM API */}
+                  <div className="grid grid-cols-3 gap-2 pt-3 border-t border-blue-300">
+                    <div className="bg-white p-2 rounded">
+                      <p className="text-xs text-gray-600">Expected Revenue</p>
+                      <p className="text-sm font-bold text-green-600">
+                        ₹{selectedActivity.total_price?.toLocaleString() || 0}
+                      </p>
+                    </div>
+                    <div className="bg-white p-2 rounded">
+                      <p className="text-xs text-gray-600">Expected Transport</p>
+                      <p className="text-sm font-bold text-orange-600">
+                        ₹{selectedActivity.transport_cost?.toLocaleString() || 0}
+                      </p>
+                    </div>
+                    <div className="bg-white p-2 rounded">
+                      <p className="text-xs text-gray-600">Other Costs</p>
+                      <p className="text-sm font-bold text-gray-600">
+                        ₹{selectedActivity.other_cost?.toLocaleString() || 0}
+                      </p>
+                    </div>
+                  </div>
+                </div>
 
                   {/* Mukkadam Selection */}
                   <div className="space-y-4">

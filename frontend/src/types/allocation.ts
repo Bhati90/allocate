@@ -1,35 +1,61 @@
-// src/types/allocation.ts
+export interface Job {
+  id: number;
+  work_id: string;
+  farmer_id?: string;
+  
+  // ✅ FARMER DETAILS (enriched by backend)
+  farmer?: {
+    farmer_name: string;
+    phone_number: string;
+    village: string;
+    taluka: string;
+    district: string;
+    location: string;  // Combined location string
+  };
+  
+  title?: string;
+  description?: string;
+  status: 'pending' | 'partially_allocated' | 'fully_allocated';
+  is_complex: boolean;
+  total_activities: number;
+  created_at: string;
+  scheduled_date?: string;
+  
+  // ✅ BOOKING INFO
+  booking?: {
+    id: number;
+    total_amount: number;
+    advance_paid: number;
+    balance: number;
+    status: 'BOOKED' | 'PARTIAL' | 'PAID';
+    payments?: any[];
+  };
+  
+  activities?: Activity[];
+}
+
 export interface Activity {
   id: string;
-  activity_type: string;
-  activity_name: string;
-  location: string;
   activity_id: string;
-  total_price: number;
+  activity_name: string;
+  activity_type: string;
+  location: string;
   total_area: number;
   allocated_area: number;
   remaining_area: number;
   scheduled_date: string;
   estimated_workers: number;
+  
+  // ✅ PRICING FROM API
   rate_per_acre: number;
+  total_price: number;       // Revenue
+  transport_cost: number;    // Expected transport cost
+  other_cost: number;
+  subtotal: number;
+  
   is_fully_allocated: boolean;
   allocations?: any[];
 }
-
-export interface Job {
-  id: string;
-  work_id: string;
-  title: string;
-  status: string;
-  created_at: string;
-  description?: string;
-  allocated?: boolean;
-  allocation_id?: number;
-  is_complex?: boolean;
-  total_activities?: number;
-  activities?: Activity[];
-}
-
 export interface Allocation {
   id: number;
   farmer_work_id: string;
