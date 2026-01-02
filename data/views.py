@@ -41,8 +41,8 @@ from .serializers import (
 # External API base URL
 EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
 
-SUPPLY_APP_URL = 'https://supply.bharatintelligence.ai'  # Change to your actual Supply App URL
-
+# SUPPLY_APP_URL = 'https://supply.bharatintelligence.ai'  # Change to your actual Supply App URL
+SUPPLY_APP_URL = 'http://localhost:8000'  # Local for testing
 def about(request):
     return render(request,'data/index.html')
 
