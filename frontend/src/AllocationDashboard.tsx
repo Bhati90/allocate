@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { 
   Users, Truck, DollarSign,ChevronDown,ChevronUp, FileText, CheckCircle, 
-  XCircle, TrendingUp, Calendar, Filter, Search,Activity,AlertCircle,ExternalLink,
+  XCircle, TrendingUp,TrendingDown, Calendar, Filter, Search,Activity,AlertCircle,ExternalLink,
   Eye, Edit, Plus, X, MapPin, BarChart3, Clock, Layers
 } from 'lucide-react';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL_SUPPLY;
@@ -218,15 +218,17 @@ const toggleSection = (section: 'complexJobs' | 'activityTypes' | 'crewDistribut
   };
 
 
+
+  
 const processMukkadamAllocations = (allocs: Allocation[], mukks: Mukkadam[]) => {
   try {
     const mukkadamMap = new Map<number, MukkadamAllocation>();
     mukks.forEach(mukkadam => {
       const mukkadamAllocs = allocs.filter(a => a.mukkadam_id === mukkadam.id);
-      const totalPrice = mukkadamAllocs.reduce((sum, a) => {
-        const price = a.mukkadam_price ? parseFloat(a.mukkadam_price.toString()) : 0;
-        return sum + price;
-      }, 0);
+        const totalPrice = mukkadamAllocs.reduce((sum, a) => {
+          const price = a.mukkadam_price ? parseFloat(String(a.mukkadam_price)) : 0;
+          return sum + price;
+        }, 0);
       mukkadamMap.set(mukkadam.id, {
         mukkadam,
         allocations: mukkadamAllocs,
@@ -247,7 +249,7 @@ const processTransportAllocations = (allocs: Allocation[], providers: TransportP
     providers.forEach(provider => {
       const providerAllocs = allocs.filter(a => a.transport_provider_id === provider.id);
       const totalPrice = providerAllocs.reduce((sum, a) => {
-        const price = a.transport_price ? parseFloat(a.transport_price.toString()) : 0;
+        const price = a.transport_price ? parseFloat(String(a.transport_price)) : 0;
         return sum + price;
       }, 0);
       transportMap.set(provider.id, {
@@ -272,8 +274,8 @@ const buildActivityLogs = (allocs: Allocation[], mukks: Mukkadam[], providers: T
         const mukkadam = mukks.find(m => m.id === allocation.mukkadam_id);
         const provider = providers.find(p => p.id === allocation.transport_provider_id);
         
-        const mukkadamPrice = allocation.mukkadam_price ? parseFloat(allocation.mukkadam_price.toString()) : 0;
-        const transportPrice = allocation.transport_price ? parseFloat(allocation.transport_price.toString()) : 0;
+        const mukkadamPrice = allocation.mukkadam_price ? parseFloat(String(allocation.mukkadam_price)) : 0;
+        const transportPrice = allocation.transport_price ? parseFloat(String(allocation.transport_price)) : 0;
         const totalPrice = mukkadamPrice + transportPrice;
 
         // Determine transport_type
@@ -344,8 +346,8 @@ const buildDailyStats = (allocs: Allocation[]) => {
         const stat = statsByDate.get(date)!;
         stat.total_allocations += 1;
         
-        const mukkadamPrice = allocation.mukkadam_price ? parseFloat(allocation.mukkadam_price.toString()) : 0;
-        const transportPrice = allocation.transport_price ? parseFloat(allocation.transport_price.toString()) : 0;
+        const mukkadamPrice = allocation.mukkadam_price ? parseFloat(String(allocation.mukkadam_price)) : 0;
+        const transportPrice = allocation.transport_price ? parseFloat(String(allocation.transport_price)) : 0;
         
         stat.total_mukkadam_price += mukkadamPrice;
         stat.total_transport_price += transportPrice;
@@ -403,59 +405,156 @@ const handleReallocate = async (allocationId: number) => {
 // Fix: Don't use allocations to determine allocated/pending
 // Use the job's status field instead!
 // Fix: Separate pending, partially allocated, and fully allocated jobs
-const allocatedJobs = jobs.filter(j => {
-  if (j.is_complex) {
-    return j.status === 'fully_allocated';
-  } else {
-    return allocations.some(a => a.farmer_work_id === j.work_id);
+// In AllocationDashboard.tsx
+
+// // ✅ IMPROVED: Calculate job status based on allocations
+// const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' => {
+//   if (!job.is_complex) {
+//     // For simple jobs, check if any allocation exists
+//     return allocations.some(a => a.farmer_work_id === job.work_id) 
+//       ? 'fully_allocated' 
+//       : 'pending';
+//   }
+  
+//   // For complex jobs, check activities
+//   if (!job.activities || job.activities.length === 0) {
+//     return 'pending';
+//   }
+  
+//   const totalActivities = job.activities.length;
+//   const fullyAllocated = job.activities.filter(a => a.is_fully_allocated).length;
+//   const partiallyAllocated = job.activities.filter(a => 
+//     a.allocated_area > 0 && !a.is_fully_allocated
+//   ).length;
+  
+//   if (fullyAllocated === totalActivities) {
+//     return 'fully_allocated';
+//   } else if (fullyAllocated > 0 || partiallyAllocated > 0) {
+//     return 'partially_allocated';
+//   }
+  
+//   return 'pending';
+// };
+
+
+
+// ✅ FIXED: Calculate job status based on allocations
+const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' => {
+  // For simple jobs (1 activity), check if that activity is fully allocated
+  if (!job.is_complex) {
+    if (!job.activities || job.activities.length === 0) {
+      return 'pending';
+    }
+    
+    const activity = job.activities[0];
+    
+    // Check if the single activity is fully allocated
+    if (activity.is_fully_allocated) {
+      return 'fully_allocated';
+    } else if (activity.allocated_area > 0) {
+      return 'partially_allocated';
+    } else {
+      return 'pending';
+    }
   }
-});
-
-const partiallyAllocatedJobs = jobs.filter(j => {
-  return j.is_complex && j.status === 'partially_allocated';
-});
-
-const pendingJobs = jobs.filter(j => {
-  if (j.is_complex) {
-    return j.status === 'pending';
-  } else {
-    return !allocations.some(a => a.farmer_work_id === j.work_id);
+  
+  // For complex jobs, check all activities
+  if (!job.activities || job.activities.length === 0) {
+    return 'pending';
   }
-});
+  
+  const totalActivities = job.activities.length;
+  const fullyAllocated = job.activities.filter(a => a.is_fully_allocated).length;
+  const partiallyAllocated = job.activities.filter(a => 
+    a.allocated_area > 0 && !a.is_fully_allocated
+  ).length;
+  
+  if (fullyAllocated === totalActivities) {
+    return 'fully_allocated';
+  } else if (fullyAllocated > 0 || partiallyAllocated > 0) {
+    return 'partially_allocated';
+  }
+  
+  return 'pending';
+};
 
+// ✅ UPDATE: Use calculated status instead of job.status
+const allocatedJobs = jobs.filter(j => calculateJobStatus(j) === 'fully_allocated');
+const partiallyAllocatedJobs = jobs.filter(j => calculateJobStatus(j) === 'partially_allocated');
+const pendingJobs = jobs.filter(j => calculateJobStatus(j) === 'pending');
+
+// ✅ ADD: Revenue calculation function
+const calculateRevenueStats = () => {
+  let totalRevenue = 0;
+  let profitableCount = 0;
+  let lossCount = 0;
+  let lowMarginCount = 0;
+
+  allocations.forEach(allocation => {
+    const job = jobs.find((j: any) => j.work_id === allocation.farmer_work_id);
+    if (job) {
+      const activity = job.activities?.find((a: any) => 
+        a.activity_name === allocation.activity_name
+      );
+      
+      if (activity) {
+        const revenue = activity.total_price || 0;
+        totalRevenue += revenue;
+
+        const cost = parseFloat(String(allocation.mukkadam_price || '0')) + 
+                    parseFloat(String(allocation.transport_price || '0'));
+        const profit = revenue - cost;
+        const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
+
+        if (profit > 0) profitableCount++;
+        if (profit < 0) lossCount++;
+        if (profit >= 0 && margin < 20) lowMarginCount++;
+      }
+    }
+  });
+
+  const totalCosts = allocations.reduce((sum, a) => 
+    sum + parseFloat(String(a.mukkadam_price || '0')) + parseFloat(String(a.transport_price || '0')), 0
+  );
+  
+  const netProfit = totalRevenue - totalCosts;
+  const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+
+  return {
+    totalRevenue,
+    netProfit,
+    profitMargin,
+    profitableAllocations: profitableCount,
+    lossAllocations: lossCount,
+    lowMarginAllocations: lowMarginCount
+  };
+};
+
+// ✅ Calculate all stats
+const revenueStats = calculateRevenueStats();
 
 const stats = {
   totalJobs: jobs.length,
   allocatedJobs: allocatedJobs.length,
-  partiallyAllocatedJobs: partiallyAllocatedJobs.length,  // ✅ ADD THIS
+  partiallyAllocatedJobs: partiallyAllocatedJobs.length,
   pendingJobs: pendingJobs.length,
-  totalMukkadamPayout: allocations.reduce((sum, a) => {
-    const price = a.mukkadam_price ? parseFloat(a.mukkadam_price.toString()) : 0;
-    return sum + price;
-  }, 0),
-  totalTransportPayout: allocations.reduce((sum, a) => {
-    const price = a.transport_price ? parseFloat(a.transport_price.toString()) : 0;
-    return sum + price;
-  }, 0),
-  totalPayout: 0
+  totalMukkadamPayout: allocations.reduce((sum, a) => 
+    sum + parseFloat(String(a.mukkadam_price || '0')), 0
+  ),
+  totalTransportPayout: allocations.reduce((sum, a) => 
+    sum + parseFloat(String(a.transport_price || '0')), 0
+  ),
+  totalPayout: allocations.reduce((sum, a) => 
+    sum + parseFloat(String(a.mukkadam_price || '0')) + parseFloat(String(a.transport_price || '0')), 0
+  ),
+  // ✅ Add revenue stats
+  totalRevenue: revenueStats.totalRevenue,
+  netProfit: revenueStats.netProfit,
+  profitMargin: revenueStats.profitMargin,
+  profitableAllocations: revenueStats.profitableAllocations,
+  lossAllocations: revenueStats.lossAllocations,
+  lowMarginAllocations: revenueStats.lowMarginAllocations
 };
-stats.totalPayout = stats.totalMukkadamPayout + stats.totalTransportPayout;
-
-const filteredAllocatedJobs = allocatedJobs.filter(j => {
-  const searchLower = searchTerm.toLowerCase();
-  return (
-    String(j.work_id || '').toLowerCase().includes(searchLower) ||
-    String(j.title || '').toLowerCase().includes(searchLower)
-  );
-});
-
-const filteredPendingJobs = pendingJobs.filter(j => {
-  const searchLower = searchTerm.toLowerCase();
-  return (
-    String(j.work_id || '').toLowerCase().includes(searchLower) ||
-    String(j.title || '').toLowerCase().includes(searchLower)
-  );
-});
 const filteredActivityLogs = activityLogs.filter(log => {
   const searchLower = searchTerm.toLowerCase();
   return (
@@ -466,16 +565,7 @@ const filteredActivityLogs = activityLogs.filter(log => {
   );
 });
 
-  const openAllocationModal = (job: Job) => {
-    setSelectedJob(job);
-    setAllocationForm({
-      mukkadam_id: '',
-      transport_provider_id: '',
-      mukkadam_price: '',
-      transport_price: ''
-    });
-    setShowAllocationModal(true);
-  };
+
 
   const closeAllocationModal = () => {
     setShowAllocationModal(false);
@@ -616,6 +706,10 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
          String(ta.provider.contact_number || '').includes(searchLower) ||
          ta.allocations.some(a => String(a.farmer_work_id || '').toLowerCase().includes(searchLower));
 });
+
+
+
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
@@ -710,7 +804,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                 <Activity className="inline-block mr-2" size={18} />
                 Activity Log ({activityLogs.length})
               </button>
-              <button
+              {/* <button
                 onClick={() => setActiveTab('analytics')}
                 className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
                   activeTab === 'analytics'
@@ -720,7 +814,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
               >
                 <BarChart3 className="inline-block mr-2" size={18} />
                 Analytics
-              </button>
+              </button> */}
             </nav>
           </div>
 
@@ -966,7 +1060,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                         <TrendingUp className="text-orange-600" size={24} />
                         <span className="text-2xl font-bold text-gray-900">{partiallyAllocatedJobs.length}</span>
                         </div>
-                        <p className="text-xs text-gray-600 font-medium">In Progress</p>
+                        <p className="text-xs text-gray-600 font-medium">Partially allocated</p>
                         <p className="text-xs text-orange-600 mt-1">Need attention</p>
                     </div>
 
@@ -983,7 +1077,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     </div>
 
                     {/* Active Workers */}
-                    <div className="bg-white p-4 rounded-xl shadow-md border-l-4 border-teal-500 hover:shadow-lg transition cursor-pointer" onClick={() => setShowActiveWorkersModal(true)}>
+                    {/* <div className="bg-white p-4 rounded-xl shadow-md border-l-4 border-teal-500 hover:shadow-lg transition cursor-pointer" onClick={() => setShowActiveWorkersModal(true)}>
                         <div className="flex items-center justify-between mb-2">
                         <Users className="text-teal-600" size={24} />
                         <span className="text-2xl font-bold text-gray-900">{totalActiveWorkers}</span>
@@ -994,7 +1088,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                         </p>
                     </div>
 
-                    {/* Total Payout */}
+                   
                     <div className="bg-white p-4 rounded-xl shadow-md border-l-4 border-purple-500 hover:shadow-lg transition">
                         <div className="flex items-center justify-between mb-2">
                         <DollarSign className="text-purple-600" size={24} />
@@ -1004,7 +1098,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                         <p className="text-xs text-purple-600 mt-1">
                         {allocations.length} allocations
                         </p>
-                    </div>
+                    </div> */}
                     </div>
 
                     {/* Main Content Grid */}
@@ -1148,59 +1242,162 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
     )}
   </div>
 </div>
-                        {/* Financial Summary */}
-                        <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl shadow-lg p-6 border border-purple-200">
-                        <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
-                            <DollarSign className="mr-2 text-purple-600" />
-                            Financial Summary
-                        </h3>
-                        
-                        <div className="grid grid-cols-2 gap-4 mb-4">
-                            <div>
-                            <p className="text-sm text-gray-600 mb-2">Mukkadam Payments</p>
-                            <p className="text-2xl font-bold text-green-600">
-                                ₹{stats.totalMukkadamPayout.toLocaleString()}
-                            </p>
-                            <p className="text-xs text-gray-500 mt-1">
-                                {allocations.length} allocations
-                            </p>
-                            </div>
-                            <div>
-                            <p className="text-sm text-gray-600 mb-2">Transport Payments</p>
-                            <p className="text-2xl font-bold text-orange-600">
-                                ₹{stats.totalTransportPayout.toLocaleString()}
-                            </p>
-                            <p className="text-xs text-gray-500 mt-1">
-                                {allocations.filter(a => a.transport_price && parseFloat(a.transport_price.toString()) > 0).length} transports
-                            </p>
-                            </div>
-                        </div>
+                        {/* ✅ Enhanced Financial Summary with Revenue & P/L */}
+<div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl shadow-lg p-6 border border-purple-200">
+  <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+    <DollarSign className="mr-2 text-purple-600" />
+    Financial Summary & P/L Analysis
+  </h3>
+  
+  {/* Revenue & Costs Row */}
+  <div className="grid grid-cols-3 gap-4 mb-4">
+    {/* Total Revenue */}
+    <div className="bg-white p-4 rounded-lg border-2 border-green-300">
+      <p className="text-sm text-gray-600 mb-2 flex items-center">
+        <TrendingUp size={16} className="mr-1 text-green-600" />
+        Total Revenue
+      </p>
+      <p className="text-2xl font-bold text-green-600">
+        ₹{stats.totalRevenue.toLocaleString()}
+      </p>
+      <p className="text-xs text-gray-500 mt-1">
+        From {allocations.length} jobs
+      </p>
+    </div>
 
-                        <div className="pt-4 border-t border-purple-300">
-                            <div className="flex justify-between items-center">
-                            <span className="text-sm font-semibold text-gray-700">Total Expenditure</span>
-                            <span className="text-3xl font-bold text-purple-600">
-                                ₹{stats.totalPayout.toLocaleString()}
-                            </span>
-                            </div>
-                            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                            <div className="bg-white p-2 rounded">
-                                <span className="text-gray-600">Avg per Job:</span>
-                                <span className="font-bold text-purple-600 ml-2">
-                                ₹{allocations.length > 0 ? (stats.totalPayout / allocations.length).toFixed(0) : 0}
-                                </span>
-                            </div>
-                            <div className="bg-white p-2 rounded">
-                                <span className="text-gray-600">Cost Ratio:</span>
-                                <span className="font-bold text-purple-600 ml-2">
-                                {stats.totalPayout > 0 
-                                    ? `${((stats.totalMukkadamPayout / stats.totalPayout) * 100).toFixed(0)}/${((stats.totalTransportPayout / stats.totalPayout) * 100).toFixed(0)}`
-                                    : '0/0'}
-                                </span>
-                            </div>
-                            </div>
-                        </div>
-                        </div>
+    {/* Mukkadam Costs */}
+    <div className="bg-white p-4 rounded-lg border border-gray-200">
+      <p className="text-sm text-gray-600 mb-2">Mukkadam Costs</p>
+      <p className="text-2xl font-bold text-blue-600">
+        ₹{stats.totalMukkadamPayout.toLocaleString()}
+      </p>
+      <p className="text-xs text-gray-500 mt-1">
+        {allocations.length} allocations
+      </p>
+    </div>
+
+    {/* Transport Costs */}
+    <div className="bg-white p-4 rounded-lg border border-gray-200">
+      <p className="text-sm text-gray-600 mb-2">Transport Costs</p>
+      <p className="text-2xl font-bold text-orange-600">
+        ₹{stats.totalTransportPayout.toLocaleString()}
+      </p>
+      <p className="text-xs text-gray-500 mt-1">
+        {allocations.filter(a => a.transport_price && parseFloat(a.transport_price.toString()) > 0).length} transports
+      </p>
+    </div>
+  </div>
+
+  {/* Profit/Loss Summary */}
+  <div className="mb-4">
+    <div className="grid grid-cols-2 gap-4">
+      {/* Total Costs */}
+      <div className="bg-white p-4 rounded-lg border border-gray-200">
+        <p className="text-sm text-gray-600 mb-2">Total Costs</p>
+        <p className="text-2xl font-bold text-purple-600">
+          ₹{stats.totalPayout.toLocaleString()}
+        </p>
+        <p className="text-xs text-gray-500 mt-1">
+          Mukkadam + Transport
+        </p>
+      </div>
+
+      {/* Net Profit/Loss */}
+      <div className={`p-4 rounded-lg border-2 ${
+        stats.netProfit >= 0 
+          ? 'bg-green-100 border-green-400' 
+          : 'bg-red-100 border-red-400'
+      }`}>
+        <p className="text-sm text-gray-700 font-semibold mb-2 flex items-center">
+          {stats.netProfit >= 0 ? (
+            <TrendingUp size={16} className="mr-1 text-green-700" />
+          ) : (
+            <TrendingDown size={16} className="mr-1 text-red-700" />
+          )}
+          Net Profit/Loss
+        </p>
+        <p className={`text-3xl font-bold ${
+          stats.netProfit >= 0 ? 'text-green-700' : 'text-red-700'
+        }`}>
+          {stats.netProfit >= 0 ? '+' : ''}₹{stats.netProfit.toLocaleString()}
+        </p>
+        <p className={`text-sm font-semibold mt-1 ${
+          stats.netProfit >= 0 ? 'text-green-600' : 'text-red-600'
+        }`}>
+          {stats.profitMargin.toFixed(1)}% margin
+        </p>
+      </div>
+    </div>
+  </div>
+
+  {/* Detailed Metrics */}
+  <div className="pt-4 border-t border-purple-300">
+    <div className="grid grid-cols-4 gap-2 text-xs">
+      <div className="bg-white p-2 rounded">
+        <span className="text-gray-600">Avg Revenue/Job:</span>
+        <span className="font-bold text-green-600 ml-2">
+          ₹{allocations.length > 0 ? (stats.totalRevenue / allocations.length).toFixed(0) : 0}
+        </span>
+      </div>
+      
+      <div className="bg-white p-2 rounded">
+        <span className="text-gray-600">Avg Cost/Job:</span>
+        <span className="font-bold text-purple-600 ml-2">
+          ₹{allocations.length > 0 ? (stats.totalPayout / allocations.length).toFixed(0) : 0}
+        </span>
+      </div>
+
+      <div className="bg-white p-2 rounded">
+        <span className="text-gray-600">Avg Profit/Job:</span>
+        <span className={`font-bold ml-2 ${stats.netProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+          ₹{allocations.length > 0 ? (stats.netProfit / allocations.length).toFixed(0) : 0}
+        </span>
+      </div>
+
+      <div className="bg-white p-2 rounded">
+        <span className="text-gray-600">Cost Ratio (M/T):</span>
+        <span className="font-bold text-purple-600 ml-2">
+          {stats.totalPayout > 0 
+            ? `${((stats.totalMukkadamPayout / stats.totalPayout) * 100).toFixed(0)}/${((stats.totalTransportPayout / stats.totalPayout) * 100).toFixed(0)}`
+            : '0/0'}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  {/* Performance Breakdown */}
+  <div className="pt-4 border-t border-purple-300 mt-4">
+    <div className="flex justify-between items-center mb-2">
+      <span className="text-sm font-semibold text-gray-700">Allocation Performance</span>
+      <span className="text-xs text-gray-500">
+        {stats.profitableAllocations}/{allocations.length} profitable
+      </span>
+    </div>
+    
+    <div className="grid grid-cols-3 gap-2 text-xs">
+      <div className="bg-green-50 p-2 rounded border border-green-200">
+        <div className="flex justify-between items-center">
+          <span className="text-gray-700">Profitable:</span>
+          <span className="font-bold text-green-700">{stats.profitableAllocations}</span>
+        </div>
+      </div>
+      
+      <div className="bg-red-50 p-2 rounded border border-red-200">
+        <div className="flex justify-between items-center">
+          <span className="text-gray-700">Loss Making:</span>
+          <span className="font-bold text-red-700">{stats.lossAllocations}</span>
+        </div>
+      </div>
+
+      <div className="bg-yellow-50 p-2 rounded border border-yellow-200">
+        <div className="flex justify-between items-center">
+          <span className="text-gray-700">Low Margin:</span>
+          <span className="font-bold text-yellow-700">{stats.lowMarginAllocations}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
                     </div>
 
                     {/* Right Column - 1/3 width */}
@@ -1338,7 +1535,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                             )}
                             </button>
 
-                            <button
+                            {/* <button
                             onClick={() => setShowActiveWorkersModal(true)}
                             className="w-full px-4 py-3 bg-white border-2 border-teal-300 text-gray-900 rounded-lg hover:bg-teal-50 font-medium text-sm flex items-center justify-between transition"
                             >
@@ -1357,7 +1554,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                             >
                             <BarChart3 size={18} className="mr-2" />
                             View Full Analytics
-                            </button>
+                            </button> */}
                         </div>
                         </div>
 
@@ -1408,94 +1605,179 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                 )}
 
                 {/* Allocated Jobs Tab */}
-                {/* Allocated Jobs Tab */}
-                {activeTab === 'allocated' && (
-                <div>
-                    {filteredAllocatedJobs.length === 0 ? (
-                    <div className="text-center py-12">
-                        <CheckCircle size={48} className="mx-auto text-gray-400 mb-4" />
-                        <p className="text-gray-600">No allocated jobs found</p>
-                    </div>
-                    ) : (
-                    <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                            <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Title</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Cost</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {filteredAllocatedJobs.map(job => {
-                            const allocation = allocations.find(a => a.farmer_work_id === job.work_id);
-                            const mukkadam = mukkadams.find(m => m.id === allocation?.mukkadam_id);
-                            const provider = transportProviders.find(t => t.id === allocation?.transport_provider_id);
-                            const totalCost = allocation ? 
-                                parseFloat(allocation.mukkadam_price?.toString() || '0') + parseFloat(allocation.transport_price?.toString() || '0') : 0;
-                            
-                            return (
-                                <tr key={job.id} className="hover:bg-gray-50">
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                    <span className="text-sm font-mono font-semibold text-blue-600">{job.work_id}</span>
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{job.title || 'N/A'}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                    <div className="text-sm">
-                                    <div className="font-medium text-gray-900">{mukkadam?.mukkadam_name || 'Unknown'}</div>
-                                    <div className="text-green-600 font-semibold">₹{allocation?.mukkadam_price?.toLocaleString() || '0'}</div>
-                                    </div>
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                    <div className="text-sm">
-                                    <div className="font-medium text-gray-900">{provider?.name || 'Unknown'}</div>
-                                    <div className="text-orange-600 font-semibold">₹{allocation?.transport_price?.toLocaleString() || '0'}</div>
-                                    </div>
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                    <span className="text-sm font-bold text-purple-600">₹{totalCost.toLocaleString()}</span>
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                    {allocation && new Date(allocation.completed_at).toLocaleDateString()}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                    <div className="flex space-x-2">
-                                    <button
-                                        onClick={() => navigate(`/allocations/${allocation?.id}`)}
-                                        className="text-blue-600 hover:text-blue-900 font-medium flex items-center"
-                                    >
-                                        <Eye size={16} className="mr-1" /> View
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                        if (allocation) {
-                                            setAllocationToReallocate(allocation);
-                                            setShowReallocateModal(true);
-                                        }
-                                        }}
-                                        className="text-orange-600 hover:text-orange-900 font-medium flex items-center"
-                                    >
-                                        <Edit size={16} className="mr-1" /> Reallocate
-                                    </button>
-                                    </div>
-                                </td>
-                                </tr>
-                            );
-                            })}
-                        </tbody>
-                        </table>
-                    </div>
-                    )}
-                </div>
-                )}
+{activeTab === 'allocated' && (
+  <div>
+    {allocations.filter(a => {
+      // Filter allocations for allocated jobs
+      const job = jobs.find(j => j.work_id === a.farmer_work_id);
+      if (!job) return false;
+      
+      const jobStatus = calculateJobStatus(job);
+      return jobStatus === 'fully_allocated';
+    }).length === 0 ? (
+      <div className="text-center py-12">
+        <CheckCircle size={48} className="mx-auto text-gray-400 mb-4" />
+        <p className="text-gray-600">No allocated jobs found</p>
+      </div>
+    ) : (
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Crew</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Cost</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {allocations
+              .filter(allocation => {
+                // Only show allocations for fully allocated jobs
+                const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
+                if (!job) return false;
+                
+                const jobStatus = calculateJobStatus(job);
+                return jobStatus === 'fully_allocated';
+              })
+              .filter(allocation => {
+                // Apply search filter
+                if (!searchTerm) return true;
+                const searchLower = searchTerm.toLowerCase();
+                const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
+                const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
+                
+                return (
+                  String(allocation.farmer_work_id || '').toLowerCase().includes(searchLower) ||
+                  String(job?.title || '').toLowerCase().includes(searchLower) ||
+                  String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower) ||
+                  String(allocation.activity_name || '').toLowerCase().includes(searchLower)
+                );
+              })
+              .map(allocation => {
+                const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
+                const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
+                const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
+                const totalCost = 
+                  parseFloat(allocation.mukkadam_price?.toString() || '0') + 
+                  parseFloat(allocation.transport_price?.toString() || '0');
+                
+                // Determine transport display
+                let transportDisplay = 'Unknown';
+                let transportPrice = 0;
+                let transportColor = 'text-gray-600';
+                
+                if (allocation.transport_type === 'none') {
+                  transportDisplay = 'No Transport';
+                  transportPrice = 0;
+                  transportColor = 'text-gray-500';
+                } else if (allocation.transport_type === 'own') {
+                  transportDisplay = 'Own Transport';
+                  transportPrice = parseFloat(allocation.own_transport_price?.toString() || allocation.transport_price?.toString() || '0');
+                  transportColor = 'text-blue-600';
+                } else if (allocation.transport_type === 'provider') {
+                  transportDisplay = provider?.name || 'Unknown Provider';
+                  transportPrice = parseFloat(allocation.transport_price?.toString() || '0');
+                  transportColor = 'text-orange-600';
+                }
+                
+                return (
+                  <tr key={allocation.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="text-sm font-mono font-semibold text-blue-600">
+                        {allocation.farmer_work_id || job?.work_id || 'N/A'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm">
+                        <div className="font-medium text-gray-900">
+                          {allocation.activity_name || job?.title || 'N/A'}
+                        </div>
+                        {job?.is_complex && (
+                          <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">
+                            Complex
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm">
+                        <div className="font-medium text-gray-900">
+                          {mukkadam?.mukkadam_name || 'Unknown'}
+                        </div>
+                        <div className="text-green-600 font-semibold">
+                          ₹{allocation.mukkadam_price?.toLocaleString() || '0'}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                      {allocation.allocated_area ? `${allocation.allocated_area} acres` : 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center text-sm font-bold text-teal-600">
+                        <Users size={14} className="mr-1" />
+                        {allocation.crew_size || mukkadam?.crew_size || 'N/A'}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-sm">
+                        <div className={`font-medium ${transportColor}`}>
+                          {transportDisplay}
+                        </div>
+                        <div className={`font-semibold ${transportColor}`}>
+                          ₹{transportPrice.toLocaleString()}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="text-sm font-bold text-purple-600">
+                        ₹{totalCost.toLocaleString()}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {allocation.work_date 
+                        ? new Date(allocation.work_date).toLocaleDateString('en-IN')
+                        : allocation.completed_at
+                        ? new Date(allocation.completed_at).toLocaleDateString('en-IN')
+                        : 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => navigate(`/allocations/${allocation.id}`)}
+                          className="text-blue-600 hover:text-blue-900 font-medium flex items-center"
+                        >
+                          <Eye size={16} className="mr-1" /> View
+                        </button>
+                        <button
+                          onClick={() => {
+                            setAllocationToReallocate(allocation);
+                            setShowReallocateModal(true);
+                          }}
+                          className="text-orange-600 hover:text-orange-900 font-medium flex items-center"
+                        >
+                          <Edit size={16} className="mr-1" /> Reallocate
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+)}
 
 
 
-             {/* Pending Jobs Tab */}
+{/* Pending Jobs Tab */}
 {activeTab === 'pending' && (
   <div>
     {pendingJobs.length === 0 ? (
@@ -1508,34 +1790,112 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
         {pendingJobs.map(job => {
           const isExpanded = expandedJobs.has(job.work_id);
           
+          // ✅ FARMER DATA IS ALREADY IN JOB OBJECT
+          const farmer = job.farmer;
+          
+          // Calculate P/L
+          const totalRevenue = job.activities?.reduce((sum, activity) => 
+            sum + (activity.subtotal || 0), 0
+          ) || 0;
+          
+          const totalAllocatedCost = job.activities?.reduce((sum, activity) => {
+            const activityCost = activity.allocations?.reduce((allocSum: number, alloc: any) => 
+              allocSum + (alloc.mukkadam_price || 0) + (alloc.transport_price || 0), 0
+            ) || 0;
+            return sum + activityCost;
+          }, 0) || 0;
+          
+          const potentialProfit = totalRevenue - totalAllocatedCost;
+          
           return (
             <div 
               key={job.id} 
               className="border-2 border-yellow-300 bg-yellow-50 rounded-xl overflow-hidden transition-all"
             >
-              {/* Compact Header - Always Visible */}
               <div 
                 className="p-4 cursor-pointer hover:bg-yellow-100 transition"
                 onClick={() => toggleJob(job.work_id)}
               >
-                <div className="flex justify-between items-center">
-                  <div className="flex items-center space-x-3 flex-1">
-                    <span className="text-lg font-mono font-bold text-blue-600">
-                      {job.work_id}
-                    </span>
-                    <span className="px-2 py-1 bg-yellow-500 text-white rounded-full text-xs font-bold">
-                      PENDING
-                    </span>
-                    <span className="px-2 py-1 bg-purple-500 text-white rounded-full text-xs font-bold">
-                      {job.total_activities} activities
-                    </span>
-                    <span className="text-sm text-gray-700 truncate max-w-md">{job.title}</span>
+                <div className="flex justify-between items-start">
+                  <div className="flex-1">
+                    {/* Job ID and Status */}
+                    <div className="flex items-center space-x-3 mb-2">
+                      <span className="text-lg font-mono font-bold text-blue-600">
+                        {job.work_id}
+                      </span>
+                      <span className="px-2 py-1 bg-yellow-500 text-white rounded-full text-xs font-bold">
+                        PENDING
+                      </span>
+                      <span className="px-2 py-1 bg-purple-500 text-white rounded-full text-xs font-bold">
+                        {job.total_activities} {job.total_activities === 1 ? 'activity' : 'activities'}
+                      </span>
+                    </div>
+
+                    {/* ✅ FARMER INFO - NO LOADING STATE NEEDED */}
+                    {farmer ? (
+                      <div className="mb-2">
+                        <div className="flex items-center space-x-2">
+                          <Users size={16} className="text-indigo-600" />
+                          <span className="font-semibold text-gray-900">
+                            {farmer.farmer_name}
+                          </span>
+                          <span className="text-sm text-gray-600">
+                            • {farmer.phone_number}
+                          </span>
+                        </div>
+                        <div className="flex items-center space-x-2 mt-1">
+                          <MapPin size={14} className="text-gray-500" />
+                          <span className="text-sm text-gray-600">
+                            {farmer.location}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mb-2 text-sm text-gray-400">
+                        Farmer info unavailable
+                      </div>
+                    )}
+
+                    {/* Title */}
+                    {job.title && (
+                      <p className="text-sm text-gray-700 mb-2">{job.title}</p>
+                    )}
+
+                    {/* ✅ FINANCIAL SUMMARY */}
+                    <div className="flex items-center space-x-6 mt-2">
+                      <div>
+                        <p className="text-xs text-gray-500">Farmer Price</p>
+                        <p className="text-lg font-bold text-green-600">
+                          ₹{totalRevenue.toLocaleString()}
+                        </p>
+                      </div>
+                      {totalAllocatedCost > 0 && (
+                        <>
+                          <div>
+                            <p className="text-xs text-gray-500">Allocated Cost</p>
+                            <p className="text-lg font-bold text-orange-600">
+                              ₹{totalAllocatedCost.toLocaleString()}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-500">Potential Profit</p>
+                            <p className={`text-lg font-bold ${
+                              potentialProfit >= 0 ? 'text-green-600' : 'text-red-600'
+                            }`}>
+                              {potentialProfit >= 0 ? '+' : ''}₹{potentialProfit.toLocaleString()}
+                            </p>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Right Side Actions */}
                   <div className="flex items-center space-x-4">
                     <div className="text-right">
                       <p className="text-xs text-gray-500">Created</p>
                       <p className="text-sm font-semibold text-gray-700">
-                        {new Date(job.created_at).toLocaleDateString()}
+                        {new Date(job.created_at).toLocaleDateString('en-IN')}
                       </p>
                     </div>
                     <button
