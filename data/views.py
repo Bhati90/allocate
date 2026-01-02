@@ -1,9 +1,6 @@
 # allocation_app/views.py
 
-<<<<<<< HEAD
 from django.shortcuts import render
-=======
->>>>>>> 7f32a4b8aaf78bf3878ad3ef8b37a9738441c0c7
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
