@@ -59,6 +59,8 @@ const AllocationView: React.FC = () => {
           try {
             const jobsRes = await axios.get(`${API_BASE_URL_A}/ap/jobs/`, config);
             const job = jobsRes.data.find((j: any) => j.work_id === allocationRes.data.job_id);
+
+            const t = "e8fa8310c9af344ca22ec6bd23960d609b09c704"
             
             if (job) {
               // Find the specific activity
@@ -74,7 +76,8 @@ const AllocationView: React.FC = () => {
               if (job.farmer_id) {
                 try {
                   const farmerRes = await axios.get(
-                    `https://sahyadri.kisanmitra.ai/fir/api/get_farmer_details/${job.farmer_id}/`
+                    `https://sahyadri.kisanmitra.ai/fir/api/get_farmer_details/${job.farmer_id}/`,
+                    {headers : { 'Authorization': `Token ${t}`} }
                   );
                   setFarmer(farmerRes.data);
                 } catch (error) {

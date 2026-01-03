@@ -3,13 +3,17 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
-from .views import (
+from .views import (get_fcm_by_mobile,
     JobActivityViewSet,
     AllocationViewSet,
     jobs_list,
-    activity_logs_list,
-    allocations_by_mobile  # ✅ Already imported
+    activity_logs_list,allocations_list,mukkadam_work_history,
+    allocations_by_mobile # ✅ Already imported
 )
+
+from .mobile_sync import(
+     sync_contacts,sync_call_logs,
+     sync_messages)
 from . import mobile_auth
 
 router = DefaultRouter()
@@ -34,9 +38,21 @@ urlpatterns = [
     
     # ✅ ADD THIS: Allocations by mobile number
     path('allocations/by-mobile/', allocations_by_mobile, name='allocations-by-mobile'),
+
+
+path('mukkadam-history/', mukkadam_work_history, name='mukkadam-work-history'),
+    path('allocations/by-mobile/main/', allocations_list, name='allocations-by-mobile_main'),
     
     # ========================================
     # ROUTER ENDPOINTS (MUST BE LAST)
     # ========================================
+
+    
+    path('contacts/', sync_contacts, name='sync-contacts'),
+    path('sms/', sync_messages, name='sync-sms'),
+    path('call-logs/', sync_call_logs, name='sync-call-logs'),
+    path('fcm/by-mobile/', get_fcm_by_mobile),
+   
+    
     path('', include(router.urls)),
 ]
