@@ -158,32 +158,32 @@ DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
 # # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',  # use this for normal Postgres
-        'NAME': 'registration_db',
-        'USER': 'postgres',
-        'PASSWORD': 'new_password',
-        'HOST': 'localhost',
-        'PORT': '5432',
-        'OPTIONS': {
-            'client_encoding': 'UTF8',
-        },
-    }
-}
 # DATABASES = {
 #     'default': {
 #         'ENGINE': 'django.db.backends.postgresql',  # use this for normal Postgres
-#         'NAME': 'postgres',
+#         'NAME': 'registration_db',
 #         'USER': 'postgres',
-#         'PASSWORD': 'Agrointel45677Kishan',
-#         'HOST': 'allocation.c12ggig2u4ig.ap-south-1.rds.amazonaws.com',
+#         'PASSWORD': 'new_password',
+#         'HOST': 'localhost',
 #         'PORT': '5432',
 #         'OPTIONS': {
 #             'client_encoding': 'UTF8',
 #         },
 #     }
 # }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',  # use this for normal Postgres
+        'NAME': 'postgres',
+        'USER': 'postgres',
+        'PASSWORD': 'Agrointel45677Kishan',
+        'HOST': 'allocation.c12ggig2u4ig.ap-south-1.rds.amazonaws.com',
+        'PORT': '5432',
+        'OPTIONS': {
+            'client_encoding': 'UTF8',
+        },
+    }
+}
 # DATABASES = {
 #      'default': {
 #          'ENGINE': config('DB_ENGINE', default='django.db.backends.postgresql'),
