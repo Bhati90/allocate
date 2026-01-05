@@ -46,7 +46,126 @@ class JobActivitySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'remaining_area', 'is_fully_allocated', 'created_at', 'updated_at']
 
+from rest_framework import serializers
+from .models import PaymentRequest, TransportPaymentRequest, Allocation
 
+class PaymentRequestSerializer(serializers.ModelSerializer):
+    # Allocation details
+    job_id = serializers.CharField(source='allocation.job_activity.job_id', read_only=True)
+    activity_name = serializers.CharField(source='allocation.job_activity.activity_name', read_only=True)
+    work_date = serializers.DateField(source='allocation.work_date', read_only=True)
+    allocated_area = serializers.DecimalField(
+        source='allocation.allocated_area',
+        max_digits=10,
+        decimal_places=2,
+        read_only=True
+    )
+    
+    # User details
+    requested_by_name = serializers.CharField(source='requested_by.username', read_only=True)
+    paid_by_name = serializers.CharField(source='paid_by.username', read_only=True)
+    rejected_by_name = serializers.CharField(source='rejected_by.username', read_only=True)
+    
+    class Meta:
+        model = PaymentRequest
+        fields = [
+            'id',
+            'allocation',
+            'mukkadam_id',
+            'requested_amount',
+            'status',
+            
+            # Allocation details
+            'job_id',
+            'activity_name',
+            'work_date',
+            'allocated_area',
+            
+            # Timestamps
+            'requested_at',
+            'paid_at',
+            'rejected_at',
+            
+            # Users
+            'requested_by',
+            'requested_by_name',
+            'paid_by',
+            'paid_by_name',
+            'rejected_by',
+            'rejected_by_name',
+            
+            # Notes
+            'rejection_reason',
+            'notes',
+        ]
+        read_only_fields = [
+            'id',
+            'mukkadam_id',
+            'requested_amount',
+            'requested_at',
+            'requested_by',
+            'paid_at',
+            'paid_by',
+            'rejected_at',
+            'rejected_by',
+        ]
+
+
+class TransportPaymentRequestSerializer(serializers.ModelSerializer):
+    # Allocation details
+    job_id = serializers.CharField(source='allocation.job_activity.job_id', read_only=True)
+    activity_name = serializers.CharField(source='allocation.job_activity.activity_name', read_only=True)
+    work_date = serializers.DateField(source='allocation.work_date', read_only=True)
+    mukkadam_id = serializers.IntegerField(source='allocation.mukkadam_id', read_only=True)
+    
+    # User details
+    requested_by_name = serializers.CharField(source='requested_by.username', read_only=True)
+    paid_by_name = serializers.CharField(source='paid_by.username', read_only=True)
+    rejected_by_name = serializers.CharField(source='rejected_by.username', read_only=True)
+    
+    class Meta:
+        model = TransportPaymentRequest
+        fields = [
+            'id',
+            'allocation',
+            'transport_provider_id',
+            'requested_amount',
+            'status',
+            
+            # Allocation details
+            'job_id',
+            'activity_name',
+            'work_date',
+            'mukkadam_id',
+            
+            # Timestamps
+            'requested_at',
+            'paid_at',
+            'rejected_at',
+            
+            # Users
+            'requested_by',
+            'requested_by_name',
+            'paid_by',
+            'paid_by_name',
+            'rejected_by',
+            'rejected_by_name',
+            
+            # Notes
+            'rejection_reason',
+            'notes',
+        ]
+        read_only_fields = [
+            'id',
+            'transport_provider_id',
+            'requested_amount',
+            'requested_at',
+            'requested_by',
+            'paid_at',
+            'paid_by',
+            'rejected_at',
+            'rejected_by',
+        ]
 
 from rest_framework import serializers
 from .models import FCMDevice
