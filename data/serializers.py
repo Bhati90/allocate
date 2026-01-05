@@ -180,6 +180,20 @@ class FCMDeviceSerializer(serializers.ModelSerializer):
             'last_used_at'
         ]
 
+
+from rest_framework import serializers
+from .models import FCMDevice
+
+class FCMDeviceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FCMDevice
+        fields = [
+            'fcm_token',
+            'device_type',
+            'device_id',
+            'last_used_at'
+        ]
+
 class AllocationSerializer(serializers.ModelSerializer):
     allocated_by = UserSerializer(read_only=True)
     created_by = serializers.SerializerMethodField()
