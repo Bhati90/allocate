@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { 
   ArrowLeft, Users, Truck, DollarSign, 
-  Calendar, FileText, ExternalLink, Car, XCircle,CheckCircle,
+  Calendar, FileText, ExternalLink, Car, XCircle, CheckCircle, Clock, // ✅ ADD Clock
   MapPin, Phone, TrendingUp, TrendingDown, AlertCircle
 } from 'lucide-react';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL_SUPPLY;
@@ -21,8 +21,32 @@ const AllocationView: React.FC = () => {
   const [jobActivity, setJobActivity] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
+  const [mukkadamPaymentRequest, setMukkadamPaymentRequest] = useState<any>(null);
+const [transportPaymentRequest, setTransportPaymentRequest] = useState<any>(null);
   useEffect(() => {
     const fetchData = async () => {
+      // ✅ FETCH PAYMENT REQUESTS
+try {
+  const config = getAuthConfig();
+  
+  const mukkadamPayRes = await axios.get(
+    `${API_BASE_URL_A}/ap/payment-requests/?allocation=${id}`,
+    config
+  );
+  if (mukkadamPayRes.data.length > 0) {
+    setMukkadamPaymentRequest(mukkadamPayRes.data[0]);
+  }
+
+  const transportPayRes = await axios.get(
+    `${API_BASE_URL_A}/ap/transport-payment-requests/?allocation=${id}`,
+    config
+  );
+  if (transportPayRes.data.length > 0) {
+    setTransportPaymentRequest(transportPayRes.data[0]);
+  }
+} catch (error) {
+  console.error('Failed to fetch payment requests:', error);
+}
       try {
         const config = getAuthConfig();
         const allocationRes = await axios.get(`${API_BASE_URL_A}/ap/allocations/${id}/`, config);
@@ -375,7 +399,37 @@ const AllocationView: React.FC = () => {
             <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center">
               <Users className="mr-2 text-blue-500"/> Mukkadam Details
             </h3>
-            
+            {/* ✅ MUKKADAM PAYMENT STATUS */}
+{mukkadamPaymentRequest && (
+  <div className={`mt-4 p-4 rounded-lg border-2 ${
+    mukkadamPaymentRequest.status === 'paid' 
+      ? 'bg-green-50 border-green-400'
+      : 'bg-yellow-50 border-yellow-400'
+  }`}>
+    <p className="text-xs text-gray-500 uppercase font-bold mb-2">Payment Status</p>
+    {mukkadamPaymentRequest.status === 'paid' ? (
+      <div className="flex items-center">
+        <CheckCircle size={20} className="text-green-600 mr-2" />
+        <div>
+          <p className="font-bold text-green-700">PAID</p>
+          <p className="text-xs text-gray-600">
+            Paid on {new Date(mukkadamPaymentRequest.paid_at).toLocaleDateString('en-IN')}
+          </p>
+        </div>
+      </div>
+    ) : (
+      <div className="flex items-center">
+        <Clock size={20} className="text-yellow-600 mr-2" />
+        <div>
+          <p className="font-bold text-yellow-700">PENDING PAYMENT</p>
+          <p className="text-xs text-gray-600">
+            Requested on {new Date(mukkadamPaymentRequest.requested_at).toLocaleDateString('en-IN')}
+          </p>
+        </div>
+      </div>
+    )}
+  </div>
+)}
             {mukkadam ? (
               <div className="space-y-4">
                 <div>
@@ -522,6 +576,39 @@ const AllocationView: React.FC = () => {
                 )}
               </>
             )}
+
+
+            {/* ✅ TRANSPORT PAYMENT STATUS */}
+{transportPaymentRequest && data.transport_type === 'provider' && (
+  <div className={`mt-4 p-4 rounded-lg border-2 ${
+    transportPaymentRequest.status === 'paid' 
+      ? 'bg-green-50 border-green-400'
+      : 'bg-yellow-50 border-yellow-400'
+  }`}>
+    <p className="text-xs text-gray-500 uppercase font-bold mb-2">Payment Status</p>
+    {transportPaymentRequest.status === 'paid' ? (
+      <div className="flex items-center">
+        <CheckCircle size={20} className="text-green-600 mr-2" />
+        <div>
+          <p className="font-bold text-green-700">PAID</p>
+          <p className="text-xs text-gray-600">
+            Paid on {new Date(transportPaymentRequest.paid_at).toLocaleDateString('en-IN')}
+          </p>
+        </div>
+      </div>
+    ) : (
+      <div className="flex items-center">
+        <Clock size={20} className="text-yellow-600 mr-2" />
+        <div>
+          <p className="font-bold text-yellow-700">PENDING PAYMENT</p>
+          <p className="text-xs text-gray-600">
+            Requested on {new Date(transportPaymentRequest.requested_at).toLocaleDateString('en-IN')}
+          </p>
+        </div>
+      </div>
+    )}
+  </div>
+)}
           </div>
 
           {/* Work Details - Keep existing code */}

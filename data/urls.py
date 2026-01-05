@@ -6,7 +6,7 @@ from rest_framework.authtoken.views import obtain_auth_token
 from .views import (get_fcm_by_mobile,
     JobActivityViewSet,
     AllocationViewSet,
-    jobs_list,
+    jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,
     activity_logs_list,allocations_list,mukkadam_work_history,
     allocations_by_mobile # ✅ Already imported
 )
@@ -19,6 +19,10 @@ from . import mobile_auth
 router = DefaultRouter()
 router.register(r'job-activities', JobActivityViewSet, basename='job-activity')
 router.register(r'allocations', AllocationViewSet, basename='allocation')
+router.register(r'payment-requests', PaymentRequestViewSet, basename='payment-request')
+router.register(r'transport-payment-requests', TransportPaymentRequestViewSet, basename='transport-payment-request')
+
+
 
 urlpatterns = [
     # ========================================
