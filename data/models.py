@@ -352,7 +352,7 @@ class FCMDevice(models.Model):
     last_used_at = models.DateTimeField(default=timezone.now)
     
     class Meta:
-        db_table = 'fcm_devices'
+        db_table = 'data_fcm_devices'
         indexes = [
             models.Index(fields=['user_id', 'is_active']),
             models.Index(fields=['mobile_number', 'is_active']),
@@ -439,6 +439,7 @@ class Contact(models.Model):
     synced_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
+        db_table = 'data_contacts'
         ordering = ['-synced_at']
         indexes = [
             models.Index(fields=['user_id', '-synced_at']),
@@ -480,6 +481,7 @@ class Message(models.Model):
     synced_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
+        db_table = 'data_messages'
         ordering = ['-timestamp']
         indexes = [
             models.Index(fields=['user_id', '-timestamp']),
@@ -532,6 +534,7 @@ class CallLog(models.Model):
     synced_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
+        db_table = 'data_call_logs'
         ordering = ['-timestamp']
         indexes = [
             models.Index(fields=['user_id', '-timestamp']),
