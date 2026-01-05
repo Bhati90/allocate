@@ -2099,13 +2099,13 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
               <CheckCircle size={14} className="mr-1" />
               Mark Paid
             </button>
-            <button
+            {/* <button
               onClick={() => handleRejectMukkadamPayment(mukkadamPayment.id)}
               className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center"
             >
               <Ban size={14} className="mr-1" />
               Reject
-            </button>
+            </button> */}
           </div>
         ) : (
           <div className="flex items-center">

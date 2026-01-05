@@ -15,7 +15,13 @@ class UserProfile(models.Model):
     Links mobile number to Django User for mobile app login
     """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
-    mobile_number = models.CharField(max_length=15, unique=True, db_index=True)
+    mobile_number = models.CharField(
+        max_length=15, 
+        unique=True, 
+        db_index=True,
+        null=True,  # ✅ Allow NULL
+        blank=True  # ✅ Allow empty in forms
+    )
     full_name = models.CharField(max_length=255, blank=True, null=True)
     role = models.CharField(
         max_length=50,
@@ -38,16 +44,14 @@ class UserProfile(models.Model):
         ]
     
     def __str__(self):
-        return f"{self.full_name or self.user.username} - {self.mobile_number}"
+        return f"{self.full_name or self.user.username} - {self.mobile_number or 'No mobile'}"
 
 
-
-# Auto-create profile when User is created
+# ✅ Update the signal to set mobile_number as None explicitly
 @receiver(post_save, sender=User)
 def create_user_profile(sender, instance, created, **kwargs):
-    if created and not hasattr(instance, 'profile'):
-        UserProfile.objects.create(user=instance)
-
+    if created:
+        UserProfile.objects.create(user=instance, mobile_number=None)
 
 
 @receiver(post_save, sender=User)
