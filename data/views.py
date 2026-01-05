@@ -12,6 +12,7 @@ from decimal import Decimal
 import requests
 
 from .models import JobActivity, Allocation, AllocationStats
+from django.db.models import Q
 from .serializers import (
     JobActivitySerializer,
     AllocationSerializer, 
@@ -42,9 +43,63 @@ from .serializers import (
 EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
 
 SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'  # Change to your actual Supply App URL
-
+# SUPPLY_API_URL = 'http://localhost:8000'
 def about(request):
     return render(request,'data/index.html')
+
+
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+from .models import FCMDevice
+from .serializers import FCMDeviceSerializer
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def get_fcm_by_mobile(request):
+    """
+    Get active FCM token(s) by mobile number
+
+    POST /api/fcm/by-mobile/
+    {
+        "mobile_number": "9876543210"
+    }
+    """
+    mobile_number = request.data.get('mobile_number')
+
+    if not mobile_number:
+        return Response(
+            {"success": "false", "message": "mobile_number is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    devices = FCMDevice.objects.filter(
+        mobile_number=mobile_number,
+        is_active=True
+    ).order_by('-last_used_at')
+
+    if not devices.exists():
+        return Response(
+            {
+                "success": False,
+                "message": "No active FCM tokens found for this mobile number"
+            },
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    serializer = FCMDeviceSerializer(devices, many=True)
+
+    return Response(
+        {
+            "success": True,
+            "mobile_number": mobile_number,
+            "count": devices.count(),
+            "tokens": serializer.data
+        },
+        status=status.HTTP_200_OK
+    )
 
 
 @api_view(['GET'])
@@ -565,11 +620,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
-# ✅ URL of your Supply App API
-SUPPLY_APP_URL = 'https://supply.bharatintelligence.ai'  # Change to your actual Supply App URL
-
-# allocation_app/views.py
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def allocations_by_mobile(request):
@@ -594,7 +644,7 @@ def allocations_by_mobile(request):
     # ✅ STEP 1: Call Supply App API to get mukkadam(s)
     try:
         supply_response = requests.get(
-            f'{SUPPLY_APP_URL}/api/mukkadam/by-mobile/',
+            f'{SUPPLY_API_URL}/api/mukkadam/by-mobile/',
             params={'mobile_number': mobile_number},
             timeout=5
         )
@@ -650,7 +700,7 @@ def allocations_by_mobile(request):
                 # Fetch from Supply App API
                 try:
                     provider_response = requests.get(
-                        f'{SUPPLY_APP_URL}/api/transport-provider/{alloc.transport_provider_id}/',
+                        f'{SUPPLY_API_URL}/api/transport-provider/{alloc.transport_provider_id}/',
                         timeout=3
                     )
                     
@@ -752,7 +802,7 @@ def activity_logs_list(request):
         # Get mukkadam name
         try:
             mukkadam_response = requests.get(
-                f'{SUPPLY_APP_URL}/api/mukkadam/{allocation.mukkadam_id}/',
+                f'{SUPPLY_API_URL}/api/mukkadam/{allocation.mukkadam_id}/',
                 timeout=2
             )
             mukkadam_data = mukkadam_response.json()
@@ -773,7 +823,7 @@ def activity_logs_list(request):
         elif allocation.transport_type == 'provider' and allocation.transport_provider_id:
             try:
                 transport_response = requests.get(
-                    f'{SUPPLY_APP_URL}/api/transport-providers/{allocation.transport_provider_id}/',
+                    f'{SUPPLY_API_URL}/api/transport-providers/{allocation.transport_provider_id}/',
                     timeout=2
                 )
                 transport_data = transport_response.json()
@@ -805,3 +855,698 @@ def activity_logs_list(request):
         })
     
     return Response(logs)
+
+
+
+
+# views.py - REMOVE THE MUKKADAM IMPORT
+# from .models import JobActivity, Allocation, AllocationStats, Mukkadam  # ❌ WRONG
+
+from .models import JobActivity, Allocation, AllocationStats  # ✅ CORRECT
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def allocations_list(request):
+    """
+    Get all allocations with complete details from external APIs
+    
+    Filters:
+    - mukkadam_phone: Filter by mukkadam mobile number
+    - work_date: Filter by work date (YYYY-MM-DD)
+    - status: pending/confirmed/completed
+    
+    Example: /ap/allocations/by-mobile/main/?mukkadam_phone=9876543210
+    """
+    print("="*80)
+    print("📋 FETCHING ALLOCATIONS WITH FULL DETAILS")
+    print("="*80)
+    
+    # Get query parameters
+    mukkadam_phone = request.GET.get('mukkadam_phone')
+    work_date = request.GET.get('work_date')
+    allocation_status = request.GET.get('status')
+    
+    print(f"🔍 Filters: phone={mukkadam_phone}, date={work_date}, status={allocation_status}")
+    
+    # ========================================
+    # STEP 1: GET ALLOCATIONS FROM DATABASE
+    # ========================================
+    allocations_query = Allocation.objects.all().select_related('job_activity')
+    
+    # Apply filters
+    if work_date:
+        allocations_query = allocations_query.filter(work_date=work_date)
+    
+    if allocation_status:
+        allocations_query = allocations_query.filter(status=allocation_status)
+    
+    # ✅ FIX: Use 'allocated_at' instead of 'created_at'
+    allocations = list(allocations_query.order_by('-allocated_at'))
+    
+    print(f"📊 Found {len(allocations)} allocations in database")
+    
+    if not allocations:
+        return Response({'count': 0, 'allocations': []})
+    
+    # ========================================
+    # STEP 2: FILTER BY MUKKADAM PHONE (via Supply API)
+    # ========================================
+    if mukkadam_phone:
+        print(f"\n📱 Filtering by mukkadam phone: {mukkadam_phone}")
+        
+        try:
+            # ✅ GET MUKKADAM FROM SUPPLY API
+            # SUPPLY_API_URL = 'http://localhost:8000'  # Your Supply API URL
+            
+            # Search for mukkadam by phone
+            mukkadam_response = requests.get(
+                f'{SUPPLY_API_URL}/api/mukkadam/minimal_list/',
+                params={'search': mukkadam_phone},
+                timeout=5
+            )
+            
+            if mukkadam_response.status_code == 200:
+                mukkadams_data = mukkadam_response.json()
+                
+                # Extract mukkadam IDs from response
+                if isinstance(mukkadams_data, list):
+                    mukkadam_ids = [m['id'] for m in mukkadams_data if mukkadam_phone in m.get('mobile_numbers', '')]
+                elif isinstance(mukkadams_data, dict) and 'results' in mukkadams_data:
+                    mukkadam_ids = [m['id'] for m in mukkadams_data['results'] if mukkadam_phone in m.get('mobile_numbers', '')]
+                else:
+                    mukkadam_ids = []
+                
+                print(f"   Found {len(mukkadam_ids)} mukkadams with phone {mukkadam_phone}: {mukkadam_ids}")
+                
+                if not mukkadam_ids:
+                    print("   ⚠️ No mukkadams found with that phone number")
+                    return Response({'count': 0, 'allocations': []})
+                
+                # Filter allocations by mukkadam IDs
+                allocations = [a for a in allocations if a.mukkadam_id in mukkadam_ids]
+                print(f"   ✅ Filtered to {len(allocations)} allocations")
+            else:
+                print(f"   ❌ Supply API error: {mukkadam_response.status_code}")
+                return Response(
+                    {'error': 'Failed to fetch mukkadam data from Supply API'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                
+        except Exception as e:
+            print(f"   ❌ Error filtering by phone: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            return Response(
+                {'error': f'Error filtering by phone: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    # ========================================
+    # STEP 3: BATCH FETCH JOB DETAILS
+    # ========================================
+    print("\n🔄 Fetching job details from external API...")
+    
+    job_ids = set(alloc.job_activity.job_id for alloc in allocations if alloc.job_activity)
+    print(f"   Found {len(job_ids)} unique jobs")
+    
+    jobs_cache = {}
+    EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
+    job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+    
+    try:
+        # Fetch all jobs in one call
+        response = requests.get(
+            f'{EXTERNAL_API_URL}/get_allocated_jobs/',
+            headers={'Authorization': job_token},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            jobs_list = data.get('data', []) if isinstance(data, dict) else data
+            
+            # Cache jobs by ID
+            for job in jobs_list:
+                job_id = str(job.get('work_id') or job.get('id') or job.get('job_id'))
+                if job_id in job_ids:
+                    jobs_cache[job_id] = job
+                    print(f"   ✅ Cached job {job_id}")
+        else:
+            print(f"   ❌ Failed to fetch jobs: Status {response.status_code}")
+    except Exception as e:
+        print(f"   ❌ Error fetching jobs: {str(e)}")
+    
+    # ========================================
+    # STEP 4: BATCH FETCH FARMER DETAILS
+    # ========================================
+    print("\n👥 Fetching farmer details...")
+    
+    farmer_ids = set()
+    for job in jobs_cache.values():
+        farmer_id = job.get('farmer_id')
+        if farmer_id:
+            farmer_ids.add(str(farmer_id))
+    
+    print(f"   Found {len(farmer_ids)} unique farmers")
+    
+    farmers_cache = {}
+    FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
+    farmer_token = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
+    
+    for farmer_id in farmer_ids:
+        try:
+            farmer_response = requests.get(
+                f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
+                headers={'Authorization': farmer_token},
+                timeout=3
+            )
+            
+            if farmer_response.status_code == 200:
+                farmer_data = farmer_response.json()
+                farmers_cache[farmer_id] = {
+                    'farmer_id': farmer_id,
+                    'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
+                    'phone_number': farmer_data.get('phone_number', 'N/A'),
+                    'village': farmer_data.get('village', 'N/A'),
+                    'taluka': farmer_data.get('taluka', 'N/A'),
+                    'district': farmer_data.get('district', 'N/A'),
+                    'location': f"{farmer_data.get('village', 'N/A')}, {farmer_data.get('taluka', 'N/A')}, {farmer_data.get('district', 'N/A')}"
+                }
+                print(f"   ✅ Cached farmer {farmer_id}")
+            else:
+                print(f"   ⚠️ Farmer {farmer_id} returned {farmer_response.status_code}")
+        except Exception as e:
+            print(f"   ❌ Error fetching farmer {farmer_id}: {str(e)}")
+    
+    # ========================================
+    # STEP 5: BATCH FETCH MUKKADAM DETAILS FROM SUPPLY API
+    # ========================================
+    print("\n👷 Fetching mukkadam details from Supply API...")
+    
+    mukkadam_ids = set(alloc.mukkadam_id for alloc in allocations)
+    print(f"   Found {len(mukkadam_ids)} unique mukkadams")
+    
+    mukkadams_cache = {}
+    # SUPPLY_API_URL = 'http://localhost:8000'  # ✅ YOUR SUPPLY API URL
+    
+    for mukkadam_id in mukkadam_ids:
+        try:
+            mukkadam_response = requests.get(
+                f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
+                timeout=3
+            )
+            
+            if mukkadam_response.status_code == 200:
+                mukkadam_data = mukkadam_response.json()
+                mukkadams_cache[mukkadam_id] = {
+                    'mukkadam_id': mukkadam_id,
+                    'mukkadam_name': mukkadam_data.get('mukkadam_name', 'Unknown'),
+                    'mobile_numbers': mukkadam_data.get('mobile_numbers', 'N/A'),
+                    'village': mukkadam_data.get('village', 'N/A'),
+                    'crew_size': mukkadam_data.get('crew_size', 'N/A'),
+                    'has_smartphone': mukkadam_data.get('has_smartphone', 'no'),
+                    'transport_mode': mukkadam_data.get('transport_mode', 'N/A')
+                }
+                print(f"   ✅ Cached mukkadam {mukkadam_id}: {mukkadams_cache[mukkadam_id]['mukkadam_name']}")
+            else:
+                print(f"   ⚠️ Mukkadam {mukkadam_id} not found, using fallback")
+                mukkadams_cache[mukkadam_id] = {
+                    'mukkadam_id': mukkadam_id,
+                    'mukkadam_name': f'Mukkadam #{mukkadam_id}',
+                    'mobile_numbers': 'N/A',
+                    'village': 'N/A',
+                    'crew_size': 'N/A',
+                    'has_smartphone': 'no',
+                    'transport_mode': 'N/A'
+                }
+        except Exception as e:
+            print(f"   ❌ Error fetching mukkadam {mukkadam_id}: {str(e)}")
+            mukkadams_cache[mukkadam_id] = {
+                'mukkadam_id': mukkadam_id,
+                'mukkadam_name': f'Mukkadam #{mukkadam_id}',
+                'mobile_numbers': 'N/A',
+                'village': 'N/A',
+                'crew_size': 'N/A',
+                'has_smartphone': 'no',
+                'transport_mode': 'N/A'
+            }
+    
+    # ========================================
+    # STEP 6: BUILD ENRICHED ALLOCATIONS
+    # ========================================
+    print("\n🔄 Building enriched allocation data...")
+    
+    enriched_allocations = []
+    
+    for idx, allocation in enumerate(allocations):
+        print(f"\n  📌 Allocation {idx + 1}/{len(allocations)}: ID={allocation.id}")
+        
+        job_activity = allocation.job_activity
+        if not job_activity:
+            print(f"     ⚠️ No job activity found")
+            continue
+        
+        job_id = str(job_activity.job_id)
+        activity_id = str(job_activity.activity_id)
+        
+        # Get cached data
+        job_data = jobs_cache.get(job_id, {})
+        farmer_id = str(job_data.get('farmer_id', ''))
+        farmer_data = farmers_cache.get(farmer_id)
+        mukkadam_data = mukkadams_cache.get(allocation.mukkadam_id, {})
+        
+        # Get activity details
+        activity_details = None
+        if job_data and 'activities' in job_data:
+            activity_details = next(
+                (a for a in job_data.get('activities', []) 
+                 if str(a.get('id') or a.get('activity_id')) == activity_id),
+                None
+            )
+        
+        # ✅ GET CENTRAL TEAM CONTACT from booking
+        central_team_phone = 'N/A'
+        if job_data and 'booking' in job_data:
+            booking = job_data['booking']
+            central_team_phone = booking.get('phone_number', 'N/A')
+        
+        # Calculate payment
+        revenue = float(allocation.mukkadam_price) * float(allocation.allocated_area)
+        transport_cost = float(allocation.transport_price or 0)
+        total_cost = revenue + transport_cost
+        
+        # ✅ BUILD COMPLETE ALLOCATION
+        enriched_allocation = {
+            'allocation_id': allocation.id,
+            'work_date': str(allocation.work_date) if allocation.work_date else None,
+            'allocated_area': float(allocation.allocated_area),
+            'crew_size': allocation.crew_size,
+            'status': allocation.status,
+            'notes': allocation.notes,
+            'allocated_at': allocation.allocated_at.isoformat() if allocation.allocated_at else None,
+            
+            'mukkadam': mukkadam_data,
+            'farmer': farmer_data,
+            
+            'job': {
+                'job_id': job_id,
+                'job_name': job_data.get('job_name', 'N/A'),
+                'scheduled_date': job_data.get('scheduled_date', 'N/A'),
+                'location': job_data.get('location', 'N/A'),
+                'central_team_phone': central_team_phone,
+            },
+            
+            'activity': {
+                'activity_id': activity_id,
+                'activity_name': activity_details.get('activity_name', 'Unknown') if activity_details else 'Unknown',
+                'activity_type': activity_details.get('activity_type', 'N/A') if activity_details else 'N/A',
+                'total_area': float(activity_details.get('acres', 0)) if activity_details else 0,
+                'scheduled_date': activity_details.get('scheduled_date', 'N/A') if activity_details else 'N/A',
+                'scheduled_time': activity_details.get('scheduled_time', 'N/A') if activity_details else 'N/A',
+            },
+            
+            'payment': {
+                'mukkadam_price_per_acre': float(allocation.mukkadam_price),
+                'allocated_acres': float(allocation.allocated_area),
+                'mukkadam_total_payment': revenue,
+                'transport_type': allocation.transport_type,
+                'transport_price': transport_cost,
+                'total_amount': total_cost,
+            },
+        }
+        
+        enriched_allocations.append(enriched_allocation)
+        print(f"     ✅ Enriched allocation")
+    
+    print(f"\n✅ Successfully enriched {len(enriched_allocations)} allocations")
+    print("="*80)
+    
+    return Response({
+        'count': len(enriched_allocations),
+        'allocations': enriched_allocations
+    })
+
+
+
+# data/views.py
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def mukkadam_work_history(request):
+    """
+    Get complete work history and analytics for a mukkadam
+    
+    GET /ap/mukkadam-history/?mukkadam_phone=9876543210
+    GET /ap/mukkadam-history/?mukkadam_id=134
+    
+    Returns:
+    - All allocations (past, current, upcoming)
+    - Total earnings
+    - Completion statistics
+    - Performance metrics
+    """
+    print("="*80)
+    print("📊 FETCHING MUKKADAM WORK HISTORY & ANALYTICS")
+    print("="*80)
+    
+    mukkadam_phone = request.GET.get('mukkadam_phone')
+    mukkadam_id = request.GET.get('mukkadam_id')
+    
+    if not mukkadam_phone and not mukkadam_id:
+        return Response(
+            {'error': 'Either mukkadam_phone or mukkadam_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # ========================================
+    # STEP 1: GET MUKKADAM DETAILS FROM SUPPLY API
+    # ========================================
+    print("\n👤 Fetching mukkadam details...")
+    
+    # SUPPLY_API_URL = 'http://localhost:8000'
+    mukkadam_data = None
+    
+    try:
+        if mukkadam_id:
+            # Fetch by ID
+            response = requests.get(
+                f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
+                timeout=5
+            )
+            if response.status_code == 200:
+                mukkadam_data = response.json()
+                mukkadam_id = int(mukkadam_id)
+        else:
+            # Search by phone
+            response = requests.get(
+                f'{SUPPLY_API_URL}/api/mukkadam/minimal_list/',
+                timeout=5
+            )
+            if response.status_code == 200:
+                mukkadams = response.json()
+                for m in mukkadams:
+                    if mukkadam_phone in m.get('mobile_numbers', ''):
+                        mukkadam_id = m['id']
+                        # Fetch full details
+                        full_response = requests.get(
+                            f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
+                            timeout=5
+                        )
+                        if full_response.status_code == 200:
+                            mukkadam_data = full_response.json()
+                        break
+        
+        if not mukkadam_data:
+            return Response(
+                {'error': 'Mukkadam not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        print(f"   ✅ Found: {mukkadam_data.get('mukkadam_name')} (ID: {mukkadam_id})")
+    
+    except Exception as e:
+        print(f"   ❌ Error fetching mukkadam: {str(e)}")
+        return Response(
+            {'error': f'Failed to fetch mukkadam details: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+    # ========================================
+    # STEP 2: GET ALL ALLOCATIONS FOR THIS MUKKADAM
+    # ========================================
+    print(f"\n📋 Fetching all allocations for mukkadam ID: {mukkadam_id}")
+    
+    allocations = Allocation.objects.filter(
+        mukkadam_id=mukkadam_id
+    ).select_related('job_activity').order_by('-work_date')
+    
+    print(f"   Found {allocations.count()} total allocations")
+    
+    if allocations.count() == 0:
+        return Response({
+            'mukkadam': {
+                'mukkadam_id': mukkadam_id,
+                'mukkadam_name': mukkadam_data.get('mukkadam_name'),
+                'mobile_numbers': mukkadam_data.get('mobile_numbers'),
+                'village': mukkadam_data.get('village'),
+            },
+            'summary': {
+                'total_allocations': 0,
+                'total_earnings': 0,
+                'completed_jobs': 0,
+                'pending_jobs': 0,
+                'upcoming_jobs': 0,
+            },
+            'allocations': [],
+            'monthly_breakdown': []
+        })
+    
+    # ========================================
+    # STEP 3: CATEGORIZE ALLOCATIONS BY STATUS
+    # ========================================
+    from datetime import datetime, date
+    
+    today = date.today()
+    
+    completed_allocations = []
+    pending_allocations = []
+    upcoming_allocations = []
+    
+    total_earnings = 0
+    total_area_worked = 0
+    
+    for allocation in allocations:
+        work_date = allocation.work_date
+        
+        # Calculate earnings
+        earnings = float(allocation.mukkadam_price) * float(allocation.allocated_area)
+        total_earnings += earnings
+        total_area_worked += float(allocation.allocated_area)
+        
+        # Categorize by date and status
+        if allocation.status == 'completed':
+            completed_allocations.append(allocation)
+        elif work_date and work_date < today:
+            # Past date but not marked completed
+            pending_allocations.append(allocation)
+        elif work_date and work_date >= today:
+            # Future date
+            upcoming_allocations.append(allocation)
+        else:
+            pending_allocations.append(allocation)
+    
+    print(f"   Completed: {len(completed_allocations)}")
+    print(f"   Pending: {len(pending_allocations)}")
+    print(f"   Upcoming: {len(upcoming_allocations)}")
+    
+    # ========================================
+    # STEP 4: FETCH JOB & FARMER DETAILS
+    # ========================================
+    print("\n🔄 Fetching job and farmer details...")
+    
+    job_ids = set(alloc.job_activity.job_id for alloc in allocations if alloc.job_activity)
+    
+    jobs_cache = {}
+    farmers_cache = {}
+    
+    EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
+    job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+    
+    try:
+        response = requests.get(
+            f'{EXTERNAL_API_URL}/get_allocated_jobs/',
+            headers={'Authorization': job_token},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            jobs_list = data.get('data', []) if isinstance(data, dict) else data
+            
+            for job in jobs_list:
+                job_id = str(job.get('work_id') or job.get('id'))
+                if job_id in job_ids:
+                    jobs_cache[job_id] = job
+    except Exception as e:
+        print(f"   ⚠️ Error fetching jobs: {str(e)}")
+    
+    # Fetch farmer details
+    farmer_ids = set()
+    for job in jobs_cache.values():
+        if job.get('farmer_id'):
+            farmer_ids.add(str(job['farmer_id']))
+    
+    FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
+    farmer_token = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
+    
+    for farmer_id in farmer_ids:
+        try:
+            response = requests.get(
+                f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
+                headers={'Authorization': farmer_token},
+                timeout=3
+            )
+            if response.status_code == 200:
+                farmers_cache[farmer_id] = response.json()
+        except Exception as e:
+            print(f"   ⚠️ Error fetching farmer {farmer_id}: {str(e)}")
+    
+    # ========================================
+    # STEP 5: BUILD ALLOCATION DETAILS
+    # ========================================
+    print("\n📦 Building allocation details...")
+    
+    def build_allocation_detail(allocation):
+        job_activity = allocation.job_activity
+        if not job_activity:
+            return None
+        
+        job_id = str(job_activity.job_id)
+        activity_id = str(job_activity.activity_id)
+        
+        job_data = jobs_cache.get(job_id, {})
+        farmer_id = str(job_data.get('farmer_id', ''))
+        farmer_data = farmers_cache.get(farmer_id, {})
+        
+        activity_details = None
+        if job_data and 'activities' in job_data:
+            activity_details = next(
+                (a for a in job_data['activities'] 
+                 if str(a.get('id') or a.get('activity_id')) == activity_id),
+                None
+            )
+        
+        central_team_phone = 'N/A'
+        if job_data and 'booking' in job_data:
+            central_team_phone = job_data['booking'].get('phone_number', 'N/A')
+        
+        earnings = float(allocation.mukkadam_price) * float(allocation.allocated_area)
+        transport_cost = float(allocation.transport_price or 0)
+        
+        return {
+            'allocation_id': allocation.id,
+            'work_date': str(allocation.work_date) if allocation.work_date else None,
+            'allocated_area': float(allocation.allocated_area),
+            'crew_size': allocation.crew_size,
+            'status': allocation.status,
+            'allocated_at': allocation.allocated_at.isoformat() if allocation.allocated_at else None,
+            
+            'job': {
+                'job_id': job_id,
+                'job_name': job_data.get('job_name', 'N/A'),
+                'location': job_data.get('location', 'N/A'),
+                'central_team_phone': central_team_phone,
+            },
+            
+            'farmer': {
+                'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
+                'phone_number': farmer_data.get('phone_number', 'N/A'),
+                'location': f"{farmer_data.get('village', 'N/A')}, {farmer_data.get('taluka', 'N/A')}"
+            } if farmer_data else None,
+            
+            'activity': {
+                'activity_name': activity_details.get('activity_name', 'Unknown') if activity_details else 'Unknown',
+                'activity_type': activity_details.get('activity_type', 'N/A') if activity_details else 'N/A',
+            },
+            
+            'payment': {
+                'rate_per_acre': float(allocation.mukkadam_price),
+                'allocated_acres': float(allocation.allocated_area),
+                'total_earnings': earnings,
+                'transport_cost': transport_cost,
+                'total_payment': earnings + transport_cost,
+            }
+        }
+    
+    completed_details = [build_allocation_detail(a) for a in completed_allocations]
+    completed_details = [d for d in completed_details if d]
+    
+    pending_details = [build_allocation_detail(a) for a in pending_allocations]
+    pending_details = [d for d in pending_details if d]
+    
+    upcoming_details = [build_allocation_detail(a) for a in upcoming_allocations]
+    upcoming_details = [d for d in upcoming_details if d]
+    
+    # ========================================
+    # STEP 6: CALCULATE MONTHLY BREAKDOWN
+    # ========================================
+    from collections import defaultdict
+    
+    monthly_stats = defaultdict(lambda: {
+        'month': '',
+        'allocations': 0,
+        'area_worked': 0,
+        'earnings': 0,
+        'completed': 0
+    })
+    
+    for allocation in allocations:
+        if allocation.work_date:
+            month_key = allocation.work_date.strftime('%Y-%m')
+            month_name = allocation.work_date.strftime('%B %Y')
+            
+            earnings = float(allocation.mukkadam_price) * float(allocation.allocated_area)
+            
+            monthly_stats[month_key]['month'] = month_name
+            monthly_stats[month_key]['allocations'] += 1
+            monthly_stats[month_key]['area_worked'] += float(allocation.allocated_area)
+            monthly_stats[month_key]['earnings'] += earnings
+            
+            if allocation.status == 'completed':
+                monthly_stats[month_key]['completed'] += 1
+    
+    monthly_breakdown = sorted(
+        monthly_stats.values(),
+        key=lambda x: x['month'],
+        reverse=True
+    )
+    
+    # ========================================
+    # STEP 7: BUILD FINAL RESPONSE
+    # ========================================
+    print(f"\n✅ Successfully compiled work history")
+    print(f"   Total Earnings: ₹{total_earnings:,.2f}")
+    print(f"   Total Area: {total_area_worked:.2f} acres")
+    print("="*80)
+    
+    completion_rate = (len(completed_allocations) / allocations.count() * 100) if allocations.count() > 0 else 0
+    
+    response_data = {
+        'mukkadam': {
+            'mukkadam_id': mukkadam_id,
+            'mukkadam_name': mukkadam_data.get('mukkadam_name'),
+            'mobile_numbers': mukkadam_data.get('mobile_numbers'),
+            'village': mukkadam_data.get('village'),
+            'crew_size': mukkadam_data.get('crew_size'),
+            'has_smartphone': mukkadam_data.get('has_smartphone'),
+        },
+        
+        'summary': {
+            'total_allocations': allocations.count(),
+            'completed_jobs': len(completed_allocations),
+            'pending_jobs': len(pending_allocations),
+            'upcoming_jobs': len(upcoming_allocations),
+            'completion_rate': round(completion_rate, 2),
+            
+            'total_earnings': round(total_earnings, 2),
+            'total_area_worked': round(total_area_worked, 2),
+            'average_earnings_per_job': round(total_earnings / allocations.count(), 2) if allocations.count() > 0 else 0,
+        },
+        
+        'work_history': {
+            'completed': completed_details,
+            'pending': pending_details,
+            'upcoming': upcoming_details,
+        },
+        
+        'monthly_breakdown': monthly_breakdown,
+        
+        'performance_metrics': {
+            'total_jobs_completed': len(completed_allocations),
+            'total_jobs_pending': len(pending_allocations),
+            'average_area_per_job': round(total_area_worked / allocations.count(), 2) if allocations.count() > 0 else 0,
+            'most_recent_work': str(allocations.first().work_date) if allocations.first() and allocations.first().work_date else None,
+        }
+    }
+    
+    return Response(response_data)

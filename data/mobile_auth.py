@@ -14,40 +14,71 @@ from django.utils.decorators import method_decorator
 @method_decorator(csrf_exempt, name='dispatch')
 @api_view(['POST'])
 def mobile_login(request):
-    """Mobile login endpoint"""
+    """
+    Mobile login endpoint with smart auto-generated names
+    """
     try:
-        print("kzjdflkgdfk")
+        print("📱 Mobile Login Request Received")
         mobile_number = request.data.get('mobile_number', '').strip()
         full_name = request.data.get('full_name', '').strip()
         
+        # Validate mobile number
         if not mobile_number or len(mobile_number) != 10:
             return Response(
                 {'error': 'Valid 10-digit mobile number required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        if not mobile_number.isdigit():
+            return Response(
+                {'error': 'Mobile number must contain only digits'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         try:
+            # Existing user
             profile = UserProfile.objects.select_related('user').get(mobile_number=mobile_number)
             user = profile.user
             is_new_user = False
             
+            print(f"✅ Existing user found: {profile.full_name} ({mobile_number})")
+            
         except UserProfile.DoesNotExist:
+            # New user registration
+            print(f"🆕 New user registration for: {mobile_number}")
+            
+            # ✅ Smart auto-generation of full_name
             if not full_name:
-                return Response(
-                    {
-                        'is_new': True,
-                        'error': 'Full name required for new registration'
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+                # Option 1: Simple format
+                # full_name = f"User {mobile_number}"
+                
+                # Option 2: More friendly format with last 4 digits
+                # full_name = f"User {mobile_number[-4:]}"
+                
+                # Option 3: Professional format
+                full_name = f"Mobile User {mobile_number[-4:]}"
+                
+                # Option 4: Keep it minimal
+                # full_name = mobile_number
+                
+                print(f"   📝 Auto-generated full_name: {full_name}")
+            else:
+                print(f"   📝 User provided full_name: {full_name}")
             
             username = f"user_{mobile_number}"
             
+            # Create or get user
             try:
                 user = User.objects.get(username=username)
+                print(f"   Found existing User object: {username}")
             except User.DoesNotExist:
-                user = User.objects.create_user(username=username)
+                user = User.objects.create_user(
+                    username=username,
+                    first_name=full_name  # Also set Django's first_name field
+                )
+                print(f"   ✅ Created new User object: {username}")
             
+            # Create or update profile
             profile, created = UserProfile.objects.get_or_create(
                 user=user,
                 defaults={
@@ -63,25 +94,49 @@ def mobile_login(request):
                 profile.full_name = full_name
                 profile.is_mobile_verified = True
                 profile.save()
+                print(f"   ✅ Updated existing profile")
+            else:
+                print(f"   ✅ Created new profile")
             
             is_new_user = True
+            print(f"✅ New user registered: {full_name} ({mobile_number})")
         
-        token, _ = Token.objects.get_or_create(user=user)
+        # Generate or get auth token
+        token, created = Token.objects.get_or_create(user=user)
         
-        return Response({
+        response_data = {
+            'success': True,
             'token': token.key,
             'is_new_user': is_new_user,
+            'message': 'Login successful' if not is_new_user else 'Registration successful',
             'user': {
                 'id': user.id,
                 'username': user.username,
                 'full_name': profile.full_name,
                 'mobile_number': mobile_number,
-                'role': profile.role
+                'role': profile.role,
+                'is_mobile_verified': profile.is_mobile_verified
             }
-        })
+        }
+        
+        print(f"✅ Login successful for {mobile_number}")
+        print("="*80)
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+        
     except Exception as e:
         import traceback
+        print("❌ ERROR IN MOBILE LOGIN:")
         traceback.print_exc()
+        
+        return Response(
+            {
+                'success': False,
+                'error': 'An error occurred during login',
+                'details': str(e)
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @api_view(['POST'])
