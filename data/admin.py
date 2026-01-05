@@ -3,7 +3,12 @@ from .models import (
     UserProfile,
     JobActivity,
     Allocation,
-    AllocationStats
+    AllocationStats,
+    FCMDevice,
+    PushNotificationLog,
+    Contact,
+    Message,
+    CallLog
 )
 
 # -----------------------------
@@ -97,3 +102,75 @@ class AllocationStatsAdmin(admin.ModelAdmin):
         'total_transport_price',
         'allocations_by_user'
     )
+
+# -----------------------------
+# FCM & Push Notification Admin
+# -----------------------------
+@admin.register(FCMDevice)
+class FCMDeviceAdmin(admin.ModelAdmin):
+    list_display = (
+        'mobile_number',
+        'user_id',
+        'device_type',
+        'is_active',
+        'last_used_at',
+        'created_at'
+    )
+    list_filter = ('device_type', 'is_active', 'created_at')
+    search_fields = ('user_id', 'mobile_number', 'fcm_token', 'device_id')
+    readonly_fields = ('created_at', 'updated_at', 'last_used_at')
+
+
+@admin.register(PushNotificationLog)
+class PushNotificationLogAdmin(admin.ModelAdmin):
+    list_display = (
+        'mobile_number',
+        'title',
+        'status',
+        'scheduled_at',
+        'sent_at',
+        'created_at'
+    )
+    list_filter = ('status', 'created_at', 'scheduled_at')
+    search_fields = ('user_id', 'mobile_number', 'title', 'body')
+    readonly_fields = ('created_at', 'updated_at', 'sent_at')
+
+
+# -----------------------------
+# User Data Sync Admin (Contacts, Calls, SMS)
+# -----------------------------
+@admin.register(Contact)
+class ContactAdmin(admin.ModelAdmin):
+    list_display = ('display_name', 'user_id', 'synced_at')
+    search_fields = ('display_name', 'user_id', 'phones')
+    readonly_fields = ('synced_at',)
+    list_filter = ('synced_at',)
+
+
+@admin.register(Message)
+class MessageAdmin(admin.ModelAdmin):
+    list_display = (
+        'type',
+        'address',
+        'user_id',
+        'message_datetime',
+        'read_status'
+    )
+    list_filter = ('type', 'read_status', 'synced_at')
+    search_fields = ('address', 'body', 'user_id')
+    readonly_fields = ('synced_at', 'timestamp')
+
+
+@admin.register(CallLog)
+class CallLogAdmin(admin.ModelAdmin):
+    list_display = (
+        'type',
+        'name',
+        'number',
+        'duration',
+        'user_id',
+        'call_datetime'
+    )
+    list_filter = ('type', 'synced_at')
+    search_fields = ('name', 'number', 'user_id')
+    readonly_fields = ('synced_at', 'timestamp')
