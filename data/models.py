@@ -15,7 +15,13 @@ class UserProfile(models.Model):
     Links mobile number to Django User for mobile app login
     """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
-    mobile_number = models.CharField(max_length=15, unique=True, db_index=True)
+    mobile_number = models.CharField(
+        max_length=15, 
+        unique=True, 
+        db_index=True,
+        null=True,  # ✅ Allow NULL
+        blank=True  # ✅ Allow empty in forms
+    )
     full_name = models.CharField(max_length=255, blank=True, null=True)
     role = models.CharField(
         max_length=50,
@@ -38,16 +44,14 @@ class UserProfile(models.Model):
         ]
     
     def __str__(self):
-        return f"{self.full_name or self.user.username} - {self.mobile_number}"
+        return f"{self.full_name or self.user.username} - {self.mobile_number or 'No mobile'}"
 
 
-
-# Auto-create profile when User is created
+# ✅ Update the signal to set mobile_number as None explicitly
 @receiver(post_save, sender=User)
 def create_user_profile(sender, instance, created, **kwargs):
-    if created and not hasattr(instance, 'profile'):
-        UserProfile.objects.create(user=instance)
-
+    if created:
+        UserProfile.objects.create(user=instance, mobile_number=None)
 
 
 @receiver(post_save, sender=User)
@@ -323,6 +327,159 @@ class AllocationStats(models.Model):
         return f"Stats for {self.date}"
     
 
+
+class PaymentRequest(models.Model):
+    """Payment requests from mukkadams for completed work"""
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('paid', 'Paid'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    # Link to allocation
+    allocation = models.OneToOneField(
+        Allocation,
+        on_delete=models.CASCADE,
+        related_name='payment_request',
+        help_text="One payment request per allocation"
+    )
+    
+    # Mukkadam info (redundant but useful for queries)
+    mukkadam_id = models.IntegerField(db_index=True)
+    
+    # Amount (copied from allocation at creation)
+    requested_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="mukkadam_price × allocated_area"
+    )
+    
+    # Status tracking
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending',
+        db_index=True
+    )
+    
+    # Timestamps and users
+    requested_at = models.DateTimeField(auto_now_add=True)
+    requested_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_payment_requests'
+    )
+    
+    paid_at = models.DateTimeField(null=True, blank=True)
+    paid_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='paid_payment_requests'
+    )
+    
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    rejected_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='rejected_payment_requests'
+    )
+    rejection_reason = models.TextField(blank=True, null=True)
+    
+    # Notes
+    notes = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        ordering = ['-requested_at']
+        indexes = [
+            models.Index(fields=['mukkadam_id', 'status']),
+            models.Index(fields=['status', '-requested_at']),
+        ]
+    
+    def __str__(self):
+        return f"Payment Request #{self.id} - Mukkadam #{self.mukkadam_id} - ₹{self.requested_amount} ({self.status})"
+
+
+class TransportPaymentRequest(models.Model):
+    """Payment requests from transport providers"""
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('paid', 'Paid'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    # Link to allocation
+    allocation = models.OneToOneField(
+        Allocation,
+        on_delete=models.CASCADE,
+        related_name='transport_payment_request',
+        help_text="One payment request per allocation"
+    )
+    
+    # Transport provider info
+    transport_provider_id = models.IntegerField(db_index=True)
+    
+    # Amount (copied from allocation at creation)
+    requested_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Transport cost from allocation"
+    )
+    
+    # Status tracking
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending',
+        db_index=True
+    )
+    
+    # Timestamps and users
+    requested_at = models.DateTimeField(auto_now_add=True)
+    requested_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='created_transport_payment_requests'
+    )
+    
+    paid_at = models.DateTimeField(null=True, blank=True)
+    paid_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='paid_transport_payment_requests'
+    )
+    
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    rejected_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='rejected_transport_payment_requests'
+    )
+    rejection_reason = models.TextField(blank=True, null=True)
+    
+    # Notes
+    notes = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        ordering = ['-requested_at']
+        indexes = [
+            models.Index(fields=['transport_provider_id', 'status']),
+            models.Index(fields=['status', '-requested_at']),
+        ]
+    
+    def __str__(self):
+        return f"Transport Payment #{self.id} - Provider #{self.transport_provider_id} - ₹{self.requested_amount} ({self.status})"
 
 
 # models.py

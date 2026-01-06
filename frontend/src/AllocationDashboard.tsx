@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { 
-  Users, Truck, DollarSign,ChevronDown,ChevronUp, FileText, CheckCircle, 
+  Users, Truck, DollarSign,ChevronDown,ChevronUp, FileText, CheckCircle, CheckSquare,Ban,
   XCircle, TrendingUp,TrendingDown, Calendar, Filter, Search,Activity,AlertCircle,ExternalLink,
   Eye, Edit, Plus, X, MapPin, BarChart3, Clock, Layers
 } from 'lucide-react';
@@ -79,6 +79,45 @@ const toggleActivity = (activityId: string) => {
   });
 };
 
+// Helper to get the actual list of data for the table
+const getAllocatedList = () => {
+  return allocations.filter(allocation => {
+    // 1. If status is 'allocated', it belongs here
+    if (allocation.status === 'allocated') return true;
+
+    // 2. If it is 'completed' but payment rejected, it stays here
+    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+    if (allocation.status === 'completed' && mukkadamPayment?.status === 'rejected') {
+        return true;
+    }
+    return false;
+  });
+};
+
+const getCompletedList = () => {
+  return allocations.filter(allocation => {
+    // 1. If status is 'completed', it belongs here
+    if (allocation.status === 'completed') return true;
+
+    // 2. Or if payment is pending/paid
+    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+    return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
+  });
+};
+
+// ✅ FIXED: Calculate Counts based on Unique Job IDs
+const getAllocatedUniqueJobCount = () => {
+  const list = getAllocatedList();
+  const uniqueIds = new Set(list.map(a => a.farmer_work_id)); // Counts Job 600 only once
+  return uniqueIds.size;
+};
+
+const getCompletedUniqueJobCount = () => {
+  const list = getCompletedList();
+  const uniqueIds = new Set(list.map(a => a.farmer_work_id));
+  return uniqueIds.size;
+};
+
 const toggleMukkadam = (mukkadamId: number) => {
   setExpandedMukkadams(prev => {
     const newSet = new Set(prev);
@@ -90,7 +129,72 @@ const toggleMukkadam = (mukkadamId: number) => {
     return newSet;
   });
 };
+// ✅ ADD: Reject payment request functions
+const handleRejectMukkadamPayment = async (paymentRequestId: number) => {
+  if (!confirm('Reject this payment request? The allocation will move back to Allocated tab.')) return;
 
+  try {
+    const config = getAuthConfig();
+    await axios.post(
+      `${API_BASE_URL_A}/ap/payment-requests/${paymentRequestId}/reject/`,
+      {},
+      config
+    );
+    alert('✅ Payment request rejected');
+    await fetchPaymentRequests();
+    await fetchDashboardData(); // Refresh allocations
+  } catch (error) {
+    console.error('Error rejecting payment:', error);
+    alert('❌ Failed to reject payment request');
+  }
+};
+
+const handleRejectTransportPayment = async (paymentRequestId: number) => {
+  if (!confirm('Reject this transport payment request?')) return;
+
+  try {
+    const config = getAuthConfig();
+    await axios.post(
+      `${API_BASE_URL_A}/ap/transport-payment-requests/${paymentRequestId}/reject/`,
+      {},
+      config
+    );
+    alert('✅ Transport payment request rejected');
+    await fetchPaymentRequests();
+    await fetchDashboardData();
+  } catch (error) {
+    console.error('Error rejecting transport payment:', error);
+    alert('❌ Failed to reject transport payment request');
+  }
+};
+
+// ✅ FIXED: Filter based on Allocation Status, not Job Status
+const getAllocatedAllocations = () => {
+  return allocations.filter(allocation => {
+    // 1. If the API says it's allocated, show it here
+    if (allocation.status === 'allocated') return true;
+
+    // 2. Edge Case: If it's completed but the payment was rejected, move it back here
+    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+    if (allocation.status === 'completed' && mukkadamPayment?.status === 'rejected') {
+        return true;
+    }
+
+    return false;
+  });
+};
+
+// ✅ FIXED: Filter based on Allocation Status or Payment Existence
+const getCompletedAllocations = () => {
+  return allocations.filter(allocation => {
+    // 1. If the API says it's completed, show it here
+    if (allocation.status === 'completed') return true;
+
+    // 2. OR if a payment request exists (implies work is done/pending payment)
+    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+    return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
+  });
+};
 const toggleTransporter = (transporterId: number) => {
   setExpandedTransporters(prev => {
     const newSet = new Set(prev);
@@ -125,7 +229,7 @@ const toggleSection = (section: 'complexJobs' | 'activityTypes' | 'crewDistribut
 
 
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'allocated' | 'pending' | 'partially' | 'mukkadams' | 'transport' | 'activity' | 'analytics'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'allocated' |'completed'| 'pending' | 'partially' | 'mukkadams' | 'transport' | 'activity' | 'analytics'>('overview');
   // State declarations - USE ONLY Job type (which now includes all properties)
   const [jobs, setJobs] = useState<Job[]>([]);
   const [allocations, setAllocations] = useState<Allocation[]>([]);
@@ -435,7 +539,127 @@ const handleReallocate = async (allocationId: number) => {
   
 //   return 'pending';
 // };
+// ✅ NEW: Payment request states
+  const [mukkadamPaymentRequests, setMukkadamPaymentRequests] = useState<any[]>([]);
+  const [transportPaymentRequests, setTransportPaymentRequests] = useState<any[]>([]);
+  const [loadingPayments, setLoadingPayments] = useState(false);
 
+  // Fetch data on mount
+  useEffect(() => {
+    fetchAllData();
+  }, []);
+
+  const fetchAllData = async () => {
+    const config = getAuthConfig();
+    
+    try {
+      // Fetch allocations
+      const allocRes = await axios.get(`${API_BASE_URL_A}/ap/allocations/`, config);
+      setAllocations(allocRes.data);
+
+      // Fetch jobs
+      const jobsRes = await axios.get(`${API_BASE_URL_A}/ap/jobs/`, config);
+      setJobs(jobsRes.data);
+
+      // Fetch mukkadams
+      const mukkadamRes = await axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`, config);
+      setMukkadams(mukkadamRes.data);
+
+      // Fetch transport providers
+      const transportRes = await axios.get(`${API_BASE_URL}/api/transport-providers/`, config);
+      setTransportProviders(transportRes.data);
+
+      // ✅ Fetch payment requests
+      await fetchPaymentRequests();
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    }
+  };
+
+  // ✅ NEW: Fetch payment requests
+  const fetchPaymentRequests = async () => {
+    setLoadingPayments(true);
+    try {
+      const config = getAuthConfig();
+
+      // Fetch mukkadam payment requests
+      const mukkadamPayRes = await axios.get(
+        `${API_BASE_URL_A}/ap/payment-requests/`,
+        config
+      );
+      setMukkadamPaymentRequests(mukkadamPayRes.data);
+
+      // Fetch transport payment requests
+      const transportPayRes = await axios.get(
+        `${API_BASE_URL_A}/ap/transport-payment-requests/`,
+        config
+      );
+      setTransportPaymentRequests(transportPayRes.data);
+    } catch (error) {
+      console.error('Error fetching payment requests:', error);
+    } finally {
+      setLoadingPayments(false);
+    }
+  };
+
+  // ✅ NEW: Mark mukkadam payment as paid
+  const handleMarkMukkadamPaid = async (paymentRequestId: number) => {
+    if (!confirm('Mark this payment as PAID?')) return;
+
+    try {
+      const config = getAuthConfig();
+      await axios.post(
+        `${API_BASE_URL_A}/ap/payment-requests/${paymentRequestId}/mark_paid/`,
+        {},
+        config
+      );
+      alert('✅ Payment marked as PAID');
+      await fetchPaymentRequests();
+    } catch (error) {
+      console.error('Error marking payment as paid:', error);
+      alert('❌ Failed to mark payment as paid');
+    }
+  };
+
+  // ✅ NEW: Mark transport payment as paid
+  const handleMarkTransportPaid = async (paymentRequestId: number) => {
+    if (!confirm('Mark this transport payment as PAID?')) return;
+
+    try {
+      const config = getAuthConfig();
+      await axios.post(
+        `${API_BASE_URL_A}/ap/transport-payment-requests/${paymentRequestId}/mark_paid/`,
+        {},
+        config
+      );
+      alert('✅ Transport payment marked as PAID');
+      await fetchPaymentRequests();
+    } catch (error) {
+      console.error('Error marking transport payment as paid:', error);
+      alert('❌ Failed to mark transport payment as paid');
+    }
+  };
+
+  // ✅ NEW: Get payment request for allocation
+  const getMukkadamPaymentRequest = (allocationId: number) => {
+    return mukkadamPaymentRequests.find(pr => pr.allocation === allocationId);
+  };
+
+  const getTransportPaymentRequest = (allocationId: number) => {
+    return transportPaymentRequests.find(pr => pr.allocation === allocationId);
+  };
+
+  // ✅ NEW: Get completed allocations (work_date < today)
+  // const getCompletedAllocations = () => {
+  //   const today = new Date();
+  //   today.setHours(0, 0, 0, 0);
+
+  //   return allocations.filter(allocation => {
+  //     if (!allocation.work_date) return false;
+  //     const workDate = new Date(allocation.work_date);
+  //     return workDate < today;
+  //   });
+  // };
 
 
 // ✅ FIXED: Calculate job status based on allocations
@@ -532,10 +756,10 @@ const calculateRevenueStats = () => {
 
 // ✅ Calculate all stats
 const revenueStats = calculateRevenueStats();
-
 const stats = {
   totalJobs: jobs.length,
-  allocatedJobs: allocatedJobs.length,
+  allocatedJobs: getAllocatedUniqueJobCount(),  // ✅ Count unique jobs
+  completedJobs: getCompletedUniqueJobCount(),  // ✅ Count unique jobs
   partiallyAllocatedJobs: partiallyAllocatedJobs.length,
   pendingJobs: pendingJobs.length,
   totalMukkadamPayout: allocations.reduce((sum, a) => 
@@ -664,7 +888,6 @@ const workersByMukkadam = activeAllocations.reduce((acc, allocation) => {
 const workerDetails = Object.values(workersByMukkadam).sort((a, b) => b.totalWorkers - a.totalWorkers);
 
 
-
 // Filter partially allocated jobs
 const filteredPartiallyAllocatedJobs = partiallyAllocatedJobs.filter(job => {
   const searchLower = partialSearchQuery.toLowerCase();
@@ -736,19 +959,31 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                 <FileText className="inline-block mr-2" size={18} />
                 Overview
               </button>
-              <button
-                onClick={() => setActiveTab('allocated')}
-                className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                  activeTab === 'allocated'
-                    ? 'border-green-500 text-green-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <CheckCircle className="inline-block mr-2" size={18} />
-                Allocated ({stats.allocatedJobs})
-              </button>
+      <button
+    onClick={() => setActiveTab('allocated')}
+    className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
+      activeTab === 'allocated'
+        ? 'border-green-500 text-green-600'
+        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+    }`}
+  >
+    <CheckCircle className="inline-block mr-2" size={18} />
+    {/* ✅ Shows Unique Jobs Count (2) */}
+    Allocated ({getAllocatedUniqueJobCount()}) 
+  </button>
 
-                {/* After Allocated tab, add this: */}
+  <button
+    onClick={() => setActiveTab('completed')}
+    className={`px-6 py-4 font-medium transition flex items-center ${
+      activeTab === 'completed'
+        ? 'border-b-2 border-purple-600 text-purple-600'
+        : 'text-gray-600 hover:text-gray-900'
+    }`}
+  >
+    <CheckSquare size={18} className="mr-2" />
+    {/* ✅ Shows Unique Jobs Count (1) */}
+    Completed ({getCompletedUniqueJobCount()}) 
+  </button>
 <button
   onClick={() => setActiveTab('partially')}
   className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
@@ -1604,20 +1839,15 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                 </div>
                 )}
 
-                {/* Allocated Jobs Tab */}
+{/* Allocated Jobs Tab */}
 {activeTab === 'allocated' && (
   <div>
-    {allocations.filter(a => {
-      // Filter allocations for allocated jobs
-      const job = jobs.find(j => j.work_id === a.farmer_work_id);
-      if (!job) return false;
-      
-      const jobStatus = calculateJobStatus(job);
-      return jobStatus === 'fully_allocated';
-    }).length === 0 ? (
+    
+      {getAllocatedList().length === 0 ? (
       <div className="text-center py-12">
         <CheckCircle size={48} className="mx-auto text-gray-400 mb-4" />
         <p className="text-gray-600">No allocated jobs found</p>
+        <p className="text-sm text-gray-500 mt-2">Jobs move to Completed when payment is requested</p>
       </div>
     ) : (
       <div className="overflow-x-auto">
@@ -1632,21 +1862,13 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Cost</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {allocations
+            {getAllocatedList()
               .filter(allocation => {
-                // Only show allocations for fully allocated jobs
-                const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
-                if (!job) return false;
-                
-                const jobStatus = calculateJobStatus(job);
-                return jobStatus === 'fully_allocated';
-              })
-              .filter(allocation => {
-                // Apply search filter
                 if (!searchTerm) return true;
                 const searchLower = searchTerm.toLowerCase();
                 const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
@@ -1667,7 +1889,9 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                   parseFloat(allocation.mukkadam_price?.toString() || '0') + 
                   parseFloat(allocation.transport_price?.toString() || '0');
                 
-                // Determine transport display
+                const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+                const isRejected = mukkadamPayment?.status === 'rejected';
+                
                 let transportDisplay = 'Unknown';
                 let transportPrice = 0;
                 let transportColor = 'text-gray-600';
@@ -1742,9 +1966,19 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {allocation.work_date 
                         ? new Date(allocation.work_date).toLocaleDateString('en-IN')
-                        : allocation.completed_at
-                        ? new Date(allocation.completed_at).toLocaleDateString('en-IN')
                         : 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {isRejected ? (
+                        <span className="px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold flex items-center w-fit">
+                          <Ban size={14} className="mr-1" />
+                          Payment Rejected
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold">
+                          Awaiting Payment Request
+                        </span>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <div className="flex space-x-2">
@@ -1774,7 +2008,219 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
     )}
   </div>
 )}
+{/* ✅ COMPLETED TAB - NEW */}
+          {activeTab === 'completed' && (
+            <div className="p-6">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-bold text-gray-800">Completed Allocations</h2>
+                <button
+                  onClick={fetchPaymentRequests}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
+                  disabled={loadingPayments}
+                >
+                  {loadingPayments ? 'Refreshing...' : '🔄 Refresh Payments'}
+                </button>
+              </div>
 
+              {getCompletedAllocations().length === 0 ? (
+                <div className="text-center py-12">
+                  <CheckSquare size={48} className="mx-auto text-gray-400 mb-4" />
+                  <p className="text-gray-600">No completed allocations found</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Work Date</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam Payment</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport Payment</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {getCompletedAllocations()
+                        .filter(allocation => {
+                          if (!searchTerm) return true;
+                          const searchLower = searchTerm.toLowerCase();
+                          const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
+                          return (
+                            String(allocation.farmer_work_id || '').toLowerCase().includes(searchLower) ||
+                            String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower) ||
+                            String(allocation.activity_name || '').toLowerCase().includes(searchLower)
+                          );
+                        })
+                        .map(allocation => {
+                          const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
+                          const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
+                          
+                          // Get payment requests
+                          const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+                          const transportPayment = getTransportPaymentRequest(allocation.id);
+
+                          const mukkadamAmount = parseFloat(String(allocation.mukkadam_price || '0'));
+                          const transportAmount = parseFloat(String(allocation.transport_price || '0'));
+
+                          return (
+                            <tr key={allocation.id} className="hover:bg-gray-50">
+                              {/* Mukkadam */}
+                              <td className="px-4 py-4">
+                                <div className="text-sm">
+                                  <div className="font-medium text-gray-900">
+                                    {mukkadam?.mukkadam_name || 'Unknown'}
+                                  </div>
+                                  <div className="text-gray-500 text-xs">
+                                    ID: {allocation.mukkadam_id}
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Activity */}
+                              <td className="px-4 py-4">
+                                <div className="text-sm">
+                                  <div className="font-medium text-gray-900">
+                                    {allocation.activity_name || 'N/A'}
+                                  </div>
+                                  <div className="text-gray-500 text-xs">
+                                    Job: {allocation.farmer_work_id}
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Area */}
+                              <td className="px-4 py-4 text-sm text-gray-700">
+                                {allocation.allocated_area} acres
+                              </td>
+
+                              {/* Work Date */}
+                              <td className="px-4 py-4 text-sm text-gray-700">
+                                {new Date(allocation.work_date).toLocaleDateString('en-IN')}
+                              </td>
+
+                              {/* Mukkadam Payment Status */}
+<td className="px-4 py-4">
+  <div className="space-y-2">
+    <div className="font-bold text-green-600">
+      ₹{mukkadamAmount.toLocaleString()}
+    </div>
+    
+    {mukkadamPayment ? (
+      <div>
+        {mukkadamPayment.status === 'paid' ? (
+          <div className="flex items-center">
+            <CheckCircle size={16} className="text-green-600 mr-1" />
+            <span className="text-xs font-semibold text-green-700">PAID</span>
+          </div>
+        ) : mukkadamPayment.status === 'pending' ? (
+          <div className="flex space-x-2">
+            <button
+              onClick={() => handleMarkMukkadamPaid(mukkadamPayment.id)}
+              className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center"
+            >
+              <CheckCircle size={14} className="mr-1" />
+              Mark Paid
+            </button>
+            {/* <button
+              onClick={() => handleRejectMukkadamPayment(mukkadamPayment.id)}
+              className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center"
+            >
+              <Ban size={14} className="mr-1" />
+              Reject
+            </button> */}
+          </div>
+        ) : (
+          <div className="flex items-center">
+            <Ban size={16} className="text-red-600 mr-1" />
+            <span className="text-xs font-semibold text-red-700">REJECTED</span>
+          </div>
+        )}
+      </div>
+    ) : (
+      <span className="text-xs text-gray-500 italic">Not requested</span>
+    )}
+  </div>
+</td>
+
+                              {/* Transport Payment Status */}
+<td className="px-4 py-4">
+  {allocation.transport_type === 'provider' && allocation.transport_provider_id ? (
+    <div className="space-y-2">
+      <div className="font-bold text-orange-600">
+        ₹{transportAmount.toLocaleString()}
+      </div>
+      <div className="text-xs text-gray-600">
+        {provider?.name || 'Unknown'}
+      </div>
+      
+      {transportPayment ? (
+        <div>
+          {transportPayment.status === 'paid' ? (
+            <div className="flex items-center">
+              <CheckCircle size={16} className="text-green-600 mr-1" />
+              <span className="text-xs font-semibold text-green-700">PAID</span>
+            </div>
+          ) : transportPayment.status === 'pending' ? (
+            <div className="flex space-x-2">
+              <button
+                onClick={() => handleMarkTransportPaid(transportPayment.id)}
+                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center"
+              >
+                <CheckCircle size={14} className="mr-1" />
+                Mark Paid
+              </button>
+              <button
+                onClick={() => handleRejectTransportPayment(transportPayment.id)}
+                className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center"
+              >
+                <Ban size={14} className="mr-1" />
+                Reject
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center">
+              <Ban size={16} className="text-red-600 mr-1" />
+              <span className="text-xs font-semibold text-red-700">REJECTED</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <span className="text-xs text-gray-500 italic">Not requested</span>
+      )}
+    </div>
+  ) : allocation.transport_type === 'own' ? (
+    <div className="space-y-2">
+      <div className="font-bold text-blue-600">
+        ₹{transportAmount.toLocaleString()}
+      </div>
+      <div className="text-xs text-gray-600">Own Transport</div>
+    </div>
+  ) : (
+    <div className="text-xs text-gray-500">
+      No Transport
+    </div>
+  )}
+</td>
+                              {/* Actions */}
+                              <td className="px-4 py-4">
+                                <button
+                                  onClick={() => navigate(`/allocations/${allocation.id}`)}
+                                  className="text-blue-600 hover:text-blue-900 font-medium flex items-center text-sm"
+                                >
+                                  <Eye size={16} className="mr-1" /> View
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
 
 {/* Pending Jobs Tab */}
