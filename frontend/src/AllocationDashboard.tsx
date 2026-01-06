@@ -79,19 +79,44 @@ const toggleActivity = (activityId: string) => {
   });
 };
 
-// ✅ UPDATE: Count unique jobs instead of allocations
-const getAllocatedJobsCount = () => {
-  const allocatedAllocs = getAllocatedAllocations();
-  const uniqueJobIds = new Set(allocatedAllocs.map(a => a.farmer_work_id));
-  return uniqueJobIds.size;
+// Helper to get the actual list of data for the table
+const getAllocatedList = () => {
+  return allocations.filter(allocation => {
+    // 1. If status is 'allocated', it belongs here
+    if (allocation.status === 'allocated') return true;
+
+    // 2. If it is 'completed' but payment rejected, it stays here
+    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+    if (allocation.status === 'completed' && mukkadamPayment?.status === 'rejected') {
+        return true;
+    }
+    return false;
+  });
 };
 
-const getCompletedJobsCount = () => {
-  const completedAllocs = getCompletedAllocations();
-  const uniqueJobIds = new Set(completedAllocs.map(a => a.farmer_work_id));
-  return uniqueJobIds.size;
+const getCompletedList = () => {
+  return allocations.filter(allocation => {
+    // 1. If status is 'completed', it belongs here
+    if (allocation.status === 'completed') return true;
+
+    // 2. Or if payment is pending/paid
+    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+    return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
+  });
 };
 
+// ✅ FIXED: Calculate Counts based on Unique Job IDs
+const getAllocatedUniqueJobCount = () => {
+  const list = getAllocatedList();
+  const uniqueIds = new Set(list.map(a => a.farmer_work_id)); // Counts Job 600 only once
+  return uniqueIds.size;
+};
+
+const getCompletedUniqueJobCount = () => {
+  const list = getCompletedList();
+  const uniqueIds = new Set(list.map(a => a.farmer_work_id));
+  return uniqueIds.size;
+};
 
 const toggleMukkadam = (mukkadamId: number) => {
   setExpandedMukkadams(prev => {
@@ -143,32 +168,30 @@ const handleRejectTransportPayment = async (paymentRequestId: number) => {
   }
 };
 
-// ✅ UPDATE: Get allocations for Allocated tab
+// ✅ FIXED: Filter based on Allocation Status, not Job Status
 const getAllocatedAllocations = () => {
   return allocations.filter(allocation => {
-    const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
-    if (!job) return false;
-    
-    const jobStatus = calculateJobStatus(job);
-    if (jobStatus !== 'fully_allocated') return false;
-    
-    // Check payment request status
+    // 1. If the API says it's allocated, show it here
+    if (allocation.status === 'allocated') return true;
+
+    // 2. Edge Case: If it's completed but the payment was rejected, move it back here
     const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-    
-    // Show in Allocated if:
-    // 1. No payment request exists yet, OR
-    // 2. Payment request was rejected
-    return !mukkadamPayment || mukkadamPayment.status === 'rejected';
+    if (allocation.status === 'completed' && mukkadamPayment?.status === 'rejected') {
+        return true;
+    }
+
+    return false;
   });
 };
 
-// ✅ UPDATE: Get allocations for Completed tab
+// ✅ FIXED: Filter based on Allocation Status or Payment Existence
 const getCompletedAllocations = () => {
   return allocations.filter(allocation => {
+    // 1. If the API says it's completed, show it here
+    if (allocation.status === 'completed') return true;
+
+    // 2. OR if a payment request exists (implies work is done/pending payment)
     const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-    
-    // Show in Completed if:
-    // Payment request exists AND (pending OR paid)
     return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
   });
 };
@@ -735,8 +758,8 @@ const calculateRevenueStats = () => {
 const revenueStats = calculateRevenueStats();
 const stats = {
   totalJobs: jobs.length,
-  allocatedJobs: getAllocatedJobsCount(),  // ✅ Count unique jobs
-  completedJobs: getCompletedJobsCount(),  // ✅ Count unique jobs
+  allocatedJobs: getAllocatedUniqueJobCount(),  // ✅ Count unique jobs
+  completedJobs: getCompletedUniqueJobCount(),  // ✅ Count unique jobs
   partiallyAllocatedJobs: partiallyAllocatedJobs.length,
   pendingJobs: pendingJobs.length,
   totalMukkadamPayout: allocations.reduce((sum, a) => 
@@ -936,31 +959,31 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                 <FileText className="inline-block mr-2" size={18} />
                 Overview
               </button>
-           <button
-  onClick={() => setActiveTab('allocated')}
-  className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-    activeTab === 'allocated'
-      ? 'border-green-500 text-green-600'
-      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-  }`}
->
-  <CheckCircle className="inline-block mr-2" size={18} />
-  Allocated ({getAllocatedJobsCount()})
-</button>
+      <button
+    onClick={() => setActiveTab('allocated')}
+    className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
+      activeTab === 'allocated'
+        ? 'border-green-500 text-green-600'
+        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+    }`}
+  >
+    <CheckCircle className="inline-block mr-2" size={18} />
+    {/* ✅ Shows Unique Jobs Count (2) */}
+    Allocated ({getAllocatedUniqueJobCount()}) 
+  </button>
 
-                {/* After Allocated tab, add this: */}
-
-             <button
-  onClick={() => setActiveTab('completed')}
-  className={`px-6 py-4 font-medium transition flex items-center ${
-    activeTab === 'completed'
-      ? 'border-b-2 border-purple-600 text-purple-600'
-      : 'text-gray-600 hover:text-gray-900'
-  }`}
->
-  <CheckSquare size={18} className="mr-2" />
-  Completed ({getCompletedJobsCount()})
-</button>
+  <button
+    onClick={() => setActiveTab('completed')}
+    className={`px-6 py-4 font-medium transition flex items-center ${
+      activeTab === 'completed'
+        ? 'border-b-2 border-purple-600 text-purple-600'
+        : 'text-gray-600 hover:text-gray-900'
+    }`}
+  >
+    <CheckSquare size={18} className="mr-2" />
+    {/* ✅ Shows Unique Jobs Count (1) */}
+    Completed ({getCompletedUniqueJobCount()}) 
+  </button>
 <button
   onClick={() => setActiveTab('partially')}
   className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
@@ -1819,7 +1842,8 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
 {/* Allocated Jobs Tab */}
 {activeTab === 'allocated' && (
   <div>
-    {getAllocatedAllocations().length === 0 ? (
+    
+      {getAllocatedList().length === 0 ? (
       <div className="text-center py-12">
         <CheckCircle size={48} className="mx-auto text-gray-400 mb-4" />
         <p className="text-gray-600">No allocated jobs found</p>
@@ -1843,7 +1867,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {getAllocatedAllocations()
+            {getAllocatedList()
               .filter(allocation => {
                 if (!searchTerm) return true;
                 const searchLower = searchTerm.toLowerCase();
