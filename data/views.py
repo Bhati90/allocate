@@ -56,334 +56,6 @@ from rest_framework import status
 from .models import FCMDevice
 from .serializers import FCMDeviceSerializer
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def get_fcm_by_mobile(request):
-    """
-    Get active FCM token(s) by mobile number
-
-    POST /api/fcm/by-mobile/
-    {
-        "mobile_number": "9876543210"
-    }
-    """
-    mobile_number = request.data.get('mobile_number')
-
-    if not mobile_number:
-        return Response(
-            {"success": "false", "message": "mobile_number is required"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    devices = FCMDevice.objects.filter(
-        mobile_number=mobile_number,
-        is_active=True
-    ).order_by('-last_used_at')
-
-    if not devices.exists():
-        return Response(
-            {
-                "success": False,
-                "message": "No active FCM tokens found for this mobile number"
-            },
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    serializer = FCMDeviceSerializer(devices, many=True)
-
-    return Response(
-        {
-            "success": True,
-            "mobile_number": mobile_number,
-            "count": devices.count(),
-            "tokens": serializer.data
-        },
-        status=status.HTTP_200_OK
-    )
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def jobs_list(request):
-    """
-    Fetch jobs from external API and enrich with:
-    1. Allocation data from database
-    2. Farmer details from farmer API
-    """
-    print("="*80)
-    print("🔍 FETCHING JOBS FROM EXTERNAL API")
-    print("="*80)
-    
-    try:
-        # Fetch jobs from external API
-        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
-        
-        print(f"📡 API URL: {api_url}")
-        
-        response = requests.get(
-            api_url,
-            headers={'Authorization': token},
-            timeout=10
-        )
-        
-        print(f"📊 Response Status: {response.status_code}")
-        response.raise_for_status()
-        
-        # Parse JSON
-        try:
-            response_data = response.json()
-        except json.JSONDecodeError as e:
-            print(f"❌ JSON Decode Error: {str(e)}")
-            return Response(
-                {'error': f'Invalid JSON from external API: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        
-        # Handle different response formats
-        if isinstance(response_data, dict):
-            if 'data' in response_data:
-                jobs_from_api = response_data['data']
-                print(f"✅ Extracted {len(jobs_from_api)} jobs from 'data' key")
-            elif 'results' in response_data:
-                jobs_from_api = response_data['results']
-            else:
-                jobs_from_api = [response_data]
-        else:
-            jobs_from_api = response_data
-        
-        if not isinstance(jobs_from_api, list):
-            print(f"❌ Unexpected response type: {type(jobs_from_api)}")
-            return Response(
-                {'error': f'Expected list, got {type(jobs_from_api).__name__}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        
-        print(f"✅ Found {len(jobs_from_api)} jobs from API")
-        
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Request Error: {str(e)}")
-        return Response(
-            {'error': f'Failed to fetch jobs from external API: {str(e)}'},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE
-        )
-    
-    if not jobs_from_api:
-        print("⚠️ No jobs returned from API")
-        return Response([])
-    
-    # ========================================
-    # ✅ STEP 1: BATCH FETCH ALL FARMER DETAILS
-    # ========================================
-    print("\n👥 FETCHING FARMER DETAILS...")
-    
-    # Extract unique farmer IDs
-    farmer_ids = set()
-    for job in jobs_from_api:
-        farmer_id = job.get('farmer_id')
-        if farmer_id:
-            farmer_ids.add(str(farmer_id))
-    
-    print(f"   Found {len(farmer_ids)} unique farmers: {farmer_ids}")
-    
-    # Fetch all farmer details (batch request)
-    farmers_cache = {}
-    FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
-    tok = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
-    for farmer_id in farmer_ids:
-        try:
-            farmer_response = requests.get(
-                f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
-                headers={'Authorization': tok},
-                timeout=3
-            )
-            if farmer_response.status_code == 200:
-                farmer_data = farmer_response.json()
-                farmers_cache[farmer_id] = {
-                    'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
-                    'phone_number': farmer_data.get('phone_number', 'N/A'),
-                    'village': farmer_data.get('village', 'N/A'),
-                    'taluka': farmer_data.get('taluka', 'N/A'),
-                    'district': farmer_data.get('district', 'N/A'),
-                    'location': f"{farmer_data.get('village', 'N/A')}, {farmer_data.get('taluka', 'N/A')}, {farmer_data.get('district', 'N/A')}"
-                }
-                print(f"   ✅ Fetched farmer {farmer_id}: {farmers_cache[farmer_id]['farmer_name']}")
-            else:
-                print(f"   ❌ Failed to fetch farmer {farmer_id}: Status {farmer_response.status_code}")
-                farmers_cache[farmer_id] = None
-        except Exception as e:
-            print(f"   ❌ Error fetching farmer {farmer_id}: {str(e)}")
-            farmers_cache[farmer_id] = None
-    
-    # ========================================
-    # STEP 2: ENRICH JOBS WITH ALLOCATIONS & FARMER DATA
-    # ========================================
-    enriched_jobs = []
-    
-    print(f"\n🔄 Enriching {len(jobs_from_api)} jobs with allocation data...")
-    
-    for idx, job in enumerate(jobs_from_api):
-        # Get job_id
-        job_id = str(
-            job.get('work_id') or 
-            job.get('id') or 
-            job.get('job_id') or 
-            f"UNKNOWN_{idx}"
-        )
-        
-        print(f"\n  📌 Job {idx + 1}: {job_id}")
-        
-        # ✅ GET FARMER DETAILS FROM CACHE
-        farmer_id = str(job.get('farmer_id', ''))
-        farmer_details = farmers_cache.get(farmer_id)
-        
-        # GET ACTIVITIES FROM API
-        activities_from_api = job.get('activities', [])
-        print(f"     📊 Found {len(activities_from_api)} activities from API")
-        
-        # ENRICH WITH ALLOCATION DATA FROM DB
-        activities_data = []
-        
-        for api_activity in activities_from_api:
-            activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
-            
-            # Check if this activity has been allocated
-            db_activity = JobActivity.objects.filter(
-                job_id=job_id,
-                activity_id=activity_id
-            ).prefetch_related('allocations').first()
-            
-            # Build allocations list
-            allocations_data = []
-            allocated_area = Decimal('0')
-            
-            if db_activity:
-                print(f"     💾 Activity {activity_id} found in DB with {db_activity.allocations.count()} allocations")
-                
-                for alloc in db_activity.allocations.all():
-                    allocated_area += Decimal(str(alloc.allocated_area))
-                    
-                    # Fetch mukkadam name
-                    try:
-                        mukkadam_response = requests.get(
-                            f'{SUPPLY_API_URL}/api/mukkadam/{alloc.mukkadam_id}/',
-                            timeout=2
-                        )
-                        mukkadam_data = mukkadam_response.json()
-                        mukkadam_name = mukkadam_data.get('mukkadam_name', 'Unknown')
-                    except:
-                        mukkadam_name = f'Mukkadam #{alloc.mukkadam_id}'
-                    
-                    allocations_data.append({
-                        'allocation_id': alloc.id,
-                        'mukkadam_id': alloc.mukkadam_id,
-                        'mukkadam_name': mukkadam_name,
-                        'allocated_area': float(alloc.allocated_area),
-                        'work_date': str(alloc.work_date) if alloc.work_date else None,
-                        'crew_size': alloc.crew_size,
-                        'mukkadam_price': float(alloc.mukkadam_price),
-                        'transport_type': alloc.transport_type,
-                        'transport_price': float(alloc.transport_price or 0),
-                        'total_cost': float(alloc.total_cost)
-                    })
-            
-            # Calculate areas
-            total_area = Decimal(str(api_activity.get('acres', 0)))
-            remaining_area = total_area - allocated_area
-            is_fully_allocated = allocated_area >= total_area
-            
-            print(f"     🔍 Activity {activity_id} ({api_activity.get('activity_name')})")
-            print(f"        Total: {total_area}, Allocated: {allocated_area}, Remaining: {remaining_area}")
-            print(f"        Is Fully Allocated: {is_fully_allocated}")
-
-            def safe_date(value):
-                if not value:
-                    return ''
-                return str(value).split('T')[0]
-            
-            # ✅ ADD ACTIVITY WITH PRICING FROM API
-            activities_data.append({
-                'id': db_activity.id if db_activity else None,
-                'activity_id': activity_id,
-                'activity_name': api_activity.get('activity_name', 'Unknown'),
-                'activity_type': api_activity.get('activity_type', ''),
-                'location': api_activity.get('location', 'N/A'),
-                'total_area': float(total_area),
-                'allocated_area': float(allocated_area),
-                'remaining_area': float(remaining_area),
-                'scheduled_date': safe_date(
-                    api_activity.get('date_time') or 
-                    api_activity.get('scheduled_date') or 
-                    job.get('scheduled_date')
-                ),
-                'scheduled_time': api_activity.get('scheduled_time', ''),
-                'estimated_workers': api_activity.get('estimated_workers', 10),
-                
-                # ✅ PRICING FROM API
-                'rate_per_acre': float(api_activity.get('total_price', 0)) / float(total_area) if float(total_area) > 0 else 0,
-                'total_price': float(api_activity.get('total_price', 0)),  # Revenue
-                'transport_cost': float(api_activity.get('transport_cost', 0)),  # Expected transport cost
-                'other_cost': float(api_activity.get('other_cost', 0)),
-                'subtotal': float(api_activity.get('subtotal', 0)),
-                
-                'is_fully_allocated': is_fully_allocated,
-                'allocations': allocations_data
-            })
-
-        
-        # Calculate job status
-        def calculate_status(activities):
-            if not activities:
-                return 'pending'
-            
-            fully_allocated = sum(1 for a in activities if a['is_fully_allocated'])
-            partially_allocated = sum(1 for a in activities if a['allocated_area'] > 0 and not a['is_fully_allocated'])
-            
-            print(f"\n     📊 STATUS CALCULATION:")
-            print(f"        Total Activities: {len(activities)}")
-            print(f"        Fully Allocated: {fully_allocated}")
-            print(f"        Partially Allocated: {partially_allocated}")
-            
-            if fully_allocated == len(activities):
-                status = 'fully_allocated'
-            elif fully_allocated > 0 or partially_allocated > 0:
-                status = 'partially_allocated'
-            else:
-                status = 'pending'
-            
-            print(f"        Final Status: {status}")
-            return status
-        
-        job_status = calculate_status(activities_data)
-        
-        # ✅ BUILD ENRICHED JOB WITH FARMER DETAILS
-        enriched_job = {
-            **job,  # All original data from external API
-            'work_id': job_id,
-            
-            # ✅ FARMER DETAILS
-            'farmer': farmer_details,  # Complete farmer object
-            
-            # ACTIVITIES WITH ALLOCATIONS
-            'activities': activities_data,
-            
-            # JOB METADATA
-            'status': job_status,
-            'total_activities': len(activities_data),
-            'is_complex': len(activities_data) > 1,
-            
-            # ✅ BOOKING INFO (from API)
-            'booking': job.get('booking', {})
-        }
-        
-        enriched_jobs.append(enriched_job)
-    
-    print(f"\n✅ Successfully enriched {len(enriched_jobs)} jobs")
-    print("="*80)
-    
-    return Response(enriched_jobs)
-
-
 # ... rest of your views (JobActivityViewSet, AllocationViewSet, activity_logs_list) remain the same ...
 class JobActivityViewSet(viewsets.ModelViewSet):
     """
@@ -620,249 +292,444 @@ class AllocationViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def allocations_by_mobile(request):
-    """
-    Get all allocations for a mukkadam by mobile number
-    GET /api/allocations/by-mobile/?mobile_number=9876543210
-    
-    This API:
-    1. Calls Supply App to get mukkadam_id from mobile number
-    2. Fetches allocations from Allocation App database
-    3. Calls Supply App to get transport provider details
-    4. Returns combined data
-    """
-    mobile_number = request.GET.get('mobile_number')
-    
-    if not mobile_number:
-        return Response(
-            {'error': 'mobile_number query parameter is required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    # ✅ STEP 1: Call Supply App API to get mukkadam(s)
-    try:
-        supply_response = requests.get(
-            f'{SUPPLY_API_URL}/api/mukkadam/by-mobile/',
-            params={'mobile_number': mobile_number},
-            timeout=5
-        )
-        supply_data = supply_response.json()
-        
-        if not supply_data.get('found'):
-            return Response({
-                'error': 'No mukkadam found with this mobile number',
-                'mobile_number': mobile_number,
-                'mukkadams': [],
-                'allocations': [],
-                'summary': {
-                    'total_allocations': 0,
-                    'total_earnings': 0
-                }
-            }, status=status.HTTP_404_NOT_FOUND)
-        
-        mukkadams = supply_data.get('mukkadams', [])
-        mukkadam_ids = [m['id'] for m in mukkadams]
-        
-    except requests.exceptions.RequestException as e:
-        return Response(
-            {'error': f'Failed to connect to Supply App: {str(e)}'},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE
-        )
-    
-    # ✅ STEP 2: Get allocations from Allocation App database
-    allocations = Allocation.objects.filter(
-        mukkadam_id__in=mukkadam_ids
-    ).select_related('job_activity', 'allocated_by').order_by('-allocated_at')
-    
-    # ✅ STEP 3: Build response with transport provider details from Supply App
-    allocations_data = []
-    total_area = Decimal('0')
-    total_cost = Decimal('0')
-    
-    # ✅ Cache transport provider data to avoid multiple API calls
-    transport_provider_cache = {}
-    
-    for alloc in allocations:
-        # Find which mukkadam this allocation belongs to
-        mukkadam = next((m for m in mukkadams if m['id'] == alloc.mukkadam_id), None)
-        
-        # ✅ Get transport provider name from Supply App API if applicable
-        transport_provider_name = None
-        transport_provider_details = None
-        
-        if alloc.transport_type == 'provider' and alloc.transport_provider_id:
-            # Check cache first
-            if alloc.transport_provider_id in transport_provider_cache:
-                provider_data = transport_provider_cache[alloc.transport_provider_id]
-            else:
-                # Fetch from Supply App API
-                try:
-                    provider_response = requests.get(
-                        f'{SUPPLY_API_URL}/api/transport-provider/{alloc.transport_provider_id}/',
-                        timeout=3
-                    )
-                    
-                    if provider_response.status_code == 200:
-                        provider_json = provider_response.json()
-                        if provider_json.get('found'):
-                            provider_data = provider_json.get('provider')
-                            transport_provider_cache[alloc.transport_provider_id] = provider_data
-                        else:
-                            provider_data = None
-                    else:
-                        provider_data = None
-                        
-                except requests.exceptions.RequestException as e:
-                    print(f"⚠️ Failed to fetch transport provider {alloc.transport_provider_id}: {str(e)}")
-                    provider_data = None
-            
-            # Set provider name and details
-            if provider_data:
-                transport_provider_name = provider_data.get('name')
-                transport_provider_details = {
-                    'id': provider_data.get('id'),
-                    'name': provider_data.get('name'),
-                    'contact_number': provider_data.get('contact_number'),
-                    'base_location': provider_data.get('base_location'),
-                    'vehicle_type': provider_data.get('vehicle_type')
-                }
-            else:
-                transport_provider_name = f'Provider #{alloc.transport_provider_id}'
-        
-        allocation_data = {
-            'allocation_id': alloc.id,
-            'mukkadam_id': alloc.mukkadam_id,
-            'mukkadam_name': mukkadam['mukkadam_name'] if mukkadam else 'Unknown',
-            'mukkadam_village': mukkadam.get('village') if mukkadam else None,
-            'status': alloc.status,
-            
-            # Job details
-            'job_id': alloc.job_activity.job_id,
-            'activity_id': alloc.job_activity.activity_id,
-            'activity_name': alloc.job_activity.activity_name,
-            'activity_type': alloc.job_activity.activity_type,
-            'location': alloc.job_activity.location,
-            
-            # Allocation details
-            'allocated_area': float(alloc.allocated_area),
-            'work_date': str(alloc.work_date),
-            'crew_size': alloc.crew_size,
-            
-            # Pricing
-            'mukkadam_price': float(alloc.mukkadam_price),
-            'transport_type': alloc.transport_type,
-            'transport_price': float(alloc.transport_price or 0),
-            'transport_provider': transport_provider_name,
-            'transport_provider_details': transport_provider_details,  # ✅ Full details
-            'total_cost': float(alloc.total_cost),
-            
-            # Metadata
-            'allocated_at': alloc.allocated_at.isoformat(),
-            'allocated_by': alloc.allocated_by.username if alloc.allocated_by else None,
-            'notes': alloc.notes,
-            
-            # Activity details
-            'scheduled_datetime': alloc.job_activity.scheduled_datetime.isoformat(),
-            'total_activity_area': float(alloc.job_activity.total_area),
-            'remaining_activity_area': float(alloc.job_activity.remaining_area),
-        }
-        
-        allocations_data.append(allocation_data)
-        total_area += alloc.allocated_area
-        total_cost += Decimal(str(alloc.total_cost))
-    
-    # Summary statistics
-    summary = {
-        'total_allocations': allocations.count(),
-        'total_area_allocated': float(total_area),
-        'total_earnings': float(total_cost),
-        'active_allocations': allocations.filter(status='allocated').count(),
-        'completed_allocations': allocations.filter(status='completed').count(),
-        'in_progress_allocations': allocations.filter(status='in_progress').count(),
-    }
-    
-    return Response({
-        'mukkadams': mukkadams,  # From Supply App
-        'mukkadams_count': len(mukkadams),
-        'allocations': allocations_data,  # From Allocation App + Supply App
-        'summary': summary
-    })
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def activity_logs_list(request):
-    """Get all allocation activity logs"""
-    allocations = Allocation.objects.all().select_related('job_activity', 'allocated_by').order_by('-allocated_at')
-    
-    logs = []
-    for allocation in allocations:
-        # Get mukkadam name
-        try:
-            mukkadam_response = requests.get(
-                f'{SUPPLY_API_URL}/api/mukkadam/{allocation.mukkadam_id}/',
-                timeout=2
-            )
-            mukkadam_data = mukkadam_response.json()
-            mukkadam_name = mukkadam_data.get('mukkadam_name', 'Unknown')
-        except:
-            mukkadam_name = f'Mukkadam #{allocation.mukkadam_id}'
-        
-        # Get transport name based on transport_type
-        transport_name = "Unknown"
-        transport_price = float(allocation.transport_price or 0)
-        
-        if allocation.transport_type == 'none':
-            transport_name = "No Transport"
-            transport_price = 0
-        elif allocation.transport_type == 'own':
-            transport_name = "Own Transport"
-            transport_price = float(allocation.own_transport_price or 0)
-        elif allocation.transport_type == 'provider' and allocation.transport_provider_id:
-            try:
-                transport_response = requests.get(
-                    f'{SUPPLY_API_URL}/api/transport-providers/{allocation.transport_provider_id}/',
-                    timeout=2
-                )
-                transport_data = transport_response.json()
-                transport_name = transport_data.get('name', 'Unknown Provider')
-            except:
-                transport_name = f'Provider #{allocation.transport_provider_id}'
-        
-        # Get user name
-        user_name = allocation.allocated_by.username if allocation.allocated_by else 'System'
-        
-        logs.append({
-            'id': allocation.id,
-            'allocation_id': allocation.id,
-            'job_id': allocation.job_activity.job_id,
-            'mukkadam_id': allocation.mukkadam_id,
-            'mukkadam_name': mukkadam_name,
-            'transport_type': allocation.transport_type,
-            'transport_provider_id': allocation.transport_provider_id,
-            'transport_name': transport_name,
-            'mukkadam_price': float(allocation.mukkadam_price),
-            'transport_price': transport_price,
-            'total_price': float(allocation.mukkadam_price) + transport_price,
-            'user_name': user_name,
-            'timestamp': allocation.allocated_at.isoformat(),
-            'work_date': str(allocation.work_date) if allocation.work_date else None,
-            'allocated_area': float(allocation.allocated_area) if allocation.allocated_area else None,
-            'crew_size': allocation.crew_size,
-            'activity_name': allocation.job_activity.activity_name if allocation.job_activity else None
-        })
-    
-    return Response(logs)
-
-
-
 
 # views.py - REMOVE THE MUKKADAM IMPORT
 # from .models import JobActivity, Allocation, AllocationStats, Mukkadam  # ❌ WRONG
 
 from .models import JobActivity, Allocation, AllocationStats  # ✅ CORRECT
+
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.utils import timezone
+from .models import PaymentRequest, TransportPaymentRequest, Allocation
+from .serializers import PaymentRequestSerializer, TransportPaymentRequestSerializer
+
+class PaymentRequestViewSet(viewsets.ModelViewSet):
+    """ViewSet for mukkadam payment requests"""
+    serializer_class = PaymentRequestSerializer
+    permission_classes = [AllowAny]  # Change to IsAuthenticated in production
+    
+    def get_queryset(self):
+        """Filter by mukkadam_id or show all for admin"""
+        queryset = PaymentRequest.objects.all()
+        
+        mukkadam_id = self.request.query_params.get('mukkadam_id')
+        if mukkadam_id:
+            queryset = queryset.filter(mukkadam_id=mukkadam_id)
+        
+        # Filter by status
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        
+        return queryset
+    
+    def create(self, request, *args, **kwargs):
+        """Create payment request for an allocation"""
+        allocation_id = request.data.get('allocation_id')
+        
+        if not allocation_id:
+            return Response(
+                {'error': 'allocation_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            allocation = Allocation.objects.get(id=allocation_id)
+        except Allocation.DoesNotExist:
+            return Response(
+                {'error': 'Allocation not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if payment request already exists
+        if hasattr(allocation, 'payment_request'):
+            return Response(
+                {
+                    'error': 'Payment request already exists for this allocation',
+                    'existing_request': PaymentRequestSerializer(allocation.payment_request).data
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Calculate amount from allocation
+        requested_amount = float(allocation.mukkadam_price) * float(allocation.allocated_area)
+        
+        # Create payment request
+        payment_request = PaymentRequest.objects.create(
+            allocation=allocation,
+            mukkadam_id=allocation.mukkadam_id,
+            requested_amount=requested_amount,
+            requested_by=request.user if request.user.is_authenticated else None,
+            notes=request.data.get('notes', '')
+        )
+        
+        serializer = self.get_serializer(payment_request)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+        # In PaymentRequestViewSet
+    # In PaymentRequestViewSet
+
+    # ... existing imports ...
+    # Ensure you import ActivityLog
+    # from .models import ActivityLog 
+
+    @action(detail=True, methods=['post'])
+    def re_request(self, request, pk=None):
+        """Allow mukkadam to re-request payment after rejection"""
+        payment_request = self.get_object()
+        
+        if payment_request.status != 'rejected':
+            return Response(
+                {'error': 'Can only re-request payments that were rejected'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        payment_request.status = 'pending'
+        payment_request.requested_at = timezone.now()
+        payment_request.save()
+        
+        # ✅ FIX: Use ActivityLog instead of PaymentActivity
+        ActivityLog.objects.create(
+            activity_type='payment_requested',  # Use one of the choices from your model
+            description="Payment re-requested after rejection",
+            payment_request=payment_request,
+            allocation=payment_request.allocation,
+            performed_by=request.user if request.user.is_authenticated else None,
+            job_id=payment_request.allocation.farmer_work_id,  # Required field in ActivityLog
+            mukkadam_id=payment_request.mukkadam_id,          # Required field in ActivityLog
+            metadata={"notes": "Re-request"}
+        )
+        
+        serializer = self.get_serializer(payment_request)
+        return Response({
+            'message': 'Payment request submitted successfully',
+            'payment_request': serializer.data
+        })
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a payment request"""
+        payment_request = self.get_object()
+        
+        if payment_request.status == 'paid':
+            return Response(
+                {'error': 'Cannot reject a payment that has already been paid'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        payment_request.status = 'rejected'
+        payment_request.save()
+        
+        # ✅ FIX: Use ActivityLog
+        ActivityLog.objects.create(
+            activity_type='payment_rejected',
+            description=request.data.get('rejection_reason', 'Payment request rejected'),
+            payment_request=payment_request,
+            allocation=payment_request.allocation,
+            performed_by=request.user if request.user.is_authenticated else None,
+            job_id=payment_request.allocation.farmer_work_id,
+            mukkadam_id=payment_request.mukkadam_id,
+            amount=payment_request.requested_amount
+        )
+        
+        serializer = self.get_serializer(payment_request)
+        return Response({
+            'message': 'Payment request rejected successfully',
+            'payment_request': serializer.data
+        })
+
+    @action(detail=True, methods=['post'])
+    def mark_paid(self, request, pk=None):
+        """Mark payment as paid"""
+        payment_request = self.get_object()
+        payment_request.status = 'paid'
+        payment_request.paid_at = timezone.now()
+        payment_request.paid_by = request.user if request.user.is_authenticated else None
+        payment_request.save()
+        
+        # Update allocation status
+        allocation = payment_request.allocation
+        allocation.status = 'completed'
+        allocation.completed_at = timezone.now()
+        allocation.save()
+        
+        # ✅ FIX: Use ActivityLog (This caused your NameError)
+        ActivityLog.objects.create(
+            activity_type='payment_paid',
+            description=f"Payment marked as paid by {request.user.username if request.user.is_authenticated else 'Unknown'}",
+            payment_request=payment_request,
+            allocation=allocation,
+            performed_by=request.user if request.user.is_authenticated else None,
+            job_id=allocation.farmer_work_id,
+            mukkadam_id=allocation.mukkadam_id,
+            amount=payment_request.requested_amount
+        )
+        
+        return Response({
+            'message': 'Payment marked as paid successfully',
+            'allocation': AllocationSerializer(allocation).data,
+            'payment_request': self.get_serializer(payment_request).data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def my_requests(self, request):
+        """Get payment requests for specific mukkadam"""
+        mukkadam_id = request.query_params.get('mukkadam_id')
+        
+        if not mukkadam_id:
+            return Response(
+                {'error': 'mukkadam_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        requests = PaymentRequest.objects.filter(mukkadam_id=mukkadam_id)
+        
+        # Filter by status if provided
+        status_param = request.query_params.get('status')
+        if status_param:
+            requests = requests.filter(status=status_param)
+        
+        serializer = self.get_serializer(requests, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def pending(self, request):
+        """Get all pending payment requests (admin view)"""
+        requests = PaymentRequest.objects.filter(status='pending')
+        serializer = self.get_serializer(requests, many=True)
+        return Response(serializer.data)
+
+
+class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
+    """ViewSet for transport provider payment requests"""
+    serializer_class = TransportPaymentRequestSerializer
+    permission_classes = [AllowAny]  # Change to IsAuthenticated in production
+    
+    def get_queryset(self):
+        """Filter by transport_provider_id or show all for admin"""
+        queryset = TransportPaymentRequest.objects.all()
+        
+        provider_id = self.request.query_params.get('transport_provider_id')
+        if provider_id:
+            queryset = queryset.filter(transport_provider_id=provider_id)
+        
+        # Filter by status
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        
+        return queryset
+    
+    def create(self, request, *args, **kwargs):
+        """Create transport payment request for an allocation"""
+        allocation_id = request.data.get('allocation_id')
+        
+        if not allocation_id:
+            return Response(
+                {'error': 'allocation_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            allocation = Allocation.objects.get(id=allocation_id)
+        except Allocation.DoesNotExist:
+            return Response(
+                {'error': 'Allocation not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if this allocation has transport provider
+        if not allocation.transport_provider_id:
+            return Response(
+                {'error': 'This allocation does not have a transport provider'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if payment request already exists
+        if hasattr(allocation, 'transport_payment_request'):
+            return Response(
+                {
+                    'error': 'Transport payment request already exists for this allocation',
+                    'existing_request': TransportPaymentRequestSerializer(allocation.transport_payment_request).data
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get amount from allocation
+        requested_amount = float(allocation.transport_price or 0)
+        
+        if requested_amount <= 0:
+            return Response(
+                {'error': 'Transport cost is zero or not set'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create payment request
+        payment_request = TransportPaymentRequest.objects.create(
+            allocation=allocation,
+            transport_provider_id=allocation.transport_provider_id,
+            requested_amount=requested_amount,
+            requested_by=request.user if request.user.is_authenticated else None,
+            notes=request.data.get('notes', '')
+        )
+        
+        serializer = self.get_serializer(payment_request)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'])
+    def mark_paid(self, request, pk=None):
+        """Admin marks transport payment as paid"""
+        payment_request = self.get_object()
+        
+        if payment_request.status == 'paid':
+            return Response(
+                {'error': 'Payment already marked as paid'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # ✅ UPDATE: Mark payment as paid
+        payment_request.status = 'paid'
+        payment_request.paid_at = timezone.now()
+        payment_request.paid_by = request.user if request.user.is_authenticated else None
+        payment_request.save()
+        
+        # ✅ NEW: Check if mukkadam payment is also paid, then mark allocation complete
+        allocation = payment_request.allocation
+        
+        # Only mark as completed if mukkadam payment is also paid (or doesn't exist)
+        mukkadam_payment = getattr(allocation, 'payment_request', None)
+        if not mukkadam_payment or mukkadam_payment.status == 'paid':
+            allocation.status = 'completed'
+            allocation.save()
+        
+        serializer = self.get_serializer(payment_request)
+        return Response(serializer.data)
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a payment request"""
+        payment_request = self.get_object()
+        
+        if payment_request.status == 'paid':
+            return Response(
+                {'error': 'Cannot reject a payment that has already been paid'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        payment_request.status = 'rejected'
+        payment_request.save()
+        
+        serializer = self.get_serializer(payment_request)
+        return Response({
+            'message': 'Payment request rejected successfully',
+            'payment_request': serializer.data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def my_requests(self, request):
+        """Get payment requests for specific transport provider"""
+        provider_id = request.query_params.get('transport_provider_id')
+        
+        if not provider_id:
+            return Response(
+                {'error': 'transport_provider_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        requests = TransportPaymentRequest.objects.filter(transport_provider_id=provider_id)
+        
+        # Filter by status if provided
+        status_param = request.query_params.get('status')
+        if status_param:
+            requests = requests.filter(status=status_param)
+        
+        serializer = self.get_serializer(requests, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def pending(self, request):
+        """Get all pending transport payment requests (admin view)"""
+        requests = TransportPaymentRequest.objects.filter(status='pending')
+        serializer = self.get_serializer(requests, many=True)
+        return Response(serializer.data)
+
+from .models import ActivityLog
+from .serializers import ActivityLogSerializer
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def activity_logs_list(request):
+    """Get all activity logs with external data enriched"""
+    
+    # Get query parameters
+    activity_type = request.query_params.get('activity_type')
+    mukkadam_id = request.query_params.get('mukkadam_id')
+    job_id = request.query_params.get('job_id')
+    days = request.query_params.get('days', 30)  # Default last 30 days
+    
+    # Build queryset
+    queryset = ActivityLog.objects.all()
+    
+    if activity_type:
+        queryset = queryset.filter(activity_type=activity_type)
+    if mukkadam_id:
+        queryset = queryset.filter(mukkadam_id=mukkadam_id)
+    if job_id:
+        queryset = queryset.filter(job_id=job_id)
+    
+    # Filter by date range
+    if days:
+        from_date = timezone.now() - timedelta(days=int(days))
+        queryset = queryset.filter(performed_at__gte=from_date)
+    
+    queryset = queryset.select_related('performed_by')[:200]  # Limit to last 200
+    
+    logs = []
+    for log in queryset:
+        # Get mukkadam name
+        try:
+            mukkadam_response = requests.get(
+                f'{SUPPLY_API_URL}/api/mukkadam/{log.mukkadam_id}/',
+                timeout=2
+            )
+            mukkadam_data = mukkadam_response.json()
+            mukkadam_name = mukkadam_data.get('mukkadam_name', 'Unknown')
+        except:
+            mukkadam_name = f'Mukkadam #{log.mukkadam_id}'
+        
+        # Get transport name if applicable
+        transport_name = None
+        if log.transport_provider_id:
+            try:
+                transport_response = requests.get(
+                    f'{SUPPLY_API_URL}/api/transport-providers/{log.transport_provider_id}/',
+                    timeout=2
+                )
+                transport_data = transport_response.json()
+                transport_name = transport_data.get('name', 'Unknown Provider')
+            except:
+                transport_name = f'Provider #{log.transport_provider_id}'
+        
+        logs.append({
+            'id': log.id,
+            'activity_type': log.activity_type,
+            'activity_type_display': log.get_activity_type_display(),
+            'description': log.description,
+            'job_id': log.job_id,
+            'mukkadam_id': log.mukkadam_id,
+            'mukkadam_name': mukkadam_name,
+            'transport_provider_id': log.transport_provider_id,
+            'transport_name': transport_name,
+            'amount': float(log.amount) if log.amount else None,
+            'performed_by_name': log.performed_by.username if log.performed_by else 'System',
+            'performed_at': log.performed_at.isoformat(),
+            'metadata': log.metadata,
+        })
+    
+    return Response(logs)
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -877,9 +744,9 @@ def allocations_list(request):
     
     Example: /ap/allocations/by-mobile/main/?mukkadam_phone=9876543210
     """
-    print("="*80)
-    print("📋 FETCHING ALLOCATIONS WITH FULL DETAILS")
-    print("="*80)
+    # print("="*80)
+    # print("📋 FETCHING ALLOCATIONS WITH FULL DETAILS")
+    # print("="*80)
     
     # Get query parameters
     mukkadam_phone = request.GET.get('mukkadam_phone')
@@ -1186,7 +1053,175 @@ def allocations_list(request):
         'allocations': enriched_allocations
     })
 
-
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def allocations_by_mobile(request):
+    """
+    Get all allocations for a mukkadam by mobile number
+    GET /api/allocations/by-mobile/?mobile_number=9876543210
+    
+    This API:
+    1. Calls Supply App to get mukkadam_id from mobile number
+    2. Fetches allocations from Allocation App database
+    3. Calls Supply App to get transport provider details
+    4. Returns combined data
+    """
+    mobile_number = request.GET.get('mobile_number')
+    
+    if not mobile_number:
+        return Response(
+            {'error': 'mobile_number query parameter is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # ✅ STEP 1: Call Supply App API to get mukkadam(s)
+    try:
+        supply_response = requests.get(
+            f'{SUPPLY_API_URL}/api/mukkadam/by-mobile/',
+            params={'mobile_number': mobile_number},
+            timeout=5
+        )
+        supply_data = supply_response.json()
+        
+        if not supply_data.get('found'):
+            return Response({
+                'error': 'No mukkadam found with this mobile number',
+                'mobile_number': mobile_number,
+                'mukkadams': [],
+                'allocations': [],
+                'summary': {
+                    'total_allocations': 0,
+                    'total_earnings': 0
+                }
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        mukkadams = supply_data.get('mukkadams', [])
+        mukkadam_ids = [m['id'] for m in mukkadams]
+        
+    except requests.exceptions.RequestException as e:
+        return Response(
+            {'error': f'Failed to connect to Supply App: {str(e)}'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+    
+    # ✅ STEP 2: Get allocations from Allocation App database
+    allocations = Allocation.objects.filter(
+        mukkadam_id__in=mukkadam_ids
+    ).select_related('job_activity', 'allocated_by').order_by('-allocated_at')
+    
+    # ✅ STEP 3: Build response with transport provider details from Supply App
+    allocations_data = []
+    total_area = Decimal('0')
+    total_cost = Decimal('0')
+    
+    # ✅ Cache transport provider data to avoid multiple API calls
+    transport_provider_cache = {}
+    
+    for alloc in allocations:
+        # Find which mukkadam this allocation belongs to
+        mukkadam = next((m for m in mukkadams if m['id'] == alloc.mukkadam_id), None)
+        
+        # ✅ Get transport provider name from Supply App API if applicable
+        transport_provider_name = None
+        transport_provider_details = None
+        
+        if alloc.transport_type == 'provider' and alloc.transport_provider_id:
+            # Check cache first
+            if alloc.transport_provider_id in transport_provider_cache:
+                provider_data = transport_provider_cache[alloc.transport_provider_id]
+            else:
+                # Fetch from Supply App API
+                try:
+                    provider_response = requests.get(
+                        f'{SUPPLY_API_URL}/api/transport-provider/{alloc.transport_provider_id}/',
+                        timeout=3
+                    )
+                    
+                    if provider_response.status_code == 200:
+                        provider_json = provider_response.json()
+                        if provider_json.get('found'):
+                            provider_data = provider_json.get('provider')
+                            transport_provider_cache[alloc.transport_provider_id] = provider_data
+                        else:
+                            provider_data = None
+                    else:
+                        provider_data = None
+                        
+                except requests.exceptions.RequestException as e:
+                    print(f"⚠️ Failed to fetch transport provider {alloc.transport_provider_id}: {str(e)}")
+                    provider_data = None
+            
+            # Set provider name and details
+            if provider_data:
+                transport_provider_name = provider_data.get('name')
+                transport_provider_details = {
+                    'id': provider_data.get('id'),
+                    'name': provider_data.get('name'),
+                    'contact_number': provider_data.get('contact_number'),
+                    'base_location': provider_data.get('base_location'),
+                    'vehicle_type': provider_data.get('vehicle_type')
+                }
+            else:
+                transport_provider_name = f'Provider #{alloc.transport_provider_id}'
+        
+        allocation_data = {
+            'allocation_id': alloc.id,
+            'mukkadam_id': alloc.mukkadam_id,
+            'mukkadam_name': mukkadam['mukkadam_name'] if mukkadam else 'Unknown',
+            'mukkadam_village': mukkadam.get('village') if mukkadam else None,
+            'status': alloc.status,
+            
+            # Job details
+            'job_id': alloc.job_activity.job_id,
+            'activity_id': alloc.job_activity.activity_id,
+            'activity_name': alloc.job_activity.activity_name,
+            'activity_type': alloc.job_activity.activity_type,
+            'location': alloc.job_activity.location,
+            
+            # Allocation details
+            'allocated_area': float(alloc.allocated_area),
+            'work_date': str(alloc.work_date),
+            'crew_size': alloc.crew_size,
+            
+            # Pricing
+            'mukkadam_price': float(alloc.mukkadam_price),
+            'transport_type': alloc.transport_type,
+            'transport_price': float(alloc.transport_price or 0),
+            'transport_provider': transport_provider_name,
+            'transport_provider_details': transport_provider_details,  # ✅ Full details
+            'total_cost': float(alloc.total_cost),
+            
+            # Metadata
+            'allocated_at': alloc.allocated_at.isoformat(),
+            'allocated_by': alloc.allocated_by.username if alloc.allocated_by else None,
+            'notes': alloc.notes,
+            
+            # Activity details
+            'scheduled_datetime': alloc.job_activity.scheduled_datetime.isoformat(),
+            'total_activity_area': float(alloc.job_activity.total_area),
+            'remaining_activity_area': float(alloc.job_activity.remaining_area),
+        }
+        
+        allocations_data.append(allocation_data)
+        total_area += alloc.allocated_area
+        total_cost += Decimal(str(alloc.total_cost))
+    
+    # Summary statistics
+    summary = {
+        'total_allocations': allocations.count(),
+        'total_area_allocated': float(total_area),
+        'total_earnings': float(total_cost),
+        'active_allocations': allocations.filter(status='allocated').count(),
+        'completed_allocations': allocations.filter(status='completed').count(),
+        'in_progress_allocations': allocations.filter(status='in_progress').count(),
+    }
+    
+    return Response({
+        'mukkadams': mukkadams,  # From Supply App
+        'mukkadams_count': len(mukkadams),
+        'allocations': allocations_data,  # From Allocation App + Supply App
+        'summary': summary
+    })
 
 # data/views.py
 
@@ -1563,346 +1598,329 @@ def mukkadam_work_history(request):
 
 
 
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.utils import timezone
-from .models import PaymentRequest, TransportPaymentRequest, Allocation
-from .serializers import PaymentRequestSerializer, TransportPaymentRequestSerializer
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def get_fcm_by_mobile(request):
+    """
+    Get active FCM token(s) by mobile number
 
-class PaymentRequestViewSet(viewsets.ModelViewSet):
-    """ViewSet for mukkadam payment requests"""
-    serializer_class = PaymentRequestSerializer
-    permission_classes = [AllowAny]  # Change to IsAuthenticated in production
+    POST /api/fcm/by-mobile/
+    {
+        "mobile_number": "9876543210"
+    }
+    """
+    mobile_number = request.data.get('mobile_number')
+
+    if not mobile_number:
+        return Response(
+            {"success": "false", "message": "mobile_number is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    devices = FCMDevice.objects.filter(
+        mobile_number=mobile_number,
+        is_active=True
+    ).order_by('-last_used_at')
+
+    if not devices.exists():
+        return Response(
+            {
+                "success": False,
+                "message": "No active FCM tokens found for this mobile number"
+            },
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    serializer = FCMDeviceSerializer(devices, many=True)
+
+    return Response(
+        {
+            "success": True,
+            "mobile_number": mobile_number,
+            "count": devices.count(),
+            "tokens": serializer.data
+        },
+        status=status.HTTP_200_OK
+    )
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def jobs_list(request):
+    """
+    Fetch jobs from external API and enrich with:
+    1. Allocation data from database
+    2. Farmer details from farmer API
+    """
+    # print("="*80)
+    # print("🔍 FETCHING JOBS FROM EXTERNAL API")
+    # print("="*80)
     
-    def get_queryset(self):
-        """Filter by mukkadam_id or show all for admin"""
-        queryset = PaymentRequest.objects.all()
+    try:
+        # Fetch jobs from external API
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
         
-        mukkadam_id = self.request.query_params.get('mukkadam_id')
-        if mukkadam_id:
-            queryset = queryset.filter(mukkadam_id=mukkadam_id)
+        # print(f"📡 API URL: {api_url}")
         
-        # Filter by status
-        status_param = self.request.query_params.get('status')
-        if status_param:
-            queryset = queryset.filter(status=status_param)
+        response = requests.get(
+            api_url,
+            headers={'Authorization': token},
+            timeout=10
+        )
         
-        return queryset
-    
-    def create(self, request, *args, **kwargs):
-        """Create payment request for an allocation"""
-        allocation_id = request.data.get('allocation_id')
+        # print(f"📊 Response Status: {response.status_code}")
+        response.raise_for_status()
         
-        if not allocation_id:
-            return Response(
-                {'error': 'allocation_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
+        # Parse JSON
         try:
-            allocation = Allocation.objects.get(id=allocation_id)
-        except Allocation.DoesNotExist:
+            response_data = response.json()
+        except json.JSONDecodeError as e:
+            # print(f"❌ JSON Decode Error: {str(e)}")
             return Response(
-                {'error': 'Allocation not found'},
-                status=status.HTTP_404_NOT_FOUND
+                {'error': f'Invalid JSON from external API: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-        # Check if payment request already exists
-        if hasattr(allocation, 'payment_request'):
+        # Handle different response formats
+        if isinstance(response_data, dict):
+            if 'data' in response_data:
+                jobs_from_api = response_data['data']
+                # print(f"✅ Extracted {len(jobs_from_api)} jobs from 'data' key")
+            elif 'results' in response_data:
+                jobs_from_api = response_data['results']
+            else:
+                jobs_from_api = [response_data]
+        else:
+            jobs_from_api = response_data
+        
+        if not isinstance(jobs_from_api, list):
+            # print(f"❌ Unexpected response type: {type(jobs_from_api)}")
             return Response(
-                {
-                    'error': 'Payment request already exists for this allocation',
-                    'existing_request': PaymentRequestSerializer(allocation.payment_request).data
-                },
-                status=status.HTTP_400_BAD_REQUEST
+                {'error': f'Expected list, got {type(jobs_from_api).__name__}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-        # Calculate amount from allocation
-        requested_amount = float(allocation.mukkadam_price) * float(allocation.allocated_area)
+        # print(f"✅ Found {len(jobs_from_api)} jobs from API")
         
-        # Create payment request
-        payment_request = PaymentRequest.objects.create(
-            allocation=allocation,
-            mukkadam_id=allocation.mukkadam_id,
-            requested_amount=requested_amount,
-            requested_by=request.user if request.user.is_authenticated else None,
-            notes=request.data.get('notes', '')
+    except requests.exceptions.RequestException as e:
+        # print(f"❌ Request Error: {str(e)}")
+        return Response(
+            {'error': f'Failed to fetch jobs from external API: {str(e)}'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
         )
-        
-        serializer = self.get_serializer(payment_request)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
     
-        # In PaymentRequestViewSet
-    @action(detail=True, methods=['post'])
-    def re_request(self, request, pk=None):
-        """Allow mukkadam to re-request payment after rejection"""
-        payment_request = self.get_object()
-        
-        if payment_request.status != 'rejected':
-            return Response(
-                {'error': 'Can only re-request payments that were rejected'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        payment_request.status = 'pending'
-        payment_request.requested_at = timezone.now()
-        payment_request.save()
-        
-        # Log activity
-        PaymentActivity.objects.create(
-            payment_request=payment_request,
-            allocation=payment_request.allocation,
-            action='re_requested',
-            performed_by=request.user if request.user.is_authenticated else None,
-            notes=f"Payment re-requested after rejection"
-        )
-        
-        serializer = self.get_serializer(payment_request)
-        return Response({
-            'message': 'Payment request submitted successfully',
-            'payment_request': serializer.data
-        })
-
-    # Update the reject method to log activity
-    @action(detail=True, methods=['post'])
-    def reject(self, request, pk=None):
-        """Reject a payment request"""
-        payment_request = self.get_object()
-        
-        if payment_request.status == 'paid':
-            return Response(
-                {'error': 'Cannot reject a payment that has already been paid'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        payment_request.status = 'rejected'
-        payment_request.save()
-        
-        # Log activity
-        PaymentActivity.objects.create(
-            payment_request=payment_request,
-            allocation=payment_request.allocation,
-            action='rejected',
-            performed_by=request.user if request.user.is_authenticated else None,
-            notes=request.data.get('rejection_reason', 'Payment request rejected')
-        )
-        
-        serializer = self.get_serializer(payment_request)
-        return Response({
-            'message': 'Payment request rejected successfully',
-            'payment_request': serializer.data
-        })
-
-    # Update mark_paid to log activity
-    @action(detail=True, methods=['post'])
-    def mark_paid(self, request, pk=None):
-        """Mark payment as paid"""
-        payment_request = self.get_object()
-        payment_request.status = 'paid'
-        payment_request.paid_at = timezone.now()
-        payment_request.paid_by = request.user if request.user.is_authenticated else None
-        payment_request.save()
-        
-        # Update allocation status
-        allocation = payment_request.allocation
-        allocation.status = 'completed'
-        allocation.completed_at = timezone.now()
-        allocation.save()
-        
-        # Log activity
-        PaymentActivity.objects.create(
-            payment_request=payment_request,
-            allocation=allocation,
-            action='paid',
-            performed_by=request.user if request.user.is_authenticated else None,
-            amount_paid=payment_request.amount,
-            notes=f"Payment marked as paid by {request.user.username if request.user.is_authenticated else 'Unknown'}"
-        )
-        
-        return Response({
-            'message': 'Payment marked as paid successfully',
-            'allocation': AllocationSerializer(allocation).data,
-            'payment_request': self.get_serializer(payment_request).data
-        })
-    @action(detail=False, methods=['get'])
-    def my_requests(self, request):
-        """Get payment requests for specific mukkadam"""
-        mukkadam_id = request.query_params.get('mukkadam_id')
-        
-        if not mukkadam_id:
-            return Response(
-                {'error': 'mukkadam_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        requests = PaymentRequest.objects.filter(mukkadam_id=mukkadam_id)
-        
-        # Filter by status if provided
-        status_param = request.query_params.get('status')
-        if status_param:
-            requests = requests.filter(status=status_param)
-        
-        serializer = self.get_serializer(requests, many=True)
-        return Response(serializer.data)
+    if not jobs_from_api:
+        # print("⚠️ No jobs returned from API")
+        return Response([])
     
-    @action(detail=False, methods=['get'])
-    def pending(self, request):
-        """Get all pending payment requests (admin view)"""
-        requests = PaymentRequest.objects.filter(status='pending')
-        serializer = self.get_serializer(requests, many=True)
-        return Response(serializer.data)
-
-
-class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
-    """ViewSet for transport provider payment requests"""
-    serializer_class = TransportPaymentRequestSerializer
-    permission_classes = [AllowAny]  # Change to IsAuthenticated in production
+    # ========================================
+    # ✅ STEP 1: BATCH FETCH ALL FARMER DETAILS
+    # ========================================
+    # print("\n👥 FETCHING FARMER DETAILS...")
     
-    def get_queryset(self):
-        """Filter by transport_provider_id or show all for admin"""
-        queryset = TransportPaymentRequest.objects.all()
-        
-        provider_id = self.request.query_params.get('transport_provider_id')
-        if provider_id:
-            queryset = queryset.filter(transport_provider_id=provider_id)
-        
-        # Filter by status
-        status_param = self.request.query_params.get('status')
-        if status_param:
-            queryset = queryset.filter(status=status_param)
-        
-        return queryset
+    # Extract unique farmer IDs
+    farmer_ids = set()
+    for job in jobs_from_api:
+        farmer_id = job.get('farmer_id')
+        if farmer_id:
+            farmer_ids.add(str(farmer_id))
     
-    def create(self, request, *args, **kwargs):
-        """Create transport payment request for an allocation"""
-        allocation_id = request.data.get('allocation_id')
-        
-        if not allocation_id:
-            return Response(
-                {'error': 'allocation_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
+    # print(f"   Found {len(farmer_ids)} unique farmers: {farmer_ids}")
+    
+    # Fetch all farmer details (batch request)
+    farmers_cache = {}
+    FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
+    tok = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
+    for farmer_id in farmer_ids:
         try:
-            allocation = Allocation.objects.get(id=allocation_id)
-        except Allocation.DoesNotExist:
-            return Response(
-                {'error': 'Allocation not found'},
-                status=status.HTTP_404_NOT_FOUND
+            farmer_response = requests.get(
+                f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
+                headers={'Authorization': tok},
+                timeout=3
             )
-        
-        # Check if this allocation has transport provider
-        if not allocation.transport_provider_id:
-            return Response(
-                {'error': 'This allocation does not have a transport provider'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Check if payment request already exists
-        if hasattr(allocation, 'transport_payment_request'):
-            return Response(
-                {
-                    'error': 'Transport payment request already exists for this allocation',
-                    'existing_request': TransportPaymentRequestSerializer(allocation.transport_payment_request).data
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Get amount from allocation
-        requested_amount = float(allocation.transport_price or 0)
-        
-        if requested_amount <= 0:
-            return Response(
-                {'error': 'Transport cost is zero or not set'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Create payment request
-        payment_request = TransportPaymentRequest.objects.create(
-            allocation=allocation,
-            transport_provider_id=allocation.transport_provider_id,
-            requested_amount=requested_amount,
-            requested_by=request.user if request.user.is_authenticated else None,
-            notes=request.data.get('notes', '')
+            if farmer_response.status_code == 200:
+                farmer_data = farmer_response.json()
+                farmers_cache[farmer_id] = {
+                    'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
+                    'phone_number': farmer_data.get('phone_number', 'N/A'),
+                    'village': farmer_data.get('village', 'N/A'),
+                    'taluka': farmer_data.get('taluka', 'N/A'),
+                    'district': farmer_data.get('district', 'N/A'),
+                    'location': f"{farmer_data.get('village', 'N/A')}, {farmer_data.get('taluka', 'N/A')}, {farmer_data.get('district', 'N/A')}"
+                }
+                # print(f"   ✅ Fetched farmer {farmer_id}: {farmers_cache[farmer_id]['farmer_name']}")
+            else:
+                # print(f"   ❌ Failed to fetch farmer {farmer_id}: Status {farmer_response.status_code}")
+                farmers_cache[farmer_id] = None
+        except Exception as e:
+            # print(f"   ❌ Error fetching farmer {farmer_id}: {str(e)}")
+            farmers_cache[farmer_id] = None
+    
+    # ========================================
+    # STEP 2: ENRICH JOBS WITH ALLOCATIONS & FARMER DATA
+    # ========================================
+    enriched_jobs = []
+    
+    # print(f"\n🔄 Enriching {len(jobs_from_api)} jobs with allocation data...")
+    
+    for idx, job in enumerate(jobs_from_api):
+        # Get job_id
+        job_id = str(
+            job.get('work_id') or 
+            job.get('id') or 
+            job.get('job_id') or 
+            f"UNKNOWN_{idx}"
         )
         
-        serializer = self.get_serializer(payment_request)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # print(f"\n  📌 Job {idx + 1}: {job_id}")
+        
+        # ✅ GET FARMER DETAILS FROM CACHE
+        farmer_id = str(job.get('farmer_id', ''))
+        farmer_details = farmers_cache.get(farmer_id)
+        
+        # GET ACTIVITIES FROM API
+        activities_from_api = job.get('activities', [])
+        # print(f"     📊 Found {len(activities_from_api)} activities from API")
+        
+        # ENRICH WITH ALLOCATION DATA FROM DB
+        activities_data = []
+        
+        for api_activity in activities_from_api:
+            activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
+            
+            # Check if this activity has been allocated
+            db_activity = JobActivity.objects.filter(
+                job_id=job_id,
+                activity_id=activity_id
+            ).prefetch_related('allocations').first()
+            
+            # Build allocations list
+            allocations_data = []
+            allocated_area = Decimal('0')
+            
+            if db_activity:
+                # print(f"     💾 Activity {activity_id} found in DB with {db_activity.allocations.count()} allocations")
+                
+                for alloc in db_activity.allocations.all():
+                    allocated_area += Decimal(str(alloc.allocated_area))
+                    
+                    # Fetch mukkadam name
+                    try:
+                        mukkadam_response = requests.get(
+                            f'{SUPPLY_API_URL}/api/mukkadam/{alloc.mukkadam_id}/',
+                            timeout=2
+                        )
+                        mukkadam_data = mukkadam_response.json()
+                        mukkadam_name = mukkadam_data.get('mukkadam_name', 'Unknown')
+                    except:
+                        mukkadam_name = f'Mukkadam #{alloc.mukkadam_id}'
+                    
+                    allocations_data.append({
+                        'allocation_id': alloc.id,
+                        'mukkadam_id': alloc.mukkadam_id,
+                        'mukkadam_name': mukkadam_name,
+                        'allocated_area': float(alloc.allocated_area),
+                        'work_date': str(alloc.work_date) if alloc.work_date else None,
+                        'crew_size': alloc.crew_size,
+                        'mukkadam_price': float(alloc.mukkadam_price),
+                        'transport_type': alloc.transport_type,
+                        'transport_price': float(alloc.transport_price or 0),
+                        'total_cost': float(alloc.total_cost)
+                    })
+            
+            # Calculate areas
+            total_area = Decimal(str(api_activity.get('acres', 0)))
+            remaining_area = total_area - allocated_area
+            is_fully_allocated = allocated_area >= total_area
+            
+            # print(f"     🔍 Activity {activity_id} ({api_activity.get('activity_name')})")
+            # print(f"        Total: {total_area}, Allocated: {allocated_area}, Remaining: {remaining_area}")
+            # print(f"        Is Fully Allocated: {is_fully_allocated}")
+
+            def safe_date(value):
+                if not value:
+                    return ''
+                return str(value).split('T')[0]
+            
+            # ✅ ADD ACTIVITY WITH PRICING FROM API
+            activities_data.append({
+                'id': db_activity.id if db_activity else None,
+                'activity_id': activity_id,
+                'activity_name': api_activity.get('activity_name', 'Unknown'),
+                'activity_type': api_activity.get('activity_type', ''),
+                'location': api_activity.get('location', 'N/A'),
+                'total_area': float(total_area),
+                'allocated_area': float(allocated_area),
+                'remaining_area': float(remaining_area),
+                'scheduled_date': safe_date(
+                    api_activity.get('date_time') or 
+                    api_activity.get('scheduled_date') or 
+                    job.get('scheduled_date')
+                ),
+                'scheduled_time': api_activity.get('scheduled_time', ''),
+                'estimated_workers': api_activity.get('estimated_workers', 10),
+                
+                # ✅ PRICING FROM API
+                'rate_per_acre': float(api_activity.get('total_price', 0)) / float(total_area) if float(total_area) > 0 else 0,
+                'total_price': float(api_activity.get('total_price', 0)),  # Revenue
+                'transport_cost': float(api_activity.get('transport_cost', 0)),  # Expected transport cost
+                'other_cost': float(api_activity.get('other_cost', 0)),
+                'subtotal': float(api_activity.get('subtotal', 0)),
+                
+                'is_fully_allocated': is_fully_allocated,
+                'allocations': allocations_data
+            })
+
+        
+        # Calculate job status
+        def calculate_status(activities):
+            if not activities:
+                return 'pending'
+            
+            fully_allocated = sum(1 for a in activities if a['is_fully_allocated'])
+            partially_allocated = sum(1 for a in activities if a['allocated_area'] > 0 and not a['is_fully_allocated'])
+            
+            # print(f"\n     📊 STATUS CALCULATION:")
+            # print(f"        Total Activities: {len(activities)}")
+            # print(f"        Fully Allocated: {fully_allocated}")
+            # print(f"        Partially Allocated: {partially_allocated}")
+            
+            if fully_allocated == len(activities):
+                status = 'fully_allocated'
+            elif fully_allocated > 0 or partially_allocated > 0:
+                status = 'partially_allocated'
+            else:
+                status = 'pending'
+            
+            # print(f"        Final Status: {status}")
+            return status
+        
+        job_status = calculate_status(activities_data)
+        
+        # ✅ BUILD ENRICHED JOB WITH FARMER DETAILS
+        enriched_job = {
+            **job,  # All original data from external API
+            'work_id': job_id,
+            
+            # ✅ FARMER DETAILS
+            'farmer': farmer_details,  # Complete farmer object
+            
+            # ACTIVITIES WITH ALLOCATIONS
+            'activities': activities_data,
+            
+            # JOB METADATA
+            'status': job_status,
+            'total_activities': len(activities_data),
+            'is_complex': len(activities_data) > 1,
+            
+            # ✅ BOOKING INFO (from API)
+            'booking': job.get('booking', {})
+        }
+        
+        enriched_jobs.append(enriched_job)
     
-    @action(detail=True, methods=['post'])
-    def mark_paid(self, request, pk=None):
-        """Admin marks transport payment as paid"""
-        payment_request = self.get_object()
-        
-        if payment_request.status == 'paid':
-            return Response(
-                {'error': 'Payment already marked as paid'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # ✅ UPDATE: Mark payment as paid
-        payment_request.status = 'paid'
-        payment_request.paid_at = timezone.now()
-        payment_request.paid_by = request.user if request.user.is_authenticated else None
-        payment_request.save()
-        
-        # ✅ NEW: Check if mukkadam payment is also paid, then mark allocation complete
-        allocation = payment_request.allocation
-        
-        # Only mark as completed if mukkadam payment is also paid (or doesn't exist)
-        mukkadam_payment = getattr(allocation, 'payment_request', None)
-        if not mukkadam_payment or mukkadam_payment.status == 'paid':
-            allocation.status = 'completed'
-            allocation.save()
-        
-        serializer = self.get_serializer(payment_request)
-        return Response(serializer.data)
-    @action(detail=True, methods=['post'])
-    def reject(self, request, pk=None):
-        """Reject a payment request"""
-        payment_request = self.get_object()
-        
-        if payment_request.status == 'paid':
-            return Response(
-                {'error': 'Cannot reject a payment that has already been paid'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        payment_request.status = 'rejected'
-        payment_request.save()
-        
-        serializer = self.get_serializer(payment_request)
-        return Response({
-            'message': 'Payment request rejected successfully',
-            'payment_request': serializer.data
-        })
+    # print(f"\n✅ Successfully enriched {len(enriched_jobs)} jobs")
+    # print("="*80)
     
-    @action(detail=False, methods=['get'])
-    def my_requests(self, request):
-        """Get payment requests for specific transport provider"""
-        provider_id = request.query_params.get('transport_provider_id')
-        
-        if not provider_id:
-            return Response(
-                {'error': 'transport_provider_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        requests = TransportPaymentRequest.objects.filter(transport_provider_id=provider_id)
-        
-        # Filter by status if provided
-        status_param = request.query_params.get('status')
-        if status_param:
-            requests = requests.filter(status=status_param)
-        
-        serializer = self.get_serializer(requests, many=True)
-        return Response(serializer.data)
-    
-    @action(detail=False, methods=['get'])
-    def pending(self, request):
-        """Get all pending transport payment requests (admin view)"""
-        requests = TransportPaymentRequest.objects.filter(status='pending')
-        serializer = self.get_serializer(requests, many=True)
-        return Response(serializer.data)
+    return Response(enriched_jobs)
