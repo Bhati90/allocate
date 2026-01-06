@@ -326,7 +326,9 @@ class AllocationStats(models.Model):
     def __str__(self):
         return f"Stats for {self.date}"
     
-
+from django.db import models
+from django.contrib.auth.models import User
+from django.utils import timezone
 
 class PaymentRequest(models.Model):
     """Payment requests from mukkadams for completed work"""
@@ -480,6 +482,79 @@ class TransportPaymentRequest(models.Model):
     
     def __str__(self):
         return f"Transport Payment #{self.id} - Provider #{self.transport_provider_id} - ₹{self.requested_amount} ({self.status})"
+
+class ActivityLog(models.Model):
+    """Unified activity log for all actions in the system"""
+    
+    ACTIVITY_TYPES = [
+        ('allocation_created', 'Allocation Created'),
+        ('allocation_updated', 'Allocation Updated'),
+        ('allocation_deleted', 'Allocation Deleted'),
+        ('payment_requested', 'Payment Requested'),
+        ('payment_paid', 'Payment Paid'),
+        ('payment_rejected', 'Payment Rejected'),
+        ('transport_payment_requested', 'Transport Payment Requested'),
+        ('transport_payment_paid', 'Transport Payment Paid'),
+        ('transport_payment_rejected', 'Transport Payment Rejected'),
+    ]
+    
+    # Activity details
+    activity_type = models.CharField(max_length=50, choices=ACTIVITY_TYPES, db_index=True)
+    description = models.TextField()
+    
+    # Related objects
+    allocation = models.ForeignKey(
+        Allocation,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='activity_logs'
+    )
+    payment_request = models.ForeignKey(
+        PaymentRequest,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='activity_logs'
+    )
+    transport_payment_request = models.ForeignKey(
+        TransportPaymentRequest,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='activity_logs'
+    )
+    
+    # IDs for reference (in case objects are deleted)
+    job_id = models.CharField(max_length=100, db_index=True)
+    mukkadam_id = models.IntegerField(db_index=True)
+    transport_provider_id = models.IntegerField(null=True, blank=True)
+    
+    # Financial data
+    amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    
+    # User and timestamp
+    performed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    performed_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    
+    # Additional metadata
+    metadata = models.JSONField(default=dict, blank=True)
+    
+    class Meta:
+        ordering = ['-performed_at']
+        indexes = [
+            models.Index(fields=['activity_type', '-performed_at']),
+            models.Index(fields=['job_id', '-performed_at']),
+            models.Index(fields=['mukkadam_id', '-performed_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.get_activity_type_display()} - {self.job_id} at {self.performed_at}"
 
 
 # models.py

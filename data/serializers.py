@@ -1,7 +1,7 @@
 # allocation_app/serializers.py
 
 from rest_framework import serializers
-from .models import JobActivity, Allocation, AllocationStats
+from .models import JobActivity, Allocation, AllocationStats,ActivityLog
 from django.contrib.auth.models import User
 
 
@@ -167,6 +167,71 @@ class TransportPaymentRequestSerializer(serializers.ModelSerializer):
             'rejected_by',
         ]
 
+
+class ActivityLogSerializer(serializers.ModelSerializer):
+    performed_by_name = serializers.CharField(source='performed_by.username', read_only=True)
+    activity_type_display = serializers.CharField(source='get_activity_type_display', read_only=True)
+    
+    class Meta:
+        model = ActivityLog
+        fields = [
+            'id',
+            'activity_type',
+            'activity_type_display',
+            'description',
+            'job_id',
+            'mukkadam_id',
+            'transport_provider_id',
+            'amount',
+            'performed_by',
+            'performed_by_name',
+            'performed_at',
+            'metadata',
+        ]
+
+
+from rest_framework import serializers
+from .models import UserLocation
+from django.contrib.auth.models import User
+
+class UserLocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserLocation
+        fields = ['id', 'user', 'latitude', 'longitude', 'captured_at']
+        read_only_fields = ['captured_at']
+
+class BatchLocationSerializer(serializers.Serializer):
+    """
+    Serializer to handle the specific batch structure sent by the mobile app
+    """
+    user_id = serializers.IntegerField()
+    today_date = serializers.DateField() # Validates yyyy-MM-dd
+    locations = serializers.ListField(
+        child=serializers.DictField()
+    )
+
+    def create(self, validated_data):
+        user_id = validated_data.get('user_id')
+        locations_data = validated_data.get('locations')
+        
+        # Verify user exists
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            raise serializers.ValidationError({"user_id": "User not found"})
+
+        # Bulk create for performance since we expect high frequency/batching
+        location_instances = [
+            UserLocation(
+                user=user,
+                latitude=loc['latitude'],
+                longitude=loc['longitude']
+            ) for loc in locations_data
+        ]
+        
+        return UserLocation.objects.bulk_create(location_instances)
+    
+    
 from rest_framework import serializers
 from .models import FCMDevice
 

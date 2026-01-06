@@ -44,7 +44,7 @@ urlpatterns = [
     path('allocations/by-mobile/', allocations_by_mobile, name='allocations-by-mobile'),
 
 
-path('mukkadam-history/', mukkadam_work_history, name='mukkadam-work-history'),
+    path('mukkadam-history/', mukkadam_work_history, name='mukkadam-work-history'),
     path('allocations/by-mobile/main/', allocations_list, name='allocations-by-mobile_main'),
     
     # ========================================
