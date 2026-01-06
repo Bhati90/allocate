@@ -1395,6 +1395,22 @@ def mukkadam_work_history(request):
     # STEP 5: BUILD ALLOCATION DETAILS
     # ========================================
     print("\n📦 Building allocation details...")
+    payment_status = None
+    if hasattr(allocation, 'payment_request'):
+        pr = allocation.payment_request
+        payment_status = {
+            'has_request': True,
+            'request_id': pr.id,
+            'status': pr.status,
+            'requested_amount': float(pr.requested_amount),
+            'requested_at': pr.requested_at.isoformat(),
+            'paid_at': pr.paid_at.isoformat() if pr.paid_at else None,
+        }
+    else:
+        payment_status = {
+            'has_request': False,
+            'can_request': allocation.status == 'completed',  # Only completed jobs
+        }
     
     def build_allocation_detail(allocation):
         job_activity = allocation.job_activity
@@ -1449,13 +1465,7 @@ def mukkadam_work_history(request):
                 'activity_type': activity_details.get('activity_type', 'N/A') if activity_details else 'N/A',
             },
             
-            'payment': {
-                'rate_per_acre': float(allocation.mukkadam_price),
-                'allocated_acres': float(allocation.allocated_area),
-                'total_earnings': earnings,
-                'transport_cost': transport_cost,
-                'total_payment': earnings + transport_cost,
-            }
+            'payment': payment_status, 
         }
     
     completed_details = [build_allocation_detail(a) for a in completed_allocations]
@@ -1550,3 +1560,349 @@ def mukkadam_work_history(request):
     }
     
     return Response(response_data)
+
+
+
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.utils import timezone
+from .models import PaymentRequest, TransportPaymentRequest, Allocation
+from .serializers import PaymentRequestSerializer, TransportPaymentRequestSerializer
+
+class PaymentRequestViewSet(viewsets.ModelViewSet):
+    """ViewSet for mukkadam payment requests"""
+    serializer_class = PaymentRequestSerializer
+    permission_classes = [AllowAny]  # Change to IsAuthenticated in production
+    
+    def get_queryset(self):
+        """Filter by mukkadam_id or show all for admin"""
+        queryset = PaymentRequest.objects.all()
+        
+        mukkadam_id = self.request.query_params.get('mukkadam_id')
+        if mukkadam_id:
+            queryset = queryset.filter(mukkadam_id=mukkadam_id)
+        
+        # Filter by status
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        
+        return queryset
+    
+    def create(self, request, *args, **kwargs):
+        """Create payment request for an allocation"""
+        allocation_id = request.data.get('allocation_id')
+        
+        if not allocation_id:
+            return Response(
+                {'error': 'allocation_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            allocation = Allocation.objects.get(id=allocation_id)
+        except Allocation.DoesNotExist:
+            return Response(
+                {'error': 'Allocation not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if payment request already exists
+        if hasattr(allocation, 'payment_request'):
+            return Response(
+                {
+                    'error': 'Payment request already exists for this allocation',
+                    'existing_request': PaymentRequestSerializer(allocation.payment_request).data
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Calculate amount from allocation
+        requested_amount = float(allocation.mukkadam_price) * float(allocation.allocated_area)
+        
+        # Create payment request
+        payment_request = PaymentRequest.objects.create(
+            allocation=allocation,
+            mukkadam_id=allocation.mukkadam_id,
+            requested_amount=requested_amount,
+            requested_by=request.user if request.user.is_authenticated else None,
+            notes=request.data.get('notes', '')
+        )
+        
+        serializer = self.get_serializer(payment_request)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+        # In PaymentRequestViewSet
+    @action(detail=True, methods=['post'])
+    def re_request(self, request, pk=None):
+        """Allow mukkadam to re-request payment after rejection"""
+        payment_request = self.get_object()
+        
+        if payment_request.status != 'rejected':
+            return Response(
+                {'error': 'Can only re-request payments that were rejected'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        payment_request.status = 'pending'
+        payment_request.requested_at = timezone.now()
+        payment_request.save()
+        
+        # Log activity
+        PaymentActivity.objects.create(
+            payment_request=payment_request,
+            allocation=payment_request.allocation,
+            action='re_requested',
+            performed_by=request.user if request.user.is_authenticated else None,
+            notes=f"Payment re-requested after rejection"
+        )
+        
+        serializer = self.get_serializer(payment_request)
+        return Response({
+            'message': 'Payment request submitted successfully',
+            'payment_request': serializer.data
+        })
+
+    # Update the reject method to log activity
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a payment request"""
+        payment_request = self.get_object()
+        
+        if payment_request.status == 'paid':
+            return Response(
+                {'error': 'Cannot reject a payment that has already been paid'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        payment_request.status = 'rejected'
+        payment_request.save()
+        
+        # Log activity
+        PaymentActivity.objects.create(
+            payment_request=payment_request,
+            allocation=payment_request.allocation,
+            action='rejected',
+            performed_by=request.user if request.user.is_authenticated else None,
+            notes=request.data.get('rejection_reason', 'Payment request rejected')
+        )
+        
+        serializer = self.get_serializer(payment_request)
+        return Response({
+            'message': 'Payment request rejected successfully',
+            'payment_request': serializer.data
+        })
+
+    # Update mark_paid to log activity
+    @action(detail=True, methods=['post'])
+    def mark_paid(self, request, pk=None):
+        """Mark payment as paid"""
+        payment_request = self.get_object()
+        payment_request.status = 'paid'
+        payment_request.paid_at = timezone.now()
+        payment_request.paid_by = request.user if request.user.is_authenticated else None
+        payment_request.save()
+        
+        # Update allocation status
+        allocation = payment_request.allocation
+        allocation.status = 'completed'
+        allocation.completed_at = timezone.now()
+        allocation.save()
+        
+        # Log activity
+        PaymentActivity.objects.create(
+            payment_request=payment_request,
+            allocation=allocation,
+            action='paid',
+            performed_by=request.user if request.user.is_authenticated else None,
+            amount_paid=payment_request.amount,
+            notes=f"Payment marked as paid by {request.user.username if request.user.is_authenticated else 'Unknown'}"
+        )
+        
+        return Response({
+            'message': 'Payment marked as paid successfully',
+            'allocation': AllocationSerializer(allocation).data,
+            'payment_request': self.get_serializer(payment_request).data
+        })
+    @action(detail=False, methods=['get'])
+    def my_requests(self, request):
+        """Get payment requests for specific mukkadam"""
+        mukkadam_id = request.query_params.get('mukkadam_id')
+        
+        if not mukkadam_id:
+            return Response(
+                {'error': 'mukkadam_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        requests = PaymentRequest.objects.filter(mukkadam_id=mukkadam_id)
+        
+        # Filter by status if provided
+        status_param = request.query_params.get('status')
+        if status_param:
+            requests = requests.filter(status=status_param)
+        
+        serializer = self.get_serializer(requests, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def pending(self, request):
+        """Get all pending payment requests (admin view)"""
+        requests = PaymentRequest.objects.filter(status='pending')
+        serializer = self.get_serializer(requests, many=True)
+        return Response(serializer.data)
+
+
+class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
+    """ViewSet for transport provider payment requests"""
+    serializer_class = TransportPaymentRequestSerializer
+    permission_classes = [AllowAny]  # Change to IsAuthenticated in production
+    
+    def get_queryset(self):
+        """Filter by transport_provider_id or show all for admin"""
+        queryset = TransportPaymentRequest.objects.all()
+        
+        provider_id = self.request.query_params.get('transport_provider_id')
+        if provider_id:
+            queryset = queryset.filter(transport_provider_id=provider_id)
+        
+        # Filter by status
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        
+        return queryset
+    
+    def create(self, request, *args, **kwargs):
+        """Create transport payment request for an allocation"""
+        allocation_id = request.data.get('allocation_id')
+        
+        if not allocation_id:
+            return Response(
+                {'error': 'allocation_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            allocation = Allocation.objects.get(id=allocation_id)
+        except Allocation.DoesNotExist:
+            return Response(
+                {'error': 'Allocation not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if this allocation has transport provider
+        if not allocation.transport_provider_id:
+            return Response(
+                {'error': 'This allocation does not have a transport provider'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if payment request already exists
+        if hasattr(allocation, 'transport_payment_request'):
+            return Response(
+                {
+                    'error': 'Transport payment request already exists for this allocation',
+                    'existing_request': TransportPaymentRequestSerializer(allocation.transport_payment_request).data
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get amount from allocation
+        requested_amount = float(allocation.transport_price or 0)
+        
+        if requested_amount <= 0:
+            return Response(
+                {'error': 'Transport cost is zero or not set'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create payment request
+        payment_request = TransportPaymentRequest.objects.create(
+            allocation=allocation,
+            transport_provider_id=allocation.transport_provider_id,
+            requested_amount=requested_amount,
+            requested_by=request.user if request.user.is_authenticated else None,
+            notes=request.data.get('notes', '')
+        )
+        
+        serializer = self.get_serializer(payment_request)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'])
+    def mark_paid(self, request, pk=None):
+        """Admin marks transport payment as paid"""
+        payment_request = self.get_object()
+        
+        if payment_request.status == 'paid':
+            return Response(
+                {'error': 'Payment already marked as paid'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # ✅ UPDATE: Mark payment as paid
+        payment_request.status = 'paid'
+        payment_request.paid_at = timezone.now()
+        payment_request.paid_by = request.user if request.user.is_authenticated else None
+        payment_request.save()
+        
+        # ✅ NEW: Check if mukkadam payment is also paid, then mark allocation complete
+        allocation = payment_request.allocation
+        
+        # Only mark as completed if mukkadam payment is also paid (or doesn't exist)
+        mukkadam_payment = getattr(allocation, 'payment_request', None)
+        if not mukkadam_payment or mukkadam_payment.status == 'paid':
+            allocation.status = 'completed'
+            allocation.save()
+        
+        serializer = self.get_serializer(payment_request)
+        return Response(serializer.data)
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a payment request"""
+        payment_request = self.get_object()
+        
+        if payment_request.status == 'paid':
+            return Response(
+                {'error': 'Cannot reject a payment that has already been paid'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        payment_request.status = 'rejected'
+        payment_request.save()
+        
+        serializer = self.get_serializer(payment_request)
+        return Response({
+            'message': 'Payment request rejected successfully',
+            'payment_request': serializer.data
+        })
+    
+    @action(detail=False, methods=['get'])
+    def my_requests(self, request):
+        """Get payment requests for specific transport provider"""
+        provider_id = request.query_params.get('transport_provider_id')
+        
+        if not provider_id:
+            return Response(
+                {'error': 'transport_provider_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        requests = TransportPaymentRequest.objects.filter(transport_provider_id=provider_id)
+        
+        # Filter by status if provided
+        status_param = request.query_params.get('status')
+        if status_param:
+            requests = requests.filter(status=status_param)
+        
+        serializer = self.get_serializer(requests, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def pending(self, request):
+        """Get all pending transport payment requests (admin view)"""
+        requests = TransportPaymentRequest.objects.filter(status='pending')
+        serializer = self.get_serializer(requests, many=True)
+        return Response(serializer.data)
