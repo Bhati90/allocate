@@ -733,6 +733,288 @@ def activity_logs_list(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+def jobs_list(request):
+    """
+    Fetch jobs from external API and enrich with:
+    1. Allocation data from database
+    2. Farmer details from farmer API
+    """
+    # print("="*80)
+    # print("🔍 FETCHING JOBS FROM EXTERNAL API")
+    # print("="*80)
+    
+    try:
+        # Fetch jobs from external API
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
+        
+        # print(f"📡 API URL: {api_url}")
+        
+        response = requests.get(
+            api_url,
+            headers={'Authorization': token},
+            timeout=10
+        )
+        
+        # print(f"📊 Response Status: {response.status_code}")
+        response.raise_for_status()
+        
+        # Parse JSON
+        try:
+            response_data = response.json()
+        except json.JSONDecodeError as e:
+            # print(f"❌ JSON Decode Error: {str(e)}")
+            return Response(
+                {'error': f'Invalid JSON from external API: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Handle different response formats
+        if isinstance(response_data, dict):
+            if 'data' in response_data:
+                jobs_from_api = response_data['data']
+                # print(f"✅ Extracted {len(jobs_from_api)} jobs from 'data' key")
+            elif 'results' in response_data:
+                jobs_from_api = response_data['results']
+            else:
+                jobs_from_api = [response_data]
+        else:
+            jobs_from_api = response_data
+        
+        if not isinstance(jobs_from_api, list):
+            # print(f"❌ Unexpected response type: {type(jobs_from_api)}")
+            return Response(
+                {'error': f'Expected list, got {type(jobs_from_api).__name__}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # print(f"✅ Found {len(jobs_from_api)} jobs from API")
+        
+    except requests.exceptions.RequestException as e:
+        # print(f"❌ Request Error: {str(e)}")
+        return Response(
+            {'error': f'Failed to fetch jobs from external API: {str(e)}'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+    
+    if not jobs_from_api:
+        # print("⚠️ No jobs returned from API")
+        return Response([])
+    
+    # ========================================
+    # ✅ STEP 1: BATCH FETCH ALL FARMER DETAILS
+    # ========================================
+    # print("\n👥 FETCHING FARMER DETAILS...")
+    
+    # Extract unique farmer IDs
+    farmer_ids = set()
+    for job in jobs_from_api:
+        farmer_id = job.get('farmer_id')
+        if farmer_id:
+            farmer_ids.add(str(farmer_id))
+    
+    # print(f"   Found {len(farmer_ids)} unique farmers: {farmer_ids}")
+    
+    # Fetch all farmer details (batch request)
+    farmers_cache = {}
+    FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
+    tok = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
+    for farmer_id in farmer_ids:
+        try:
+            farmer_response = requests.get(
+                f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
+                headers={'Authorization': tok},
+                timeout=20
+            )
+            if farmer_response.status_code == 200:
+                farmer_data = farmer_response.json()
+                farmers_cache[farmer_id] = {
+                    'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
+                    'phone_number': farmer_data.get('phone_number', 'N/A'),
+                    'village': farmer_data.get('village', 'N/A'),
+                    'taluka': farmer_data.get('taluka', 'N/A'),
+                    'district': farmer_data.get('district', 'N/A'),
+                    'location': f"{farmer_data.get('village', 'N/A')}, {farmer_data.get('taluka', 'N/A')}, {farmer_data.get('district', 'N/A')}"
+                }
+                # print(f"   ✅ Fetched farmer {farmer_id}: {farmers_cache[farmer_id]['farmer_name']}")
+            else:
+                # print(f"   ❌ Failed to fetch farmer {farmer_id}: Status {farmer_response.status_code}")
+                farmers_cache[farmer_id] = None
+        except Exception as e:
+            # print(f"   ❌ Error fetching farmer {farmer_id}: {str(e)}")
+            farmers_cache[farmer_id] = None
+    
+    # ========================================
+    # STEP 2: ENRICH JOBS WITH ALLOCATIONS & FARMER DATA
+    # ========================================
+    enriched_jobs = []
+    
+    # print(f"\n🔄 Enriching {len(jobs_from_api)} jobs with allocation data...")
+    
+    for idx, job in enumerate(jobs_from_api):
+        # Get job_id
+        job_id = str(
+            job.get('work_id') or 
+            job.get('id') or 
+            job.get('job_id') or 
+            f"UNKNOWN_{idx}"
+        )
+        
+        # print(f"\n  📌 Job {idx + 1}: {job_id}")
+        
+        # ✅ GET FARMER DETAILS FROM CACHE
+        farmer_id = str(job.get('farmer_id', ''))
+        farmer_details = farmers_cache.get(farmer_id)
+        
+        # GET ACTIVITIES FROM API
+        activities_from_api = job.get('activities', [])
+        # print(f"     📊 Found {len(activities_from_api)} activities from API")
+        
+        # ENRICH WITH ALLOCATION DATA FROM DB
+        activities_data = []
+        
+        for api_activity in activities_from_api:
+            activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
+            
+            # Check if this activity has been allocated
+            db_activity = JobActivity.objects.filter(
+                job_id=job_id,
+                activity_id=activity_id
+            ).prefetch_related('allocations').first()
+            
+            # Build allocations list
+            allocations_data = []
+            allocated_area = Decimal('0')
+            
+            if db_activity:
+                # print(f"     💾 Activity {activity_id} found in DB with {db_activity.allocations.count()} allocations")
+                
+                for alloc in db_activity.allocations.all():
+                    allocated_area += Decimal(str(alloc.allocated_area))
+                    
+                    # Fetch mukkadam name
+                    try:
+                        mukkadam_response = requests.get(
+                            f'{SUPPLY_API_URL}/api/mukkadam/{alloc.mukkadam_id}/',
+                            timeout=2
+                        )
+                        mukkadam_data = mukkadam_response.json()
+                        mukkadam_name = mukkadam_data.get('mukkadam_name', 'Unknown')
+                    except:
+                        mukkadam_name = f'Mukkadam #{alloc.mukkadam_id}'
+                    
+                    allocations_data.append({
+                        'allocation_id': alloc.id,
+                        'mukkadam_id': alloc.mukkadam_id,
+                        'mukkadam_name': mukkadam_name,
+                        'allocated_area': float(alloc.allocated_area),
+                        'work_date': str(alloc.work_date) if alloc.work_date else None,
+                        'crew_size': alloc.crew_size,
+                        'mukkadam_price': float(alloc.mukkadam_price),
+                        'transport_type': alloc.transport_type,
+                        'transport_price': float(alloc.transport_price or 0),
+                        'total_cost': float(alloc.total_cost)
+                    })
+            
+            # Calculate areas
+            total_area = Decimal(str(api_activity.get('acres', 0)))
+            remaining_area = total_area - allocated_area
+            is_fully_allocated = allocated_area >= total_area
+            
+            # print(f"     🔍 Activity {activity_id} ({api_activity.get('activity_name')})")
+            # print(f"        Total: {total_area}, Allocated: {allocated_area}, Remaining: {remaining_area}")
+            # print(f"        Is Fully Allocated: {is_fully_allocated}")
+
+            def safe_date(value):
+                if not value:
+                    return ''
+                return str(value).split('T')[0]
+            
+            # ✅ ADD ACTIVITY WITH PRICING FROM API
+            activities_data.append({
+                'id': db_activity.id if db_activity else None,
+                'activity_id': activity_id,
+                'activity_name': api_activity.get('activity_name', 'Unknown'),
+                'activity_type': api_activity.get('activity_type', ''),
+                'location': api_activity.get('location', 'N/A'),
+                'total_area': float(total_area),
+                'allocated_area': float(allocated_area),
+                'remaining_area': float(remaining_area),
+                'scheduled_date': safe_date(
+                    api_activity.get('date_time') or 
+                    api_activity.get('scheduled_date') or 
+                    job.get('scheduled_date')
+                ),
+                'scheduled_time': api_activity.get('scheduled_time', ''),
+                'estimated_workers': api_activity.get('estimated_workers', 10),
+                
+                # ✅ PRICING FROM API
+                'rate_per_acre': float(api_activity.get('total_price', 0)) / float(total_area) if float(total_area) > 0 else 0,
+                'total_price': float(api_activity.get('total_price', 0)),  # Revenue
+                'transport_cost': float(api_activity.get('transport_cost', 0)),  # Expected transport cost
+                'other_cost': float(api_activity.get('other_cost', 0)),
+                'subtotal': float(api_activity.get('subtotal', 0)),
+                
+                'is_fully_allocated': is_fully_allocated,
+                'allocations': allocations_data
+            })
+
+        
+        # Calculate job status
+        def calculate_status(activities):
+            if not activities:
+                return 'pending'
+            
+            fully_allocated = sum(1 for a in activities if a['is_fully_allocated'])
+            partially_allocated = sum(1 for a in activities if a['allocated_area'] > 0 and not a['is_fully_allocated'])
+            
+            # print(f"\n     📊 STATUS CALCULATION:")
+            # print(f"        Total Activities: {len(activities)}")
+            # print(f"        Fully Allocated: {fully_allocated}")
+            # print(f"        Partially Allocated: {partially_allocated}")
+            
+            if fully_allocated == len(activities):
+                status = 'fully_allocated'
+            elif fully_allocated > 0 or partially_allocated > 0:
+                status = 'partially_allocated'
+            else:
+                status = 'pending'
+            
+            # print(f"        Final Status: {status}")
+            return status
+        
+        job_status = calculate_status(activities_data)
+        
+        # ✅ BUILD ENRICHED JOB WITH FARMER DETAILS
+        enriched_job = {
+            **job,  # All original data from external API
+            'work_id': job_id,
+            
+            # ✅ FARMER DETAILS
+            'farmer': farmer_details,  # Complete farmer object
+            
+            # ACTIVITIES WITH ALLOCATIONS
+            'activities': activities_data,
+            
+            # JOB METADATA
+            'status': job_status,
+            'total_activities': len(activities_data),
+            'is_complex': len(activities_data) > 1,
+            
+            # ✅ BOOKING INFO (from API)
+            'booking': job.get('booking', {})
+        }
+        
+        enriched_jobs.append(enriched_job)
+    
+    # print(f"\n✅ Successfully enriched {len(enriched_jobs)} jobs")
+    # print("="*80)
+    
+    return Response(enriched_jobs)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def allocations_list(request):
     """
     Get all allocations with complete details from external APIs
@@ -1224,21 +1506,263 @@ def allocations_by_mobile(request):
     })
 
 # data/views.py
+# data/views.py
+# allocation_app/views.py
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def transporter_work_history(request):
+    """
+    Get complete work history and analytics for a Transporter
+    """
+    print("="*80)
+    print("🚚 FETCHING TRANSPORTER WORK HISTORY & ANALYTICS")
+    print("="*80)
+    
+    mobile_number = request.GET.get('mobile_number')
+    provider_id = request.GET.get('transport_provider_id')
+    
+    if not mobile_number and not provider_id:
+        return Response(
+            {'error': 'Either mobile_number or transport_provider_id is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # ========================================
+    # STEP 1: GET TRANSPORTER DETAILS FROM SUPPLY API
+    # ========================================
+    provider_data = None
+    
+    try:
+        if provider_id:
+            # Fetch by ID
+            print(f"   🔍 Fetching by ID: {provider_id}")
+            response = requests.get(
+                f'{SUPPLY_API_URL}/api/transport-providers/{provider_id}/',
+                timeout=10
+            )
+            if response.status_code == 200:
+                provider_data = response.json()
+                provider_id = int(provider_id)
+            else:
+                print(f"   ❌ Supply API Error (ID): {response.status_code} - {response.text}")
+
+        else:
+            # Search by phone using check-transporter
+            print(f"   🔍 Searching for transporter with mobile: {mobile_number}")
+            check_url = f'{SUPPLY_API_URL}/api/check-transporter/'
+            
+            print(f"   📡 POST Request to: {check_url}")
+            response = requests.post(
+                check_url,
+                json={'contact_number': mobile_number}, # Send data in body
+                timeout=5
+            )
+            
+            print(f"   📊 Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('success') and result.get('registered'):
+                    # Extract data
+                    provider_data = result.get('data')
+                    provider_id = result.get('transporter_id')
+                    print(f"   ✅ Found transporter ID: {provider_id}")
+                else:
+                    print(f"   ⚠️ Transporter not registered: {result.get('message')}")
+            else:
+                # IMPORTANT: This prints why it failed (e.g., 404 URL not found, 500 Server Error)
+                print(f"   ❌ Supply API Failed: {response.status_code}")
+                print(f"   📄 Response Body: {response.text}")
+
+        if not provider_data:
+            return Response(
+                {'error': 'Transporter not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+            
+    except Exception as e:
+        print(f"   ❌ Error fetching transporter: {str(e)}")
+        return Response(
+            {'error': f'Failed to fetch transporter details: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+    # ... (Rest of Step 2, 3, 4, 5 remains exactly the same) ...
+    
+    # ========================================
+    # STEP 2: GET ALLOCATIONS FOR THIS TRANSPORTER
+    # ========================================
+    allocations = Allocation.objects.filter(
+        transport_provider_id=provider_id
+    ).select_related('job_activity', 'transport_payment_request').order_by('-work_date')
+    
+    # ========================================
+    # STEP 3: BATCH FETCH JOB & MUKKADAM DETAILS
+    # ========================================
+    # Collect IDs for batch fetching
+    job_ids = set()
+    mukkadam_ids = set()
+    
+    for alloc in allocations:
+        if alloc.job_activity:
+            job_ids.add(str(alloc.job_activity.job_id))
+        mukkadam_ids.add(alloc.mukkadam_id)
+        
+    # --- A. Fetch Jobs ---
+    jobs_cache = {}
+    farmers_cache = {}
+    
+    try:
+        EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
+        job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        
+        response = requests.get(
+            f'{EXTERNAL_API_URL}/get_allocated_jobs/',
+            headers={'Authorization': job_token},
+            timeout=8
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            jobs_list = data.get('data', []) if isinstance(data, dict) else data
+            
+            for job in jobs_list:
+                jid = str(job.get('work_id') or job.get('id'))
+                if jid in job_ids:
+                    jobs_cache[jid] = job
+                    
+            FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
+            farmer_token = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
+            
+            farmer_ids = set(j.get('farmer_id') for j in jobs_cache.values() if j.get('farmer_id'))
+            
+            for fid in farmer_ids:
+                try:
+                    f_resp = requests.get(
+                        f'{FARMER_API_BASE}/get_farmer_details/{fid}/',
+                        headers={'Authorization': farmer_token},
+                        timeout=3
+                    )
+                    if f_resp.status_code == 200:
+                        farmers_cache[str(fid)] = f_resp.json()
+                except:
+                    pass
+    except Exception as e:
+        print(f"   ⚠️ Error fetching external job data: {e}")
+
+    # --- B. Fetch Mukkadams (Who they need to contact) ---
+    mukkadams_cache = {}
+    try:
+        for mid in mukkadam_ids:
+            m_resp = requests.get(
+                f'{SUPPLY_API_URL}/api/mukkadam/{mid}/',
+                timeout=3
+            )
+            if m_resp.status_code == 200:
+                mukkadams_cache[mid] = m_resp.json()
+    except Exception as e:
+        print(f"   ⚠️ Error fetching mukkadams: {e}")
+
+    # ========================================
+    # STEP 4: BUILD RESPONSE DATA
+    # ========================================
+    from datetime import date
+    today = date.today()
+    
+    completed_jobs = []
+    upcoming_jobs = []
+    
+    total_earnings = 0
+    pending_payout = 0
+    
+    for alloc in allocations:
+        # Get related data from caches
+        job_id = str(alloc.job_activity.job_id)
+        job_data = jobs_cache.get(job_id, {})
+        
+        farmer_id = str(job_data.get('farmer_id', ''))
+        farmer_data = farmers_cache.get(farmer_id, {})
+        
+        mukkadam_data = mukkadams_cache.get(alloc.mukkadam_id, {})
+        
+        # Payment Status Logic
+        payment_status = 'pending_work' # Default
+        transport_amount = float(alloc.transport_price or 0)
+        
+        # Check explicit payment request
+        if hasattr(alloc, 'transport_payment_request'):
+            req = alloc.transport_payment_request
+            payment_status = req.status # 'pending', 'paid', 'rejected'
+            
+            if payment_status == 'paid':
+                total_earnings += float(req.requested_amount)
+            elif payment_status == 'pending':
+                pending_payout += float(req.requested_amount)
+        
+        elif alloc.status == 'completed' or (alloc.work_date and alloc.work_date < today):
+             payment_status = 'unclaimed'
+             pending_payout += transport_amount
+
+        # Build Job Object
+        job_obj = {
+            'allocation_id': alloc.id,
+            'work_date': str(alloc.work_date),
+            'status': alloc.status, # 'allocated', 'completed'
+            'payment_status': payment_status,
+            'amount': transport_amount,
+            
+            # Job / Location Info (Where to go)
+            'job': {
+                'id': job_id,
+                'location': job_data.get('location') or farmer_data.get('village', 'Unknown'),
+                'farmer_name': farmer_data.get('farmer_name', 'Unknown Farmer'),
+                'farmer_mobile': farmer_data.get('phone_number', 'N/A'),
+                'google_maps_link': f"https://www.google.com/maps/search/?api=1&query={job_data.get('location', '')}" 
+            },
+            
+            # Contact Person (Mukkadam)
+            'contact_person': {
+                'role': 'Mukkadam',
+                'name': mukkadam_data.get('mukkadam_name', f'Mukkadam #{alloc.mukkadam_id}'),
+                'mobile': mukkadam_data.get('mobile_numbers', 'N/A'),
+                'crew_size': alloc.crew_size or mukkadam_data.get('crew_size', 0)
+            }
+        }
+        
+        # Categorize
+        if alloc.status == 'completed' or (alloc.work_date and alloc.work_date < today):
+            completed_jobs.append(job_obj)
+        else:
+            upcoming_jobs.append(job_obj)
+
+    # ========================================
+    # STEP 5: FINAL RESPONSE
+    # ========================================
+    return Response({
+        'transporter': {
+            'id': provider_data.get('id'),
+            'name': provider_data.get('name'),
+            'mobile': provider_data.get('contact_number'),
+            'vehicle': provider_data.get('vehicle_type'),
+            'base_location': provider_data.get('base_location')
+        },
+        'stats': {
+            'total_trips': len(allocations),
+            'completed_trips': len(completed_jobs),
+            'upcoming_trips': len(upcoming_jobs),
+            'total_earnings': total_earnings,
+            'pending_payout': pending_payout
+        },
+        'upcoming_jobs': upcoming_jobs,
+        'history': completed_jobs
+    })
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def mukkadam_work_history(request):
     """
     Get complete work history and analytics for a mukkadam
-    
-    GET /ap/mukkadam-history/?mukkadam_phone=9876543210
-    GET /ap/mukkadam-history/?mukkadam_id=134
-    
-    Returns:
-    - All allocations (past, current, upcoming)
-    - Total earnings
-    - Completion statistics
-    - Performance metrics
     """
     print("="*80)
     print("📊 FETCHING MUKKADAM WORK HISTORY & ANALYTICS")
@@ -1256,8 +1780,7 @@ def mukkadam_work_history(request):
     # ========================================
     # STEP 1: GET MUKKADAM DETAILS FROM SUPPLY API
     # ========================================
-    print("\n👤 Fetching mukkadam details...")
-    
+    # ... (Keep existing Step 1 code exactly as is) ...
     # SUPPLY_API_URL = 'http://localhost:8000'
     mukkadam_data = None
     
@@ -1297,8 +1820,6 @@ def mukkadam_work_history(request):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        print(f"   ✅ Found: {mukkadam_data.get('mukkadam_name')} (ID: {mukkadam_id})")
-    
     except Exception as e:
         print(f"   ❌ Error fetching mukkadam: {str(e)}")
         return Response(
@@ -1309,171 +1830,130 @@ def mukkadam_work_history(request):
     # ========================================
     # STEP 2: GET ALL ALLOCATIONS FOR THIS MUKKADAM
     # ========================================
-    print(f"\n📋 Fetching all allocations for mukkadam ID: {mukkadam_id}")
-    
     allocations = Allocation.objects.filter(
         mukkadam_id=mukkadam_id
-    ).select_related('job_activity').order_by('-work_date')
-    
-    print(f"   Found {allocations.count()} total allocations")
-    
-    if allocations.count() == 0:
-        return Response({
-            'mukkadam': {
-                'mukkadam_id': mukkadam_id,
-                'mukkadam_name': mukkadam_data.get('mukkadam_name'),
-                'mobile_numbers': mukkadam_data.get('mobile_numbers'),
-                'village': mukkadam_data.get('village'),
-            },
-            'summary': {
-                'total_allocations': 0,
-                'total_earnings': 0,
-                'completed_jobs': 0,
-                'pending_jobs': 0,
-                'upcoming_jobs': 0,
-            },
-            'allocations': [],
-            'monthly_breakdown': []
-        })
+    ).select_related('job_activity', 'payment_request').order_by('-work_date')
     
     # ========================================
-    # STEP 3: CATEGORIZE ALLOCATIONS BY STATUS
+    # STEP 3: CATEGORIZE ALLOCATIONS & CALCULATE EARNINGS
     # ========================================
     from datetime import datetime, date
     
     today = date.today()
     
     completed_allocations = []
-    pending_allocations = []
-    upcoming_allocations = []
+    pending_allocations = []  # Past due but not completed
+    upcoming_allocations = [] # Future dates
     
-    total_earnings = 0
     total_area_worked = 0
     
+    # --- 💰 FINANCIAL BREAKDOWN VARIABLES ---
+    total_potential_earnings = 0  # Total allocated one (Sum of everything)
+    total_paid_earnings = 0       # Actually paid
+    total_pending_payout = 0      # Completed but NOT paid yet
+    total_upcoming_income = 0     # Jobs not yet completed (Pending + Upcoming)
+
     for allocation in allocations:
         work_date = allocation.work_date
         
-        # Calculate earnings
+        # Calculate earnings for this specific allocation
         earnings = float(allocation.mukkadam_price) * float(allocation.allocated_area)
-        total_earnings += earnings
+        
+        # 1. Add to Total Potential (Allocated One)
+        total_potential_earnings += earnings
         total_area_worked += float(allocation.allocated_area)
         
-        # Categorize by date and status
+        # 2. Categorize and Calculate Specific Financials
         if allocation.status == 'completed':
             completed_allocations.append(allocation)
+            
+            # CHECK PAYMENT STATUS
+            # If payment request exists AND status is 'paid'
+            if hasattr(allocation, 'payment_request') and allocation.payment_request.status == 'paid':
+                total_paid_earnings += earnings
+            else:
+                # Completed, but payment is Pending, Rejected, or Not Requested yet
+                total_pending_payout += earnings
+                
         elif work_date and work_date < today:
-            # Past date but not marked completed
+            # Past date but not marked completed (Pending Job)
             pending_allocations.append(allocation)
-        elif work_date and work_date >= today:
-            # Future date
-            upcoming_allocations.append(allocation)
+            total_upcoming_income += earnings # Still counted as potential future income once done
+            
         else:
-            pending_allocations.append(allocation)
-    
-    print(f"   Completed: {len(completed_allocations)}")
-    print(f"   Pending: {len(pending_allocations)}")
-    print(f"   Upcoming: {len(upcoming_allocations)}")
-    
+            # Future date (Upcoming Job)
+            upcoming_allocations.append(allocation)
+            total_upcoming_income += earnings # Projected income
+
     # ========================================
-    # STEP 4: FETCH JOB & FARMER DETAILS
+    # STEP 4: FETCH JOB & FARMER DETAILS (External APIs)
     # ========================================
-    print("\n🔄 Fetching job and farmer details...")
-    
+    # ... (Keep existing Step 4 code exactly as is) ...
     job_ids = set(alloc.job_activity.job_id for alloc in allocations if alloc.job_activity)
-    
     jobs_cache = {}
     farmers_cache = {}
-    
     EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
     job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-    
     try:
-        response = requests.get(
-            f'{EXTERNAL_API_URL}/get_allocated_jobs/',
-            headers={'Authorization': job_token},
-            timeout=10
-        )
-        
+        response = requests.get(f'{EXTERNAL_API_URL}/get_allocated_jobs/', headers={'Authorization': job_token}, timeout=10)
         if response.status_code == 200:
             data = response.json()
             jobs_list = data.get('data', []) if isinstance(data, dict) else data
-            
             for job in jobs_list:
                 job_id = str(job.get('work_id') or job.get('id'))
                 if job_id in job_ids:
                     jobs_cache[job_id] = job
     except Exception as e:
         print(f"   ⚠️ Error fetching jobs: {str(e)}")
-    
-    # Fetch farmer details
+
     farmer_ids = set()
     for job in jobs_cache.values():
         if job.get('farmer_id'):
             farmer_ids.add(str(job['farmer_id']))
-    
     FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
     farmer_token = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
-    
     for farmer_id in farmer_ids:
         try:
-            response = requests.get(
-                f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
-                headers={'Authorization': farmer_token},
-                timeout=3
-            )
+            response = requests.get(f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/', headers={'Authorization': farmer_token}, timeout=3)
             if response.status_code == 200:
                 farmers_cache[farmer_id] = response.json()
-        except Exception as e:
-            print(f"   ⚠️ Error fetching farmer {farmer_id}: {str(e)}")
-    
+        except Exception:
+            pass
+
     # ========================================
     # STEP 5: BUILD ALLOCATION DETAILS
     # ========================================
-    print("\n📦 Building allocation details...")
-    payment_status = None
-    if hasattr(allocation, 'payment_request'):
-        pr = allocation.payment_request
-        payment_status = {
-            'has_request': True,
-            'request_id': pr.id,
-            'status': pr.status,
-            'requested_amount': float(pr.requested_amount),
-            'requested_at': pr.requested_at.isoformat(),
-            'paid_at': pr.paid_at.isoformat() if pr.paid_at else None,
-        }
-    else:
-        payment_status = {
-            'has_request': False,
-            'can_request': allocation.status == 'completed',  # Only completed jobs
-        }
-    
+    # ... (Keep existing build_allocation_detail function logic) ...
     def build_allocation_detail(allocation):
         job_activity = allocation.job_activity
-        if not job_activity:
-            return None
-        
+        if not job_activity: return None
         job_id = str(job_activity.job_id)
         activity_id = str(job_activity.activity_id)
-        
         job_data = jobs_cache.get(job_id, {})
         farmer_id = str(job_data.get('farmer_id', ''))
         farmer_data = farmers_cache.get(farmer_id, {})
-        
-        activity_details = None
-        if job_data and 'activities' in job_data:
-            activity_details = next(
-                (a for a in job_data['activities'] 
-                 if str(a.get('id') or a.get('activity_id')) == activity_id),
-                None
-            )
-        
+        activity_details = next((a for a in job_data.get('activities',[]) if str(a.get('id') or a.get('activity_id')) == activity_id), None)
         central_team_phone = 'N/A'
         if job_data and 'booking' in job_data:
             central_team_phone = job_data['booking'].get('phone_number', 'N/A')
         
-        earnings = float(allocation.mukkadam_price) * float(allocation.allocated_area)
-        transport_cost = float(allocation.transport_price or 0)
-        
+        # Determine payment object for response
+        payment_info = {
+            'has_request': False,
+            'can_request': allocation.status == 'completed',
+            'status': 'N/A'
+        }
+        if hasattr(allocation, 'payment_request'):
+            pr = allocation.payment_request
+            payment_info = {
+                'has_request': True,
+                'request_id': pr.id,
+                'status': pr.status,
+                'requested_amount': float(pr.requested_amount),
+                'requested_at': pr.requested_at.isoformat(),
+                'paid_at': pr.paid_at.isoformat() if pr.paid_at else None,
+            }
+
         return {
             'allocation_id': allocation.id,
             'work_date': str(allocation.work_date) if allocation.work_date else None,
@@ -1481,79 +1961,49 @@ def mukkadam_work_history(request):
             'crew_size': allocation.crew_size,
             'status': allocation.status,
             'allocated_at': allocation.allocated_at.isoformat() if allocation.allocated_at else None,
-            
             'job': {
                 'job_id': job_id,
                 'job_name': job_data.get('job_name', 'N/A'),
                 'location': job_data.get('location', 'N/A'),
                 'central_team_phone': central_team_phone,
             },
-            
             'farmer': {
                 'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
                 'phone_number': farmer_data.get('phone_number', 'N/A'),
                 'location': f"{farmer_data.get('village', 'N/A')}, {farmer_data.get('taluka', 'N/A')}"
             } if farmer_data else None,
-            
             'activity': {
                 'activity_name': activity_details.get('activity_name', 'Unknown') if activity_details else 'Unknown',
                 'activity_type': activity_details.get('activity_type', 'N/A') if activity_details else 'N/A',
             },
-            
-            'payment': payment_status, 
+            'payment': payment_info, 
         }
-    
-    completed_details = [build_allocation_detail(a) for a in completed_allocations]
-    completed_details = [d for d in completed_details if d]
-    
-    pending_details = [build_allocation_detail(a) for a in pending_allocations]
-    pending_details = [d for d in pending_details if d]
-    
-    upcoming_details = [build_allocation_detail(a) for a in upcoming_allocations]
-    upcoming_details = [d for d in upcoming_details if d]
-    
+
+    completed_details = [d for d in [build_allocation_detail(a) for a in completed_allocations] if d]
+    pending_details = [d for d in [build_allocation_detail(a) for a in pending_allocations] if d]
+    upcoming_details = [d for d in [build_allocation_detail(a) for a in upcoming_allocations] if d]
+
     # ========================================
-    # STEP 6: CALCULATE MONTHLY BREAKDOWN
+    # STEP 6: MONTHLY BREAKDOWN
     # ========================================
+    # ... (Keep existing monthly logic) ...
     from collections import defaultdict
-    
-    monthly_stats = defaultdict(lambda: {
-        'month': '',
-        'allocations': 0,
-        'area_worked': 0,
-        'earnings': 0,
-        'completed': 0
-    })
-    
+    monthly_stats = defaultdict(lambda: {'month': '', 'allocations': 0, 'area_worked': 0, 'earnings': 0, 'completed': 0})
     for allocation in allocations:
         if allocation.work_date:
             month_key = allocation.work_date.strftime('%Y-%m')
-            month_name = allocation.work_date.strftime('%B %Y')
-            
-            earnings = float(allocation.mukkadam_price) * float(allocation.allocated_area)
-            
-            monthly_stats[month_key]['month'] = month_name
+            monthly_stats[month_key]['month'] = allocation.work_date.strftime('%B %Y')
             monthly_stats[month_key]['allocations'] += 1
             monthly_stats[month_key]['area_worked'] += float(allocation.allocated_area)
-            monthly_stats[month_key]['earnings'] += earnings
-            
+            monthly_stats[month_key]['earnings'] += float(allocation.mukkadam_price) * float(allocation.allocated_area)
             if allocation.status == 'completed':
                 monthly_stats[month_key]['completed'] += 1
     
-    monthly_breakdown = sorted(
-        monthly_stats.values(),
-        key=lambda x: x['month'],
-        reverse=True
-    )
-    
+    monthly_breakdown = sorted(monthly_stats.values(), key=lambda x: x['month'], reverse=True)
+
     # ========================================
-    # STEP 7: BUILD FINAL RESPONSE
+    # STEP 7: BUILD FINAL RESPONSE (UPDATED SUMMARY)
     # ========================================
-    print(f"\n✅ Successfully compiled work history")
-    print(f"   Total Earnings: ₹{total_earnings:,.2f}")
-    print(f"   Total Area: {total_area_worked:.2f} acres")
-    print("="*80)
-    
     completion_rate = (len(completed_allocations) / allocations.count() * 100) if allocations.count() > 0 else 0
     
     response_data = {
@@ -1566,6 +2016,7 @@ def mukkadam_work_history(request):
             'has_smartphone': mukkadam_data.get('has_smartphone'),
         },
         
+        # ✅ UPDATED FINANCIAL SUMMARY BASED ON YOUR REQUEST
         'summary': {
             'total_allocations': allocations.count(),
             'completed_jobs': len(completed_allocations),
@@ -1573,9 +2024,19 @@ def mukkadam_work_history(request):
             'upcoming_jobs': len(upcoming_allocations),
             'completion_rate': round(completion_rate, 2),
             
-            'total_earnings': round(total_earnings, 2),
+            # 1. Total Earning Potential (From all allocations)
+            'total_potential_earnings': round(total_potential_earnings, 2),
+            
+            # 2. Total Paid (Completed & Paid status)
+            'total_paid_earnings': round(total_paid_earnings, 2),
+            
+            # 3. Pending Payout (Completed & Not Paid/Requested)
+            'total_pending_payout': round(total_pending_payout, 2),
+            
+            # 4. Upcoming Income (Allocated or Pending Jobs)
+            'total_upcoming_income': round(total_upcoming_income, 2),
+            
             'total_area_worked': round(total_area_worked, 2),
-            'average_earnings_per_job': round(total_earnings / allocations.count(), 2) if allocations.count() > 0 else 0,
         },
         
         'work_history': {
@@ -1595,8 +2056,6 @@ def mukkadam_work_history(request):
     }
     
     return Response(response_data)
-
-
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -1643,284 +2102,243 @@ def get_fcm_by_mobile(request):
         status=status.HTTP_200_OK
     )
 
+# allocation_app/views.py
+
+from django.db.models import Prefetch
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def jobs_list(request):
+def get_job_details(request, job_id):
     """
-    Fetch jobs from external API and enrich with:
-    1. Allocation data from database
-    2. Farmer details from farmer API
+    Get full breakdown of a specific job from LOCAL DB only (Fast).
+    Reconstructs the job object structure expected by the frontend.
     """
-    # print("="*80)
-    # print("🔍 FETCHING JOBS FROM EXTERNAL API")
-    # print("="*80)
-    
-    try:
-        # Fetch jobs from external API
-        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
-        
-        # print(f"📡 API URL: {api_url}")
-        
-        response = requests.get(
-            api_url,
-            headers={'Authorization': token},
-            timeout=10
-        )
-        
-        # print(f"📊 Response Status: {response.status_code}")
-        response.raise_for_status()
-        
-        # Parse JSON
-        try:
-            response_data = response.json()
-        except json.JSONDecodeError as e:
-            # print(f"❌ JSON Decode Error: {str(e)}")
-            return Response(
-                {'error': f'Invalid JSON from external API: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        
-        # Handle different response formats
-        if isinstance(response_data, dict):
-            if 'data' in response_data:
-                jobs_from_api = response_data['data']
-                # print(f"✅ Extracted {len(jobs_from_api)} jobs from 'data' key")
-            elif 'results' in response_data:
-                jobs_from_api = response_data['results']
-            else:
-                jobs_from_api = [response_data]
-        else:
-            jobs_from_api = response_data
-        
-        if not isinstance(jobs_from_api, list):
-            # print(f"❌ Unexpected response type: {type(jobs_from_api)}")
-            return Response(
-                {'error': f'Expected list, got {type(jobs_from_api).__name__}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        
-        # print(f"✅ Found {len(jobs_from_api)} jobs from API")
-        
-    except requests.exceptions.RequestException as e:
-        # print(f"❌ Request Error: {str(e)}")
-        return Response(
-            {'error': f'Failed to fetch jobs from external API: {str(e)}'},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE
-        )
-    
-    if not jobs_from_api:
-        # print("⚠️ No jobs returned from API")
-        return Response([])
-    
-    # ========================================
-    # ✅ STEP 1: BATCH FETCH ALL FARMER DETAILS
-    # ========================================
-    # print("\n👥 FETCHING FARMER DETAILS...")
-    
-    # Extract unique farmer IDs
-    farmer_ids = set()
-    for job in jobs_from_api:
-        farmer_id = job.get('farmer_id')
-        if farmer_id:
-            farmer_ids.add(str(farmer_id))
-    
-    # print(f"   Found {len(farmer_ids)} unique farmers: {farmer_ids}")
-    
-    # Fetch all farmer details (batch request)
-    farmers_cache = {}
-    FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
-    tok = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
-    for farmer_id in farmer_ids:
-        try:
-            farmer_response = requests.get(
-                f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
-                headers={'Authorization': tok},
-                timeout=3
-            )
-            if farmer_response.status_code == 200:
-                farmer_data = farmer_response.json()
-                farmers_cache[farmer_id] = {
-                    'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
-                    'phone_number': farmer_data.get('phone_number', 'N/A'),
-                    'village': farmer_data.get('village', 'N/A'),
-                    'taluka': farmer_data.get('taluka', 'N/A'),
-                    'district': farmer_data.get('district', 'N/A'),
-                    'location': f"{farmer_data.get('village', 'N/A')}, {farmer_data.get('taluka', 'N/A')}, {farmer_data.get('district', 'N/A')}"
-                }
-                # print(f"   ✅ Fetched farmer {farmer_id}: {farmers_cache[farmer_id]['farmer_name']}")
-            else:
-                # print(f"   ❌ Failed to fetch farmer {farmer_id}: Status {farmer_response.status_code}")
-                farmers_cache[farmer_id] = None
-        except Exception as e:
-            # print(f"   ❌ Error fetching farmer {farmer_id}: {str(e)}")
-            farmers_cache[farmer_id] = None
-    
-    # ========================================
-    # STEP 2: ENRICH JOBS WITH ALLOCATIONS & FARMER DATA
-    # ========================================
-    enriched_jobs = []
-    
-    # print(f"\n🔄 Enriching {len(jobs_from_api)} jobs with allocation data...")
-    
-    for idx, job in enumerate(jobs_from_api):
-        # Get job_id
-        job_id = str(
-            job.get('work_id') or 
-            job.get('id') or 
-            job.get('job_id') or 
-            f"UNKNOWN_{idx}"
-        )
-        
-        # print(f"\n  📌 Job {idx + 1}: {job_id}")
-        
-        # ✅ GET FARMER DETAILS FROM CACHE
-        farmer_id = str(job.get('farmer_id', ''))
-        farmer_details = farmers_cache.get(farmer_id)
-        
-        # GET ACTIVITIES FROM API
-        activities_from_api = job.get('activities', [])
-        # print(f"     📊 Found {len(activities_from_api)} activities from API")
-        
-        # ENRICH WITH ALLOCATION DATA FROM DB
-        activities_data = []
-        
-        for api_activity in activities_from_api:
-            activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
-            
-            # Check if this activity has been allocated
-            db_activity = JobActivity.objects.filter(
-                job_id=job_id,
-                activity_id=activity_id
-            ).prefetch_related('allocations').first()
-            
-            # Build allocations list
-            allocations_data = []
-            allocated_area = Decimal('0')
-            
-            if db_activity:
-                # print(f"     💾 Activity {activity_id} found in DB with {db_activity.allocations.count()} allocations")
-                
-                for alloc in db_activity.allocations.all():
-                    allocated_area += Decimal(str(alloc.allocated_area))
-                    
-                    # Fetch mukkadam name
-                    try:
-                        mukkadam_response = requests.get(
-                            f'{SUPPLY_API_URL}/api/mukkadam/{alloc.mukkadam_id}/',
-                            timeout=2
-                        )
-                        mukkadam_data = mukkadam_response.json()
-                        mukkadam_name = mukkadam_data.get('mukkadam_name', 'Unknown')
-                    except:
-                        mukkadam_name = f'Mukkadam #{alloc.mukkadam_id}'
-                    
-                    allocations_data.append({
-                        'allocation_id': alloc.id,
-                        'mukkadam_id': alloc.mukkadam_id,
-                        'mukkadam_name': mukkadam_name,
-                        'allocated_area': float(alloc.allocated_area),
-                        'work_date': str(alloc.work_date) if alloc.work_date else None,
-                        'crew_size': alloc.crew_size,
-                        'mukkadam_price': float(alloc.mukkadam_price),
-                        'transport_type': alloc.transport_type,
-                        'transport_price': float(alloc.transport_price or 0),
-                        'total_cost': float(alloc.total_cost)
-                    })
-            
-            # Calculate areas
-            total_area = Decimal(str(api_activity.get('acres', 0)))
-            remaining_area = total_area - allocated_area
-            is_fully_allocated = allocated_area >= total_area
-            
-            # print(f"     🔍 Activity {activity_id} ({api_activity.get('activity_name')})")
-            # print(f"        Total: {total_area}, Allocated: {allocated_area}, Remaining: {remaining_area}")
-            # print(f"        Is Fully Allocated: {is_fully_allocated}")
+    # 1. Fetch all activities for this job from local DB
+    activities = JobActivity.objects.filter(job_id=job_id).prefetch_related(
+        Prefetch('allocations', queryset=Allocation.objects.select_related('payment_request'))
+    )
 
-            def safe_date(value):
-                if not value:
-                    return ''
-                return str(value).split('T')[0]
+    if not activities.exists():
+        return Response({'error': 'Job not found locally'}, status=404)
+
+    # 2. Build the structure manually
+    activities_data = []
+    total_revenue = 0
+    
+    # We try to guess the job title/farmer from the first activity if possible, 
+    # or leave it generic since we are avoiding the external API.
+    job_title = f"Job #{job_id}" 
+
+    for activity in activities:
+        # Sum allocations
+        allocs_data = []
+        allocated_area = Decimal('0')
+        
+        for alloc in activity.allocations.all():
+            allocated_area += alloc.allocated_area
             
-            # ✅ ADD ACTIVITY WITH PRICING FROM API
-            activities_data.append({
-                'id': db_activity.id if db_activity else None,
-                'activity_id': activity_id,
-                'activity_name': api_activity.get('activity_name', 'Unknown'),
-                'activity_type': api_activity.get('activity_type', ''),
-                'location': api_activity.get('location', 'N/A'),
-                'total_area': float(total_area),
-                'allocated_area': float(allocated_area),
-                'remaining_area': float(remaining_area),
-                'scheduled_date': safe_date(
-                    api_activity.get('date_time') or 
-                    api_activity.get('scheduled_date') or 
-                    job.get('scheduled_date')
-                ),
-                'scheduled_time': api_activity.get('scheduled_time', ''),
-                'estimated_workers': api_activity.get('estimated_workers', 10),
-                
-                # ✅ PRICING FROM API
-                'rate_per_acre': float(api_activity.get('total_price', 0)) / float(total_area) if float(total_area) > 0 else 0,
-                'total_price': float(api_activity.get('total_price', 0)),  # Revenue
-                'transport_cost': float(api_activity.get('transport_cost', 0)),  # Expected transport cost
-                'other_cost': float(api_activity.get('other_cost', 0)),
-                'subtotal': float(api_activity.get('subtotal', 0)),
-                
-                'is_fully_allocated': is_fully_allocated,
-                'allocations': allocations_data
+            # Fetch mukkadam name (optional: could be optimized with a separate mukkadam cache if slow)
+            # For speed, we just return the ID, and let frontend fetch details if needed, 
+            # OR we fetch it here if your Supply API is fast. 
+            # Assuming we just send basic data:
+            
+            allocs_data.append({
+                'allocation_id': alloc.id,
+                'mukkadam_id': alloc.mukkadam_id,
+                'mukkadam_name': f"Mukkadam #{alloc.mukkadam_id}", # Frontend will enrich this if needed
+                'allocated_area': float(alloc.allocated_area),
+                'crew_size': alloc.crew_size,
+                'mukkadam_price': float(alloc.mukkadam_price),
+                'transport_price': float(alloc.transport_price or 0),
+                'work_date': str(alloc.work_date) if alloc.work_date else None,
+                'status': alloc.status
             })
 
+        # Calculate pricing
+        # If rate_per_acre is 0, try to calc from totals
+        rate = float(activity.rate_per_acre)
+        revenue = float(activity.total_price)
+        total_revenue += revenue
+
+        activities_data.append({
+            'activity_id': activity.activity_id,
+            'activity_name': activity.activity_name,
+            'total_area': float(activity.total_area),
+            'allocated_area': float(allocated_area),
+            'remaining_area': float(activity.remaining_area),
+            'rate_per_acre': rate,
+            'total_price': revenue,
+            'allocations': allocs_data
+        })
+
+    response_data = {
+        'work_id': job_id,
+        'title': job_title,
+        'activities': activities_data,
+        'farmer_id': None, # We don't have this locally in JobActivity, frontend handles null gracefully
+    }
+
+    return Response(response_data)
+
+
+
+
+# allocation_app/views.py
+
+from django.core.cache import cache # Optional, for caching external job list
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def light_activity_logs(request):
+    """
+    High-speed Activity Log. 
+    Removes external HTTP calls. Returns IDs only.
+    Frontend must map mukkadam_id -> mukkadam_name.
+    """
+    # 1. Efficient DB Fetch
+    queryset = ActivityLog.objects.all().select_related('performed_by', 'allocation')
+    
+    # Simple Filters
+    if request.query_params.get('job_id'):
+        queryset = queryset.filter(job_id=request.query_params.get('job_id'))
+    
+    # Limit to last 100 for dashboard speed
+    queryset = queryset.order_by('-performed_at')[:100]
+
+    logs = []
+    for log in queryset:
+        logs.append({
+            'id': log.id,
+            'activity_type': log.activity_type,
+            'activity_type_display': log.get_activity_type_display(),
+            'description': log.description,
+            'job_id': log.job_id,
+            'allocation_id': log.allocation_id,
+            # Send IDs only - No external API calls here!
+            'mukkadam_id': log.mukkadam_id, 
+            'transport_provider_id': log.transport_provider_id,
+            # Basic financial data
+            'amount': float(log.amount) if log.amount else 0,
+            # Metadata
+            'performed_by_name': log.performed_by.username if log.performed_by else 'System',
+            'timestamp': log.performed_at.isoformat(), # Renamed to match frontend expectation
+            'performed_at': log.performed_at.isoformat(),
+            'metadata': log.metadata,
+        })
+    
+    return Response(logs)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def light_jobs_list(request):
+    """
+    High-speed Job List.
+    Fetches external jobs but SKIPS the Farmer Enrichment loop.
+    Returns raw external data + local allocation status.
+    """
+    try:
+        # 1. Fetch External Jobs (One single call)
+        # Suggestion: Cache this response for 5 minutes in production
+        EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
         
-        # Calculate job status
-        def calculate_status(activities):
-            if not activities:
-                return 'pending'
+        response = requests.get(
+            f'{EXTERNAL_API_URL}/get_allocated_jobs/',
+            headers={'Authorization': token},
+            timeout=5
+        )
+        
+        if response.status_code != 200:
+            return Response([], status=response.status_code)
             
-            fully_allocated = sum(1 for a in activities if a['is_fully_allocated'])
-            partially_allocated = sum(1 for a in activities if a['allocated_area'] > 0 and not a['is_fully_allocated'])
+        api_data = response.json()
+        raw_jobs = api_data.get('data', []) if isinstance(api_data, dict) else api_data
+
+        # 2. Fetch Local Allocation Data in Bulk (One single DB query)
+        # We get all job_ids from the external list
+        external_ids = [str(j.get('work_id') or j.get('id')) for j in raw_jobs]
+        
+        # Get all local activities for these jobs
+        local_activities = JobActivity.objects.filter(
+            job_id__in=external_ids
+        ).prefetch_related('allocations')
+
+        # Create a lookup map for speed
+        activity_map = {}
+        for act in local_activities:
+            if act.job_id not in activity_map:
+                activity_map[act.job_id] = []
+            activity_map[act.job_id].append(act)
+
+        # 3. Merge Data (In Memory - Very Fast)
+        light_jobs = []
+        
+        for job in raw_jobs:
+            job_id = str(job.get('work_id') or job.get('id'))
             
-            # print(f"\n     📊 STATUS CALCULATION:")
-            # print(f"        Total Activities: {len(activities)}")
-            # print(f"        Fully Allocated: {fully_allocated}")
-            # print(f"        Partially Allocated: {partially_allocated}")
+            # Basic info only
+            job_obj = {
+                'id': job.get('id'),
+                'work_id': job_id,
+                'title': job.get('title') or f"Job {job_id}",
+                'farmer_id': job.get('farmer_id'), 
+                # Pass raw booking info, don't fetch farmer API details
+                'farmer': { 
+                    'farmer_name': job.get('farmer_name') or job.get('booking', {}).get('farmer_name', 'Unknown'),
+                    'location': job.get('location') or job.get('booking', {}).get('location', '')
+                },
+                'created_at': job.get('created_at'),
+                'description': job.get('description'),
+                'is_complex': False,
+                'activities': []
+            }
+
+            # Map activities
+            raw_activities = job.get('activities', [])
+            job_obj['is_complex'] = len(raw_activities) > 1
             
-            if fully_allocated == len(activities):
-                status = 'fully_allocated'
-            elif fully_allocated > 0 or partially_allocated > 0:
-                status = 'partially_allocated'
+            # Calculate status based on local DB data
+            fully_allocated_count = 0
+            has_allocation = False
+            
+            # Use local DB activities if they exist, otherwise use API structure
+            db_acts = activity_map.get(job_id, [])
+            
+            # Simple status logic for dashboard
+            for api_act in raw_activities:
+                act_id = str(api_act.get('id') or api_act.get('activity_id'))
+                # Find matching DB activity
+                matched_db = next((d for d in db_acts if d.activity_id == act_id), None)
+                
+                total_area = float(api_act.get('acres', 0))
+                allocated = float(matched_db.allocated_area) if matched_db else 0
+                
+                is_full = total_area > 0 and allocated >= (total_area - 0.1)
+                if is_full: fully_allocated_count += 1
+                if allocated > 0: has_allocation = True
+                
+                job_obj['activities'].append({
+                    'activity_name': api_act.get('activity_name'),
+                    'total_area': total_area,
+                    'allocated_area': allocated,
+                    'is_fully_allocated': is_full,
+                    'location': api_act.get('location'),
+                    'scheduled_date': api_act.get('date_time')
+                })
+
+            # Determine Status
+            if raw_activities and fully_allocated_count == len(raw_activities):
+                job_obj['status'] = 'fully_allocated'
+            elif has_allocation:
+                job_obj['status'] = 'partially_allocated'
             else:
-                status = 'pending'
-            
-            # print(f"        Final Status: {status}")
-            return status
-        
-        job_status = calculate_status(activities_data)
-        
-        # ✅ BUILD ENRICHED JOB WITH FARMER DETAILS
-        enriched_job = {
-            **job,  # All original data from external API
-            'work_id': job_id,
-            
-            # ✅ FARMER DETAILS
-            'farmer': farmer_details,  # Complete farmer object
-            
-            # ACTIVITIES WITH ALLOCATIONS
-            'activities': activities_data,
-            
-            # JOB METADATA
-            'status': job_status,
-            'total_activities': len(activities_data),
-            'is_complex': len(activities_data) > 1,
-            
-            # ✅ BOOKING INFO (from API)
-            'booking': job.get('booking', {})
-        }
-        
-        enriched_jobs.append(enriched_job)
-    
-    # print(f"\n✅ Successfully enriched {len(enriched_jobs)} jobs")
-    # print("="*80)
-    
-    return Response(enriched_jobs)
+                job_obj['status'] = 'pending'
+
+            light_jobs.append(job_obj)
+
+        return Response(light_jobs)
+
+    except Exception as e:
+        print(f"Error in light_jobs_list: {e}")
+        return Response({'error': str(e)}, status=500)

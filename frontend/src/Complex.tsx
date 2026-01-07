@@ -395,10 +395,10 @@ const maxAllowedArea = editMode && existingAllocation
                     </div>
                     
                     <div className="space-y-1 text-xs text-gray-600">
-                      <div className="flex items-center">
+                      {/* <div className="flex items-center">
                         <MapPin size={12} className="mr-1" />
                         {activity.location}
-                      </div>
+                      </div> */}
                       <div className="flex items-center">
                         <Calendar size={12} className="mr-1" />
                         {new Date(activity.scheduled_date).toLocaleDateString()}
