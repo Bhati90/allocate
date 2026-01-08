@@ -34,6 +34,9 @@ const AllocationView: React.FC = () => {
       const config = getAuthConfig();
       setLoading(true);
 
+    //   const t = 'Token 307a2e56b1bb0e13c173ac0fabf6d05629dcd203'
+    const t = 'Token b5920d610d85bff62bb0ab70f971ed6a44eb1b8c'
+
       try {
         // ✅ 1. PARALLEL FETCH: Get Allocation & Payments immediately
         const [allocationRes, mukkadamPayRes, transportPayRes] = await Promise.all([
@@ -54,7 +57,9 @@ const AllocationView: React.FC = () => {
 
         // Fetch Mukkadam
         secondaryPromises.push(
-          axios.get(`${API_BASE_URL}/api/mukkadam/${currentAllocation.mukkadam_id}/`, config)
+          axios.get(`${API_BASE_URL}/api/mukkadam/${currentAllocation.mukkadam_id}/`
+            
+          )
             .then(res => setMukkadam(res.data))
             .catch(err => console.error('Failed to fetch mukkadam', err))
         );
@@ -311,50 +316,332 @@ const AllocationView: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* Payment Statuses for THIS allocation */}
-                        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-gray-100">
-                            {/* Mukkadam Payment */}
-                            <div className={`p-3 rounded-lg border ${mukkadamPaymentRequest?.status === 'paid' ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
-                                <p className="text-xs text-gray-500 uppercase font-bold mb-1">Mukkadam Payment</p>
-                                <div className="flex justify-between items-center">
-                                    <span className="text-lg font-bold text-blue-600">₹{parseFloat(data.mukkadam_price).toLocaleString()}</span>
-                                    {mukkadamPaymentRequest ? (
-                                        <span className={`text-xs font-bold px-2 py-1 rounded ${
-                                            mukkadamPaymentRequest.status === 'paid' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'
-                                        }`}>
-                                            {mukkadamPaymentRequest.status.toUpperCase()}
-                                        </span>
-                                    ) : (
-                                        <span className="text-xs text-gray-400 italic">Not Requested</span>
-                                    )}
-                                </div>
-                            </div>
+                        {/* Payment Statuses for THIS allocation - ENHANCED */}
+<div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-gray-100">
+  {/* Mukkadam Payment */}
+  <div className={`p-4 rounded-lg border-2 transition ${
+    mukkadamPaymentRequest?.status === 'paid' 
+      ? 'bg-green-50 border-green-300 shadow-sm' 
+      : mukkadamPaymentRequest?.status === 'pending'
+      ? 'bg-yellow-50 border-yellow-300'
+      : 'bg-gray-50 border-gray-200'
+  }`}>
+    <div className="flex items-start justify-between mb-3">
+      <p className="text-xs text-gray-500 uppercase font-bold flex items-center">
+        <DollarSign size={14} className="mr-1" />
+        Mukkadam Payment
+      </p>
+      {mukkadamPaymentRequest ? (
+        <span className={`text-xs font-bold px-2 py-1 rounded-full flex items-center gap-1 ${
+          mukkadamPaymentRequest.status === 'paid' 
+            ? 'bg-green-200 text-green-800' 
+            : mukkadamPaymentRequest.status === 'pending'
+            ? 'bg-yellow-200 text-yellow-800'
+            : 'bg-red-200 text-red-800'
+        }`}>
+          {mukkadamPaymentRequest.status === 'paid' && <CheckCircle size={12} />}
+          {mukkadamPaymentRequest.status === 'pending' && <Clock size={12} />}
+          {mukkadamPaymentRequest.status === 'rejected' && <XCircle size={12} />}
+          {mukkadamPaymentRequest.status.toUpperCase()}
+        </span>
+      ) : (
+        <span className="text-xs text-gray-400 italic">Not Requested</span>
+      )}
+    </div>
+    
+    <p className="text-2xl font-bold text-blue-600 mb-2">
+      ₹{parseFloat(data.mukkadam_price).toLocaleString()}
+    </p>
+    
+    {mukkadamPaymentRequest && (
+      <div className="space-y-1 text-xs text-gray-600">
+        {mukkadamPaymentRequest.requested_at && (
+          <p>Requested: {new Date(mukkadamPaymentRequest.requested_at).toLocaleDateString('en-IN')}</p>
+        )}
+        {mukkadamPaymentRequest.paid_at && (
+          <p className="text-green-600 font-semibold">
+            Paid: {new Date(mukkadamPaymentRequest.paid_at).toLocaleDateString('en-IN')}
+          </p>
+        )}
+      </div>
+    )}
+  </div>
 
-                            {/* Transport Payment */}
-                            <div className={`p-3 rounded-lg border ${transportPaymentRequest?.status === 'paid' ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
-                                <p className="text-xs text-gray-500 uppercase font-bold mb-1">
-                                    {currentTransport.text} Transport
-                                </p>
-                                <div className="flex justify-between items-center">
-                                    <span className="text-lg font-bold text-orange-600">₹{parseFloat(data.transport_price || 0).toLocaleString()}</span>
-                                    {transportPaymentRequest ? (
-                                        <span className={`text-xs font-bold px-2 py-1 rounded ${
-                                            transportPaymentRequest.status === 'paid' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'
-                                        }`}>
-                                            {transportPaymentRequest.status.toUpperCase()}
-                                        </span>
-                                    ) : (
-                                        <span className="text-xs text-gray-400 italic">
-                                            {data.transport_type === 'provider' ? 'Not Requested' : 'N/A'}
-                                        </span>
-                                    )}
-                                </div>
-                                {provider && <p className="text-xs text-gray-500 mt-1">{provider.name}</p>}
-                            </div>
-                        </div>
+  {/* Transport Payment */}
+  <div className={`p-4 rounded-lg border-2 transition ${
+    transportPaymentRequest?.status === 'paid' 
+      ? 'bg-green-50 border-green-300 shadow-sm' 
+      : transportPaymentRequest?.status === 'pending'
+      ? 'bg-yellow-50 border-yellow-300'
+      : 'bg-gray-50 border-gray-200'
+  }`}>
+    <div className="flex items-start justify-between mb-3">
+      <p className="text-xs text-gray-500 uppercase font-bold flex items-center">
+        <TransportIcon size={14} className={`mr-1 ${currentTransport.color}`} />
+        {currentTransport.text} Transport
+      </p>
+      {transportPaymentRequest ? (
+        <span className={`text-xs font-bold px-2 py-1 rounded-full flex items-center gap-1 ${
+          transportPaymentRequest.status === 'paid' 
+            ? 'bg-green-200 text-green-800' 
+            : transportPaymentRequest.status === 'pending'
+            ? 'bg-yellow-200 text-yellow-800'
+            : 'bg-red-200 text-red-800'
+        }`}>
+          {transportPaymentRequest.status === 'paid' && <CheckCircle size={12} />}
+          {transportPaymentRequest.status === 'pending' && <Clock size={12} />}
+          {transportPaymentRequest.status === 'rejected' && <XCircle size={12} />}
+          {transportPaymentRequest.status.toUpperCase()}
+        </span>
+      ) : (
+        <span className="text-xs text-gray-400 italic">
+          {data.transport_type === 'provider' ? 'Not Requested' : 'N/A'}
+        </span>
+      )}
+    </div>
+    
+    <p className="text-2xl font-bold text-orange-600 mb-2">
+      ₹{parseFloat(data.transport_price || 0).toLocaleString()}
+    </p>
+    
+    {data.transport_type === 'provider' && provider && (
+      <p className="text-xs text-gray-600 font-semibold">{provider.name}</p>
+    )}
+    
+    {transportPaymentRequest && (
+      <div className="space-y-1 text-xs text-gray-600 mt-2">
+        {transportPaymentRequest.requested_at && (
+          <p>Requested: {new Date(transportPaymentRequest.requested_at).toLocaleDateString('en-IN')}</p>
+        )}
+        {transportPaymentRequest.paid_at && (
+          <p className="text-green-600 font-semibold">
+            Paid: {new Date(transportPaymentRequest.paid_at).toLocaleDateString('en-IN')}
+          </p>
+        )}
+      </div>
+    )}
+  </div>
+</div>
                     </div>
                 </div>
 
+
+{/* Transport Provider Details Card - ADD THIS NEW SECTION */}
+{data.transport_type === 'provider' && provider && (
+  <div className="bg-white rounded-xl shadow-lg border-l-4 border-orange-500 overflow-hidden">
+    <div className="p-6">
+      <div className="flex justify-between items-start mb-6">
+        <div>
+          <h3 className="text-lg font-bold text-gray-900 flex items-center">
+            <Truck className="mr-2 text-orange-500"/> 
+            {provider.name}
+          </h3>
+          <p className="text-gray-500 text-sm flex items-center mt-1">
+            <MapPin size={14} className="mr-1" />
+            {provider.base_location || provider.district || 'Location not specified'}
+          </p>
+        </div>
+        <div className="text-right">
+          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-orange-100 text-orange-800">
+            TRANSPORT PROVIDER
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
+        {/* Contact Number */}
+        <div>
+          <p className="text-xs text-gray-500 uppercase font-bold">Contact</p>
+          <p className="font-semibold text-gray-800 flex items-center">
+            <Phone size={14} className="mr-1 text-gray-400"/>
+            {provider.contact_number || 'Not provided'}
+          </p>
+        </div>
+
+        {/* Vehicle Type */}
+        <div>
+          <p className="text-xs text-gray-500 uppercase font-bold">Vehicle Type</p>
+          <p className="font-semibold text-gray-800">
+            {provider.vehicle_type || 'Not specified'}
+          </p>
+        </div>
+
+        {/* Max Distance */}
+        <div>
+          <p className="text-xs text-gray-500 uppercase font-bold">Service Range</p>
+          <p className="font-semibold text-teal-600">
+            {provider.max_distance ? `${provider.max_distance} km` : 'Any distance'}
+          </p>
+        </div>
+
+        {/* Location Details */}
+        {provider.district && (
+          <div>
+            <p className="text-xs text-gray-500 uppercase font-bold">District</p>
+            <p className="font-semibold text-gray-800">{provider.district}</p>
+          </div>
+        )}
+
+        {provider.taluka && (
+          <div>
+            <p className="text-xs text-gray-500 uppercase font-bold">Taluka</p>
+            <p className="font-semibold text-gray-800">{provider.taluka}</p>
+          </div>
+        )}
+
+        {/* Status */}
+        <div>
+          <p className="text-xs text-gray-500 uppercase font-bold">Status</p>
+          <p className="font-semibold">
+            {provider.is_active ? (
+              <span className="flex items-center text-green-600">
+                <CheckCircle size={14} className="mr-1" />
+                Active
+              </span>
+            ) : (
+              <span className="flex items-center text-gray-400">
+                <XCircle size={14} className="mr-1" />
+                Inactive
+              </span>
+            )}
+          </p>
+        </div>
+      </div>
+
+      {/* Transport Price Breakdown */}
+      <div className="mt-6 pt-4 border-t border-gray-100">
+        <div className="bg-orange-50 p-4 rounded-lg border border-orange-200">
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-xs text-gray-500 uppercase font-bold mb-1">Transport Charges</p>
+              <p className="text-2xl font-bold text-orange-600">
+                ₹{parseFloat(data.transport_price || 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="text-right">
+              {transportPaymentRequest ? (
+                <div>
+                  <span className={`text-xs font-bold px-3 py-1 rounded-full ${
+                    transportPaymentRequest.status === 'paid' 
+                      ? 'bg-green-200 text-green-800' 
+                      : transportPaymentRequest.status === 'pending'
+                      ? 'bg-yellow-200 text-yellow-800'
+                      : 'bg-red-200 text-red-800'
+                  }`}>
+                    {transportPaymentRequest.status.toUpperCase()}
+                  </span>
+                  {transportPaymentRequest.paid_at && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Paid: {new Date(transportPaymentRequest.paid_at).toLocaleDateString('en-IN')}
+                    </p>
+                  )}
+                  {transportPaymentRequest.paid_by && (
+                    <p className="text-xs text-gray-600 mt-1">
+                      By: {transportPaymentRequest.paid_by.username}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <span className="text-xs text-gray-400 italic">Payment Not Requested</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Additional Notes */}
+      {provider.notes && (
+        <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+          <p className="text-xs text-gray-500 uppercase font-bold mb-1">Provider Notes</p>
+          <p className="text-sm text-gray-700">{provider.notes}</p>
+        </div>
+      )}
+
+      {/* Allocation Details */}
+      <div className="mt-4 pt-4 border-t border-gray-100">
+        <div className="grid grid-cols-2 gap-4 text-xs">
+          <div>
+            <p className="text-gray-500 uppercase font-bold">Allocated By</p>
+            <p className="font-semibold text-gray-800 mt-1">
+              {data.allocated_by?.username || 'System'}
+            </p>
+          </div>
+          <div>
+            <p className="text-gray-500 uppercase font-bold">Allocation Date</p>
+            <p className="font-semibold text-gray-800 mt-1">
+              {new Date(data.created_at || data.work_date).toLocaleDateString('en-IN', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+              })}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* Own Transport Info Card */}
+{data.transport_type === 'own' && (
+  <div className="bg-white rounded-xl shadow-lg border-l-4 border-blue-500 overflow-hidden">
+    <div className="p-6">
+      <div className="flex items-start space-x-4">
+        <div className="bg-blue-100 p-4 rounded-lg">
+          <Car className="w-8 h-8 text-blue-600" />
+        </div>
+        <div className="flex-1">
+          <h3 className="text-lg font-bold text-gray-900 mb-2">
+            Own Transport Arrangement
+          </h3>
+          <p className="text-sm text-gray-600 mb-4">
+            The mukkadam is using their own transport for this allocation.
+          </p>
+          
+          <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-xs text-gray-500 uppercase font-bold mb-1">Transport Charges</p>
+                <p className="text-2xl font-bold text-blue-600">
+                  ₹{parseFloat(data.transport_price || 0).toLocaleString()}
+                </p>
+              </div>
+              {mukkadam?.transport_mode && (
+                <div className="text-right">
+                  <p className="text-xs text-gray-500 uppercase font-bold mb-1">Vehicle Type</p>
+                  <p className="text-sm font-semibold text-gray-700">
+                    {mukkadam.transport_mode.replace(/_/g, ' ').replace('own ', '')}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* No Transport Card */}
+{data.transport_type === 'none' && (
+  <div className="bg-white rounded-xl shadow-lg border-l-4 border-gray-400 overflow-hidden">
+    <div className="p-6">
+      <div className="flex items-center space-x-4">
+        <div className="bg-gray-100 p-4 rounded-lg">
+          <XCircle className="w-8 h-8 text-gray-600" />
+        </div>
+        <div>
+          <h3 className="text-lg font-bold text-gray-900 mb-1">
+            No Transport Required
+          </h3>
+          <p className="text-sm text-gray-600">
+            Local workforce - No transportation arranged for this allocation.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
                 {/* Farmer Details (Compact) */}
                 {farmer && (
                     <div className="bg-white p-6 rounded-xl shadow-lg border-l-4 border-indigo-500">
