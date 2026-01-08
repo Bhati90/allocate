@@ -205,6 +205,27 @@ const handleRejectTransportPayment = async (paymentRequestId: number) => {
   }
 };
 
+
+// ✅ FIXED: Filter based on Allocation Status or Payment Existence
+const getCompletedAllocations = () => {
+  return allocations.filter(allocation => {
+    // 1. If the API says it's completed, show it here
+    if (allocation.status === 'completed') {
+      // BUT: If payment was rejected, DON'T show it here (it goes back to Allocated)
+      const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+      if (mukkadamPayment?.status === 'rejected') {
+        return false;
+      }
+      return true;
+    }
+
+    // 2. OR if a payment request exists with pending/paid status (implies work is done)
+    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+    return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
+  });
+};
+
+
 // ✅ FIXED: Only show allocations for FULLY allocated jobs
 // ✅ FIXED: Only show allocations for FULLY allocated jobs (0 remaining area)
 const getAllocatedAllocations = () => {
@@ -232,24 +253,8 @@ const getAllocatedAllocations = () => {
   });
 };
 
-// ✅ FIXED: Filter based on Allocation Status or Payment Existence
-const getCompletedAllocations = () => {
-  return allocations.filter(allocation => {
-    // 1. If the API says it's completed, show it here
-    if (allocation.status === 'completed') {
-      // BUT: If payment was rejected, DON'T show it here (it goes back to Allocated)
-      const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-      if (mukkadamPayment?.status === 'rejected') {
-        return false;
-      }
-      return true;
-    }
 
-    // 2. OR if a payment request exists with pending/paid status (implies work is done)
-    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-    return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
-  });
-};
+// ✅ FIXED: Filter based on Allocation Status or Payment Existence
 
 const toggleTransporter = (transporterId: number) => {
   setExpandedTransporters(prev => {
@@ -3489,7 +3494,6 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
     )}
   </div>
 )}
-
 {activeTab === 'activity' && (
   <div>
     {/* Filter Bar */}
