@@ -4,8 +4,7 @@ from .models import (
     JobActivity,
     Allocation,
     AllocationStats,
-    FCMDevice,
-    PushNotificationLog,
+    
     Contact,
     Message,
     CallLog
@@ -104,36 +103,6 @@ class AllocationStatsAdmin(admin.ModelAdmin):
     )
 
 # -----------------------------
-# FCM & Push Notification Admin
-# -----------------------------
-@admin.register(FCMDevice)
-class FCMDeviceAdmin(admin.ModelAdmin):
-    list_display = (
-        'mobile_number',
-        'user_id',
-        'device_type',
-        'is_active',
-        'last_used_at',
-        'created_at'
-    )
-    list_filter = ('device_type', 'is_active', 'created_at')
-    search_fields = ('user_id', 'mobile_number', 'fcm_token', 'device_id')
-    readonly_fields = ('created_at', 'updated_at', 'last_used_at')
-
-
-@admin.register(PushNotificationLog)
-class PushNotificationLogAdmin(admin.ModelAdmin):
-    list_display = (
-        'mobile_number',
-        'title',
-        'status',
-        'scheduled_at',
-        'sent_at',
-        'created_at'
-    )
-    list_filter = ('status', 'created_at', 'scheduled_at')
-    search_fields = ('user_id', 'mobile_number', 'title', 'body')
-    readonly_fields = ('created_at', 'updated_at', 'sent_at')
 
 
 # -----------------------------
