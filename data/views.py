@@ -53,8 +53,37 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
-from .models import FCMDevice
-from .serializers import FCMDeviceSerializer
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
+from .models import UserProfile  # ✅ Import UserProfile model
+
+class UserProfileView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        user = request.user
+        
+        try:
+            # ✅ Get UserProfile to check role
+            profile = user.profile
+            
+            return Response({
+                'id': user.id,
+                'username': user.username,
+                'full_name': profile.full_name,
+                'mobile_number': profile.mobile_number,
+                'role': profile.role,
+                'is_admin': profile.role == 'admin',  # ✅ Check role field
+                'is_verified': profile.is_mobile_verified
+            })
+        except UserProfile.DoesNotExist:
+            return Response({
+                'error': 'User profile not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+
 
 # ... rest of your views (JobActivityViewSet, AllocationViewSet, activity_logs_list) remain the same ...
 class JobActivityViewSet(viewsets.ModelViewSet):
@@ -2026,51 +2055,6 @@ def mukkadam_work_history(request):
     
     return Response(response_data)
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def get_fcm_by_mobile(request):
-    """
-    Get active FCM token(s) by mobile number
-
-    POST /api/fcm/by-mobile/
-    {
-        "mobile_number": "9876543210"
-    }
-    """
-    mobile_number = request.data.get('mobile_number')
-
-    if not mobile_number:
-        return Response(
-            {"success": "false", "message": "mobile_number is required"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    devices = FCMDevice.objects.filter(
-        mobile_number=mobile_number,
-        is_active=True
-    ).order_by('-last_used_at')
-
-    if not devices.exists():
-        return Response(
-            {
-                "success": False,
-                "message": "No active FCM tokens found for this mobile number"
-            },
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    serializer = FCMDeviceSerializer(devices, many=True)
-
-    return Response(
-        {
-            "success": True,
-            "mobile_number": mobile_number,
-            "count": devices.count(),
-            "tokens": serializer.data
-        },
-        status=status.HTTP_200_OK
-    )
-
 # allocation_app/views.py
 
 from django.db.models import Prefetch
@@ -2151,163 +2135,3 @@ def get_job_details(request, job_id):
 
 
 
-
-# allocation_app/views.py
-
-from django.core.cache import cache # Optional, for caching external job list
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def light_activity_logs(request):
-    """
-    High-speed Activity Log. 
-    Removes external HTTP calls. Returns IDs only.
-    Frontend must map mukkadam_id -> mukkadam_name.
-    """
-    # 1. Efficient DB Fetch
-    queryset = ActivityLog.objects.all().select_related('performed_by', 'allocation')
-    
-    # Simple Filters
-    if request.query_params.get('job_id'):
-        queryset = queryset.filter(job_id=request.query_params.get('job_id'))
-    
-    # Limit to last 100 for dashboard speed
-    queryset = queryset.order_by('-performed_at')[:100]
-
-    logs = []
-    for log in queryset:
-        logs.append({
-            'id': log.id,
-            'activity_type': log.activity_type,
-            'activity_type_display': log.get_activity_type_display(),
-            'description': log.description,
-            'job_id': log.job_id,
-            'allocation_id': log.allocation_id,
-            # Send IDs only - No external API calls here!
-            'mukkadam_id': log.mukkadam_id, 
-            'transport_provider_id': log.transport_provider_id,
-            # Basic financial data
-            'amount': float(log.amount) if log.amount else 0,
-            # Metadata
-            'performed_by_name': log.performed_by.username if log.performed_by else 'System',
-            'timestamp': log.performed_at.isoformat(), # Renamed to match frontend expectation
-            'performed_at': log.performed_at.isoformat(),
-            'metadata': log.metadata,
-        })
-    
-    return Response(logs)
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def light_jobs_list(request):
-    """
-    High-speed Job List.
-    Fetches external jobs but SKIPS the Farmer Enrichment loop.
-    Returns raw external data + local allocation status.
-    """
-    try:
-        # 1. Fetch External Jobs (One single call)
-        # Suggestion: Cache this response for 5 minutes in production
-        EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
-        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-        
-        response = requests.get(
-            f'{EXTERNAL_API_URL}/get_allocated_jobs/',
-            headers={'Authorization': token},
-            timeout=5
-        )
-        
-        if response.status_code != 200:
-            return Response([], status=response.status_code)
-            
-        api_data = response.json()
-        raw_jobs = api_data.get('data', []) if isinstance(api_data, dict) else api_data
-
-        # 2. Fetch Local Allocation Data in Bulk (One single DB query)
-        # We get all job_ids from the external list
-        external_ids = [str(j.get('work_id') or j.get('id')) for j in raw_jobs]
-        
-        # Get all local activities for these jobs
-        local_activities = JobActivity.objects.filter(
-            job_id__in=external_ids
-        ).prefetch_related('allocations')
-
-        # Create a lookup map for speed
-        activity_map = {}
-        for act in local_activities:
-            if act.job_id not in activity_map:
-                activity_map[act.job_id] = []
-            activity_map[act.job_id].append(act)
-
-        # 3. Merge Data (In Memory - Very Fast)
-        light_jobs = []
-        
-        for job in raw_jobs:
-            job_id = str(job.get('work_id') or job.get('id'))
-            
-            # Basic info only
-            job_obj = {
-                'id': job.get('id'),
-                'work_id': job_id,
-                'title': job.get('title') or f"Job {job_id}",
-                'farmer_id': job.get('farmer_id'), 
-                # Pass raw booking info, don't fetch farmer API details
-                'farmer': { 
-                    'farmer_name': job.get('farmer_name') or job.get('booking', {}).get('farmer_name', 'Unknown'),
-                    'location': job.get('location') or job.get('booking', {}).get('location', '')
-                },
-                'created_at': job.get('created_at'),
-                'description': job.get('description'),
-                'is_complex': False,
-                'activities': []
-            }
-
-            # Map activities
-            raw_activities = job.get('activities', [])
-            job_obj['is_complex'] = len(raw_activities) > 1
-            
-            # Calculate status based on local DB data
-            fully_allocated_count = 0
-            has_allocation = False
-            
-            # Use local DB activities if they exist, otherwise use API structure
-            db_acts = activity_map.get(job_id, [])
-            
-            # Simple status logic for dashboard
-            for api_act in raw_activities:
-                act_id = str(api_act.get('id') or api_act.get('activity_id'))
-                # Find matching DB activity
-                matched_db = next((d for d in db_acts if d.activity_id == act_id), None)
-                
-                total_area = float(api_act.get('acres', 0))
-                allocated = float(matched_db.allocated_area) if matched_db else 0
-                
-                is_full = total_area > 0 and allocated >= (total_area - 0.1)
-                if is_full: fully_allocated_count += 1
-                if allocated > 0: has_allocation = True
-                
-                job_obj['activities'].append({
-                    'activity_name': api_act.get('activity_name'),
-                    'total_area': total_area,
-                    'allocated_area': allocated,
-                    'is_fully_allocated': is_full,
-                    'location': api_act.get('location'),
-                    'scheduled_date': api_act.get('date_time')
-                })
-
-            # Determine Status
-            if raw_activities and fully_allocated_count == len(raw_activities):
-                job_obj['status'] = 'fully_allocated'
-            elif has_allocation:
-                job_obj['status'] = 'partially_allocated'
-            else:
-                job_obj['status'] = 'pending'
-
-            light_jobs.append(job_obj)
-
-        return Response(light_jobs)
-
-    except Exception as e:
-        print(f"Error in light_jobs_list: {e}")
-        return Response({'error': str(e)}, status=500)
