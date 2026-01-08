@@ -55,7 +55,6 @@ urlpatterns = [
 
 
 
-
    path('job-details/<str:job_id>/', get_job_details, name='get-job-details'),
     
     path('contacts/', sync_contacts, name='sync-contacts'),
