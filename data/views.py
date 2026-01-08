@@ -10,7 +10,7 @@ from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
 import requests
-
+from .utils import clear_mukkadam_cache
 from .models import JobActivity, Allocation, AllocationStats
 from django.db.models import Q
 from .serializers import (
@@ -53,8 +53,37 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
-from .models import FCMDevice
-from .serializers import FCMDeviceSerializer
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework import status
+from .models import UserProfile  # ✅ Import UserProfile model
+
+class UserProfileView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        user = request.user
+        
+        try:
+            # ✅ Get UserProfile to check role
+            profile = user.profile
+            
+            return Response({
+                'id': user.id,
+                'username': user.username,
+                'full_name': profile.full_name,
+                'mobile_number': profile.mobile_number,
+                'role': profile.role,
+                'is_admin': profile.role == 'admin',  # ✅ Check role field
+                'is_verified': profile.is_mobile_verified
+            })
+        except UserProfile.DoesNotExist:
+            return Response({
+                'error': 'User profile not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+
 
 # ... rest of your views (JobActivityViewSet, AllocationViewSet, activity_logs_list) remain the same ...
 class JobActivityViewSet(viewsets.ModelViewSet):
@@ -292,7 +321,231 @@ class AllocationViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
-
+    def perform_create(self, serializer):
+        allocation = super().perform_create(serializer)
+        # Clear mukkadam cache when new allocation is created
+        clear_mukkadam_cache(allocation.mukkadam_id)
+        return allocation
+    
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def allocations_by_mobile(request):
+    """
+    Get all allocations for a mukkadam by mobile number with assigned transporter details
+    GET /api/allocations/by-mobile/?mobile_number=9876543210
+    GET /api/allocations/by-mobile/?mukkadam_phone=9876543210
+    
+    This API:
+    1. Calls Supply App to get mukkadam_id from mobile number
+    2. Fetches allocations from Allocation App database
+    3. For each allocation, calls Supply App to get assigned transport provider details
+    4. Returns combined data with transporter info
+    """
+    # ✅ Accept both parameter names
+    mobile_number = request.GET.get('mobile_number') or request.GET.get('mukkadam_phone')
+    
+    if not mobile_number:
+        return Response(
+            {'error': 'mobile_number or mukkadam_phone query parameter is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    print("=" * 80)
+    print(f"📞 FETCHING ALLOCATIONS FOR MUKKADAM: {mobile_number}")
+    print("=" * 80)
+    
+    # ✅ STEP 1: Call Supply App API to get mukkadam(s)
+    try:
+        supply_response = requests.get(
+            f'{SUPPLY_API_URL}/api/mukkadam/by-mobile/',
+            params={'mobile_number': mobile_number},
+            timeout=5
+        )
+        supply_data = supply_response.json()
+        
+        if not supply_data.get('found'):
+            return Response({
+                'success': False,
+                'error': 'No mukkadam found with this mobile number',
+                'mobile_number': mobile_number,
+                'mukkadams': [],
+                'allocations': [],
+                'summary': {
+                    'total_allocations': 0,
+                    'total_earnings': 0
+                }
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        mukkadams = supply_data.get('mukkadams', [])
+        mukkadam_ids = [m['id'] for m in mukkadams]
+        
+        print(f"✅ Found {len(mukkadams)} mukkadam(s): {[m['mukkadam_name'] for m in mukkadams]}")
+        
+    except requests.exceptions.RequestException as e:
+        return Response(
+            {'success': False, 'error': f'Failed to connect to Supply App: {str(e)}'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+    
+    # ✅ STEP 2: Get allocations from Allocation App database
+    allocations = Allocation.objects.filter(
+        mukkadam_id__in=mukkadam_ids
+    ).select_related('job_activity', 'allocated_by').order_by('-allocated_at')
+    
+    print(f"📋 Found {allocations.count()} allocation(s)")
+    
+    # ✅ STEP 3: Build response with transport provider details from Supply App
+    allocations_data = []
+    total_area = Decimal('0')
+    total_cost = Decimal('0')
+    
+    # ✅ Cache transport provider data to avoid multiple API calls
+    transport_provider_cache = {}
+    transporters_found = 0
+    
+    for alloc in allocations:
+        # Find which mukkadam this allocation belongs to
+        mukkadam = next((m for m in mukkadams if m['id'] == alloc.mukkadam_id), None)
+        
+        # ✅ Get transport provider FULL details from Supply App API if applicable
+        transport_provider_id = None
+        transport_provider_name = None
+        transport_provider_contact = None
+        transport_provider_details = None
+        
+        if alloc.transport_type == 'provider' and alloc.transport_provider_id:
+            transport_provider_id = alloc.transport_provider_id
+            
+            print(f"🚛 Fetching transporter #{transport_provider_id} for allocation #{alloc.id}")
+            
+            # Check cache first
+            if alloc.transport_provider_id in transport_provider_cache:
+                provider_data = transport_provider_cache[alloc.transport_provider_id]
+                print(f"   ✅ Using cached transporter data")
+            else:
+                # Fetch from Supply App API
+                try:
+                    provider_response = requests.get(
+                        f'{SUPPLY_API_URL}/api/transport-provider/{alloc.transport_provider_id}/',
+                        timeout=3
+                    )
+                    
+                    if provider_response.status_code == 200:
+                        provider_json = provider_response.json()
+                        if provider_json.get('found'):
+                            provider_data = provider_json.get('provider')
+                            transport_provider_cache[alloc.transport_provider_id] = provider_data
+                            print(f"   ✅ Fetched transporter: {provider_data.get('name')}")
+                        else:
+                            provider_data = None
+                            print(f"   ⚠️ Transporter not found in database")
+                    else:
+                        provider_data = None
+                        print(f"   ❌ API returned status {provider_response.status_code}")
+                        
+                except requests.exceptions.RequestException as e:
+                    print(f"   ❌ Failed to fetch transport provider: {str(e)}")
+                    provider_data = None
+            
+            # ✅ Set provider name and COMPLETE details
+            if provider_data:
+                transport_provider_name = provider_data.get('name')
+                transport_provider_contact = provider_data.get('contact_number')
+                # ✅ Include ALL fields from the transport provider
+                transport_provider_details = {
+                    'id': provider_data.get('id'),
+                    'name': provider_data.get('name'),
+                    'contact_number': provider_data.get('contact_number'),
+                    'base_location': provider_data.get('base_location'),
+                    'district': provider_data.get('district'),
+                    'taluka': provider_data.get('taluka'),
+                    'village': provider_data.get('village'),
+                    'max_distance': provider_data.get('max_distance'),
+                    'vehicle_type': provider_data.get('vehicle_type'),
+                    'is_active': provider_data.get('is_active'),
+                    'capacity': provider_data.get('capacity'),
+                }
+                transporters_found += 1
+            else:
+                # Transporter ID exists but details not found
+                transport_provider_name = f'Provider #{alloc.transport_provider_id}'
+                transport_provider_contact = None
+        
+        allocation_data = {
+            'allocation_id': alloc.id,
+            
+            # Mukkadam Info
+            'mukkadam_id': alloc.mukkadam_id,
+            'mukkadam_name': mukkadam['mukkadam_name'] if mukkadam else 'Unknown',
+            'mukkadam_phone': mukkadam.get('contact_number') if mukkadam else None,
+            'mukkadam_village': mukkadam.get('village') if mukkadam else None,
+            'status': alloc.status,
+            
+            # Job details
+            'job_id': alloc.job_activity.job_id,
+            'activity_id': alloc.job_activity.activity_id,
+            'activity_name': alloc.job_activity.activity_name,
+            'activity_type': alloc.job_activity.activity_type,
+            'location': alloc.job_activity.location,
+            
+            # Allocation details
+            'allocated_area': float(alloc.allocated_area),
+            'work_date': str(alloc.work_date),
+            'crew_size': alloc.crew_size,
+            
+            # Pricing
+            'mukkadam_price': float(alloc.mukkadam_price),
+            
+            # ✅ TRANSPORTER INFO - Easy access at top level
+            'transport_type': alloc.transport_type,
+            'transport_price': float(alloc.transport_price or 0),
+            'transport_provider_id': transport_provider_id,  # ✅ ID
+            'transport_provider_name': transport_provider_name,  # ✅ Name
+            'transport_provider_contact': transport_provider_contact,  # ✅ Contact
+            'transport_provider_details': transport_provider_details,  # ✅ Full details object
+            
+            'total_cost': float(alloc.total_cost),
+            
+            # Metadata
+            'allocated_at': alloc.allocated_at.isoformat(),
+            'allocated_by': alloc.allocated_by.username if alloc.allocated_by else None,
+            'notes': alloc.notes,
+            
+            # Activity details
+            'scheduled_datetime': alloc.job_activity.scheduled_datetime.isoformat(),
+            'total_activity_area': float(alloc.job_activity.total_area),
+            'remaining_activity_area': float(alloc.job_activity.remaining_area),
+        }
+        
+        allocations_data.append(allocation_data)
+        total_area += alloc.allocated_area
+        total_cost += Decimal(str(alloc.total_cost))
+    
+    # Summary statistics
+    summary = {
+        'total_allocations': allocations.count(),
+        'total_area_allocated': float(total_area),
+        'total_earnings': float(total_cost),
+        'active_allocations': allocations.filter(status='allocated').count(),
+        'completed_allocations': allocations.filter(status='completed').count(),
+        'in_progress_allocations': allocations.filter(status='in_progress').count(),
+        'transporters_assigned': transporters_found,  # ✅ Count of allocations with transporters
+    }
+    
+    print("=" * 80)
+    print(f"✅ RESPONSE READY")
+    print(f"   Allocations: {summary['total_allocations']}")
+    print(f"   Transporters found: {transporters_found}")
+    print("=" * 80)
+    
+    return Response({
+        'success': True,
+        'mobile_number': mobile_number,
+        'mukkadams': mukkadams,  # From Supply App
+        'mukkadams_count': len(mukkadams),
+        'allocations': allocations_data,  # From Allocation App + Supply App (with transporter details)
+        'summary': summary
+    })
 # views.py - REMOVE THE MUKKADAM IMPORT
 # from .models import JobActivity, Allocation, AllocationStats, Mukkadam  # ❌ WRONG
 
@@ -658,16 +911,25 @@ class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
 from .models import ActivityLog
 from .serializers import ActivityLogSerializer
 
+from .utils import batch_fetch_mukkadams, batch_fetch_transport_providers
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def activity_logs_list(request):
-    """Get all activity logs with external data enriched"""
+    """
+    Get all activity logs with external data enriched
+    OPTIMIZED with caching + async
+    """
+    import time
+    start_time = time.time()
     
     # Get query parameters
     activity_type = request.query_params.get('activity_type')
     mukkadam_id = request.query_params.get('mukkadam_id')
     job_id = request.query_params.get('job_id')
     days = request.query_params.get('days', 30)  # Default last 30 days
+    
+    print(f"🔍 Filters: activity_type={activity_type}, mukkadam_id={mukkadam_id}, job_id={job_id}, days={days}")
     
     # Build queryset
     queryset = ActivityLog.objects.all()
@@ -684,32 +946,74 @@ def activity_logs_list(request):
         from_date = timezone.now() - timedelta(days=int(days))
         queryset = queryset.filter(performed_at__gte=from_date)
     
-    queryset = queryset.select_related('performed_by')[:200]  # Limit to last 200
+    queryset = queryset.select_related('performed_by').order_by('-performed_at')[:200]  # Limit to last 200
+    
+    # Convert to list to iterate multiple times
+    logs_queryset = list(queryset)
+    
+    print(f"📊 Found {len(logs_queryset)} activity logs")
+    
+    if not logs_queryset:
+        return Response([])
+    
+    # ========================================
+    # ✅ STEP 1: COLLECT ALL UNIQUE IDs
+    # ========================================
+    mukkadam_ids = set()
+    transport_provider_ids = set()
+    
+    for log in logs_queryset:
+        if log.mukkadam_id:
+            mukkadam_ids.add(log.mukkadam_id)
+        if log.transport_provider_id:
+            transport_provider_ids.add(log.transport_provider_id)
+    
+    print(f"   Unique mukkadams: {len(mukkadam_ids)}")
+    print(f"   Unique transport providers: {len(transport_provider_ids)}")
+    
+    # ========================================
+    # ✅ STEP 2: BATCH FETCH ALL DATA IN PARALLEL
+    # ========================================
+    print("\n⚡ PARALLEL BATCH FETCHING...")
+    batch_start = time.time()
+    
+    mukkadams_cache = {}
+    transport_providers_cache = {}
+    
+    if mukkadam_ids:
+        mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=15)
+    
+    if transport_provider_ids:
+        transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=10)
+    
+    batch_elapsed = time.time() - batch_start
+    print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
+    
+    # ========================================
+    # STEP 3: BUILD LOGS WITH CACHED DATA
+    # ========================================
+    print("\n🔄 Building enriched logs...")
     
     logs = []
-    for log in queryset:
-        # Get mukkadam name
-        try:
-            mukkadam_response = requests.get(
-                f'{SUPPLY_API_URL}/api/mukkadam/{log.mukkadam_id}/',
-                timeout=2
-            )
-            mukkadam_data = mukkadam_response.json()
-            mukkadam_name = mukkadam_data.get('mukkadam_name', 'Unknown')
-        except:
-            mukkadam_name = f'Mukkadam #{log.mukkadam_id}'
+    for log in logs_queryset:
+        # Get mukkadam name from cache
+        mukkadam_name = 'Unknown'
+        if log.mukkadam_id:
+            mukkadam_data = mukkadams_cache.get(log.mukkadam_id)
+            if mukkadam_data:
+                mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{log.mukkadam_id}')
+            else:
+                mukkadam_name = f'Mukkadam #{log.mukkadam_id}'
         
-        # Get transport name if applicable
+        # Get transport provider name from cache
         transport_name = None
+        transport_details = None
         if log.transport_provider_id:
-            try:
-                transport_response = requests.get(
-                    f'{SUPPLY_API_URL}/api/transport-providers/{log.transport_provider_id}/',
-                    timeout=2
-                )
-                transport_data = transport_response.json()
-                transport_name = transport_data.get('name', 'Unknown Provider')
-            except:
+            transport_data = transport_providers_cache.get(log.transport_provider_id)
+            if transport_data:
+                transport_name = transport_data.get('name', f'Provider #{log.transport_provider_id}')
+                transport_details = transport_data
+            else:
                 transport_name = f'Provider #{log.transport_provider_id}'
         
         logs.append({
@@ -722,33 +1026,44 @@ def activity_logs_list(request):
             'mukkadam_name': mukkadam_name,
             'transport_provider_id': log.transport_provider_id,
             'transport_name': transport_name,
+            'transport_details': transport_details,  # ✅ Full transport provider details
             'amount': float(log.amount) if log.amount else None,
             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
             'performed_at': log.performed_at.isoformat(),
             'metadata': log.metadata,
         })
     
-    return Response(logs)
-
+    total_elapsed = time.time() - start_time
+    print(f"\n✅ Activity logs API completed in {total_elapsed:.2f}s")
+    print(f"   Database query + build: {total_elapsed - batch_elapsed:.2f}s")
+    print(f"   Batch fetching: {batch_elapsed:.2f}s")
+    print("="*80)
+    
+    return Response({
+        'count': len(logs),
+        'logs': logs,
+        'performance': {
+            'total_time': f'{total_elapsed:.2f}s',
+            'batch_fetch_time': f'{batch_elapsed:.2f}s',
+            'mukkadams_fetched': len(mukkadams_cache),
+            'providers_fetched': len(transport_providers_cache)
+        }
+    })
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def jobs_list(request):
     """
-    Fetch jobs from external API and enrich with:
-    1. Allocation data from database
-    2. Farmer details from farmer API
+    Fetch jobs from external API and enrich with allocation data
+    OPTIMIZED with caching + async
     """
-    # print("="*80)
-    # print("🔍 FETCHING JOBS FROM EXTERNAL API")
-    # print("="*80)
+    import time
+    start_time = time.time()
     
     try:
         # Fetch jobs from external API
         token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
         api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
-        
-        # print(f"📡 API URL: {api_url}")
         
         response = requests.get(
             api_url,
@@ -756,103 +1071,64 @@ def jobs_list(request):
             timeout=10
         )
         
-        # print(f"📊 Response Status: {response.status_code}")
         response.raise_for_status()
+        response_data = response.json()
         
-        # Parse JSON
-        try:
-            response_data = response.json()
-        except json.JSONDecodeError as e:
-            # print(f"❌ JSON Decode Error: {str(e)}")
-            return Response(
-                {'error': f'Invalid JSON from external API: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-        
-        # Handle different response formats
         if isinstance(response_data, dict):
-            if 'data' in response_data:
-                jobs_from_api = response_data['data']
-                # print(f"✅ Extracted {len(jobs_from_api)} jobs from 'data' key")
-            elif 'results' in response_data:
-                jobs_from_api = response_data['results']
-            else:
-                jobs_from_api = [response_data]
+            jobs_from_api = response_data.get('data', response_data.get('results', [response_data]))
         else:
             jobs_from_api = response_data
         
         if not isinstance(jobs_from_api, list):
-            # print(f"❌ Unexpected response type: {type(jobs_from_api)}")
             return Response(
                 {'error': f'Expected list, got {type(jobs_from_api).__name__}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-        # print(f"✅ Found {len(jobs_from_api)} jobs from API")
-        
     except requests.exceptions.RequestException as e:
-        # print(f"❌ Request Error: {str(e)}")
         return Response(
             {'error': f'Failed to fetch jobs from external API: {str(e)}'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE
         )
     
     if not jobs_from_api:
-        # print("⚠️ No jobs returned from API")
         return Response([])
     
     # ========================================
-    # ✅ STEP 1: BATCH FETCH ALL FARMER DETAILS
+    # STEP 1: COLLECT ALL UNIQUE IDs
     # ========================================
-    # print("\n👥 FETCHING FARMER DETAILS...")
-    
-    # Extract unique farmer IDs
     farmer_ids = set()
+    mukkadam_ids = set()
+    
     for job in jobs_from_api:
         farmer_id = job.get('farmer_id')
         if farmer_id:
             farmer_ids.add(str(farmer_id))
     
-    # print(f"   Found {len(farmer_ids)} unique farmers: {farmer_ids}")
-    
-    # Fetch all farmer details (batch request)
-    farmers_cache = {}
-    FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
-    tok = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
-    for farmer_id in farmer_ids:
-        try:
-            farmer_response = requests.get(
-                f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
-                headers={'Authorization': tok},
-                timeout=20
-            )
-            if farmer_response.status_code == 200:
-                farmer_data = farmer_response.json()
-                farmers_cache[farmer_id] = {
-                    'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
-                    'phone_number': farmer_data.get('phone_number', 'N/A'),
-                    'village': farmer_data.get('village', 'N/A'),
-                    'taluka': farmer_data.get('taluka', 'N/A'),
-                    'district': farmer_data.get('district', 'N/A'),
-                    'location': f"{farmer_data.get('village', 'N/A')}, {farmer_data.get('taluka', 'N/A')}, {farmer_data.get('district', 'N/A')}"
-                }
-                # print(f"   ✅ Fetched farmer {farmer_id}: {farmers_cache[farmer_id]['farmer_name']}")
-            else:
-                # print(f"   ❌ Failed to fetch farmer {farmer_id}: Status {farmer_response.status_code}")
-                farmers_cache[farmer_id] = None
-        except Exception as e:
-            # print(f"   ❌ Error fetching farmer {farmer_id}: {str(e)}")
-            farmers_cache[farmer_id] = None
+    # Get mukkadam IDs from allocations
+    all_allocations = Allocation.objects.all().select_related('job_activity')
+    for alloc in all_allocations:
+        mukkadam_ids.add(alloc.mukkadam_id)
     
     # ========================================
-    # STEP 2: ENRICH JOBS WITH ALLOCATIONS & FARMER DATA
+    # ✅ STEP 2: BATCH FETCH ALL DATA IN PARALLEL
+    # ========================================
+    print(f"\n⚡ PARALLEL BATCH FETCHING...")
+    batch_start = time.time()
+    
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)  # ✅ Reduced
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)  # ✅ Reduced
+    # transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)  # ✅ Reduced
+
+    batch_elapsed = time.time() - batch_start
+    print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
+    
+    # ========================================
+    # STEP 3: ENRICH JOBS
     # ========================================
     enriched_jobs = []
     
-    # print(f"\n🔄 Enriching {len(jobs_from_api)} jobs with allocation data...")
-    
     for idx, job in enumerate(jobs_from_api):
-        # Get job_id
         job_id = str(
             job.get('work_id') or 
             job.get('id') or 
@@ -860,48 +1136,33 @@ def jobs_list(request):
             f"UNKNOWN_{idx}"
         )
         
-        # print(f"\n  📌 Job {idx + 1}: {job_id}")
-        
-        # ✅ GET FARMER DETAILS FROM CACHE
+        # Get farmer details from cache
         farmer_id = str(job.get('farmer_id', ''))
         farmer_details = farmers_cache.get(farmer_id)
         
-        # GET ACTIVITIES FROM API
+        # Get activities
         activities_from_api = job.get('activities', [])
-        # print(f"     📊 Found {len(activities_from_api)} activities from API")
-        
-        # ENRICH WITH ALLOCATION DATA FROM DB
         activities_data = []
         
         for api_activity in activities_from_api:
             activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
             
-            # Check if this activity has been allocated
+            # Check if allocated
             db_activity = JobActivity.objects.filter(
                 job_id=job_id,
                 activity_id=activity_id
             ).prefetch_related('allocations').first()
             
-            # Build allocations list
             allocations_data = []
             allocated_area = Decimal('0')
             
             if db_activity:
-                # print(f"     💾 Activity {activity_id} found in DB with {db_activity.allocations.count()} allocations")
-                
                 for alloc in db_activity.allocations.all():
                     allocated_area += Decimal(str(alloc.allocated_area))
                     
-                    # Fetch mukkadam name
-                    try:
-                        mukkadam_response = requests.get(
-                            f'{SUPPLY_API_URL}/api/mukkadam/{alloc.mukkadam_id}/',
-                            timeout=2
-                        )
-                        mukkadam_data = mukkadam_response.json()
-                        mukkadam_name = mukkadam_data.get('mukkadam_name', 'Unknown')
-                    except:
-                        mukkadam_name = f'Mukkadam #{alloc.mukkadam_id}'
+                    # Get mukkadam from cache
+                    mukkadam_data = mukkadams_cache.get(alloc.mukkadam_id, {})
+                    mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{alloc.mukkadam_id}')
                     
                     allocations_data.append({
                         'allocation_id': alloc.id,
@@ -921,16 +1182,11 @@ def jobs_list(request):
             remaining_area = total_area - allocated_area
             is_fully_allocated = allocated_area >= total_area
             
-            # print(f"     🔍 Activity {activity_id} ({api_activity.get('activity_name')})")
-            # print(f"        Total: {total_area}, Allocated: {allocated_area}, Remaining: {remaining_area}")
-            # print(f"        Is Fully Allocated: {is_fully_allocated}")
-
             def safe_date(value):
                 if not value:
                     return ''
                 return str(value).split('T')[0]
             
-            # ✅ ADD ACTIVITY WITH PRICING FROM API
             activities_data.append({
                 'id': db_activity.id if db_activity else None,
                 'activity_id': activity_id,
@@ -947,18 +1203,14 @@ def jobs_list(request):
                 ),
                 'scheduled_time': api_activity.get('scheduled_time', ''),
                 'estimated_workers': api_activity.get('estimated_workers', 10),
-                
-                # ✅ PRICING FROM API
                 'rate_per_acre': float(api_activity.get('total_price', 0)) / float(total_area) if float(total_area) > 0 else 0,
-                'total_price': float(api_activity.get('total_price', 0)),  # Revenue
-                'transport_cost': float(api_activity.get('transport_cost', 0)),  # Expected transport cost
+                'total_price': float(api_activity.get('total_price', 0)),
+                'transport_cost': float(api_activity.get('transport_cost', 0)),
                 'other_cost': float(api_activity.get('other_cost', 0)),
                 'subtotal': float(api_activity.get('subtotal', 0)),
-                
                 'is_fully_allocated': is_fully_allocated,
                 'allocations': allocations_data
             })
-
         
         # Calculate job status
         def calculate_status(activities):
@@ -968,67 +1220,47 @@ def jobs_list(request):
             fully_allocated = sum(1 for a in activities if a['is_fully_allocated'])
             partially_allocated = sum(1 for a in activities if a['allocated_area'] > 0 and not a['is_fully_allocated'])
             
-            # print(f"\n     📊 STATUS CALCULATION:")
-            # print(f"        Total Activities: {len(activities)}")
-            # print(f"        Fully Allocated: {fully_allocated}")
-            # print(f"        Partially Allocated: {partially_allocated}")
-            
             if fully_allocated == len(activities):
-                status = 'fully_allocated'
+                return 'fully_allocated'
             elif fully_allocated > 0 or partially_allocated > 0:
-                status = 'partially_allocated'
+                return 'partially_allocated'
             else:
-                status = 'pending'
-            
-            # print(f"        Final Status: {status}")
-            return status
+                return 'pending'
         
         job_status = calculate_status(activities_data)
         
-        # ✅ BUILD ENRICHED JOB WITH FARMER DETAILS
         enriched_job = {
-            **job,  # All original data from external API
+            **job,
             'work_id': job_id,
-            
-            # ✅ FARMER DETAILS
-            'farmer': farmer_details,  # Complete farmer object
-            
-            # ACTIVITIES WITH ALLOCATIONS
+            'farmer': farmer_details,
             'activities': activities_data,
-            
-            # JOB METADATA
             'status': job_status,
             'total_activities': len(activities_data),
             'is_complex': len(activities_data) > 1,
-            
-            # ✅ BOOKING INFO (from API)
             'booking': job.get('booking', {})
         }
         
         enriched_jobs.append(enriched_job)
     
-    # print(f"\n✅ Successfully enriched {len(enriched_jobs)} jobs")
-    # print("="*80)
+    total_elapsed = time.time() - start_time
+    print(f"\n✅ Jobs API completed in {total_elapsed:.2f}s")
     
     return Response(enriched_jobs)
 
+
+# allocation_app/views.py
+
+from .utils import batch_fetch_mukkadams, batch_fetch_farmers, batch_fetch_transport_providers
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def allocations_list(request):
     """
     Get all allocations with complete details from external APIs
-    
-    Filters:
-    - mukkadam_phone: Filter by mukkadam mobile number
-    - work_date: Filter by work date (YYYY-MM-DD)
-    - status: pending/confirmed/completed
-    
-    Example: /ap/allocations/by-mobile/main/?mukkadam_phone=9876543210
+    OPTIMIZED with caching + async
     """
-    # print("="*80)
-    # print("📋 FETCHING ALLOCATIONS WITH FULL DETAILS")
-    # print("="*80)
+    import time
+    start_time = time.time()
     
     # Get query parameters
     mukkadam_phone = request.GET.get('mukkadam_phone')
@@ -1042,14 +1274,12 @@ def allocations_list(request):
     # ========================================
     allocations_query = Allocation.objects.all().select_related('job_activity')
     
-    # Apply filters
     if work_date:
         allocations_query = allocations_query.filter(work_date=work_date)
     
     if allocation_status:
         allocations_query = allocations_query.filter(status=allocation_status)
     
-    # ✅ FIX: Use 'allocated_at' instead of 'created_at'
     allocations = list(allocations_query.order_by('-allocated_at'))
     
     print(f"📊 Found {len(allocations)} allocations in database")
@@ -1064,10 +1294,6 @@ def allocations_list(request):
         print(f"\n📱 Filtering by mukkadam phone: {mukkadam_phone}")
         
         try:
-            # ✅ GET MUKKADAM FROM SUPPLY API
-            # SUPPLY_API_URL = 'http://localhost:8000'  # Your Supply API URL
-            
-            # Search for mukkadam by phone
             mukkadam_response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/minimal_list/',
                 params={'search': mukkadam_phone},
@@ -1077,7 +1303,6 @@ def allocations_list(request):
             if mukkadam_response.status_code == 200:
                 mukkadams_data = mukkadam_response.json()
                 
-                # Extract mukkadam IDs from response
                 if isinstance(mukkadams_data, list):
                     mukkadam_ids = [m['id'] for m in mukkadams_data if mukkadam_phone in m.get('mobile_numbers', '')]
                 elif isinstance(mukkadams_data, dict) and 'results' in mukkadams_data:
@@ -1085,45 +1310,29 @@ def allocations_list(request):
                 else:
                     mukkadam_ids = []
                 
-                print(f"   Found {len(mukkadam_ids)} mukkadams with phone {mukkadam_phone}: {mukkadam_ids}")
-                
                 if not mukkadam_ids:
-                    print("   ⚠️ No mukkadams found with that phone number")
                     return Response({'count': 0, 'allocations': []})
                 
-                # Filter allocations by mukkadam IDs
                 allocations = [a for a in allocations if a.mukkadam_id in mukkadam_ids]
-                print(f"   ✅ Filtered to {len(allocations)} allocations")
-            else:
-                print(f"   ❌ Supply API error: {mukkadam_response.status_code}")
-                return Response(
-                    {'error': 'Failed to fetch mukkadam data from Supply API'},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
                 
         except Exception as e:
-            print(f"   ❌ Error filtering by phone: {str(e)}")
-            import traceback
-            print(traceback.format_exc())
             return Response(
                 {'error': f'Error filtering by phone: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
     # ========================================
-    # STEP 3: BATCH FETCH JOB DETAILS
+    # STEP 3: FETCH JOBS FROM EXTERNAL API
     # ========================================
     print("\n🔄 Fetching job details from external API...")
     
     job_ids = set(alloc.job_activity.job_id for alloc in allocations if alloc.job_activity)
-    print(f"   Found {len(job_ids)} unique jobs")
     
     jobs_cache = {}
     EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
     job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
     
     try:
-        # Fetch all jobs in one call
         response = requests.get(
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
@@ -1134,125 +1343,54 @@ def allocations_list(request):
             data = response.json()
             jobs_list = data.get('data', []) if isinstance(data, dict) else data
             
-            # Cache jobs by ID
             for job in jobs_list:
                 job_id = str(job.get('work_id') or job.get('id') or job.get('job_id'))
                 if job_id in job_ids:
                     jobs_cache[job_id] = job
-                    print(f"   ✅ Cached job {job_id}")
-        else:
-            print(f"   ❌ Failed to fetch jobs: Status {response.status_code}")
     except Exception as e:
-        print(f"   ❌ Error fetching jobs: {str(e)}")
+        print(f"❌ Error fetching jobs: {str(e)}")
     
     # ========================================
-    # STEP 4: BATCH FETCH FARMER DETAILS
+    # STEP 4: COLLECT ALL UNIQUE IDs
     # ========================================
-    print("\n👥 Fetching farmer details...")
-    
     farmer_ids = set()
     for job in jobs_cache.values():
         farmer_id = job.get('farmer_id')
         if farmer_id:
             farmer_ids.add(str(farmer_id))
     
-    print(f"   Found {len(farmer_ids)} unique farmers")
-    
-    farmers_cache = {}
-    FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
-    farmer_token = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
-    
-    for farmer_id in farmer_ids:
-        try:
-            farmer_response = requests.get(
-                f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
-                headers={'Authorization': farmer_token},
-                timeout=3
-            )
-            
-            if farmer_response.status_code == 200:
-                farmer_data = farmer_response.json()
-                farmers_cache[farmer_id] = {
-                    'farmer_id': farmer_id,
-                    'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
-                    'phone_number': farmer_data.get('phone_number', 'N/A'),
-                    'village': farmer_data.get('village', 'N/A'),
-                    'taluka': farmer_data.get('taluka', 'N/A'),
-                    'district': farmer_data.get('district', 'N/A'),
-                    'location': f"{farmer_data.get('village', 'N/A')}, {farmer_data.get('taluka', 'N/A')}, {farmer_data.get('district', 'N/A')}"
-                }
-                print(f"   ✅ Cached farmer {farmer_id}")
-            else:
-                print(f"   ⚠️ Farmer {farmer_id} returned {farmer_response.status_code}")
-        except Exception as e:
-            print(f"   ❌ Error fetching farmer {farmer_id}: {str(e)}")
-    
-    # ========================================
-    # STEP 5: BATCH FETCH MUKKADAM DETAILS FROM SUPPLY API
-    # ========================================
-    print("\n👷 Fetching mukkadam details from Supply API...")
-    
     mukkadam_ids = set(alloc.mukkadam_id for alloc in allocations)
-    print(f"   Found {len(mukkadam_ids)} unique mukkadams")
     
-    mukkadams_cache = {}
-    # SUPPLY_API_URL = 'http://localhost:8000'  # ✅ YOUR SUPPLY API URL
+    transport_provider_ids = set(
+        alloc.transport_provider_id 
+        for alloc in allocations 
+        if alloc.transport_type == 'provider' and alloc.transport_provider_id
+    )
     
-    for mukkadam_id in mukkadam_ids:
-        try:
-            mukkadam_response = requests.get(
-                f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-                timeout=3
-            )
-            
-            if mukkadam_response.status_code == 200:
-                mukkadam_data = mukkadam_response.json()
-                mukkadams_cache[mukkadam_id] = {
-                    'mukkadam_id': mukkadam_id,
-                    'mukkadam_name': mukkadam_data.get('mukkadam_name', 'Unknown'),
-                    'mobile_numbers': mukkadam_data.get('mobile_numbers', 'N/A'),
-                    'village': mukkadam_data.get('village', 'N/A'),
-                    'crew_size': mukkadam_data.get('crew_size', 'N/A'),
-                    'has_smartphone': mukkadam_data.get('has_smartphone', 'no'),
-                    'transport_mode': mukkadam_data.get('transport_mode', 'N/A')
-                }
-                print(f"   ✅ Cached mukkadam {mukkadam_id}: {mukkadams_cache[mukkadam_id]['mukkadam_name']}")
-            else:
-                print(f"   ⚠️ Mukkadam {mukkadam_id} not found, using fallback")
-                mukkadams_cache[mukkadam_id] = {
-                    'mukkadam_id': mukkadam_id,
-                    'mukkadam_name': f'Mukkadam #{mukkadam_id}',
-                    'mobile_numbers': 'N/A',
-                    'village': 'N/A',
-                    'crew_size': 'N/A',
-                    'has_smartphone': 'no',
-                    'transport_mode': 'N/A'
-                }
-        except Exception as e:
-            print(f"   ❌ Error fetching mukkadam {mukkadam_id}: {str(e)}")
-            mukkadams_cache[mukkadam_id] = {
-                'mukkadam_id': mukkadam_id,
-                'mukkadam_name': f'Mukkadam #{mukkadam_id}',
-                'mobile_numbers': 'N/A',
-                'village': 'N/A',
-                'crew_size': 'N/A',
-                'has_smartphone': 'no',
-                'transport_mode': 'N/A'
-            }
+    # ========================================
+    # ✅ STEP 5: BATCH FETCH ALL DATA IN PARALLEL
+    # ========================================
+    print("\n⚡ PARALLEL BATCH FETCHING...")
+    batch_start = time.time()
+    
+    # Fetch all data types in parallel
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)  # ✅ Reduced
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)  # ✅ Reduced
+    transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)  # ✅ Reduced
+
+    batch_elapsed = time.time() - batch_start
+    print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
     
     # ========================================
     # STEP 6: BUILD ENRICHED ALLOCATIONS
     # ========================================
-    print("\n🔄 Building enriched allocation data...")
-    
     enriched_allocations = []
+    total_area = Decimal('0')
+    total_cost = Decimal('0')
     
-    for idx, allocation in enumerate(allocations):
-        print(f"\n  📌 Allocation {idx + 1}/{len(allocations)}: ID={allocation.id}")
-        
+    for allocation in allocations:
         job_activity = allocation.job_activity
         if not job_activity:
-            print(f"     ⚠️ No job activity found")
             continue
         
         job_id = str(job_activity.job_id)
@@ -1264,6 +1402,11 @@ def allocations_list(request):
         farmer_data = farmers_cache.get(farmer_id)
         mukkadam_data = mukkadams_cache.get(allocation.mukkadam_id, {})
         
+        # Get transport provider data
+        transport_provider_data = None
+        if allocation.transport_type == 'provider' and allocation.transport_provider_id:
+            transport_provider_data = transport_providers_cache.get(allocation.transport_provider_id)
+        
         # Get activity details
         activity_details = None
         if job_data and 'activities' in job_data:
@@ -1273,7 +1416,7 @@ def allocations_list(request):
                 None
             )
         
-        # ✅ GET CENTRAL TEAM CONTACT from booking
+        # Central team contact
         central_team_phone = 'N/A'
         if job_data and 'booking' in job_data:
             booking = job_data['booking']
@@ -1282,9 +1425,8 @@ def allocations_list(request):
         # Calculate payment
         revenue = float(allocation.mukkadam_price) * float(allocation.allocated_area)
         transport_cost = float(allocation.transport_price or 0)
-        total_cost = revenue + transport_cost
+        total_cost_alloc = revenue + transport_cost
         
-        # ✅ BUILD COMPLETE ALLOCATION
         enriched_allocation = {
             'allocation_id': allocation.id,
             'work_date': str(allocation.work_date) if allocation.work_date else None,
@@ -1320,190 +1462,46 @@ def allocations_list(request):
                 'mukkadam_total_payment': revenue,
                 'transport_type': allocation.transport_type,
                 'transport_price': transport_cost,
-                'total_amount': total_cost,
+                'total_amount': total_cost_alloc,
             },
+            
+            # Transport provider details
+            'transport': {
+                'transport_type': allocation.transport_type,
+                'transport_price': transport_cost,
+                'transport_provider_id': allocation.transport_provider_id if allocation.transport_type == 'provider' else None,
+                'transport_provider_details': transport_provider_data,
+            }
         }
         
         enriched_allocations.append(enriched_allocation)
-        print(f"     ✅ Enriched allocation")
+        total_area += allocation.allocated_area
+        total_cost += Decimal(str(total_cost_alloc))
     
-    print(f"\n✅ Successfully enriched {len(enriched_allocations)} allocations")
+    # Summary
+    summary = {
+        'total_allocations': len(allocations),
+        'total_area_allocated': float(total_area),
+        'total_earnings': float(total_cost),
+        'active_allocations': len([a for a in allocations if a.status == 'allocated']),
+        'completed_allocations': len([a for a in allocations if a.status == 'completed']),
+        'in_progress_allocations': len([a for a in allocations if a.status == 'in_progress']),
+    }
+    
+    total_elapsed = time.time() - start_time
+    print(f"\n✅ API completed in {total_elapsed:.2f}s")
     print("="*80)
     
     return Response({
         'count': len(enriched_allocations),
-        'allocations': enriched_allocations
+        'allocations': enriched_allocations,
+        'summary': summary,
+        'performance': {
+            'total_time': f'{total_elapsed:.2f}s',
+            'batch_fetch_time': f'{batch_elapsed:.2f}s'
+        }
     })
 
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def allocations_by_mobile(request):
-    """
-    Get all allocations for a mukkadam by mobile number
-    GET /api/allocations/by-mobile/?mobile_number=9876543210
-    
-    This API:
-    1. Calls Supply App to get mukkadam_id from mobile number
-    2. Fetches allocations from Allocation App database
-    3. Calls Supply App to get transport provider details
-    4. Returns combined data
-    """
-    mobile_number = request.GET.get('mobile_number')
-    
-    if not mobile_number:
-        return Response(
-            {'error': 'mobile_number query parameter is required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    # ✅ STEP 1: Call Supply App API to get mukkadam(s)
-    try:
-        supply_response = requests.get(
-            f'{SUPPLY_API_URL}/api/mukkadam/by-mobile/',
-            params={'mobile_number': mobile_number},
-            timeout=5
-        )
-        supply_data = supply_response.json()
-        
-        if not supply_data.get('found'):
-            return Response({
-                'error': 'No mukkadam found with this mobile number',
-                'mobile_number': mobile_number,
-                'mukkadams': [],
-                'allocations': [],
-                'summary': {
-                    'total_allocations': 0,
-                    'total_earnings': 0
-                }
-            }, status=status.HTTP_404_NOT_FOUND)
-        
-        mukkadams = supply_data.get('mukkadams', [])
-        mukkadam_ids = [m['id'] for m in mukkadams]
-        
-    except requests.exceptions.RequestException as e:
-        return Response(
-            {'error': f'Failed to connect to Supply App: {str(e)}'},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE
-        )
-    
-    # ✅ STEP 2: Get allocations from Allocation App database
-    allocations = Allocation.objects.filter(
-        mukkadam_id__in=mukkadam_ids
-    ).select_related('job_activity', 'allocated_by').order_by('-allocated_at')
-    
-    # ✅ STEP 3: Build response with transport provider details from Supply App
-    allocations_data = []
-    total_area = Decimal('0')
-    total_cost = Decimal('0')
-    
-    # ✅ Cache transport provider data to avoid multiple API calls
-    transport_provider_cache = {}
-    
-    for alloc in allocations:
-        # Find which mukkadam this allocation belongs to
-        mukkadam = next((m for m in mukkadams if m['id'] == alloc.mukkadam_id), None)
-        
-        # ✅ Get transport provider name from Supply App API if applicable
-        transport_provider_name = None
-        transport_provider_details = None
-        
-        if alloc.transport_type == 'provider' and alloc.transport_provider_id:
-            # Check cache first
-            if alloc.transport_provider_id in transport_provider_cache:
-                provider_data = transport_provider_cache[alloc.transport_provider_id]
-            else:
-                # Fetch from Supply App API
-                try:
-                    provider_response = requests.get(
-                        f'{SUPPLY_API_URL}/api/transport-provider/{alloc.transport_provider_id}/',
-                        timeout=3
-                    )
-                    
-                    if provider_response.status_code == 200:
-                        provider_json = provider_response.json()
-                        if provider_json.get('found'):
-                            provider_data = provider_json.get('provider')
-                            transport_provider_cache[alloc.transport_provider_id] = provider_data
-                        else:
-                            provider_data = None
-                    else:
-                        provider_data = None
-                        
-                except requests.exceptions.RequestException as e:
-                    print(f"⚠️ Failed to fetch transport provider {alloc.transport_provider_id}: {str(e)}")
-                    provider_data = None
-            
-            # Set provider name and details
-            if provider_data:
-                transport_provider_name = provider_data.get('name')
-                transport_provider_details = {
-                    'id': provider_data.get('id'),
-                    'name': provider_data.get('name'),
-                    'contact_number': provider_data.get('contact_number'),
-                    'base_location': provider_data.get('base_location'),
-                    'vehicle_type': provider_data.get('vehicle_type')
-                }
-            else:
-                transport_provider_name = f'Provider #{alloc.transport_provider_id}'
-        
-        allocation_data = {
-            'allocation_id': alloc.id,
-            'mukkadam_id': alloc.mukkadam_id,
-            'mukkadam_name': mukkadam['mukkadam_name'] if mukkadam else 'Unknown',
-            'mukkadam_village': mukkadam.get('village') if mukkadam else None,
-            'status': alloc.status,
-            
-            # Job details
-            'job_id': alloc.job_activity.job_id,
-            'activity_id': alloc.job_activity.activity_id,
-            'activity_name': alloc.job_activity.activity_name,
-            'activity_type': alloc.job_activity.activity_type,
-            'location': alloc.job_activity.location,
-            
-            # Allocation details
-            'allocated_area': float(alloc.allocated_area),
-            'work_date': str(alloc.work_date),
-            'crew_size': alloc.crew_size,
-            
-            # Pricing
-            'mukkadam_price': float(alloc.mukkadam_price),
-            'transport_type': alloc.transport_type,
-            'transport_price': float(alloc.transport_price or 0),
-            'transport_provider': transport_provider_name,
-            'transport_provider_details': transport_provider_details,  # ✅ Full details
-            'total_cost': float(alloc.total_cost),
-            
-            # Metadata
-            'allocated_at': alloc.allocated_at.isoformat(),
-            'allocated_by': alloc.allocated_by.username if alloc.allocated_by else None,
-            'notes': alloc.notes,
-            
-            # Activity details
-            'scheduled_datetime': alloc.job_activity.scheduled_datetime.isoformat(),
-            'total_activity_area': float(alloc.job_activity.total_area),
-            'remaining_activity_area': float(alloc.job_activity.remaining_area),
-        }
-        
-        allocations_data.append(allocation_data)
-        total_area += alloc.allocated_area
-        total_cost += Decimal(str(alloc.total_cost))
-    
-    # Summary statistics
-    summary = {
-        'total_allocations': allocations.count(),
-        'total_area_allocated': float(total_area),
-        'total_earnings': float(total_cost),
-        'active_allocations': allocations.filter(status='allocated').count(),
-        'completed_allocations': allocations.filter(status='completed').count(),
-        'in_progress_allocations': allocations.filter(status='in_progress').count(),
-    }
-    
-    return Response({
-        'mukkadams': mukkadams,  # From Supply App
-        'mukkadams_count': len(mukkadams),
-        'allocations': allocations_data,  # From Allocation App + Supply App
-        'summary': summary
-    })
 
 # data/views.py
 # data/views.py
@@ -2057,51 +2055,6 @@ def mukkadam_work_history(request):
     
     return Response(response_data)
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def get_fcm_by_mobile(request):
-    """
-    Get active FCM token(s) by mobile number
-
-    POST /api/fcm/by-mobile/
-    {
-        "mobile_number": "9876543210"
-    }
-    """
-    mobile_number = request.data.get('mobile_number')
-
-    if not mobile_number:
-        return Response(
-            {"success": "false", "message": "mobile_number is required"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    devices = FCMDevice.objects.filter(
-        mobile_number=mobile_number,
-        is_active=True
-    ).order_by('-last_used_at')
-
-    if not devices.exists():
-        return Response(
-            {
-                "success": False,
-                "message": "No active FCM tokens found for this mobile number"
-            },
-            status=status.HTTP_404_NOT_FOUND
-        )
-
-    serializer = FCMDeviceSerializer(devices, many=True)
-
-    return Response(
-        {
-            "success": True,
-            "mobile_number": mobile_number,
-            "count": devices.count(),
-            "tokens": serializer.data
-        },
-        status=status.HTTP_200_OK
-    )
-
 # allocation_app/views.py
 
 from django.db.models import Prefetch
@@ -2182,163 +2135,3 @@ def get_job_details(request, job_id):
 
 
 
-
-# allocation_app/views.py
-
-from django.core.cache import cache # Optional, for caching external job list
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def light_activity_logs(request):
-    """
-    High-speed Activity Log. 
-    Removes external HTTP calls. Returns IDs only.
-    Frontend must map mukkadam_id -> mukkadam_name.
-    """
-    # 1. Efficient DB Fetch
-    queryset = ActivityLog.objects.all().select_related('performed_by', 'allocation')
-    
-    # Simple Filters
-    if request.query_params.get('job_id'):
-        queryset = queryset.filter(job_id=request.query_params.get('job_id'))
-    
-    # Limit to last 100 for dashboard speed
-    queryset = queryset.order_by('-performed_at')[:100]
-
-    logs = []
-    for log in queryset:
-        logs.append({
-            'id': log.id,
-            'activity_type': log.activity_type,
-            'activity_type_display': log.get_activity_type_display(),
-            'description': log.description,
-            'job_id': log.job_id,
-            'allocation_id': log.allocation_id,
-            # Send IDs only - No external API calls here!
-            'mukkadam_id': log.mukkadam_id, 
-            'transport_provider_id': log.transport_provider_id,
-            # Basic financial data
-            'amount': float(log.amount) if log.amount else 0,
-            # Metadata
-            'performed_by_name': log.performed_by.username if log.performed_by else 'System',
-            'timestamp': log.performed_at.isoformat(), # Renamed to match frontend expectation
-            'performed_at': log.performed_at.isoformat(),
-            'metadata': log.metadata,
-        })
-    
-    return Response(logs)
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def light_jobs_list(request):
-    """
-    High-speed Job List.
-    Fetches external jobs but SKIPS the Farmer Enrichment loop.
-    Returns raw external data + local allocation status.
-    """
-    try:
-        # 1. Fetch External Jobs (One single call)
-        # Suggestion: Cache this response for 5 minutes in production
-        EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
-        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-        
-        response = requests.get(
-            f'{EXTERNAL_API_URL}/get_allocated_jobs/',
-            headers={'Authorization': token},
-            timeout=5
-        )
-        
-        if response.status_code != 200:
-            return Response([], status=response.status_code)
-            
-        api_data = response.json()
-        raw_jobs = api_data.get('data', []) if isinstance(api_data, dict) else api_data
-
-        # 2. Fetch Local Allocation Data in Bulk (One single DB query)
-        # We get all job_ids from the external list
-        external_ids = [str(j.get('work_id') or j.get('id')) for j in raw_jobs]
-        
-        # Get all local activities for these jobs
-        local_activities = JobActivity.objects.filter(
-            job_id__in=external_ids
-        ).prefetch_related('allocations')
-
-        # Create a lookup map for speed
-        activity_map = {}
-        for act in local_activities:
-            if act.job_id not in activity_map:
-                activity_map[act.job_id] = []
-            activity_map[act.job_id].append(act)
-
-        # 3. Merge Data (In Memory - Very Fast)
-        light_jobs = []
-        
-        for job in raw_jobs:
-            job_id = str(job.get('work_id') or job.get('id'))
-            
-            # Basic info only
-            job_obj = {
-                'id': job.get('id'),
-                'work_id': job_id,
-                'title': job.get('title') or f"Job {job_id}",
-                'farmer_id': job.get('farmer_id'), 
-                # Pass raw booking info, don't fetch farmer API details
-                'farmer': { 
-                    'farmer_name': job.get('farmer_name') or job.get('booking', {}).get('farmer_name', 'Unknown'),
-                    'location': job.get('location') or job.get('booking', {}).get('location', '')
-                },
-                'created_at': job.get('created_at'),
-                'description': job.get('description'),
-                'is_complex': False,
-                'activities': []
-            }
-
-            # Map activities
-            raw_activities = job.get('activities', [])
-            job_obj['is_complex'] = len(raw_activities) > 1
-            
-            # Calculate status based on local DB data
-            fully_allocated_count = 0
-            has_allocation = False
-            
-            # Use local DB activities if they exist, otherwise use API structure
-            db_acts = activity_map.get(job_id, [])
-            
-            # Simple status logic for dashboard
-            for api_act in raw_activities:
-                act_id = str(api_act.get('id') or api_act.get('activity_id'))
-                # Find matching DB activity
-                matched_db = next((d for d in db_acts if d.activity_id == act_id), None)
-                
-                total_area = float(api_act.get('acres', 0))
-                allocated = float(matched_db.allocated_area) if matched_db else 0
-                
-                is_full = total_area > 0 and allocated >= (total_area - 0.1)
-                if is_full: fully_allocated_count += 1
-                if allocated > 0: has_allocation = True
-                
-                job_obj['activities'].append({
-                    'activity_name': api_act.get('activity_name'),
-                    'total_area': total_area,
-                    'allocated_area': allocated,
-                    'is_fully_allocated': is_full,
-                    'location': api_act.get('location'),
-                    'scheduled_date': api_act.get('date_time')
-                })
-
-            # Determine Status
-            if raw_activities and fully_allocated_count == len(raw_activities):
-                job_obj['status'] = 'fully_allocated'
-            elif has_allocation:
-                job_obj['status'] = 'partially_allocated'
-            else:
-                job_obj['status'] = 'pending'
-
-            light_jobs.append(job_obj)
-
-        return Response(light_jobs)
-
-    except Exception as e:
-        print(f"Error in light_jobs_list: {e}")
-        return Response({'error': str(e)}, status=500)

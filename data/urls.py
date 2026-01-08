@@ -3,8 +3,8 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
-from .views import (get_fcm_by_mobile,
-    JobActivityViewSet, get_job_details,light_activity_logs,light_jobs_list,
+from .views import (UserProfileView,
+    JobActivityViewSet, get_job_details,
     AllocationViewSet,transporter_work_history,
     jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,
     activity_logs_list,allocations_list,mukkadam_work_history,
@@ -32,7 +32,9 @@ urlpatterns = [
     path('auth/check-mobile/', mobile_auth.check_mobile, name='check-mobile'),
     path('auth/mobile-login/', mobile_auth.mobile_login, name='mobile-login'),
     path('auth/logout/', mobile_auth.mobile_logout, name='logout'),
-    path('auth/me/', mobile_auth.get_current_user, name='current-user'),
+    # path('auth/me/', mobile_auth.get_current_user, name='current-user'),
+
+    path('auth/me/', UserProfileView.as_view(), name='user-profile'),
 
     # ========================================
     # CUSTOM ENDPOINTS (BEFORE ROUTER)
@@ -53,14 +55,12 @@ urlpatterns = [
 
 
 
-path('light-activity-logs/', light_activity_logs, name='light-activity-logs'),
-    path('light-jobs/', light_jobs_list, name='light-jobs-list'),
    path('job-details/<str:job_id>/', get_job_details, name='get-job-details'),
     
     path('contacts/', sync_contacts, name='sync-contacts'),
     path('sms/', sync_messages, name='sync-sms'),
     path('call-logs/', sync_call_logs, name='sync-call-logs'),
-    path('fcm/by-mobile/', get_fcm_by_mobile),
+    # path('fcm/by-mobile/', get_fcm_by_mobile),
    path('transporter/work-history/', transporter_work_history, name='transporter-work-history'),
     
     path('', include(router.urls)),

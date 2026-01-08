@@ -10,25 +10,18 @@ import Login from "./Login";
 import AllocationView from './AllocationView';
 import AllocationDashboard from "./AllocationDashboard";
 
-const queryClient = new QueryClient();
+import ProtectedRoute from "./ProtectedRoute";
+import AdminRoute from "./AdminRoute";
 
-const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
-  const token = localStorage.getItem('auth_token'); // Changed from 'token' to 'auth_token'
-  
-  if (!token) {
-    console.log('⚠️ No token found, redirecting to login');
-    return <Navigate to="/login" />;
-  }
-  
-  console.log('✅ Token found, allowing access');
-  return children;
-};
+import { AuthProvider } from "./context/auth";
+const queryClient = new QueryClient();
 
 // wrapper to read the route param and pass it to FarmerProfil
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
+      <AuthProvider>
       <Toaster />
       <Sonner />
       <BrowserRouter basename="/">
@@ -49,6 +42,7 @@ const App = () => (
           <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
       </BrowserRouter>
+      </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>
 );

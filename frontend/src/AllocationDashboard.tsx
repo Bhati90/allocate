@@ -205,6 +205,27 @@ const handleRejectTransportPayment = async (paymentRequestId: number) => {
   }
 };
 
+
+// ✅ FIXED: Filter based on Allocation Status or Payment Existence
+const getCompletedAllocations = () => {
+  return allocations.filter(allocation => {
+    // 1. If the API says it's completed, show it here
+    if (allocation.status === 'completed') {
+      // BUT: If payment was rejected, DON'T show it here (it goes back to Allocated)
+      const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+      if (mukkadamPayment?.status === 'rejected') {
+        return false;
+      }
+      return true;
+    }
+
+    // 2. OR if a payment request exists with pending/paid status (implies work is done)
+    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+    return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
+  });
+};
+
+
 // ✅ FIXED: Only show allocations for FULLY allocated jobs
 // ✅ FIXED: Only show allocations for FULLY allocated jobs (0 remaining area)
 const getAllocatedAllocations = () => {
@@ -232,36 +253,9 @@ const getAllocatedAllocations = () => {
   });
 };
 
-// ✅ FIXED: Filter based on Allocation Status or Payment Existence
-const getCompletedAllocations = () => {
-  return allocations.filter(allocation => {
-    // 1. If the API says it's completed, show it here
-    if (allocation.status === 'completed') {
-      // BUT: If payment was rejected, DON'T show it here (it goes back to Allocated)
-      const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-      if (mukkadamPayment?.status === 'rejected') {
-        return false;
-      }
-      return true;
-    }
-
-    // 2. OR if a payment request exists with pending/paid status (implies work is done)
-    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-    return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
-  });
-};
 
 // ✅ FIXED: Filter based on Allocation Status or Payment Existence
-const getCompletedAllocations = () => {
-  return allocations.filter(allocation => {
-    // 1. If the API says it's completed, show it here
-    if (allocation.status === 'completed') return true;
 
-    // 2. OR if a payment request exists (implies work is done/pending payment)
-    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-    return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
-  });
-};
 const toggleTransporter = (transporterId: number) => {
   setExpandedTransporters(prev => {
     const newSet = new Set(prev);
@@ -322,6 +316,9 @@ const toggleSection = (section: 'complexJobs' | 'activityTypes' | 'crewDistribut
     mukkadam_price: '',
     transport_price: ''
   });
+
+// Update your refreshAllocations to also fetch activity logs
+const [activityLogs, setActivityLogs] = useState<any[]>([]);
 
   // Complex allocation modal states
   const [showComplexAllocationModal, setShowComplexAllocationModal] = useState(false);
@@ -414,48 +411,67 @@ const toggleSection = (section: 'complexJobs' | 'activityTypes' | 'crewDistribut
     fetchStaticData();
   }, []); // Empty dependency array = runs once
 
-  // ✅ 2. DYNAMIC REFRESHER (Runs on Updates)
-  const refreshAllocations = async (
-    currentMukkadams = mukkadams, 
-    currentProviders = transportProviders
-  ) => {
-    const config = getAuthConfig();
-    try {
-      // Fetch FAST dynamic data (Allocations, Logs, Payments)
-      const [allocationsRes, activityRes, mukkadamPayRes, transportPayRes] = await Promise.all([
-        axios.get(`${API_BASE_URL_A}/ap/allocations/`, config),
-        axios.get(`${API_BASE_URL_A}/ap/activity-logs/`, config),
-        axios.get(`${API_BASE_URL_A}/ap/payment-requests/`, config),
-        axios.get(`${API_BASE_URL_A}/ap/transport-payment-requests/`, config)
-      ]);
+  // ✅ COMPLETE SAFE VERSION
 
-      const newAllocations = allocationsRes.data;
+// ✅ FIXED VERSION - Extract 'logs' from response
 
-      // Update State
-      setAllocations(newAllocations);
-      setActivityLogs(activityRes.data); // ✅ Use API logs directly
-      setMukkadamPaymentRequests(mukkadamPayRes.data);
-      setTransportPaymentRequests(transportPayRes.data);
+const refreshAllocations = async (
+  currentMukkadams = mukkadams, 
+  currentProviders = transportProviders
+) => {
+  const config = getAuthConfig();
+  try {
+    const [allocationsRes, activityRes, mukkadamPayRes, transportPayRes] = await Promise.all([
+      axios.get(`${API_BASE_URL_A}/ap/allocations/`, config),
+      axios.get(`${API_BASE_URL_A}/ap/activity-logs/`, config),
+      axios.get(`${API_BASE_URL_A}/ap/payment-requests/`, config),
+      axios.get(`${API_BASE_URL_A}/ap/transport-payment-requests/`, config)
+    ]);
 
-      // Re-calculate derived stats
-      if (currentMukkadams.length > 0) processMukkadamAllocations(newAllocations, currentMukkadams);
-      if (currentProviders.length > 0) processTransportAllocations(newAllocations, currentProviders);
-      buildDailyStats(newAllocations);
+    // ✅ FIX: Extract 'logs' array from the response object
+    const activityLogsArray = activityRes.data.logs || [];  // ✅ CHANGED
+    
+    // Safe data extraction for others
+    const newAllocations = Array.isArray(allocationsRes.data) 
+      ? allocationsRes.data 
+      : allocationsRes.data.results || [];
 
-    } catch (error) {
-      console.error('Error refreshing allocations:', error);
-    }
-  };
+    const mukkadamPayments = Array.isArray(mukkadamPayRes.data)
+      ? mukkadamPayRes.data
+      : mukkadamPayRes.data.results || [];
+
+    const transportPayments = Array.isArray(transportPayRes.data)
+      ? transportPayRes.data
+      : transportPayRes.data.results || [];
+
+    // Update State - All guaranteed to be arrays
+    setAllocations(newAllocations);
+    setActivityLogs(activityLogsArray);  // ✅ Now this is an array
+    setMukkadamPaymentRequests(mukkadamPayments);
+    setTransportPaymentRequests(transportPayments);
+
+    // Re-calculate derived stats
+    if (currentMukkadams.length > 0) processMukkadamAllocations(newAllocations, currentMukkadams);
+    if (currentProviders.length > 0) processTransportAllocations(newAllocations, currentProviders);
+    buildDailyStats(newAllocations);
+
+  } catch (error) {
+    console.error('Error refreshing allocations:', error);
+    
+    // ✅ Set all to empty arrays on error
+    setActivityLogs([]);
+    setMukkadamPaymentRequests([]);
+    setTransportPaymentRequests([]);
+  }
+};
 const [activityFilter, setActivityFilter] = useState<string>('all');
-
-// Update your refreshAllocations to also fetch activity logs
-const [activityLogs, setActivityLogs] = useState<any[]>([]);
 
 // Add to refreshAllocations
 
 
 // Filter activity logs
-const filteredActivityLogs = activityLogs.filter(log => {
+// Filter activity logs - add safety check
+const filteredActivityLogs = (Array.isArray(activityLogs) ? activityLogs : []).filter(log => {
   const searchLower = searchTerm.toLowerCase();
   const matchesSearch = 
     String(log.job_id || '').toLowerCase().includes(searchLower) ||

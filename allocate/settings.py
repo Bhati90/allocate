@@ -180,6 +180,28 @@ CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TASK_SERIALIZER = 'json'
+
+
+# Redis Cache Configuration
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379/1',  # Use your Redis server
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        },
+        'KEY_PREFIX': 'allocation_app',
+        'TIMEOUT': 3600,  # 1 hour default
+    }
+}
+
+
+
+# Cache timeouts (in seconds)
+CACHE_MUKKADAM_TIMEOUT = 3600  # 1 hour
+CACHE_FARMER_TIMEOUT = 3600    # 1 hour
+CACHE_TRANSPORT_TIMEOUT = 21600  # 6 hours
+CACHE_JOB_TIMEOUT = 1800  # 30 minutes
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',  # use this for normal Postgres
