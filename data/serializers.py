@@ -1,7 +1,7 @@
 # allocation_app/serializers.py
 
 from rest_framework import serializers
-from .models import JobActivity, Allocation, AllocationStats
+from .models import JobActivity, Allocation, AllocationStats,ActivityLog
 from django.contrib.auth.models import User
 
 
@@ -165,6 +165,28 @@ class TransportPaymentRequestSerializer(serializers.ModelSerializer):
             'paid_by',
             'rejected_at',
             'rejected_by',
+        ]
+
+
+class ActivityLogSerializer(serializers.ModelSerializer):
+    performed_by_name = serializers.CharField(source='performed_by.username', read_only=True)
+    activity_type_display = serializers.CharField(source='get_activity_type_display', read_only=True)
+    
+    class Meta:
+        model = ActivityLog
+        fields = [
+            'id',
+            'activity_type',
+            'activity_type_display',
+            'description',
+            'job_id',
+            'mukkadam_id',
+            'transport_provider_id',
+            'amount',
+            'performed_by',
+            'performed_by_name',
+            'performed_at',
+            'metadata',
         ]
 
 from rest_framework import serializers

@@ -4,8 +4,8 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
 from .views import (get_fcm_by_mobile,
-    JobActivityViewSet,
-    AllocationViewSet,
+    JobActivityViewSet, get_job_details,light_activity_logs,light_jobs_list,
+    AllocationViewSet,transporter_work_history,
     jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,
     activity_logs_list,allocations_list,mukkadam_work_history,
     allocations_by_mobile # ✅ Already imported
@@ -44,19 +44,24 @@ urlpatterns = [
     path('allocations/by-mobile/', allocations_by_mobile, name='allocations-by-mobile'),
 
 
-path('mukkadam-history/', mukkadam_work_history, name='mukkadam-work-history'),
+    path('mukkadam-history/', mukkadam_work_history, name='mukkadam-work-history'),
     path('allocations/by-mobile/main/', allocations_list, name='allocations-by-mobile_main'),
     
     # ========================================
     # ROUTER ENDPOINTS (MUST BE LAST)
     # ========================================
 
+
+
+path('light-activity-logs/', light_activity_logs, name='light-activity-logs'),
+    path('light-jobs/', light_jobs_list, name='light-jobs-list'),
+   path('job-details/<str:job_id>/', get_job_details, name='get-job-details'),
     
     path('contacts/', sync_contacts, name='sync-contacts'),
     path('sms/', sync_messages, name='sync-sms'),
     path('call-logs/', sync_call_logs, name='sync-call-logs'),
     path('fcm/by-mobile/', get_fcm_by_mobile),
-   
+   path('transporter/work-history/', transporter_work_history, name='transporter-work-history'),
     
     path('', include(router.urls)),
 ]
