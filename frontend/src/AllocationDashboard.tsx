@@ -56,7 +56,7 @@ const [partialSearchQuery, setPartialSearchQuery] = useState('');
 const [mukkadamSearchQuery, setMukkadamSearchQuery] = useState('');
 const [transportSearchQuery, setTransportSearchQuery] = useState('');
 
-
+const [selectedFilterDate, setSelectedFilterDate] = useState(''); // Format: YYYY-MM-DD
 
 // Toggle functions
 const toggleJob = (jobId: string) => {
@@ -1236,7 +1236,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
           </div>
 
           {/* Search Bar */}
-          {(activeTab === 'allocated' || activeTab === 'pending' || activeTab === 'activity') && (
+          {(activeTab === 'pending' || activeTab === 'activity') && (
             <div className="p-4 border-b border-gray-200">
               <div className="relative">
                 <Search className="absolute left-3 top-3 text-gray-400" size={20} />
@@ -2075,6 +2075,40 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
 
 {activeTab === 'allocated' && (
   <div>
+    {/* --- NEW: Filter Bar Section --- */}
+    <div className="flex flex-col md:flex-row gap-4 mb-6 items-end bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+      <div className="flex-1">
+        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Search Keywords</label>
+        <input 
+          type="text" 
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Search ID, Farmer, or Mukkadam..."
+          className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-green-500"
+        />
+      </div>
+      
+      <div className="w-full md:w-64">
+        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Filter by Scheduled Date</label>
+        <div className="flex gap-2">
+          <input 
+            type="date" 
+            value={selectedFilterDate}
+            onChange={(e) => setSelectedFilterDate(e.target.value)}
+            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-green-500"
+          />
+          {selectedFilterDate && (
+            <button 
+              onClick={() => setSelectedFilterDate('')}
+              className="px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 font-bold transition"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+
     {(() => {
       // Group allocations by job ID
       const allocationsByJob = getAllocatedAllocations().reduce((acc, allocation) => {
@@ -2088,324 +2122,183 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
 
       const jobIds = Object.keys(allocationsByJob);
 
-      if (jobIds.length === 0) {
+      // --- Filter Logic ---
+      const filteredJobIds = jobIds.filter(jobId => {
+        const job = jobs.find(j => j.work_id === jobId);
+        const jobAllocations = allocationsByJob[jobId];
+        
+        // 1. Calculate the actual displayed date for this job to use in filter
+        let jobDate = job?.scheduled_date;
+        if (!jobDate && job?.activities && job.activities.length > 0) {
+          const sortedDates = job.activities
+            .map(a => a.scheduled_date)
+            .filter(d => d)
+            .sort();
+          if (sortedDates.length > 0) jobDate = sortedDates[0];
+        }
+
+        // A. Apply Date Filter
+        if (selectedFilterDate) {
+          if (!jobDate || !jobDate.startsWith(selectedFilterDate)) {
+            return false;
+          }
+        }
+
+        // B. Apply Text Search Filter
+        if (!searchTerm) return true;
+        const searchLower = searchTerm.toLowerCase();
         return (
-          <div className="text-center py-12">
-            <CheckCircle size={48} className="mx-auto text-gray-400 mb-4" />
-            <p className="text-gray-600">No allocated jobs found</p>
-            <p className="text-sm text-gray-500 mt-2">Jobs move to Completed when payment is requested</p>
+          String(jobId).toLowerCase().includes(searchLower) ||
+          String(job?.title || '').toLowerCase().includes(searchLower) ||
+          String(job?.farmer?.farmer_name || '').toLowerCase().includes(searchLower) ||
+          jobAllocations.some(a => {
+            const mukkadam = mukkadams.find(m => m.id === a.mukkadam_id);
+            return String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower);
+          })
+        );
+      });
+
+      if (filteredJobIds.length === 0) {
+        return (
+          <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
+            <Search size={48} className="mx-auto text-gray-300 mb-4" />
+            <p className="text-gray-600 font-medium">No jobs found for the selected criteria</p>
+            <button 
+              onClick={() => {setSearchTerm(''); setSelectedFilterDate('');}} 
+              className="text-blue-600 text-sm mt-2 hover:underline"
+            >
+              Reset all filters
+            </button>
           </div>
         );
       }
 
       return (
         <div className="space-y-3">
-          {jobIds
-            .filter(jobId => {
-              // Search filter
-              if (!searchTerm) return true;
-              const searchLower = searchTerm.toLowerCase();
-              const job = jobs.find(j => j.work_id === jobId);
-              const jobAllocations = allocationsByJob[jobId];
-              
-              return (
-                String(jobId).toLowerCase().includes(searchLower) ||
-                String(job?.title || '').toLowerCase().includes(searchLower) ||
-                String(job?.farmer?.farmer_name || '').toLowerCase().includes(searchLower) ||
-                jobAllocations.some(a => {
-                  const mukkadam = mukkadams.find(m => m.id === a.mukkadam_id);
-                  return String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower);
-                })
-              );
-            })
-            .map(jobId => {
-              const jobAllocations = allocationsByJob[jobId];
-              const job = jobs.find(j => j.work_id === jobId);
-              const isExpanded = expandedJobs.has(jobId);
-              const farmer = job?.farmer; // ✅ Get farmer data
+          {filteredJobIds.map(jobId => {
+            const jobAllocations = allocationsByJob[jobId];
+            const job = jobs.find(j => j.work_id === jobId);
+            const isExpanded = expandedJobs.has(jobId);
+            const farmer = job?.farmer;
 
-              // Calculate aggregated totals for this job
-              const totalMukkadamCost = jobAllocations.reduce((sum, a) => {
-                const price = a.mukkadam_price ? parseFloat(String(a.mukkadam_price)) : 0;
-                return sum + price;
-              }, 0);
+            // Aggregated Totals
+            const totalMukkadamCost = jobAllocations.reduce((sum, a) => sum + (parseFloat(String(a.mukkadam_price)) || 0), 0);
+            const totalTransportCost = jobAllocations.reduce((sum, a) => sum + (parseFloat(String(a.transport_price)) || 0), 0);
+            const totalArea = jobAllocations.reduce((sum, a) => sum + (parseFloat(String(a.allocated_area)) || 0), 0);
+            const totalCost = totalMukkadamCost + totalTransportCost;
 
-              const totalTransportCost = jobAllocations.reduce((sum, a) => {
-                const price = a.transport_price ? parseFloat(String(a.transport_price)) : 0;
-                return sum + price;
-              }, 0);
+            const hasRejectedPayment = jobAllocations.some(a => getMukkadamPaymentRequest(a.id)?.status === 'rejected');
 
-              const totalCost = totalMukkadamCost + totalTransportCost;
-
-              const totalArea = jobAllocations.reduce((sum, a) => {
-                const area = a.allocated_area ? parseFloat(String(a.allocated_area)) : 0;
-                return sum + area;
-              }, 0);
-
-              const totalCrew = jobAllocations.reduce((sum, a) => sum + (a.crew_size || 0), 0);
-
-              // Check if any payment is rejected
-              const hasRejectedPayment = jobAllocations.some(a => {
-                const payment = getMukkadamPaymentRequest(a.id);
-                return payment?.status === 'rejected';
-              });
-
-              return (
-                <div
-                  key={jobId}
-                  className="border-2 border-green-300 bg-green-50 rounded-xl overflow-hidden"
-                >
-                  {/* Collapsed Header */}
-                  <div
-                    className="p-4 cursor-pointer hover:bg-green-100 transition"
-                    onClick={() => toggleJob(jobId)}
-                  >
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        {/* Job ID and Status */}
-                        <div className="flex items-center space-x-3 mb-2">
-                          <span className="text-lg font-mono font-bold text-blue-600">
-                            {jobId}
+            return (
+              <div key={jobId} className="border-2 border-green-300 bg-green-50 rounded-xl overflow-hidden shadow-sm">
+                <div className="p-4 cursor-pointer hover:bg-green-100 transition" onClick={() => toggleJob(jobId)}>
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3 mb-2">
+                        <span className="text-lg font-mono font-bold text-blue-600">{jobId}</span>
+                        <span className="px-2 py-1 bg-green-500 text-white rounded-full text-xs font-bold">ALLOCATED</span>
+                        {hasRejectedPayment && (
+                          <span className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-bold flex items-center">
+                            <Ban size={14} className="mr-1" /> Payment Rejected
                           </span>
-                          <span className="px-2 py-1 bg-green-500 text-white rounded-full text-xs font-bold">
-                            ALLOCATED
-                          </span>
-                          {hasRejectedPayment && (
-                            <span className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-bold flex items-center">
-                              <Ban size={14} className="mr-1" />
-                              Payment Rejected
-                            </span>
-                          )}
-                          {jobAllocations.length > 1 && (
-                            <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-bold">
-                              {jobAllocations.length} allocations
-                            </span>
-                          )}
-                          {job?.title && (
-                            <span className="text-sm text-gray-700 truncate max-w-xs">
-                              {job.title}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* ✅ ADD: Farmer Info */}
-                        {farmer ? (
-                          <div className="mb-2">
-                            <div className="flex items-center space-x-2">
-                              <Users size={14} className="text-indigo-600" />
-                              <span className="font-semibold text-sm text-gray-900">
-                                {farmer.farmer_name}
-                              </span>
-                              <span className="text-xs text-gray-600">
-                                • {farmer.phone_number}
-                              </span>
-                            </div>
-                            <div className="flex items-center space-x-2 mt-1">
-                              <MapPin size={12} className="text-gray-500" />
-                              <span className="text-xs text-gray-600">
-                                {farmer.location}
-                              </span>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="mb-2 text-xs text-gray-400">
-                            Farmer info unavailable
-                          </div>
                         )}
+                        <span className="text-sm font-medium text-gray-700">{job?.title}</span>
                       </div>
 
-                      {/* Aggregated Totals */}
-                      <div className="flex items-center space-x-6 mr-4">
-                        {/* <div className="text-right">
-                          <p className="text-xs text-gray-500">Total Crew</p>
-                          <p className="text-lg font-bold text-teal-600 flex items-center">
-                            <Users size={16} className="mr-1" />
-                            {totalCrew}
-                          </p>
-                        </div> */}
-                        <div className="text-right">
-                          <p className="text-xs text-gray-500">Total Area</p>
-                          <p className="text-lg font-bold text-gray-700">
-                            {totalArea.toFixed(1)} acres
-                          </p>
+                      {farmer && (
+                        <div className="mb-2">
+                          <div className="flex items-center space-x-2 text-sm">
+                            <Users size={14} className="text-indigo-600" />
+                            <span className="font-bold text-gray-900">{farmer.farmer_name}</span>
+                            <span className="text-gray-500">• {farmer.phone_number}</span>
+                          </div>
+                          <div className="flex items-center space-x-2 mt-1 text-xs text-gray-600">
+                            <MapPin size={12} />
+                            <span>{farmer.location}</span>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <p className="text-xs text-gray-500">Mukkadam Cost</p>
-                          <p className="text-lg font-bold text-green-600">
-                            ₹{totalMukkadamCost.toLocaleString()}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-xs text-gray-500">Transport Cost</p>
-                          <p className="text-lg font-bold text-orange-600">
-                            ₹{totalTransportCost.toLocaleString()}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-xs text-gray-500">Total Cost</p>
-                          <p className="text-2xl font-bold text-purple-600">
-                            ₹{totalCost.toLocaleString()}
-                          </p>
-                        </div>
-                      </div>
-
-                      {isExpanded ? (
-                        <ChevronUp className="text-green-600" size={24} />
-                      ) : (
-                        <ChevronDown className="text-green-600" size={24} />
                       )}
                     </div>
-                  </div>
 
-                  {/* Expanded Content - Individual Allocations */}
-                  {isExpanded && (
-                    <div className="px-6 pb-6 border-t border-green-300 bg-white animate-fadeIn">
-                      <div className="mt-4">
-                        <h4 className="font-semibold text-gray-900 mb-3">
-                          Individual Allocations ({jobAllocations.length})
-                        </h4>
-                        <div className="overflow-x-auto">
-                          <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-gray-50">
-                              <tr>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Crew</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cost</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                                {/* <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th> */}
-                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                              {jobAllocations.map(allocation => {
-                                const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
-                                const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
-                                
-                                const mukkadamPrice = allocation.mukkadam_price 
-                                  ? parseFloat(String(allocation.mukkadam_price)) 
-                                  : 0;
-                                const transportPrice = allocation.transport_price 
-                                  ? parseFloat(String(allocation.transport_price)) 
-                                  : 0;
-                                const allocationCost = mukkadamPrice + transportPrice;
-                                
-                                const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-                                const isRejected = mukkadamPayment?.status === 'rejected';
-                                
-                                let transportDisplay = 'Unknown';
-                                let displayTransportPrice = 0;
-                                let transportColor = 'text-gray-600';
-                                
-                                if (allocation.transport_type === 'none') {
-                                  transportDisplay = 'No Transport';
-                                  displayTransportPrice = 0;
-                                  transportColor = 'text-gray-500';
-                                } else if (allocation.transport_type === 'own') {
-                                  transportDisplay = 'Own Transport';
-                                  displayTransportPrice = allocation.own_transport_price 
-                                    ? parseFloat(String(allocation.own_transport_price))
-                                    : transportPrice;
-                                  transportColor = 'text-blue-600';
-                                } else if (allocation.transport_type === 'provider') {
-                                  transportDisplay = provider?.name || 'Unknown Provider';
-                                  displayTransportPrice = transportPrice;
-                                  transportColor = 'text-orange-600';
-                                }
-                                
-                                return (
-                                  <tr key={allocation.id} className="hover:bg-gray-50">
-                                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
-                                      {allocation.activity_name || 'N/A'}
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <div className="text-sm">
-                                        <div className="font-medium text-gray-900">
-                                          {mukkadam?.mukkadam_name || 'Unknown'}
-                                        </div>
-                                        <div className="text-green-600 font-semibold">
-                                          ₹{mukkadamPrice.toLocaleString()}
-                                        </div>
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-gray-700">
-                                      {allocation.allocated_area ? `${allocation.allocated_area} acres` : 'N/A'}
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center text-sm font-bold text-teal-600">
-                                        <Users size={14} className="mr-1" />
-                                        {allocation.crew_size || mukkadam?.crew_size || 'N/A'}
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <div className="text-sm">
-                                        <div className={`font-medium ${transportColor}`}>
-                                          {transportDisplay}
-                                        </div>
-                                        <div className={`font-semibold ${transportColor}`}>
-                                          ₹{displayTransportPrice.toLocaleString()}
-                                        </div>
-                                      </div>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                      <span className="text-sm font-bold text-purple-600">
-                                        ₹{allocationCost.toLocaleString()}
-                                      </span>
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-gray-500">
-                                      {allocation.work_date 
-                                        ? new Date(allocation.work_date).toLocaleDateString('en-IN')
-                                        : 'N/A'}
-                                    </td>
-                                    {/* <td className="px-4 py-3">
-                                      {isRejected ? (
-                                        <span className="px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold flex items-center w-fit">
-                                          <Ban size={14} className="mr-1" />
-                                          Rejected
-                                        </span>
-                                      ) : (
-                                        <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold">
-                                          Awaiting Payment
-                                        </span>
-                                      )}
-                                    </td> */}
-                                    <td className="px-4 py-3">
-                                      <div className="flex space-x-2">
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            navigate(`/allocations/${allocation.id}`);
-                                          }}
-                                          className="text-blue-600 hover:text-blue-900 font-medium flex items-center text-xs"
-                                        >
-                                          <Eye size={14} className="mr-1" /> View
-                                        </button>
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setAllocationToEdit(allocation);
-                                            setShowEditModal(true);
-                                          }}
-                                          className="text-orange-600 hover:text-orange-900 font-medium flex items-center text-xs"
-                                        >
-                                          <Edit size={14} className="mr-1" /> Reallocate
-                                        </button>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
+                    <div className="flex items-center space-x-6 mr-4">
+                      {/* --- Scheduled Date Column --- */}
+                      <div className="text-right border-r pr-6 border-green-200">
+                        <p className="text-xs text-gray-500 uppercase font-bold">Scheduled</p>
+                        <p className="text-sm font-semibold text-gray-700">
+                          {(() => {
+                            let dStr = job?.scheduled_date;
+                            if (!dStr && job?.activities?.length > 0) {
+                              const sorted = job.activities.map(a => a.scheduled_date).filter(d => d).sort();
+                              if (sorted.length > 0) dStr = sorted[0];
+                            }
+                            return dStr ? new Date(dStr).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Not set';
+                          })()}
+                        </p>
+                      </div>
+
+                      <div className="text-right">
+                        <p className="text-xs text-gray-500">Area</p>
+                        <p className="text-lg font-bold text-gray-700">{totalArea.toFixed(1)} ac</p>
+                      </div>
+                      
+                      <div className="text-right">
+                        <p className="text-xs text-gray-500">Total Cost</p>
+                        <p className="text-2xl font-bold text-purple-600">₹{totalCost.toLocaleString()}</p>
                       </div>
                     </div>
-                  )}
+
+                    {isExpanded ? <ChevronUp className="text-green-600" /> : <ChevronDown className="text-green-600" />}
+                  </div>
                 </div>
-              );
-            })}
+
+                {isExpanded && (
+                  <div className="px-6 pb-6 border-t border-green-200 bg-white">
+                    <div className="mt-4 overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr className="text-xs text-gray-500 uppercase">
+                            <th className="px-4 py-3 text-left">Activity</th>
+                            <th className="px-4 py-3 text-left">Mukkadam</th>
+                            <th className="px-4 py-3 text-left">Area</th>
+                            <th className="px-4 py-3 text-left">Crew</th>
+                            <th className="px-4 py-3 text-left">Transport</th>
+                            <th className="px-4 py-3 text-left">Cost</th>
+                            <th className="px-4 py-3 text-left">Work Date</th>
+                            <th className="px-4 py-3 text-left">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {jobAllocations.map(allocation => {
+                            const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
+                            return (
+                              <tr key={allocation.id} className="text-sm hover:bg-gray-50">
+                                <td className="px-4 py-3 font-medium">{allocation.activity_name}</td>
+                                <td className="px-4 py-3">
+                                  <div className="font-bold text-gray-900">{mukkadam?.mukkadam_name}</div>
+                                  <div className="text-green-600">₹{parseFloat(allocation.mukkadam_price).toLocaleString()}</div>
+                                </td>
+                                <td className="px-4 py-3">{allocation.allocated_area} ac</td>
+                                <td className="px-4 py-3 font-bold text-teal-600">{allocation.crew_size}</td>
+                                <td className="px-4 py-3 text-orange-600 font-medium">₹{parseFloat(allocation.transport_price).toLocaleString()}</td>
+                                <td className="px-4 py-3 font-bold text-purple-600">₹{(parseFloat(allocation.mukkadam_price) + parseFloat(allocation.transport_price)).toLocaleString()}</td>
+                                <td className="px-4 py-3 text-gray-500">{allocation.work_date ? new Date(allocation.work_date).toLocaleDateString('en-IN') : 'N/A'}</td>
+                                <td className="px-4 py-3">
+                                  <div className="flex space-x-3">
+                                    <button onClick={() => navigate(`/allocations/${allocation.id}`)} className="text-blue-600 hover:underline">View</button>
+                                    <button onClick={() => {setAllocationToEdit(allocation); setShowEditModal(true);}} className="text-orange-600 hover:underline">Reallocate</button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       );
     })()}
@@ -2784,38 +2677,38 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     {/* Right Side Actions */}
                     <div className="flex items-center space-x-4">
                       <div className="text-right">
-  <p className="text-xs text-gray-500">Scheduled</p>
-  <p className="text-sm font-semibold text-gray-700">
-    {(() => {
-      // 1. Priority: Job level scheduled_date
-      let dateStr = job.scheduled_date;
+                                <p className="text-xs text-gray-500">Scheduled</p>
+                                <p className="text-sm font-semibold text-gray-700">
+                                  {(() => {
+                                    // 1. Priority: Job level scheduled_date
+                                    let dateStr = job.scheduled_date;
 
-      // 2. Fallback: Earliest date from activities
-      if (!dateStr && job.activities && job.activities.length > 0) {
-        // Extract valid dates, sort them, and pick the first one
-        const activityDates = job.activities
-          .map(a => a.scheduled_date)
-          .filter(d => d) // Remove nulls
-          .sort(); // ISO strings (YYYY-MM-DD) sort correctly alphabetically
-        
-        if (activityDates.length > 0) {
-          dateStr = activityDates[0];
-        }
-      }
+                                    // 2. Fallback: Earliest date from activities
+                                    if (!dateStr && job.activities && job.activities.length > 0) {
+                                      // Extract valid dates, sort them, and pick the first one
+                                      const activityDates = job.activities
+                                        .map(a => a.scheduled_date)
+                                        .filter(d => d) // Remove nulls
+                                        .sort(); // ISO strings (YYYY-MM-DD) sort correctly alphabetically
+                                      
+                                      if (activityDates.length > 0) {
+                                        dateStr = activityDates[0];
+                                      }
+                                    }
 
-      // 3. Render
-      if (dateStr) {
-        return new Date(dateStr).toLocaleDateString('en-IN', {
-          day: 'numeric',
-          month: 'short',
-          year: 'numeric'
-        });
-      }
-      
-      return <span className="text-gray-400 italic">Not set</span>;
-    })()}
-  </p>
-</div>
+                                    // 3. Render
+                                    if (dateStr) {
+                                      return new Date(dateStr).toLocaleDateString('en-IN', {
+                                        day: 'numeric',
+                                        month: 'short',
+                                        year: 'numeric'
+                                      });
+                                    }
+                                    
+                                    return <span className="text-gray-400 italic">Not set</span>;
+                                  })()}
+                                </p>
+                              </div>
                       
                       <button
                         onClick={(e) => {
@@ -3494,6 +3387,8 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
     )}
   </div>
 )}
+
+
 {activeTab === 'activity' && (
   <div>
     {/* Filter Bar */}
@@ -3663,6 +3558,8 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
 
                   {/* Description */}
                   <p className="text-sm text-gray-700 mb-2">{log.description}</p>
+
+                  
 
                   {/* Details Grid */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
