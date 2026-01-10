@@ -1843,7 +1843,8 @@ def mukkadam_work_history(request):
     pending_allocations = []  # Past due but not completed
     upcoming_allocations = [] # Future dates
     
-    total_area_worked = 0
+    total_allocated_area = 0  # Sum of ALL allocations
+    total_area_worked = 0      # Sum of COMPLETED allocations only
     
     # --- 💰 FINANCIAL BREAKDOWN VARIABLES ---
     total_potential_earnings = 0  # Total allocated one (Sum of everything)
@@ -1858,12 +1859,18 @@ def mukkadam_work_history(request):
         earnings = float(allocation.mukkadam_price) * float(allocation.allocated_area)
         
         # 1. Add to Total Potential (Allocated One)
+        # 1. Add to Total Potential (Allocated One)
         total_potential_earnings += earnings
-        total_area_worked += float(allocation.allocated_area)
+        total_allocated_area += float(allocation.allocated_area)  # ALL allocations
         
         # 2. Categorize and Calculate Specific Financials
         if allocation.status == 'completed':
             completed_allocations.append(allocation)
+            total_area_worked += float(allocation.allocated_area)  # Only completed
+
+
+            # Calculate remaining area
+            
             
             # CHECK PAYMENT STATUS
             # If payment request exists AND status is 'paid'
@@ -1882,6 +1889,8 @@ def mukkadam_work_history(request):
             # Future date (Upcoming Job)
             upcoming_allocations.append(allocation)
             total_upcoming_income += earnings # Projected income
+
+    total_area_remaining = total_allocated_area - total_area_worked 
 
     # ========================================
     # STEP 4: FETCH JOB & FARMER DETAILS (External APIs)
@@ -2034,7 +2043,10 @@ def mukkadam_work_history(request):
             # 4. Upcoming Income (Allocated or Pending Jobs)
             'total_upcoming_income': round(total_upcoming_income, 2),
             
-            'total_area_worked': round(total_area_worked, 2),
+            # Area Metrics
+            'total_allocated_area': round(total_allocated_area, 2),  # ALL allocations
+            'total_area_worked': round(total_area_worked, 2),        # COMPLETED only
+            'total_area_remaining': round(total_area_remaining, 2),  # Pending + Upcoming
         },
         
         'work_history': {
@@ -2048,7 +2060,7 @@ def mukkadam_work_history(request):
         'performance_metrics': {
             'total_jobs_completed': len(completed_allocations),
             'total_jobs_pending': len(pending_allocations),
-            'average_area_per_job': round(total_area_worked / allocations.count(), 2) if allocations.count() > 0 else 0,
+            'average_area_per_job': round(total_allocated_area / allocations.count(), 2) if allocations.count() > 0 else 0,
             'most_recent_work': str(allocations.first().work_date) if allocations.first() and allocations.first().work_date else None,
         }
     }

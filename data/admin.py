@@ -143,3 +143,93 @@ class CallLogAdmin(admin.ModelAdmin):
     list_filter = ('type', 'synced_at')
     search_fields = ('name', 'number', 'user_id')
     readonly_fields = ('synced_at', 'timestamp')
+
+
+from django.contrib import admin
+from .models import ActivityLog
+
+
+@admin.register(ActivityLog)
+class ActivityLogAdmin(admin.ModelAdmin):
+    """
+    Admin configuration for ActivityLog
+    """
+
+    # 📌 Columns shown in admin list view
+    list_display = (
+        'activity_type',
+        'job_id',
+        'mukkadam_id',
+        'amount',
+        'performed_by',
+        'performed_at',
+    )
+
+    # 🔍 Filters on right sidebar
+    list_filter = (
+        'activity_type',
+        'performed_at',
+        'performed_by',
+    )
+
+    # 🔎 Search box
+    search_fields = (
+        'job_id',
+        'description',
+        'mukkadam_id',
+        'transport_provider_id',
+    )
+
+    # ⏱ Default ordering
+    ordering = ('-performed_at',)
+
+    # 🚀 Performance optimization
+    list_select_related = (
+        'allocation',
+        'payment_request',
+        'transport_payment_request',
+        'performed_by',
+    )
+
+    # 🔒 Make logs immutable (recommended)
+    readonly_fields = (
+        'activity_type',
+        'description',
+        'allocation',
+        'payment_request',
+        'transport_payment_request',
+        'job_id',
+        'mukkadam_id',
+        'transport_provider_id',
+        'amount',
+        'performed_by',
+        'performed_at',
+        'metadata',
+    )
+
+    # 🧾 Better form layout
+    fieldsets = (
+        ('Activity Info', {
+            'fields': ('activity_type', 'description', 'performed_at', 'performed_by')
+        }),
+        ('Related Objects', {
+            'fields': ('allocation', 'payment_request', 'transport_payment_request')
+        }),
+        ('Reference IDs', {
+            'fields': ('job_id', 'mukkadam_id', 'transport_provider_id')
+        }),
+        ('Financial', {
+            'fields': ('amount',)
+        }),
+        ('Metadata', {
+            'fields': ('metadata',),
+            'classes': ('collapse',),
+        }),
+    )
+
+    # ❌ Disable add/delete (logs should only be system-generated)
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
