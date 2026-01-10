@@ -2,36 +2,86 @@
 import requests
 import logging
 from django.conf import settings
-
+from django.core.cache import cache
 logger = logging.getLogger(__name__)
 
 class ExotelService:
-    BASE_URL = getattr(settings, 'EXOTEL_SERVICE_BASE_URL', "https://b5497a2f817f.ngrok-free.app/api/calls")
+    BASE_URL = getattr(settings, 'EXOTEL_SERVICE_BASE_URL')
     
     def __init__(self):
-        self.api_token = settings.EXOTEL_API_TOKEN
-        self.headers = {
+        # We no longer set self.headers here because the token changes
+        pass
+
+    def _get_access_token(self):
+        """Fetches token from cache or requests a new one from OAuth API"""
+        cache_key = "exotel_oauth_token"
+        token = cache.get(cache_key)
+
+        if not token:
+            logger.info("Fetching new OAuth token...")
+            payload = {
+                "client_id": "kishan_localhost",
+                "client_secret": "bi_M-n87nBu4a1QAs6ve7-o4FMrvm9hOMZ5npqVB-lhS-Q",
+                "scope": "call:create"
+            }
+            headers = {"Content-Type": "application/json"}
+            
+            try:
+                response = requests.post(
+                    settings.EXOTEL_TOKEN_URL, 
+                    json=payload, 
+                    headers=headers, 
+                    timeout=60
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                token = data.get("access_token")
+                # Cache the token. Subtract 30 seconds from 'expires_in' for safety.
+                expires_in = data.get("expires_in", 300) - 30 
+                cache.set(cache_key, token, timeout=expires_in)
+                
+            except Exception as e:
+                logger.error(f"Failed to obtain OAuth token: {str(e)}")
+                return None
+        
+        return token
+
+    def get_headers(self):
+        """Constructs headers with the Bearer token"""
+        token = self._get_access_token()
+        return {
             "Content-Type": "application/json",
-            "Authorization": f"Token {self.api_token}"
+            "Authorization": f"Bearer {token}",
+            "X-Client-Id": settings.EXOTEL_CLIENT_ID  # Required as per your doc
         }
 
     def make_call(self, from_number, to_number):
-        """Connect two phone numbers"""
+        """Connect two phone numbers using Bearer Token"""
         try:
             payload = {
                 "from_number": from_number,
-                "to_number": to_number
+                "to_number": to_number,
+                "side":"ALLOCATION"
             }
             
-            logger.info(f"📞 Calling: {from_number} → {to_number}")
-            
+            # Dynamically get headers with valid token
+            headers = self.get_headers()
+            if not headers.get("Authorization"):
+                return {'success': False, 'error': 'Auth failed'}
+
             response = requests.post(
-                f"{self.BASE_URL}/make_call/",
-                headers=self.headers,
+                f"{self.BASE_URL}/api/calls/make/",
+                headers=headers,
                 json=payload,
                 timeout=30
             )
             
+            # If 401, clear cache and try once more (Optional retry logic)
+            if response.status_code == 401:
+                cache.delete("exotel_oauth_token")
+                # ... optionally retry the call once ...
+
             if response.status_code == 200:
                 data = response.json()
                 return {
@@ -40,26 +90,8 @@ class ExotelService:
                     'status': data.get('status', 'queued')
                 }
             
-            logger.error(f"❌ Call failed: {response.text}")
             return {'success': False, 'error': response.text}
             
         except Exception as e:
             logger.error(f"❌ Exotel error: {str(e)}", exc_info=True)
             return {'success': False, 'error': str(e)}
-    
-    def get_call_status(self, call_sid):
-        """Check call status"""
-        try:
-            response = requests.get(
-                f"{self.BASE_URL}/get_call_status/{call_sid}/",
-                headers=self.headers,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-            return {'status': 'unknown'}
-            
-        except Exception as e:
-            logger.error(f"Error fetching status: {str(e)}")
-            return {'status': 'error'}

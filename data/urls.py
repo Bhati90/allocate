@@ -4,7 +4,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
 from .views import (MakeCallView, UserProfileView,
-    CallStatusView,UpdateCallDetailsView,
+   
     JobActivityViewSet, get_job_details,
     AllocationViewSet,transporter_work_history,ExotelWebhookView,
     jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,
@@ -34,7 +34,7 @@ urlpatterns = [
     
     path('calls/webhook/', ExotelWebhookView.as_view(), name='exotel-webhook'),
     path('calls/make/', MakeCallView.as_view(), name='make-call'),
-    path('api/calls/status/<str:call_sid>/', CallStatusView.as_view(), name='call-status'),
+    # path('api/calls/status/<str:call_sid>/', CallStatusView.as_view(), name='call-status'),
     # path('api/calls/update/<str:call_sid>/', UpdateCallDetailsView.as_view(), name='update-call'),
 
     path('login/', obtain_auth_token, name='api-token-auth'),
