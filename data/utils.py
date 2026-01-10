@@ -385,6 +385,136 @@ def batch_fetch_transport_providers(provider_ids: List[int], max_workers: int = 
 # CACHE MANAGEMENT
 # ============================================
 
+
+# allocation_app/utils.py
+
+# ... existing imports ...
+
+# ============================================
+# FETCH ALL MUKKADAMS & TRANSPORTERS VIA API
+# ============================================
+
+def get_all_mukkadams_from_api() -> List[Dict]:
+    """
+    Fetch ALL mukkadams from Supply API
+    Returns list of mukkadam dictionaries
+    """
+    cache_key = 'all_mukkadams_list'
+    
+    # Try cache first (cache for 5 minutes since this list changes)
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        print(f"✅ Using cached mukkadams list ({len(cached_data)} mukkadams)")
+        return cached_data
+    
+    session = get_requests_session()
+    
+    try:
+        print("📡 Fetching all mukkadams from Supply API...")
+        response = session.get(
+            f'{SUPPLY_API_URL}/api/mukkadam/',
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            mukkadams_data = response.json()
+            
+            # Handle both list and paginated response
+            if isinstance(mukkadams_data, dict) and 'results' in mukkadams_data:
+                # Paginated response
+                mukkadams = mukkadams_data['results']
+            elif isinstance(mukkadams_data, list):
+                # Direct list
+                mukkadams = mukkadams_data
+            else:
+                print(f"⚠️ Unexpected response format from mukkadam API")
+                return []
+            
+            print(f"✅ Fetched {len(mukkadams)} mukkadams from API")
+            
+            # Cache for 5 minutes
+            cache.set(cache_key, mukkadams, 300)
+            return mukkadams
+        else:
+            print(f"❌ Failed to fetch mukkadams: {response.status_code}")
+            return []
+            
+    except requests.exceptions.Timeout:
+        print(f"⏱️ Timeout fetching all mukkadams")
+        return []
+        
+    except Exception as e:
+        print(f"❌ Error fetching all mukkadams: {str(e)}")
+        return []
+    finally:
+        session.close()
+
+
+def get_all_transport_providers_from_api() -> List[Dict]:
+    """
+    Fetch ALL transport providers from Supply API
+    Returns list of transport provider dictionaries
+    """
+    cache_key = 'all_transport_providers_list'
+    
+    # Try cache first (cache for 10 minutes since this list changes less frequently)
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        print(f"✅ Using cached transport providers list ({len(cached_data)} providers)")
+        return cached_data
+    
+    session = get_requests_session()
+    
+    try:
+        print("📡 Fetching all transport providers from Supply API...")
+        response = session.get(
+            f'{SUPPLY_API_URL}/api/transport-providers/',
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            providers_data = response.json()
+            
+            # Handle both list and paginated response
+            if isinstance(providers_data, dict) and 'results' in providers_data:
+                # Paginated response
+                providers = providers_data['results']
+            elif isinstance(providers_data, list):
+                # Direct list
+                providers = providers_data
+            else:
+                print(f"⚠️ Unexpected response format from transport provider API")
+                return []
+            
+            print(f"✅ Fetched {len(providers)} transport providers from API")
+            
+            # Cache for 10 minutes
+            cache.set(cache_key, providers, 600)
+            return providers
+        else:
+            print(f"❌ Failed to fetch transport providers: {response.status_code}")
+            return []
+            
+    except requests.exceptions.Timeout:
+        print(f"⏱️ Timeout fetching all transport providers")
+        return []
+        
+    except Exception as e:
+        print(f"❌ Error fetching all transport providers: {str(e)}")
+        return []
+    finally:
+        session.close()
+
+
+def clear_mukkadam_list_cache():
+    """Clear the cached list of all mukkadams"""
+    cache.delete('all_mukkadams_list')
+
+
+def clear_transport_provider_list_cache():
+    """Clear the cached list of all transport providers"""
+    cache.delete('all_transport_providers_list')
+
 def clear_mukkadam_cache(mukkadam_id: int):
     """Clear cache for specific mukkadam (call when mukkadam is updated)"""
     cache_key = f'mukkadam_{mukkadam_id}'
