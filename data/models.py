@@ -557,7 +557,62 @@ class ActivityLog(models.Model):
         return f"{self.get_activity_type_display()} - {self.job_id} at {self.performed_at}"
 
 
+# core/models.py (add to your existing models)
+from django.db import models
+from django.utils import timezone
 
+class FarmerCall(models.Model):
+    """Track calls made to farmers/mukadams"""
+    CALL_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('queued', 'Queued'),
+        ('ringing', 'Ringing'),
+        ('answered', 'Answered'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+    
+    CALL_PURPOSE_CHOICES = [
+        ('new_job', 'New Job Available'),
+        ('payment', 'Payment Notification'),
+        ('reminder', 'Work Reminder'),
+        ('verification', 'Verification'),
+        ('follow_up', 'Follow Up'),
+    ]
+    
+    call_sid = models.CharField(max_length=100, unique=True)
+    user_id = models.CharField(max_length=100)
+    mobile_number = models.CharField(max_length=15)
+    from_number = models.CharField(max_length=20)
+    
+    purpose = models.CharField(max_length=20, choices=CALL_PURPOSE_CHOICES)
+    status = models.CharField(max_length=20, choices=CALL_STATUS_CHOICES, default='pending')
+    
+    duration = models.IntegerField(null=True, blank=True)  # seconds
+    price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    recording_url = models.URLField(blank=True, null=True)
+    
+    initiated_at = models.DateTimeField(auto_now_add=True)
+    answered_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    # Extra context
+    job_id = models.CharField(max_length=100, blank=True)
+    notes = models.TextField(blank=True)
+    
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    
+    class Meta:
+        db_table = "farmer_calls"
+        ordering = ['-initiated_at']
+    
+    def __str__(self):
+        return f"{self.purpose} - {self.mobile_number} - {self.status}"
 # core/models.py
 
 from django.db import models

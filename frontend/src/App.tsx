@@ -14,6 +14,9 @@ import ProtectedRoute from "./ProtectedRoute";
 import AdminRoute from "./AdminRoute";
 
 import { AuthProvider } from "./context/auth";
+import AllocationAnalytics from "./analyatics";
+import SupplyHealthDashboard from "./health";
+import MukkadamPerformanceDashboard from "./analyatics";
 const queryClient = new QueryClient();
 
 // wrapper to read the route param and pass it to FarmerProfil
@@ -28,11 +31,13 @@ const App = () => (
         <Routes>
           <Route path="/login" element={<Login />} />
           
-   
+          <Route path="/analyatics/:id" element={
+            <ProtectedRoute><MukkadamPerformanceDashboard /></ProtectedRoute>
+          } />
           <Route path="/allocations/new" element={<ProtectedRoute><AllocationDashboard /></ProtectedRoute>} />
           {/* <Route path="/allocations/new" element={<ComplexAllocationDashboard />} /> */}
           <Route path="/allocations/:id" element={<AllocationView />} />
-          
+          <Route path = '/health' element= {<SupplyHealthDashboard/>} />
           <Route path="/dashboard" element={
             <ProtectedRoute><Dashboard /></ProtectedRoute>
           } />

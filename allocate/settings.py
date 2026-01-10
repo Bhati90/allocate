@@ -215,6 +215,8 @@ DATABASES = {
         },
     }
 }
+
+EXOTEL_CALLER_ID = "+91-80-4736-1465"
 # DATABASES = {
 #      'default': {
 #          'ENGINE': config('DB_ENGINE', default='django.db.backends.postgresql'),

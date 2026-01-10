@@ -1221,7 +1221,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                 <Activity className="inline-block mr-2" size={18} />
                 Activity Log ({activityLogs.length})
               </button>
-              {/* <button
+              <button
                 onClick={() => setActiveTab('analytics')}
                 className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
                   activeTab === 'analytics'
@@ -1231,7 +1231,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
               >
                 <BarChart3 className="inline-block mr-2" size={18} />
                 Analytics
-              </button> */}
+              </button>
             </nav>
           </div>
 
