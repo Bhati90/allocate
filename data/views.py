@@ -289,6 +289,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
         # Update JobActivity allocated_area
         job_activity.allocated_area = job_activity.allocated_area + allocated_area
         job_activity.save()
+
+        # 3. ✅ NEW: Trigger WhatsApp Notifications
+        self._send_whatsapp_notifications(allocation)
         
         print("="*80)
         print("✅ ALLOCATION CREATED")
@@ -308,6 +311,23 @@ class AllocationViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED
         )
+
+    def _send_whatsapp_notifications(self, allocation):
+        """Helper to trigger notifications for Mukkadam and Transporter"""
+        try:
+            from .services import WhatsAppService
+            
+            # A. Notify Mukkadam
+            WhatsAppService.send_allocation_to_mukkadam(allocation)
+            print(f"📲 WhatsApp sent to Mukkadam: {allocation.mukkadam_id}")
+
+            # B. Notify Transporter (if assigned)
+            if hasattr(allocation, 'transporter') and allocation.transporter:
+                WhatsAppService.send_allocation_to_transporter(allocation)
+                print(f"📲 WhatsApp sent to Transporter: {allocation.transporter.name}")
+
+        except Exception as e:
+            logger.error(f"⚠️ WhatsApp Notification Flow failed: {str(e)}")
     def destroy(self, request, *args, **kwargs):
         """Delete allocation and update activity allocated_area"""
         allocation = self.get_object()
@@ -1266,7 +1286,6 @@ def jobs_list(request):
     
     return Response(enriched_jobs)
 
-
 # allocation_app/views.py
 
 from .utils import batch_fetch_mukkadams, batch_fetch_farmers, batch_fetch_transport_providers
@@ -1436,10 +1455,10 @@ def allocations_list(request):
             )
         
         # Central team contact
-        central_team_phone = 'N/A'
+        central_team_phone = "+91-804-7361465" 
         if job_data and 'booking' in job_data:
             booking = job_data['booking']
-            central_team_phone = booking.get('phone_number', 'N/A')
+            central_team_phone = "+91-804-7361465"
         
         # Calculate payment
         revenue = float(allocation.mukkadam_price) * float(allocation.allocated_area)
@@ -1957,10 +1976,10 @@ def mukkadam_work_history(request):
         farmer_id = str(job_data.get('farmer_id', ''))
         farmer_data = farmers_cache.get(farmer_id, {})
         activity_details = next((a for a in job_data.get('activities',[]) if str(a.get('id') or a.get('activity_id')) == activity_id), None)
-        central_team_phone = 'N/A'
+        central_team_phone = '+91-804-7361465'
         if job_data and 'booking' in job_data:
-            central_team_phone = job_data['booking'].get('phone_number', 'N/A')
-        
+            central_team_phone = '+91-804-7361465'
+
         # Determine payment object for response
         payment_info = {
             'has_request': False,
@@ -2106,7 +2125,7 @@ class MakeCallView(APIView):
     Simple call API - Just provide from_number and to_number
     No validation, just connect the call!
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     
     def post(self, request):
         from_number = request.data.get('from_number')
@@ -2116,6 +2135,7 @@ class MakeCallView(APIView):
         purpose = request.data.get('purpose', 'general')
         job_id = request.data.get('job_id', '')
         notes = request.data.get('notes', '')
+       
         
         # Basic validation
         if not from_number or not to_number:
@@ -2129,7 +2149,8 @@ class MakeCallView(APIView):
             exotel = ExotelService()
             call_result = exotel.make_call(
                 from_number=from_number,
-                to_number=to_number
+                to_number=to_number,
+                
             )
             
             if not call_result['success']:
@@ -2139,184 +2160,189 @@ class MakeCallView(APIView):
                     'error': call_result.get('error')
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
-            # 2️⃣ Save call record (optional tracking)
-            call = FarmerCall.objects.create(
-                call_sid=call_result['call_sid'],
-                user_id=request.user.username,  # Who initiated from backend
-                mobile_number=to_number,
-                from_number=from_number,
-                purpose=purpose,
-                status=call_result['status'],
-                job_id=job_id,
-                notes=notes,
-                created_by=request.user
-            )
+            # 2️⃣ Save call record
+            call_data = {
+                'call_sid': call_result['call_sid'],
+                'mobile_number': to_number,
+                'from_number': from_number,
+                'purpose': purpose,
+                'status': call_result.get('status', 'pending'),
+                'job_id': job_id,
+                'notes': notes,
+                
+                'direction': 'outbound',  # ✅ NEW
+            }
+            
+            # Only set user fields if user is authenticated
+            if request.user.is_authenticated:
+                call_data['user_id'] = request.user.username
+                call_data['created_by'] = request.user
+            else:
+                call_data['user_id'] = 'anonymous'
+                call_data['created_by'] = None
+            
+            call = FarmerCall.objects.create(**call_data)
+            
+            logger.info(f"✅ Call initiated: {call.call_sid} - {from_number} → {to_number}")
             
             return Response({
                 'success': True,
                 'message': 'Call initiated successfully',
                 'call_sid': call_result['call_sid'],
                 'call_id': call.id,
-                'status': call_result['status'],
+                'status': call_result.get('status', 'pending'),
                 'from': from_number,
                 'to': to_number
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
-            logger.error(f"Error making call: {str(e)}", exc_info=True)
+            logger.error(f"❌ Error making call: {str(e)}", exc_info=True)
             return Response({
                 'success': False,
                 'message': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-class CallStatusView(APIView):
-    """Check call status"""
-    
-    def get(self, request, call_sid):
-        try:
-            # Get from database first
-            call = FarmerCall.objects.filter(call_sid=call_sid).first()
-            
-            if not call:
-                return Response({
-                    'success': False,
-                    'message': 'Call not found'
-                }, status=status.HTTP_404_NOT_FOUND)
-            
-            # Fetch latest status from Exotel if call is not completed
-            if call.status not in ['completed', 'failed']:
-                exotel = ExotelService()
-                status_data = exotel.get_call_status(call_sid)
-                
-                # Update database
-                call.status = status_data.get('status', call.status)
-                call.save()
-            
-            return Response({
-                'success': True,
-                'call_sid': call.call_sid,
-                'status': call.status,
-                'duration': call.duration,
-                'purpose': call.purpose,
-                'mobile_number': call.mobile_number,
-                'initiated_at': call.initiated_at,
-                'completed_at': call.completed_at
-            })
-            
-        except Exception as e:
-            return Response({
-                'success': False,
-                'message': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-class UpdateCallDetailsView(APIView):
-    """Fetch and update complete call details"""
-    
-    def post(self, request, call_sid):
-        try:
-            call = FarmerCall.objects.filter(call_sid=call_sid).first()
-            
-            if not call:
-                return Response({
-                    'success': False,
-                    'message': 'Call not found'
-                }, status=status.HTTP_404_NOT_FOUND)
-            
-            # Fetch details from Exotel
-            exotel = ExotelService()
-            details = exotel.fetch_call_details(call_sid)
-            
-            if details and 'response' in details:
-                response_data = details['response']
-                
-                # Update call record
-                call.status = response_data.get('Status', call.status)
-                call.duration = int(response_data.get('Duration', 0) or 0)
-                call.price = float(response_data.get('Price', 0) or 0)
-                call.recording_url = response_data.get('RecordingUrl', '')
-                
-                if response_data.get('StartTime'):
-                    call.answered_at = response_data['StartTime']
-                if response_data.get('EndTime'):
-                    call.completed_at = response_data['EndTime']
-                
-                call.save()
-                
-                # Mark as complete in Exotel
-                exotel.mark_call_complete(call_sid)
-                
-                return Response({
-                    'success': True,
-                    'message': 'Call details updated',
-                    'call': {
-                        'status': call.status,
-                        'duration': call.duration,
-                        'price': call.price,
-                        'recording_url': call.recording_url
-                    }
-                })
-            
-            return Response({
-                'success': False,
-                'message': 'Could not fetch call details'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
-        except Exception as e:
-            return Response({
-                'success': False,
-                'message': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 # allocation_app/views.py
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import AllowAny # Webhooks usually need public access or secret keys
+from rest_framework.permissions import AllowAny
 from .models import FarmerCall
+from django.utils import timezone
+from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
-# core/views.py
+
+
 class ExotelWebhookView(APIView):
-    """Receive call status updates from Exotel"""
+    """
+    Receive call status updates from Exotel
+    POST /api/calls/webhook/
+    
+    Exotel sends webhook in this format:
+    {
+        "call_details": {
+            "sid": "...",
+            "status": "completed",
+            "total_talk_time": 25,
+            "recordings": [{"url": "..."}],
+            ...
+        },
+        "event_details": {
+            "event_type": "terminal"
+        }
+    }
+    """
     permission_classes = [AllowAny]
     
     def post(self, request):
-        data = request.data
-        call_details = data.get('response', data)
-        call_sid = call_details.get('Sid') or call_details.get('call_sid')
-        
-        if not call_sid:
-            return Response({"error": "No call_sid"}, status=400)
-        
         try:
+            data = request.data
+            logger.info(f"📞 Received webhook: {data}")
+            
+            # Extract call_details
+            call_details = data.get('call_details', {})
+            event_details = data.get('event_details', {})
+            
+            # Get call_sid (Exotel uses 'sid' not 'call_sid')
+            call_sid = call_details.get('sid')
+            
+            if not call_sid:
+                logger.error("❌ No call_sid in webhook")
+                return Response(
+                    {"error": "No call_sid found in webhook data"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Find the call record
             call_record = FarmerCall.objects.filter(call_sid=call_sid).first()
             
-            if call_record:
-                call_record.status = call_details.get('Status', 'unknown').lower()
-                call_record.duration = int(call_details.get('Duration', 0) or 0)
-                call_record.price = float(call_details.get('Price', 0) or 0)
-                call_record.recording_url = call_details.get('RecordingUrl', '')
-                
-                if call_details.get('StartTime'):
-                    call_record.answered_at = call_details['StartTime']
-                if call_details.get('EndTime'):
-                    call_record.completed_at = call_details['EndTime']
-                
-                call_record.save()
-                logger.info(f"✅ Updated call {call_sid}")
-                
-                return Response({"success": True}, status=200)
+            if not call_record:
+                logger.warning(f"⚠️ Call record not found for SID: {call_sid}")
+                return Response(
+                    {"error": "Call not found", "call_sid": call_sid}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
             
-            return Response({"error": "Call not found"}, status=404)
+            # Update call status
+            call_record.status = call_details.get('status', 'unknown').lower()
+            call_record.state = call_details.get('state', '')
+            call_record.direction = call_details.get('direction', 'outbound')
+            
+            # Update duration and talk time
+            if call_details.get('total_talk_time'):
+                call_record.talk_time = int(call_details['total_talk_time'])
+                call_record.duration = int(call_details['total_talk_time'])  # Fallback
+            
+            if call_details.get('total_duration'):
+                call_record.duration = int(call_details['total_duration'])
+            
+            # Update virtual number and custom field
+            call_record.virtual_number = call_details.get('virtual_number', '')
+            call_record.custom_field = call_details.get('custom_field', '')
+            call_record.legs_url = call_details.get('legs', '')
+            
+            # Parse and update timestamps
+            def parse_datetime(dt_string):
+                """Parse datetime string from Exotel format"""
+                if not dt_string:
+                    return None
+                try:
+                    # Exotel format: '2026-01-10T14:59:44+05:30'
+                    return datetime.fromisoformat(dt_string)
+                except:
+                    return None
+            
+            if call_details.get('created_time'):
+                call_record.created_time = parse_datetime(call_details['created_time'])
+            
+            if call_details.get('updated_time'):
+                call_record.updated_time = parse_datetime(call_details['updated_time'])
+            
+            if call_details.get('start_time'):
+                call_record.answered_at = parse_datetime(call_details['start_time'])
+            
+            if call_details.get('end_time'):
+                call_record.completed_at = parse_datetime(call_details['end_time'])
+            
+            # Handle recordings array
+            recordings = call_details.get('recordings', [])
+            if recordings and len(recordings) > 0:
+                # Extract URLs from recordings array
+                recording_urls = [rec.get('url') for rec in recordings if rec.get('url')]
+                call_record.recording_urls = recording_urls
+                
+                # Set primary recording URL
+                if recording_urls:
+                    call_record.recording_url = recording_urls[0]
+            
+            # Store full webhook data for debugging
+            call_record.webhook_data = data
+            
+            # Save the updated record
+            call_record.save()
+            
+            logger.info(f"✅ Updated call {call_sid} - Status: {call_record.status}, Talk Time: {call_record.talk_time}s")
+            
+            return Response({
+                "success": True,
+                "message": "Call updated successfully",
+                "call_sid": call_sid,
+                "status": call_record.status,
+                "talk_time": call_record.talk_time,
+                "has_recording": call_record.has_recording
+            }, status=status.HTTP_200_OK)
             
         except Exception as e:
-            logger.error(f"Webhook error: {str(e)}")
-            return Response({"error": str(e)}, status=500)
+            logger.error(f"❌ Webhook error: {str(e)}", exc_info=True)
+            return Response(
+                {"error": str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
+            
 from django.db.models import Prefetch
 
 @api_view(['GET'])
