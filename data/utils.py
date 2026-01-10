@@ -68,7 +68,7 @@ def get_mukkadam_cached(mukkadam_id: int) -> Optional[Dict]:
     try:
         response = session.get(
             f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-            timeout=10  # ✅ Increased from 3 to 10 seconds
+            timeout=20  # ✅ Increased from 3 to 10 seconds
         )
         
         if response.status_code == 200:
@@ -146,7 +146,7 @@ def get_farmer_cached(farmer_id: str) -> Optional[Dict]:
         response = session.get(
             f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
             headers={'Authorization': FARMER_TOKEN},
-            timeout=15  # ✅ Increased from 3 to 15 seconds (external API is slower)
+            timeout=20  # ✅ Increased from 3 to 15 seconds (external API is slower)
         )
         
         if response.status_code == 200:

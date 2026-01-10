@@ -727,7 +727,7 @@ def allocations_by_mobile(request):
         supply_response = requests.get(
             f'{SUPPLY_API_URL}/api/mukkadam/by-mobile/',
             params={'mobile_number': mobile_number},
-            timeout=5
+            timeout=20
         )
         supply_data = supply_response.json()
         
@@ -795,7 +795,7 @@ def allocations_by_mobile(request):
                 try:
                     provider_response = requests.get(
                         f'{SUPPLY_API_URL}/api/transport-provider/{alloc.transport_provider_id}/',
-                        timeout=3
+                        timeout=20
                     )
                     
                     if provider_response.status_code == 200:
@@ -1087,7 +1087,7 @@ def jobs_list(request):
         response = requests.get(
             api_url,
             headers={'Authorization': token},
-            timeout=10
+            timeout=20
         )
         
         response.raise_for_status()
@@ -1316,7 +1316,7 @@ def allocations_list(request):
             mukkadam_response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/minimal_list/',
                 params={'search': mukkadam_phone},
-                timeout=5
+                timeout=20
             )
             
             if mukkadam_response.status_code == 200:
@@ -1355,7 +1355,7 @@ def allocations_list(request):
         response = requests.get(
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
-            timeout=10
+            timeout=20
         )
         
         if response.status_code == 200:
@@ -1552,7 +1552,7 @@ def transporter_work_history(request):
             print(f"   🔍 Fetching by ID: {provider_id}")
             response = requests.get(
                 f'{SUPPLY_API_URL}/api/transport-providers/{provider_id}/',
-                timeout=10
+                timeout=20
             )
             if response.status_code == 200:
                 provider_data = response.json()
@@ -1569,7 +1569,7 @@ def transporter_work_history(request):
             response = requests.post(
                 check_url,
                 json={'contact_number': mobile_number}, # Send data in body
-                timeout=5
+                timeout=20
             )
             
             print(f"   📊 Response Status: {response.status_code}")
@@ -1633,7 +1633,8 @@ def transporter_work_history(request):
         response = requests.get(
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
-            timeout=8
+            timeout=20
+            
         )
         
         if response.status_code == 200:
@@ -1655,9 +1656,10 @@ def transporter_work_history(request):
                     f_resp = requests.get(
                         f'{FARMER_API_BASE}/get_farmer_details/{fid}/',
                         headers={'Authorization': farmer_token},
-                        timeout=3
+                        timeout=20
                     )
                     if f_resp.status_code == 200:
+                        print(f"   ✅ Fetched farmer ID: {fid}")
                         farmers_cache[str(fid)] = f_resp.json()
                 except:
                     pass
@@ -1670,7 +1672,7 @@ def transporter_work_history(request):
         for mid in mukkadam_ids:
             m_resp = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/{mid}/',
-                timeout=3
+                timeout=20
             )
             if m_resp.status_code == 200:
                 mukkadams_cache[mid] = m_resp.json()
@@ -1731,7 +1733,7 @@ def transporter_work_history(request):
                 'location': job_data.get('location') or farmer_data.get('village', 'Unknown'),
                 'farmer_name': farmer_data.get('farmer_name', 'Unknown Farmer'),
                 'farmer_mobile': farmer_data.get('phone_number', 'N/A'),
-                'google_maps_link': f"https://www.google.com/maps/search/?api=1&query={job_data.get('location', '')}" 
+                'location': job_data.get('location') or farmer_data.get('village') or 'Unknown',
             },
             
             # Contact Person (Mukkadam)
@@ -1802,7 +1804,7 @@ def mukkadam_work_history(request):
             # Fetch by ID
             response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-                timeout=5
+                timeout=20
             )
             if response.status_code == 200:
                 mukkadam_data = response.json()
@@ -1811,7 +1813,7 @@ def mukkadam_work_history(request):
             # Search by phone
             response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/minimal_list/',
-                timeout=5
+                timeout=20
             )
             if response.status_code == 200:
                 mukkadams = response.json()
@@ -1821,7 +1823,7 @@ def mukkadam_work_history(request):
                         # Fetch full details
                         full_response = requests.get(
                             f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-                            timeout=5
+                            timeout=20
                         )
                         if full_response.status_code == 200:
                             mukkadam_data = full_response.json()
@@ -1917,7 +1919,7 @@ def mukkadam_work_history(request):
     EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
     job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
     try:
-        response = requests.get(f'{EXTERNAL_API_URL}/get_allocated_jobs/', headers={'Authorization': job_token}, timeout=10)
+        response = requests.get(f'{EXTERNAL_API_URL}/get_allocated_jobs/', headers={'Authorization': job_token}, timeout=20)
         if response.status_code == 200:
             data = response.json()
             jobs_list = data.get('data', []) if isinstance(data, dict) else data
@@ -1936,7 +1938,7 @@ def mukkadam_work_history(request):
     farmer_token = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
     for farmer_id in farmer_ids:
         try:
-            response = requests.get(f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/', headers={'Authorization': farmer_token}, timeout=3)
+            response = requests.get(f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/', headers={'Authorization': farmer_token}, timeout=20)
             if response.status_code == 200:
                 farmers_cache[farmer_id] = response.json()
         except Exception:
