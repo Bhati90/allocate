@@ -8,6 +8,69 @@ from .models import Allocation, PaymentRequest, TransportPaymentRequest, Activit
 # Setup logging (Hooks into Django's logging system)
 logger = logging.getLogger(__name__)
 
+
+class whatsappService:
+
+    @classmethod
+    def send_allocation_to_mukkadam(cls, allocation):
+        """Notify Mukkadam about a new job allocation"""
+        token = cls._get_token()
+        if not token or not allocation.mukkadam_mobile: # Ensure mobile exists
+            return False
+
+        payload = {
+            "to": allocation.mukkadam_mobile,
+            "type": "template",
+            "template": {
+                "name": "mukkadam_allocation_v1",
+                "language": {"code": "mr"},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": allocation.job_activity.activity_name},
+                            {"type": "text", "text": str(allocation.work_date)},
+                            {"type": "text", "text": str(allocation.allocated_area)},
+                            {"type": "text", "text": allocation.job_activity.location}
+                        ]
+                    }
+                ]
+            }
+        }
+        return cls._execute_send(payload, token)
+
+    @classmethod
+    def send_allocation_to_transporter(cls, allocation):
+        """Notify Transporter about a new pickup/drop requirement"""
+        # Only send if a transporter is actually assigned to this allocation
+        if not hasattr(allocation, 'transporter') or not allocation.transporter:
+            return False
+
+        token = cls._get_token()
+        payload = {
+            "to": allocation.transporter.contact_number,
+            "type": "template",
+            "template": {
+                "name": "transporter_allocation_v1",
+                "language": {"code": "mr"},
+                "components": [
+                    {
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": allocation.transporter.name},
+                            {"type": "text", "text": str(allocation.work_date)},
+                            {"type": "text", "text": allocation.job_activity.location},
+                            {"type": "text", "text": str(allocation.crew_size or 0)}
+                        ]
+                    }
+                ]
+            }
+        }
+        return cls._execute_send(payload, token)
+
+  
+        
+
 def process_daily_payments():
     """
     Core logic to check past allocations and generate payments.

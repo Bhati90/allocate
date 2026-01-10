@@ -215,6 +215,12 @@ DATABASES = {
         },
     }
 }
+EXOTEL_TOKEN_URL = "https://call.bharatintelligence.ai/oauth/token"
+# EXOTEL_SERVICE_BASE_URL = "https://658fb4b69f28.ngrok-free.app/api/calls"
+EXOTEL_CLIENT_ID = "kishan_localhost"
+EXOTEL_CLIENT_SECRET= "bi_M-n87nBu4a1QAs6ve7-o4FMrvm9hOMZ5npqVB-lhS-Q",
+EXOTEL_SERVICE_BASE_URL = "https://call.bharatintelligence.ai"
+EXOTEL_CALLER_ID = "+91-804-7361465"
 # DATABASES = {
 #      'default': {
 #          'ENGINE': config('DB_ENGINE', default='django.db.backends.postgresql'),
