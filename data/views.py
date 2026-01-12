@@ -42,7 +42,7 @@ from .serializers import (
 # External API base URL
 EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
 
-SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'  # Change to your actual Supply App URL
+SUPPLY_API_URL = 'https://supply.bharatintelligence.ai' # Change to your actual Supply App URL
 # SUPPLY_API_URL = 'http://localhost:8000'
 def about(request):
     return render(request,'data/index.html')
@@ -292,7 +292,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
         # 3. ✅ NEW: Trigger WhatsApp Notifications
         self._send_whatsapp_notifications(allocation)
-
+        
         print("="*80)
         print("✅ ALLOCATION CREATED")
         print("="*80)
@@ -316,7 +316,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
         """Helper to trigger notifications for Mukkadam and Transporter"""
         try:
             from .services import WhatsAppService
-
             # A. Notify Mukkadam
             WhatsAppService.send_allocation_to_mukkadam(allocation)
             print(f"📲 WhatsApp sent to Mukkadam: {allocation.mukkadam_id}")
@@ -348,7 +347,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
         # Clear mukkadam cache when new allocation is created
         clear_mukkadam_cache(allocation.mukkadam_id)
         return allocation
-
 from .models import JobActivity, Allocation, AllocationStats  # ✅ CORRECT
 
 from rest_framework import viewsets, status
@@ -388,7 +386,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'allocation_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         try:
             allocation = Allocation.objects.get(id=allocation_id)
         except Allocation.DoesNotExist:
@@ -396,7 +393,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'Allocation not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
-
         # Check if payment request already exists
         if hasattr(allocation, 'payment_request'):
             return Response(
@@ -408,7 +404,7 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
             )
 
         # Calculate amount from allocation
-        requested_amount = float(allocation.mukkadam_price) * float(allocation.allocated_area)
+        requested_amount = float(allocation.mukkadam_price) 
 
         # Create payment request
         payment_request = PaymentRequest.objects.create(
@@ -433,7 +429,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
     def re_request(self, request, pk=None):
         """Allow mukkadam to re-request payment after rejection"""
         payment_request = self.get_object()
-
         if payment_request.status != 'rejected':
             return Response(
                 {'error': 'Can only re-request payments that were rejected'},
@@ -455,7 +450,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
             mukkadam_id=payment_request.mukkadam_id,          # Required field in ActivityLog
             metadata={"notes": "Re-request"}
         )
-
         serializer = self.get_serializer(payment_request)
         return Response({
             'message': 'Payment request submitted successfully',
@@ -466,7 +460,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
     def reject(self, request, pk=None):
         """Reject a payment request"""
         payment_request = self.get_object()
-
         if payment_request.status == 'paid':
             return Response(
                 {'error': 'Cannot reject a payment that has already been paid'},
@@ -487,7 +480,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
             mukkadam_id=payment_request.mukkadam_id,
             amount=payment_request.requested_amount
         )
-
         serializer = self.get_serializer(payment_request)
         return Response({
             'message': 'Payment request rejected successfully',
@@ -502,13 +494,11 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
         payment_request.paid_at = timezone.now()
         payment_request.paid_by = request.user if request.user.is_authenticated else None
         payment_request.save()
-
         # Update allocation status
         allocation = payment_request.allocation
         allocation.status = 'completed'
         allocation.completed_at = timezone.now()
         allocation.save()
-
         # ✅ FIX: Use ActivityLog (This caused your NameError)
         ActivityLog.objects.create(
             activity_type='payment_paid',
@@ -520,18 +510,15 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
             mukkadam_id=allocation.mukkadam_id,
             amount=payment_request.requested_amount
         )
-
         return Response({
             'message': 'Payment marked as paid successfully',
             'allocation': AllocationSerializer(allocation).data,
             'payment_request': self.get_serializer(payment_request).data
         })
-
     @action(detail=False, methods=['get'])
     def my_requests(self, request):
         """Get payment requests for specific mukkadam"""
         mukkadam_id = request.query_params.get('mukkadam_id')
-
         if not mukkadam_id:
             return Response(
                 {'error': 'mukkadam_id is required'},
@@ -585,7 +572,6 @@ class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'allocation_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         try:
             allocation = Allocation.objects.get(id=allocation_id)
         except Allocation.DoesNotExist:
@@ -593,14 +579,12 @@ class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'Allocation not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
-
         # Check if this allocation has transport provider
         if not allocation.transport_provider_id:
             return Response(
                 {'error': 'This allocation does not have a transport provider'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         # Check if payment request already exists
         if hasattr(allocation, 'transport_payment_request'):
             return Response(
@@ -619,7 +603,6 @@ class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'Transport cost is zero or not set'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         # Create payment request
         payment_request = TransportPaymentRequest.objects.create(
             allocation=allocation,
@@ -636,13 +619,11 @@ class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
     def mark_paid(self, request, pk=None):
         """Admin marks transport payment as paid"""
         payment_request = self.get_object()
-
         if payment_request.status == 'paid':
             return Response(
                 {'error': 'Payment already marked as paid'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
         # ✅ UPDATE: Mark payment as paid
         payment_request.status = 'paid'
         payment_request.paid_at = timezone.now()
@@ -657,14 +638,12 @@ class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
         if not mukkadam_payment or mukkadam_payment.status == 'paid':
             allocation.status = 'completed'
             allocation.save()
-
         serializer = self.get_serializer(payment_request)
         return Response(serializer.data)
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
         """Reject a payment request"""
         payment_request = self.get_object()
-
         if payment_request.status == 'paid':
             return Response(
                 {'error': 'Cannot reject a payment that has already been paid'},
@@ -679,12 +658,10 @@ class TransportPaymentRequestViewSet(viewsets.ModelViewSet):
             'message': 'Payment request rejected successfully',
             'payment_request': serializer.data
         })
-
     @action(detail=False, methods=['get'])
     def my_requests(self, request):
         """Get payment requests for specific transport provider"""
         provider_id = request.query_params.get('transport_provider_id')
-
         if not provider_id:
             return Response(
                 {'error': 'transport_provider_id is required'},
@@ -714,7 +691,6 @@ from .serializers import ActivityLogSerializer
 from .utils import batch_fetch_mukkadams, batch_fetch_transport_providers
 
 
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def allocations_by_mobile(request):
@@ -722,7 +698,6 @@ def allocations_by_mobile(request):
     Get all allocations for a mukkadam by mobile number with assigned transporter details
     GET /api/allocations/by-mobile/?mobile_number=9876543210
     GET /api/allocations/by-mobile/?mukkadam_phone=9876543210
-
     This API:
     1. Calls Supply App to get mukkadam_id from mobile number
     2. Fetches allocations from Allocation App database
@@ -731,7 +706,6 @@ def allocations_by_mobile(request):
     """
     # ✅ Accept both parameter names
     mobile_number = request.GET.get('mobile_number') or request.GET.get('mukkadam_phone')
-
     if not mobile_number:
         return Response(
             {'error': 'mobile_number or mukkadam_phone query parameter is required'},
@@ -750,7 +724,6 @@ def allocations_by_mobile(request):
             timeout=20
         )
         supply_data = supply_response.json()
-
         if not supply_data.get('found'):
             return Response({
                 'success': False,
@@ -774,7 +747,6 @@ def allocations_by_mobile(request):
             {'success': False, 'error': f'Failed to connect to Supply App: {str(e)}'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE
         )
-
     # ✅ STEP 2: Get allocations from Allocation App database
     allocations = Allocation.objects.filter(
         mukkadam_id__in=mukkadam_ids
@@ -817,7 +789,6 @@ def allocations_by_mobile(request):
                         f'{SUPPLY_API_URL}/api/transport-provider/{alloc.transport_provider_id}/',
                         timeout=20
                     )
-
                     if provider_response.status_code == 200:
                         provider_json = provider_response.json()
                         if provider_json.get('found'):
@@ -868,14 +839,12 @@ def allocations_by_mobile(request):
             'mukkadam_phone': mukkadam.get('contact_number') if mukkadam else None,
             'mukkadam_village': mukkadam.get('village') if mukkadam else None,
             'status': alloc.status,
-
             # Job details
             'job_id': alloc.job_activity.job_id,
             'activity_id': alloc.job_activity.activity_id,
             'activity_name': alloc.job_activity.activity_name,
             'activity_type': alloc.job_activity.activity_type,
             'location': alloc.job_activity.location,
-
             # Allocation details
             'allocated_area': float(alloc.allocated_area),
             'work_date': str(alloc.work_date),
@@ -898,7 +867,6 @@ def allocations_by_mobile(request):
             'allocated_at': alloc.allocated_at.isoformat(),
             'allocated_by': alloc.allocated_by.username if alloc.allocated_by else None,
             'notes': alloc.notes,
-
             # Activity details
             'scheduled_datetime': alloc.job_activity.scheduled_datetime.isoformat(),
             'total_activity_area': float(alloc.job_activity.total_area),
@@ -919,13 +887,11 @@ def allocations_by_mobile(request):
         'in_progress_allocations': allocations.filter(status='in_progress').count(),
         'transporters_assigned': transporters_found,  # ✅ Count of allocations with transporters
     }
-
     print("=" * 80)
     print(f"✅ RESPONSE READY")
     print(f"   Allocations: {summary['total_allocations']}")
     print(f"   Transporters found: {transporters_found}")
     print("=" * 80)
-
     return Response({
         'success': True,
         'mobile_number': mobile_number,
@@ -1653,7 +1619,6 @@ def transporter_work_history(request):
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
             timeout=20
-
         )
 
         if response.status_code == 200:
@@ -1896,9 +1861,9 @@ def mukkadam_work_history(request):
 
         # 1. Add to Total Potential (Allocated One)
         # 1. Add to Total Potential (Allocated One)
+        # 1. Add to Total Potential (Allocated One)
         total_potential_earnings += earnings
         total_allocated_area += float(allocation.allocated_area)  # ALL allocations
-
         # 2. Categorize and Calculate Specific Financials
         if allocation.status == 'completed':
             completed_allocations.append(allocation)
@@ -2078,7 +2043,6 @@ def mukkadam_work_history(request):
 
             # 4. Upcoming Income (Allocated or Pending Jobs)
             'total_upcoming_income': round(total_upcoming_income, 2),
-
             # Area Metrics
             'total_allocated_area': round(total_allocated_area, 2),  # ALL allocations
             'total_area_worked': round(total_area_worked, 2),        # COMPLETED only
@@ -2119,11 +2083,10 @@ from .models import FarmerCall
 
 
 logger = logging.getLogger(__name__)
-
 class MakeCallView(APIView):
     """
     Simple call API - Just provide from_number and to_number
-    No validation, just connect the call!
+    Accepts user_id in payload
     """
     permission_classes = [AllowAny]
 
@@ -2135,7 +2098,8 @@ class MakeCallView(APIView):
         purpose = request.data.get('purpose', 'general')
         job_id = request.data.get('job_id', '')
         notes = request.data.get('notes', '')
-
+        user_id = request.data.get('user_id')  # ✅ NEW: Accept from payload
+        # custom_field = request.data.get('custom_field', '')  # ✅ Optional custom field
 
         # Basic validation
         if not from_number or not to_number:
@@ -2150,7 +2114,7 @@ class MakeCallView(APIView):
             call_result = exotel.make_call(
                 from_number=from_number,
                 to_number=to_number,
-
+                # custom_field=custom_field  # Pass to Exotel if needed
             )
 
             if not call_result['success']:
@@ -2160,7 +2124,7 @@ class MakeCallView(APIView):
                     'error': call_result.get('error')
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            # 2️⃣ Save call record
+            # 2️⃣ Prepare call record data
             call_data = {
                 'call_sid': call_result['call_sid'],
                 'mobile_number': to_number,
@@ -2169,21 +2133,38 @@ class MakeCallView(APIView):
                 'status': call_result.get('status', 'pending'),
                 'job_id': job_id,
                 'notes': notes,
-
-                'direction': 'outbound',  # ✅ NEW
+                'direction': 'outbound',
+                # 'custom_field': custom_field,
             }
 
-            # Only set user fields if user is authenticated
-            if request.user.is_authenticated:
-                call_data['user_id'] = request.user.username
+            # ✅ Handle user_id from payload OR authenticated user
+            if user_id:
+                # User ID provided in payload (from mobile app)
+                call_data['user_id'] = str(user_id)
+                
+                # Try to link to Django User if exists
+                try:
+                    from django.contrib.auth.models import User
+                    django_user = User.objects.filter(
+                        Q(id=user_id) | Q(username=user_id)
+                    ).first()
+                    call_data['created_by'] = django_user
+                except:
+                    call_data['created_by'] = None
+                    
+            elif request.user.is_authenticated:
+                # Authenticated API call (from web/backend)
+                call_data['user_id'] = str(request.user.id)
                 call_data['created_by'] = request.user
             else:
+                # Anonymous call
                 call_data['user_id'] = 'anonymous'
                 call_data['created_by'] = None
 
+            # 3️⃣ Create call record
             call = FarmerCall.objects.create(**call_data)
 
-            logger.info(f"✅ Call initiated: {call.call_sid} - {from_number} → {to_number}")
+            logger.info(f"✅ Call initiated: {call.call_sid} - {from_number} → {to_number} (User: {call.user_id})")
 
             return Response({
                 'success': True,
@@ -2192,7 +2173,9 @@ class MakeCallView(APIView):
                 'call_id': call.id,
                 'status': call_result.get('status', 'pending'),
                 'from': from_number,
-                'to': to_number
+                'to': to_number,
+                'user_id': call.user_id,
+                'purpose': purpose
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -2201,8 +2184,156 @@ class MakeCallView(APIView):
                 'success': False,
                 'message': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 # allocation_app/views.py
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from django.db.models import Q
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_user_calls(request):
+    """
+    Get call history for a user
+    GET /api/calls/user/?user_id=12345
+    GET /api/calls/user/?user_id=12345&status=completed
+    GET /api/calls/user/?user_id=12345&date_from=2026-01-01
+    """
+    user_id = request.query_params.get('user_id')
+    
+    if not user_id:
+        return Response({
+            'error': 'user_id parameter is required'
+        }, status=400)
+    
+    # Query calls
+    calls = FarmerCall.objects.filter(user_id=user_id)
+    
+    # Apply filters
+    status_filter = request.query_params.get('status')
+    if status_filter:
+        calls = calls.filter(status=status_filter)
+    
+    date_from = request.query_params.get('date_from')
+    if date_from:
+        from datetime import datetime
+        date_from_dt = datetime.strptime(date_from, '%Y-%m-%d')
+        calls = calls.filter(initiated_at__gte=date_from_dt)
+    
+    date_to = request.query_params.get('date_to')
+    if date_to:
+        from datetime import datetime
+        date_to_dt = datetime.strptime(date_to, '%Y-%m-%d')
+        calls = calls.filter(initiated_at__lte=date_to_dt)
+    
+    # Order by most recent
+    calls = calls.order_by('-initiated_at')
+    
+    # Serialize
+    calls_data = []
+    for call in calls:
+        calls_data.append({
+            'id': call.id,
+            'call_sid': call.call_sid,
+            'from_number': call.from_number,
+            'to_number': call.mobile_number,
+            'purpose': call.purpose,
+            'status': call.status,
+            'direction': call.direction,
+            'duration': call.duration,
+            'talk_time': call.talk_time,
+            'initiated_at': call.initiated_at.isoformat() if call.initiated_at else None,
+            'completed_at': call.completed_at.isoformat() if call.completed_at else None,
+            'has_recording': call.has_recording,
+            'recording_url': call.primary_recording_url,
+            'job_id': call.job_id,
+            'notes': call.notes,
+        })
+    
+    # Stats
+    from django.db.models import Count, Avg, Sum
+    stats = calls.aggregate(
+        total_calls=Count('id'),
+        completed_calls=Count('id', filter=Q(status='completed')),
+        total_duration=Sum('duration'),
+        avg_duration=Avg('duration'),
+    )
+    
+    return Response({
+        'user_id': user_id,
+        'total_calls': calls.count(),
+        'stats': {
+            'total_calls': stats['total_calls'] or 0,
+            'completed_calls': stats['completed_calls'] or 0,
+            'total_duration_seconds': stats['total_duration'] or 0,
+            'avg_duration_seconds': int(stats['avg_duration'] or 0),
+        },
+        'calls': calls_data
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_call_details(request, call_id):
+    """
+    Get detailed information about a specific call
+    GET /api/calls/{call_id}/
+    """
+    try:
+        call = FarmerCall.objects.get(id=call_id)
+        
+        return Response({
+            'id': call.id,
+            'call_sid': call.call_sid,
+            'user_id': call.user_id,
+            'from_number': call.from_number,
+            'to_number': call.mobile_number,
+            'purpose': call.purpose,
+            'status': call.status,
+            'direction': call.direction,
+            'state': call.state,
+            
+            # Metrics
+            'duration': call.duration,
+            'talk_time': call.talk_time,
+            'price': float(call.price) if call.price else None,
+            
+            # Recordings
+            'has_recording': call.has_recording,
+            'recording_url': call.recording_url,
+            'recording_urls': call.recording_urls,
+            'primary_recording_url': call.primary_recording_url,
+            
+            # Timestamps
+            'initiated_at': call.initiated_at.isoformat() if call.initiated_at else None,
+            'answered_at': call.answered_at.isoformat() if call.answered_at else None,
+            'completed_at': call.completed_at.isoformat() if call.completed_at else None,
+            'created_time': call.created_time.isoformat() if call.created_time else None,
+            'updated_time': call.updated_time.isoformat() if call.updated_time else None,
+            
+            # Exotel specific
+            'virtual_number': call.virtual_number,
+            # 'custom_field': call.custom_field,
+            'legs_url': call.legs_url,
+            
+            # Context
+            'job_id': call.job_id,
+            'notes': call.notes,
+            'webhook_data': call.webhook_data,
+            
+            # User info
+            'created_by': {
+                'id': call.created_by.id,
+                'username': call.created_by.username,
+                'full_name': call.created_by.get_full_name()
+            } if call.created_by else None
+        })
+        
+    except FarmerCall.DoesNotExist:
+        return Response({
+            'error': 'Call not found'
+        }, status=404)
+    
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -2220,7 +2351,6 @@ class ExotelWebhookView(APIView):
     """
     Receive call status updates from Exotel
     POST /api/calls/webhook/
-
     Exotel sends webhook in this format:
     {
         "call_details": {
@@ -2236,7 +2366,6 @@ class ExotelWebhookView(APIView):
     }
     """
     permission_classes = [AllowAny]
-
     def post(self, request):
         try:
             data = request.data
@@ -2270,7 +2399,6 @@ class ExotelWebhookView(APIView):
             call_record.status = call_details.get('status', 'unknown').lower()
             call_record.state = call_details.get('state', '')
             call_record.direction = call_details.get('direction', 'outbound')
-
             # Update duration and talk time
             if call_details.get('total_talk_time'):
                 call_record.talk_time = int(call_details['total_talk_time'])
@@ -2281,9 +2409,8 @@ class ExotelWebhookView(APIView):
 
             # Update virtual number and custom field
             call_record.virtual_number = call_details.get('virtual_number', '')
-            call_record.custom_field = call_details.get('custom_field', '')
+            # call_record.custom_field = call_details.get('custom_field', '')
             call_record.legs_url = call_details.get('legs', '')
-
             # Parse and update timestamps
             def parse_datetime(dt_string):
                 """Parse datetime string from Exotel format"""
@@ -2453,7 +2580,6 @@ def get_job_details(request, job_id):
 #             if not target_m: return Response({'error': 'Mukkadam not found'}, status=404)
 #             mukkadam_id = target_m['id']
 #             url = f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/'
-
 #         mukkadam_profile = requests.get(url, timeout=5).json()
 #     except Exception as e:
 #         return Response({'error': f'Supply App Error: {str(e)}'}, status=500)
@@ -2511,7 +2637,6 @@ def get_job_details(request, job_id):
 #     # Unique dates worked
 #     unique_work_dates = set(a.work_date for a in allocations_list if a.status == 'completed')
 #     actual_days_worked = len(unique_work_dates)
-
 #     # Utilization Rate
 #     utilization_rate = (actual_days_worked / total_available_days * 100) if total_available_days > 0 else 0
 
@@ -2524,7 +2649,6 @@ def get_job_details(request, job_id):
 #     for a in allocations_list:
 #         val = float(a.mukkadam_price) * float(a.allocated_area)
 #         stats['potential'] += val
-
 #         if a.status == 'completed':
 #             stats['area_completed'] += float(a.allocated_area)
 #             if hasattr(a, 'payment_request') and a.payment_request.status == 'paid':
@@ -2636,24 +2760,20 @@ def get_job_details(request, job_id):
 #     """
 #     Comprehensive allocation analytics with mukkadam details
 #     GET /api/allocation-analytics/
-
 #     Query Params:
 #     - start_date: Filter start (default: 30 days ago)
 #     - end_date: Filter end (default: today)
 #     - include_future: Include future allocations (default: true)
 #     """
-
 #     try:
 #         # === 1. TIME RANGE SETUP ===
 #         end_date_str = request.query_params.get('end_date')
 #         start_date_str = request.query_params.get('start_date')
 #         include_future = request.query_params.get('include_future', 'true').lower() == 'true'
-
 #         if end_date_str:
 #             end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
 #         else:
 #             end_date = timezone.now().date() + timedelta(days=30 if include_future else 0)
-
 #         if start_date_str:
 #             start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
 #         else:
@@ -2670,7 +2790,6 @@ def get_job_details(request, job_id):
 #         ).select_related(
 #             'job_activity', 'allocated_by'
 #         ).order_by('work_date')
-
 #         allocations_data = list(allocations.values(
 #             'id', 'mukkadam_id', 'allocated_area', 'work_date',
 #             'crew_size', 'mukkadam_price', 'transport_price',
@@ -2729,7 +2848,6 @@ def get_job_details(request, job_id):
 #             total_available = len(available_days)
 #             total_worked = len(work_days)
 #             utilization_rate = (total_worked / total_available * 100) if total_available > 0 else 0
-
 #             mukkadam_utilization[mukkadam_id] = {
 #                 'mukkadam_id': mukkadam_id,
 #                 'mukkadam_name': mukkadam_data.get('mukkadam_name', f'Mukkadam #{mukkadam_id}'),
@@ -2748,7 +2866,6 @@ def get_job_details(request, job_id):
 #                 'total_area_allocated': sum([float(a['allocated_area']) for a in allocations_data if a['mukkadam_id'] == mukkadam_id]),
 #                 'total_earnings': sum([float(a['mukkadam_price']) for a in allocations_data if a['mukkadam_id'] == mukkadam_id]),
 #             }
-
 #         # === 6. LOCATION-BASED ANALYTICS ===
 #         location_stats = defaultdict(lambda: {
 #             'state': None,
@@ -2791,7 +2908,6 @@ def get_job_details(request, job_id):
 #             stats['mukkadams'].add(mukkadam_id)
 #             stats['jobs'].add(alloc['job_activity__job_id'])
 #             stats['allocated_by'][alloc['allocated_by__username']] += 1
-
 #         # Convert sets to counts
 #         location_analytics = []
 #         for location_key, stats in location_stats.items():
@@ -2824,12 +2940,10 @@ def get_job_details(request, job_id):
 #             'unique_mukkadams': set(),
 #             'unique_jobs': set(),
 #         })
-
 #         for alloc in allocations_data:
 #             username = alloc['allocated_by__username']
 #             if not username:
 #                 continue
-
 #             stats = allocator_stats[username]
 #             stats['username'] = username
 #             stats['full_name'] = f"{alloc['allocated_by__first_name'] or ''} {alloc['allocated_by__last_name'] or ''}".strip()
@@ -2837,7 +2951,6 @@ def get_job_details(request, job_id):
 #             stats['total_cost'] += float(alloc['mukkadam_price']) + float(alloc['transport_price'] or 0)
 #             stats['unique_mukkadams'].add(alloc['mukkadam_id'])
 #             stats['unique_jobs'].add(alloc['job_activity__job_id'])
-
 #         allocator_analytics = [
 #             {
 #                 'username': username,
@@ -2862,7 +2975,6 @@ def get_job_details(request, job_id):
 #             'total_cost': 0,
 #             'locations': set(),
 #         })
-
 #         for alloc in allocations_data:
 #             activity = alloc['job_activity__activity_name']
 #             stats = activity_stats[activity]
@@ -2898,7 +3010,6 @@ def get_job_details(request, job_id):
 #             'cost': 0,
 #             'workers': 0,
 #         })
-
 #         for alloc in allocations_data:
 #             date = alloc['work_date']
 #             daily_trend[date]['date'] = str(date)
@@ -2937,7 +3048,6 @@ def get_job_details(request, job_id):
 #                 'avg_cost': round(sum([float(a['mukkadam_price']) + float(a['transport_price'] or 0) for a in allocations_data]) / len(allocations_data), 2) if allocations_data else 0,
 #             }
 #         }
-
 #         # === 11. RETURN RESPONSE ===
 #         return Response({
 #             'success': True,
@@ -2949,7 +3059,6 @@ def get_job_details(request, job_id):
 #             'daily_trend': daily_analytics,
 #             'raw_allocations': allocations_data[:100],  # Limit for performance
 #         })
-
 #     except Exception as e:
 #         import traceback
 #         print("ERROR in comprehensive_analytics:")
@@ -3034,14 +3143,12 @@ def get_job_details(request, job_id):
 #                     try:
 #                         slot_start = datetime.strptime(slot['startDate'], '%Y-%m-%d').date()
 #                         slot_end = datetime.strptime(slot['endDate'], '%Y-%m-%d').date()
-
 #                         # This week
 #                         current = max(slot_start, this_week_start)
 #                         end = min(slot_end, this_week_end)
 #                         while current <= end:
 #                             available_days_this_week.add(current)
 #                             current += timedelta(days=1)
-
 #                         # Overall
 #                         current = max(slot_start, overall_start)
 #                         end = min(slot_end, overall_end)
@@ -3050,7 +3157,6 @@ def get_job_details(request, job_id):
 #                             current += timedelta(days=1)
 #                     except:
 #                         continue
-
 #             # Get work days from allocations
 #             work_days_this_week = set(
 #                 Allocation.objects.filter(
@@ -3059,7 +3165,6 @@ def get_job_details(request, job_id):
 #                     work_date__lte=this_week_end
 #                 ).exclude(status='cancelled').values_list('work_date', flat=True)
 #             )
-
 #             work_days_overall = set(
 #                 Allocation.objects.filter(
 #                     mukkadam_id=mukkadam_id,
@@ -3067,7 +3172,6 @@ def get_job_details(request, job_id):
 #                     work_date__lte=overall_end
 #                 ).exclude(status='cancelled').values_list('work_date', flat=True)
 #             )
-
 #             # Calculate utilization
 #             total_available_this_week = len(available_days_this_week)
 #             total_work_this_week = len(work_days_this_week)
@@ -3101,7 +3205,6 @@ def get_job_details(request, job_id):
 #                     'allocations': list(allocations_on_day),
 #                     'status': '🟢 Working' if has_work else '🔴 Idle'
 #                 })
-
 #             # Calculate earnings
 #             earnings_this_week = Allocation.objects.filter(
 #                 mukkadam_id=mukkadam_id,
@@ -3110,7 +3213,6 @@ def get_job_details(request, job_id):
 #             ).exclude(status='cancelled').aggregate(
 #                 total=Sum('mukkadam_price')
 #             )['total'] or 0
-
 #             earnings_overall = Allocation.objects.filter(
 #                 mukkadam_id=mukkadam_id,
 #                 work_date__gte=overall_start,
@@ -3118,7 +3220,6 @@ def get_job_details(request, job_id):
 #             ).exclude(status='cancelled').aggregate(
 #                 total=Sum('mukkadam_price')
 #             )['total'] or 0
-
 #             # Calculate ₹/person/day
 #             crew_size_str = mukkadam.get('crew_size', '1')
 #             try:
@@ -3133,7 +3234,6 @@ def get_job_details(request, job_id):
 #             first_allocation = Allocation.objects.filter(
 #                 mukkadam_id=mukkadam_id
 #             ).exclude(status='cancelled').order_by('allocated_at').first()
-
 #             days_to_first_job = None
 #             if first_allocation and mukkadam.get('created_at'):
 #                 try:
@@ -3152,7 +3252,6 @@ def get_job_details(request, job_id):
 #                 utilization_status = '🟠'
 #             else:
 #                 utilization_status = '🔴'
-
 #             # Get created_by username
 #             created_by_username = 'Unknown'
 #             if mukkadam.get('created_by'):
@@ -3160,7 +3259,6 @@ def get_job_details(request, job_id):
 #                     created_by_username = mukkadam['created_by'].get('username', 'Unknown')
 #                 else:
 #                     created_by_username = str(mukkadam['created_by'])
-
 #             mukkadam_details.append({
 #                 'mukkadam_id': mukkadam_id,
 #                 'mukkadam_name': mukkadam.get('mukkadam_name', f'Mukkadam #{mukkadam_id}'),
@@ -3169,7 +3267,6 @@ def get_job_details(request, job_id):
 #                 'crew_size': crew_size,
 #                 'registered_at': mukkadam.get('created_at'),
 #                 'registered_by': created_by_username,
-
 #                 # This Week
 #                 'is_active_this_week': is_active_this_week,
 #                 'available_days_this_week': total_available_this_week,
@@ -3180,7 +3277,6 @@ def get_job_details(request, job_id):
 #                 'earnings_this_week': float(earnings_this_week),
 #                 'earnings_per_person_day_this_week': round(float(earnings_per_person_day_this_week), 2),
 #                 'day_breakdown': day_breakdown,
-
 #                 # Overall
 #                 'available_days_overall': total_available_overall,
 #                 'work_days_overall': total_work_overall,
@@ -3188,7 +3284,6 @@ def get_job_details(request, job_id):
 #                 'utilization_overall': round(utilization_overall, 1),
 #                 'earnings_overall': float(earnings_overall),
 #                 'earnings_per_person_day_overall': round(float(earnings_per_person_day_overall), 2),
-
 #                 # Registration metrics
 #                 'days_to_first_job': days_to_first_job,
 #                 'has_received_job': first_allocation is not None,
@@ -3253,7 +3348,6 @@ def get_job_details(request, job_id):
 #                     return '🟠'
 #                 else:
 #                     return '🔴'
-
 #         supply_health_snapshot = {
 #             'active_teams': {
 #                 'this_week': len(active_teams_this_week),
@@ -3306,7 +3400,6 @@ def get_job_details(request, job_id):
 #             datetime.fromisoformat(t['created_at'].replace('Z', '+00:00')).date() >= this_week_start and
 #             datetime.fromisoformat(t['created_at'].replace('Z', '+00:00')).date() <= this_week_end + timedelta(days=1)
 #         ])
-
 #         # Teams confirmed for allocation (have availability set)
 #         teams_confirmed_this_week = len([
 #             m for m in all_mukkadams
@@ -3315,7 +3408,6 @@ def get_job_details(request, job_id):
 #             datetime.fromisoformat(m['created_at'].replace('Z', '+00:00')).date() <= this_week_end + timedelta(days=1) and
 #             m.get('team_availabilities', [])
 #         ])
-
 #         # Teams allocated this week
 #         teams_allocated_this_week = Allocation.objects.filter(
 #             allocated_at__gte=this_week_start,
@@ -3337,7 +3429,6 @@ def get_job_details(request, job_id):
 #             datetime.fromisoformat(m['created_at'].replace('Z', '+00:00')).date() <= cutoff_date and
 #             not any(md['mukkadam_id'] == m['id'] and md['has_received_job'] for md in mukkadam_details)
 #         ])
-
 #         supply_inflow = {
 #             'teams_registered': teams_registered_this_week,
 #             'transporters_registered': transporters_registered_this_week,
@@ -3347,7 +3438,6 @@ def get_job_details(request, job_id):
 #             'avg_days_to_first_job': round(avg_days_to_first_job, 1),
 #             'teams_rejected': teams_rejected
 #         }
-
 #         # === 6. SECTION 3: UTILIZATION & IDLE RISK ===
 #         utilization_buckets = {
 #             '0-25%': [m for m in mukkadam_details if m['available_days_overall'] > 0 and m['utilization_overall'] < 25],
@@ -3391,7 +3481,6 @@ def get_job_details(request, job_id):
 #                 'teams': utilization_buckets['90%+']
 #             },
 #         ]
-
 #         # === 7. RETURN RESPONSE ===
 #         return Response({
 #             'success': True,
@@ -3404,7 +3493,6 @@ def get_job_details(request, job_id):
 #             'section_2_supply_inflow': supply_inflow,
 #             'section_3_utilization_distribution': utilization_distribution,
 #         })
-
 #     except Exception as e:
 #         import traceback
 #         print("ERROR in supply_health_dashboard:")
