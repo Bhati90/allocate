@@ -2083,11 +2083,10 @@ from .models import FarmerCall
 
 
 logger = logging.getLogger(__name__)
-
 class MakeCallView(APIView):
     """
     Simple call API - Just provide from_number and to_number
-    No validation, just connect the call!
+    Accepts user_id in payload
     """
     permission_classes = [AllowAny]
 
@@ -2099,7 +2098,8 @@ class MakeCallView(APIView):
         purpose = request.data.get('purpose', 'general')
         job_id = request.data.get('job_id', '')
         notes = request.data.get('notes', '')
-
+        user_id = request.data.get('user_id')  # ✅ NEW: Accept from payload
+        # custom_field = request.data.get('custom_field', '')  # ✅ Optional custom field
 
         # Basic validation
         if not from_number or not to_number:
@@ -2107,13 +2107,14 @@ class MakeCallView(APIView):
                 'success': False,
                 'message': 'Both from_number and to_number are required'
             }, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             # 1️⃣ Make the call via Exotel
             exotel = ExotelService()
             call_result = exotel.make_call(
                 from_number=from_number,
                 to_number=to_number,
-
+                # custom_field=custom_field  # Pass to Exotel if needed
             )
 
             if not call_result['success']:
@@ -2122,7 +2123,8 @@ class MakeCallView(APIView):
                     'message': 'Failed to initiate call',
                     'error': call_result.get('error')
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            # 2️⃣ Save call record
+
+            # 2️⃣ Prepare call record data
             call_data = {
                 'call_sid': call_result['call_sid'],
                 'mobile_number': to_number,
@@ -2131,21 +2133,38 @@ class MakeCallView(APIView):
                 'status': call_result.get('status', 'pending'),
                 'job_id': job_id,
                 'notes': notes,
-
-                'direction': 'outbound',  # ✅ NEW
+                'direction': 'outbound',
+                # 'custom_field': custom_field,
             }
 
-            # Only set user fields if user is authenticated
-            if request.user.is_authenticated:
-                call_data['user_id'] = request.user.username
+            # ✅ Handle user_id from payload OR authenticated user
+            if user_id:
+                # User ID provided in payload (from mobile app)
+                call_data['user_id'] = str(user_id)
+                
+                # Try to link to Django User if exists
+                try:
+                    from django.contrib.auth.models import User
+                    django_user = User.objects.filter(
+                        Q(id=user_id) | Q(username=user_id)
+                    ).first()
+                    call_data['created_by'] = django_user
+                except:
+                    call_data['created_by'] = None
+                    
+            elif request.user.is_authenticated:
+                # Authenticated API call (from web/backend)
+                call_data['user_id'] = str(request.user.id)
                 call_data['created_by'] = request.user
             else:
+                # Anonymous call
                 call_data['user_id'] = 'anonymous'
                 call_data['created_by'] = None
 
+            # 3️⃣ Create call record
             call = FarmerCall.objects.create(**call_data)
 
-            logger.info(f"✅ Call initiated: {call.call_sid} - {from_number} → {to_number}")
+            logger.info(f"✅ Call initiated: {call.call_sid} - {from_number} → {to_number} (User: {call.user_id})")
 
             return Response({
                 'success': True,
@@ -2154,16 +2173,167 @@ class MakeCallView(APIView):
                 'call_id': call.id,
                 'status': call_result.get('status', 'pending'),
                 'from': from_number,
-                'to': to_number
+                'to': to_number,
+                'user_id': call.user_id,
+                'purpose': purpose
             }, status=status.HTTP_200_OK)
+
         except Exception as e:
             logger.error(f"❌ Error making call: {str(e)}", exc_info=True)
             return Response({
                 'success': False,
                 'message': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 # allocation_app/views.py
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from django.db.models import Q
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_user_calls(request):
+    """
+    Get call history for a user
+    GET /api/calls/user/?user_id=12345
+    GET /api/calls/user/?user_id=12345&status=completed
+    GET /api/calls/user/?user_id=12345&date_from=2026-01-01
+    """
+    user_id = request.query_params.get('user_id')
+    
+    if not user_id:
+        return Response({
+            'error': 'user_id parameter is required'
+        }, status=400)
+    
+    # Query calls
+    calls = FarmerCall.objects.filter(user_id=user_id)
+    
+    # Apply filters
+    status_filter = request.query_params.get('status')
+    if status_filter:
+        calls = calls.filter(status=status_filter)
+    
+    date_from = request.query_params.get('date_from')
+    if date_from:
+        from datetime import datetime
+        date_from_dt = datetime.strptime(date_from, '%Y-%m-%d')
+        calls = calls.filter(initiated_at__gte=date_from_dt)
+    
+    date_to = request.query_params.get('date_to')
+    if date_to:
+        from datetime import datetime
+        date_to_dt = datetime.strptime(date_to, '%Y-%m-%d')
+        calls = calls.filter(initiated_at__lte=date_to_dt)
+    
+    # Order by most recent
+    calls = calls.order_by('-initiated_at')
+    
+    # Serialize
+    calls_data = []
+    for call in calls:
+        calls_data.append({
+            'id': call.id,
+            'call_sid': call.call_sid,
+            'from_number': call.from_number,
+            'to_number': call.mobile_number,
+            'purpose': call.purpose,
+            'status': call.status,
+            'direction': call.direction,
+            'duration': call.duration,
+            'talk_time': call.talk_time,
+            'initiated_at': call.initiated_at.isoformat() if call.initiated_at else None,
+            'completed_at': call.completed_at.isoformat() if call.completed_at else None,
+            'has_recording': call.has_recording,
+            'recording_url': call.primary_recording_url,
+            'job_id': call.job_id,
+            'notes': call.notes,
+        })
+    
+    # Stats
+    from django.db.models import Count, Avg, Sum
+    stats = calls.aggregate(
+        total_calls=Count('id'),
+        completed_calls=Count('id', filter=Q(status='completed')),
+        total_duration=Sum('duration'),
+        avg_duration=Avg('duration'),
+    )
+    
+    return Response({
+        'user_id': user_id,
+        'total_calls': calls.count(),
+        'stats': {
+            'total_calls': stats['total_calls'] or 0,
+            'completed_calls': stats['completed_calls'] or 0,
+            'total_duration_seconds': stats['total_duration'] or 0,
+            'avg_duration_seconds': int(stats['avg_duration'] or 0),
+        },
+        'calls': calls_data
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_call_details(request, call_id):
+    """
+    Get detailed information about a specific call
+    GET /api/calls/{call_id}/
+    """
+    try:
+        call = FarmerCall.objects.get(id=call_id)
+        
+        return Response({
+            'id': call.id,
+            'call_sid': call.call_sid,
+            'user_id': call.user_id,
+            'from_number': call.from_number,
+            'to_number': call.mobile_number,
+            'purpose': call.purpose,
+            'status': call.status,
+            'direction': call.direction,
+            'state': call.state,
+            
+            # Metrics
+            'duration': call.duration,
+            'talk_time': call.talk_time,
+            'price': float(call.price) if call.price else None,
+            
+            # Recordings
+            'has_recording': call.has_recording,
+            'recording_url': call.recording_url,
+            'recording_urls': call.recording_urls,
+            'primary_recording_url': call.primary_recording_url,
+            
+            # Timestamps
+            'initiated_at': call.initiated_at.isoformat() if call.initiated_at else None,
+            'answered_at': call.answered_at.isoformat() if call.answered_at else None,
+            'completed_at': call.completed_at.isoformat() if call.completed_at else None,
+            'created_time': call.created_time.isoformat() if call.created_time else None,
+            'updated_time': call.updated_time.isoformat() if call.updated_time else None,
+            
+            # Exotel specific
+            'virtual_number': call.virtual_number,
+            # 'custom_field': call.custom_field,
+            'legs_url': call.legs_url,
+            
+            # Context
+            'job_id': call.job_id,
+            'notes': call.notes,
+            'webhook_data': call.webhook_data,
+            
+            # User info
+            'created_by': {
+                'id': call.created_by.id,
+                'username': call.created_by.username,
+                'full_name': call.created_by.get_full_name()
+            } if call.created_by else None
+        })
+        
+    except FarmerCall.DoesNotExist:
+        return Response({
+            'error': 'Call not found'
+        }, status=404)
+    
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -2239,7 +2409,7 @@ class ExotelWebhookView(APIView):
 
             # Update virtual number and custom field
             call_record.virtual_number = call_details.get('virtual_number', '')
-            call_record.custom_field = call_details.get('custom_field', '')
+            # call_record.custom_field = call_details.get('custom_field', '')
             call_record.legs_url = call_details.get('legs', '')
             # Parse and update timestamps
             def parse_datetime(dt_string):
