@@ -69,7 +69,7 @@ def get_mukkadam_cached(mukkadam_id: int) -> Optional[Dict]:
     try:
         response = session.get(
             f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-            timeout=20  # ✅ Increased from 3 to 10 seconds
+            timeout=30  # ✅ Increased from 3 to 10 seconds
         )
         
         if response.status_code == 200:
@@ -195,7 +195,7 @@ def get_transport_provider_cached(provider_id: int) -> Optional[Dict]:
     try:
         response = session.get(
             f'{SUPPLY_API_URL}/api/transport-provider/{provider_id}/',
-            timeout=10  # ✅ Increased from 3 to 10 seconds
+            timeout=30  # ✅ Increased from 3 to 10 seconds
         )
         
         if response.status_code == 200:

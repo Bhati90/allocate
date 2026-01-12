@@ -3605,12 +3605,12 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
   </div>
 )}
 
-                                            {activeTab === 'analytics' && (
+                                          {/* {activeTab === 'analytics' && (
                 <div className="space-y-6">
                     
-                    {/* KPI Summary Cards - Always visible */}
+                    
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {/* Job Status Distribution */}
+                 
                     <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 border-2 border-blue-200">
                         <h3 className="text-sm font-bold text-gray-700 mb-4">Job Status</h3>
                         <div className="space-y-2">
@@ -3635,7 +3635,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                         </div>
                     </div>
 
-                    {/* Workforce Metrics */}
+                    
                     <div className="bg-gradient-to-br from-teal-50 to-cyan-50 rounded-xl p-6 border-2 border-teal-200">
                         <h3 className="text-sm font-bold text-gray-700 mb-4">Workforce</h3>
                         <div className="space-y-2">
@@ -3664,7 +3664,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                         </div>
                     </div>
 
-                    {/* Financial Metrics */}
+                   
                     <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-6 border-2 border-purple-200">
                         <h3 className="text-sm font-bold text-gray-700 mb-4">Financials</h3>
                         <div className="space-y-2">
@@ -3691,7 +3691,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                         </div>
                     </div>
 
-                    {/* Efficiency Metrics */}
+                    
                     <div className="bg-gradient-to-br from-amber-50 to-yellow-50 rounded-xl p-6 border-2 border-amber-200">
                         <h3 className="text-sm font-bold text-gray-700 mb-4">Efficiency</h3>
                         <div className="space-y-2">
@@ -3726,7 +3726,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     </div>
                     </div>
 
-                    {/* Complex Job Analytics - Collapsible */}
+                    
                     {jobs.filter(j => j.is_complex).length > 0 && (
                     <div className="bg-white rounded-xl shadow-lg border border-purple-200 overflow-hidden">
                         <button
@@ -3819,7 +3819,6 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     </div>
                     )}
 
-                    {/* Activity Type Analytics - Collapsible */}
                     {(() => {
                     const activityStats: Record<string, {count: number, totalArea: number, totalWorkers: number, totalCost: number}> = {};
                     
@@ -3917,7 +3916,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     );
                     })()}
 
-                    {/* Crew Size Distribution - Collapsible */}
+                   
                     {(() => {
                     const crewSizeDistribution: Record<string, number> = {
                         '1-5': 0,
@@ -3996,9 +3995,9 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     );
                     })()}
 
-                    {/* Charts - Always visible (smaller sections) */}
+                    
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {/* 7-Day Allocation Trend */}
+                    
                     <div className="bg-white rounded-xl shadow-lg p-6">
                         <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
                         <TrendingUp className="mr-2 text-green-600" />
@@ -4031,7 +4030,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                         </div>
                     </div>
 
-                    {/* Top Allocators */}
+                    
                     <div className="bg-white rounded-xl shadow-lg p-6">
                         <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
                         <BarChart3 className="mr-2 text-purple-600" />
@@ -4081,7 +4080,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     </div>
                     </div>
 
-                    {/* Day-wise Stats Table - Always visible */}
+                    
                     <div className="bg-white rounded-xl shadow-lg">
                     <div className="px-6 py-4 border-b border-gray-200">
                         <h2 className="text-xl font-bold text-gray-900 flex items-center">
@@ -4146,7 +4145,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     </div>
 
                 </div>
-                )}
+                )}  */}
           </div>
         </div>
 

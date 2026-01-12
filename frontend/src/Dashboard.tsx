@@ -1,7 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, List,Truck, Calendar, UserCog, LogOut } from 'lucide-react';
+import { UserPlus,MapPin, List,Truck, Calendar, UserCog, LogOut } from 'lucide-react';
 
+import { useAuth } from './context/auth';
 const Dashboard = () => {
   const navigate = useNavigate();
   
@@ -9,6 +10,10 @@ const Dashboard = () => {
     localStorage.clear();
     navigate('/login');
   };
+
+  
+
+const { isAdmin, userData, logout: authLogout, isLoading } = useAuth();
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
@@ -26,6 +31,17 @@ const Dashboard = () => {
           <UserCog size={48} className="mb-4" />
           <span className="text-2xl font-bold">Allocation</span>
         </button>
+
+        {isAdmin && (
+            <button 
+              onClick={() => navigate('/analytics')} 
+              className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white p-8 rounded-xl shadow-lg flex flex-col items-center hover:from-emerald-600 hover:to-emerald-700 transition transform hover:scale-105"
+            >
+              <MapPin size={48} className="mb-4" />
+              <span className="text-2xl font-bold">analytics</span>
+              <span className="text-sm mt-2 opacity-90">Track analytics</span>
+            </button>
+          )}
       </div>
     </div>
   );

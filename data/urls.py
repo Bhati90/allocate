@@ -5,16 +5,16 @@ from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
 from .views import (MakeCallView, UserProfileView,
    
-    JobActivityViewSet, get_job_details,
+    JobActivityViewSet, get_job_details,get_user_calls,get_call_details,
     AllocationViewSet,transporter_work_history,ExotelWebhookView,
     jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,
     activity_logs_list,allocations_list,mukkadam_work_history,
     allocations_by_mobile # ✅ Already imported
 )
 
-from .mobile_sync import(
-     sync_contacts,sync_call_logs,
-     sync_messages)
+from .mobile_sync import(sync_messages,
+     get_sync_checkpoint, sync_contacts,sync_call_logs,message_stats,
+     )
 from . import mobile_auth
 
 router = DefaultRouter()
@@ -31,7 +31,10 @@ urlpatterns = [
     # ========================================
     # path('allocation-analytics/', comprehensive_analytics, name='allocation-analytics'),
     # path('supply-health/', supply_health_dashboard, name='supply-health'),
+    # path('calls/user/', get_user_calls, name='user-calls'),
     
+    # Get specific call details
+    path('calls/<int:call_id>/', get_call_details, name='call-details'),
     path('calls/webhook/', ExotelWebhookView.as_view(), name='exotel-webhook'),
     path('calls/make/', MakeCallView.as_view(), name='make-call'),
     # path('api/calls/status/<str:call_sid>/', CallStatusView.as_view(), name='call-status'),
@@ -68,6 +71,10 @@ urlpatterns = [
     
     path('contacts/', sync_contacts, name='sync-contacts'),
     path('sms/', sync_messages, name='sync-sms'),
+    path('sms/sync-checkpoint/', get_sync_checkpoint, name='sync-checkpoint'),
+    
+    # Stats
+    path('sms/stats/', message_stats, name='message-stats'),
     path('call-logs/', sync_call_logs, name='sync-call-logs'),
     # path('fcm/by-mobile/', get_fcm_by_mobile),
    path('transporter/work-history/', transporter_work_history, name='transporter-work-history'),
