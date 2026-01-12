@@ -701,6 +701,9 @@ class Contact(models.Model):
     def __str__(self):
         return f"{self.display_name} (User: {self.user_id})"
 
+import hashlib
+from django.db import models
+from datetime import datetime
 
 class Message(models.Model):
     """
@@ -731,6 +734,16 @@ class Message(models.Model):
         default=0,
         help_text="1 for Read, 0 for Unread"
     )
+    
+    # ✅ NEW: Unique hash for duplicate detection
+    message_hash = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="SHA256 hash of user_id + address + body for duplicate detection"
+    )
+    
     synced_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -740,6 +753,14 @@ class Message(models.Model):
             models.Index(fields=['user_id', '-timestamp']),
             models.Index(fields=['address', '-timestamp']),
             models.Index(fields=['user_id', 'address']),
+            models.Index(fields=['message_hash']),  # ✅ NEW
+        ]
+        # ✅ NEW: Compound unique constraint (backup)
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user_id', 'address', 'timestamp'],
+                name='unique_user_message'
+            )
         ]
     
     def __str__(self):
@@ -749,7 +770,23 @@ class Message(models.Model):
     def message_datetime(self):
         """Convert milliseconds timestamp to datetime"""
         return datetime.fromtimestamp(self.timestamp / 1000.0)
-
+    
+    @staticmethod
+    def generate_hash(user_id, address, body):
+        """Generate unique hash for message"""
+        # Create hash from user_id + address + first 500 chars of body
+        content = f"{user_id}|{address}|{body[:500]}"
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()
+    
+    def save(self, *args, **kwargs):
+        """Auto-generate hash before saving"""
+        if not self.message_hash:
+            self.message_hash = self.generate_hash(
+                self.user_id, 
+                self.address, 
+                self.body
+            )
+        super().save(*args, **kwargs)
 
 class CallLog(models.Model):
     """

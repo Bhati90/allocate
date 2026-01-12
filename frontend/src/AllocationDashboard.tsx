@@ -3605,7 +3605,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
   </div>
 )}
 
-                                            {activeTab === 'analytics' && (
+                                            {/* {activeTab === 'analytics' && (
                 <div className="space-y-6">
                     
                     {/* KPI Summary Cards - Always visible */}
@@ -4146,7 +4146,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     </div>
 
                 </div>
-                )}
+                )} */}
           </div>
         </div>
 

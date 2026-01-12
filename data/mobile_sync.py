@@ -108,7 +108,10 @@ def sync_contacts(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def sync_messages(request):
-    """Sync messages - ALWAYS SUCCESS"""
+    """
+    Sync messages - Smart duplicate prevention
+    POST /api/sms/
+    """
     print("="*80)
     print("💬 SYNCING SMS MESSAGES")
     print("="*80)
@@ -123,19 +126,43 @@ def sync_messages(request):
         
         created_count = 0
         skipped_count = 0
-        warnings = []
+        updated_count = 0
+        errors = []
+        
+        # ========================================
+        # STEP 1: GET EXISTING MESSAGE HASHES FOR THIS USER
+        # ========================================
+        user_ids = set(msg.get('user_id', 'unknown') for msg in messages_data)
+        
+        # Get all existing message hashes for these users
+        existing_hashes = set(
+            Message.objects.filter(user_id__in=user_ids)
+            .values_list('message_hash', flat=True)
+        )
+        
+        print(f"📋 Found {len(existing_hashes)} existing messages for user(s)")
+        
+        # ========================================
+        # STEP 2: PROCESS EACH MESSAGE
+        # ========================================
+        messages_to_create = []
         
         for idx, message_data in enumerate(messages_data):
             try:
+                # Extract basic fields
                 user_id = message_data.get('user_id', 'unknown')
                 address = message_data.get('address', 'Unknown')
                 body = message_data.get('body', '')
                 timestamp = message_data.get('timestamp')
                 
-                # Try to get clean timestamp
+                # ✅ CRITICAL: Clean and normalize timestamp
                 try:
                     if timestamp:
                         timestamp = int(timestamp)
+                        if timestamp < 10000000000:
+                            timestamp = timestamp * 1000
+                        if timestamp < 0:
+                            timestamp = abs(timestamp)
                     else:
                         import time
                         timestamp = int(time.time() * 1000)
@@ -143,74 +170,119 @@ def sync_messages(request):
                     import time
                     timestamp = int(time.time() * 1000)
                 
-                # Check for duplicate (less strict)
-                existing = Message.objects.filter(
-                    user_id=user_id,
-                    address=address,
-                    timestamp=timestamp
-                ).first()
+                # ✅ GENERATE HASH FOR DUPLICATE CHECK
+                message_hash = Message.generate_hash(user_id, address, body)
                 
-                if existing:
+                # ✅ CHECK IF HASH EXISTS
+                if message_hash in existing_hashes:
                     skipped_count += 1
                     continue
                 
-                # Try serializer first
-                serializer = MessageSerializer(data=message_data)
-                if serializer.is_valid(raise_exception=False):
-                    serializer.save()
-                    created_count += 1
+                # ✅ PREPARE MESSAGE OBJECT
+                msg_type = message_data.get('type', 'inbox')
+                if msg_type:
+                    msg_type = str(msg_type).lower().strip()
+                    type_mapping = {
+                        'received': 'inbox', 'incoming': 'inbox', 'in': 'inbox',
+                        'outgoing': 'sent', 'outbox': 'sent', 'out': 'sent',
+                    }
+                    msg_type = type_mapping.get(msg_type, msg_type)
                 else:
-                    # Create manually with defaults
-                    Message.objects.create(
-                        user_id=user_id,
-                        address=address,
-                        body=str(body)[:5000],  # Limit length
-                        timestamp=timestamp,
-                        type=message_data.get('type', 'inbox'),
-                        read_status=int(message_data.get('read_status', 0)) if message_data.get('read_status') else 0
-                    )
-                    created_count += 1
-                    warnings.append(f"Index {idx}: Created with defaults")
-            
-            except Exception as e:
-                # Last resort - create with absolute minimal data
+                    msg_type = 'inbox'
+                
+                # Read status
+                read_status = message_data.get('read_status', 0)
                 try:
-                    import time
-                    Message.objects.create(
-                        user_id=message_data.get('user_id', 'unknown'),
-                        address=message_data.get('address', 'Unknown'),
-                        body=str(message_data.get('body', ''))[:5000],
-                        timestamp=int(time.time() * 1000),
-                        type='inbox',
-                        read_status=0
-                    )
-                    created_count += 1
-                    warnings.append(f"Index {idx}: Emergency save - {str(e)[:50]}")
+                    read_status = int(read_status)
+                    read_status = 1 if read_status else 0
                 except:
-                    warnings.append(f"Index {idx}: Failed completely")
+                    read_status = 0
+                
+                # ✅ CREATE MESSAGE OBJECT (DON'T SAVE YET)
+                message_obj = Message(
+                    user_id=user_id,
+                    address=address,
+                    body=str(body)[:5000],  # Limit length
+                    timestamp=timestamp,
+                    type=msg_type,
+                    read_status=read_status,
+                    message_hash=message_hash
+                )
+                
+                messages_to_create.append(message_obj)
+                existing_hashes.add(message_hash)  # Add to set to prevent duplicates in this batch
+                
+            except Exception as e:
+                errors.append({
+                    'index': idx,
+                    'error': str(e)[:100],
+                    'data': {
+                        'user_id': message_data.get('user_id'),
+                        'address': message_data.get('address')
+                    }
+                })
         
-        print(f"✅ Created: {created_count}, Skipped: {skipped_count}, Warnings: {len(warnings)}")
+        # ========================================
+        # STEP 3: BULK CREATE (MUCH FASTER)
+        # ========================================
+        if messages_to_create:
+            try:
+                # Use bulk_create with ignore_conflicts to handle race conditions
+                created_messages = Message.objects.bulk_create(
+                    messages_to_create,
+                    ignore_conflicts=True  # ✅ Skip if hash already exists
+                )
+                created_count = len(created_messages)
+                print(f"✅ Bulk created: {created_count} messages")
+            except Exception as bulk_error:
+                print(f"⚠️ Bulk create failed, trying one by one: {str(bulk_error)}")
+                # Fallback: Create one by one
+                for msg_obj in messages_to_create:
+                    try:
+                        msg_obj.save()
+                        created_count += 1
+                    except Exception as e:
+                        if 'unique' in str(e).lower() or 'duplicate' in str(e).lower():
+                            skipped_count += 1
+                        else:
+                            errors.append({
+                                'user_id': msg_obj.user_id,
+                                'address': msg_obj.address,
+                                'error': str(e)[:100]
+                            })
+        
+        # ========================================
+        # STEP 4: RESPONSE
+        # ========================================
+        print(f"✅ Created: {created_count}, Skipped: {skipped_count}, Errors: {len(errors)}")
         print("="*80)
         
-        return Response({
+        response_data = {
             "status": "success",
             "message": "Messages synchronized successfully.",
             "created": created_count,
             "skipped": skipped_count,
-            "warnings": len(warnings)
-        }, status=status.HTTP_201_CREATED)
+            "total_received": len(messages_data),
+            "errors": len(errors)
+        }
+        
+        if errors and len(errors) < 10:  # Only include errors if not too many
+            response_data["error_details"] = errors[:10]
+        
+        return Response(response_data, status=status.HTTP_201_CREATED)
     
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
+        print(f"❌ Critical Error: {str(e)}")
         import traceback
         print(traceback.format_exc())
         print("="*80)
+        
         return Response({
-            "status": "success",
-            "message": "Partial sync completed",
-            "note": str(e)
-        }, status=status.HTTP_200_OK)
-
+            "status": "error",
+            "message": str(e),
+            "created": created_count if 'created_count' in locals() else 0,
+            "skipped": skipped_count if 'skipped_count' in locals() else 0
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])

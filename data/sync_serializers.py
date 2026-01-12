@@ -30,20 +30,17 @@ class ContactSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
-        fields = ['id', 'user_id', 'address', 'body', 'timestamp', 'type', 'read_status', 'synced_at']
-        read_only_fields = ['id', 'synced_at']
+        fields = ['id', 'user_id', 'address', 'body', 'timestamp', 'type', 'read_status', 'message_hash', 'synced_at']
+        read_only_fields = ['id', 'message_hash', 'synced_at']
     
     def validate_timestamp(self, value):
         """Accept ANY timestamp format - just convert to int"""
         if value is None or value == '':
-            # Use current time in milliseconds
             import time
             return int(time.time() * 1000)
         
-        # Try to convert to int
         try:
             if isinstance(value, str):
-                # Remove any non-digit characters
                 cleaned = ''.join(filter(str.isdigit, value))
                 if cleaned:
                     value = int(cleaned)
@@ -53,17 +50,14 @@ class MessageSerializer(serializers.ModelSerializer):
             
             value = int(value)
             
-            # If too small (probably seconds), convert to milliseconds
-            if value < 10000000000:  # Less than Sep 2001 in seconds
+            if value < 10000000000:
                 value = value * 1000
             
-            # If negative, make positive
             if value < 0:
                 value = abs(value)
             
             return value
         except:
-            # If all else fails, use current time
             import time
             return int(time.time() * 1000)
     
@@ -72,10 +66,8 @@ class MessageSerializer(serializers.ModelSerializer):
         if not value:
             return 'inbox'
         
-        # Convert to lowercase and clean
         value = str(value).lower().strip()
         
-        # Map common variations
         type_mapping = {
             'received': 'inbox',
             'incoming': 'inbox',
@@ -92,12 +84,10 @@ class MessageSerializer(serializers.ModelSerializer):
         if value is None or value == '':
             return 0
         
-        # Try to convert to int
         try:
             value = int(value)
             return 1 if value else 0
         except:
-            # If it's a string like "true", "read", etc.
             if isinstance(value, str):
                 if value.lower() in ['true', 'read', '1', 'yes']:
                     return 1
@@ -120,8 +110,6 @@ class MessageSerializer(serializers.ModelSerializer):
         if not value:
             return 'unknown'
         return str(value)
-
-
 class CallLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = CallLog
