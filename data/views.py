@@ -347,6 +347,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
         # Clear mukkadam cache when new allocation is created
         clear_mukkadam_cache(allocation.mukkadam_id)
         return allocation
+    
+
 from .models import JobActivity, Allocation, AllocationStats  # ✅ CORRECT
 
 from rest_framework import viewsets, status
@@ -1829,68 +1831,71 @@ def mukkadam_work_history(request):
     # ========================================
     # STEP 2: GET ALL ALLOCATIONS FOR THIS MUKKADAM
     # ========================================
+    # allocations = Allocation.objects.filter(
+    #     mukkadam_id=mukkadam_id
+    # ).select_related('job_activity', 'payment_request').order_by('-work_date')
+
+# Update your Step 2 Query
     allocations = Allocation.objects.filter(
         mukkadam_id=mukkadam_id
-    ).select_related('job_activity', 'payment_request').order_by('-work_date')
-
+    ).select_related('job_activity').prefetch_related('payment_request').order_by('-work_date')
     # ========================================
     # STEP 3: CATEGORIZE ALLOCATIONS & CALCULATE EARNINGS
     # ========================================
-    from datetime import datetime, date
-
+    from datetime import date
     today = date.today()
 
     completed_allocations = []
-    pending_allocations = []  # Past due but not completed
-    upcoming_allocations = [] # Future dates
+    pending_allocations = []
+    upcoming_allocations = []
 
-    total_allocated_area = 0  # Sum of ALL allocations
-    total_area_worked = 0      # Sum of COMPLETED allocations only
+    total_allocated_area = 0
+    total_area_worked = 0
 
-    # --- 💰 FINANCIAL BREAKDOWN VARIABLES ---
-    total_potential_earnings = 0  # Total allocated one (Sum of everything)
-    total_paid_earnings = 0       # Actually paid
-    total_pending_payout = 0      # Completed but NOT paid yet
-    total_upcoming_income = 0     # Jobs not yet completed (Pending + Upcoming)
+    total_potential_earnings = 0
+    total_paid_earnings = 0
+    total_pending_payout = 0
+    total_upcoming_income = 0
 
     for allocation in allocations:
         work_date = allocation.work_date
-
-        # Calculate earnings for this specific allocation
         earnings = float(allocation.mukkadam_price) * float(allocation.allocated_area)
 
-        # 1. Add to Total Potential (Allocated One)
-        # 1. Add to Total Potential (Allocated One)
-        # 1. Add to Total Potential (Allocated One)
+        has_payment_req = hasattr(allocation, 'payment_request')
+
         total_potential_earnings += earnings
-        total_allocated_area += float(allocation.allocated_area)  # ALL allocations
-        # 2. Categorize and Calculate Specific Financials
+        total_allocated_area += float(allocation.allocated_area)
+
+        # ============================
+        # COMPLETED JOBS
+        # ============================
         if allocation.status == 'completed':
             completed_allocations.append(allocation)
-            total_area_worked += float(allocation.allocated_area)  # Only completed
+            total_area_worked += float(allocation.allocated_area)
 
-
-            # Calculate remaining area
-
-
-            # CHECK PAYMENT STATUS
-            # If payment request exists AND status is 'paid'
-            if hasattr(allocation, 'payment_request') and allocation.payment_request.status == 'paid':
+            if has_payment_req and allocation.payment_request.status == 'paid':
                 total_paid_earnings += earnings
             else:
-                # Completed, but payment is Pending, Rejected, or Not Requested yet
+                # ✅ Completed but not paid → pending payout
                 total_pending_payout += earnings
+                pending_allocations.append(allocation)
 
-        elif work_date and work_date < today:
-            # Past date but not marked completed (Pending Job)
+        # ============================
+        # PAST DATE OR PAYMENT REQUEST
+        # ============================
+        elif (work_date and work_date < today) or has_payment_req:
             pending_allocations.append(allocation)
-            total_upcoming_income += earnings # Still counted as potential future income once done
 
+            # ✅ Always pending payout
+            total_pending_payout += earnings
+
+        # ============================
+        # FUTURE JOBS
+        # ============================
         else:
-            # Future date (Upcoming Job)
             upcoming_allocations.append(allocation)
-            total_upcoming_income += earnings # Projected income
-
+            total_upcoming_income += earnings
+    
     total_area_remaining = total_allocated_area - total_area_worked
 
     # ========================================
