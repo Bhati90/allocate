@@ -149,6 +149,13 @@ const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
       alert('Please select a mukkadam');
       return;
     }
+    // Find the actual Mukkadam object to get their full crew size
+    const mukkadamObj = mukkadams.find(m => m.id === parseInt(allocationForm.mukkadam_id));
+
+    const finalCrewSize = allocationForm.crew_size 
+      ? parseInt(allocationForm.crew_size) 
+      : parseInt(mukkadamObj?.crew_size || '0');
+
     if (!allocationForm.allocated_area || parseFloat(allocationForm.allocated_area) <= 0) {
       alert('Please enter valid area');
       return;
@@ -181,10 +188,9 @@ const maxAllowedArea = editMode && existingAllocation
     setAllocating(true);
 
     try {
+      // ✅ Use finalCrewSize in the notes
       let notes = `Activity ID: ${selectedActivity.activity_id}`;
-      if (allocationForm.crew_size) {
-        notes += `\nCrew Size: ${allocationForm.crew_size} workers`;
-      }
+      notes += `\nCrew Size: ${finalCrewSize} workers ${!allocationForm.crew_size ? '(Full Default)' : ''}`;
 
       const payload = {
         activity_id: selectedActivity.activity_id,
@@ -200,7 +206,7 @@ const maxAllowedArea = editMode && existingAllocation
         mukkadam_id: parseInt(allocationForm.mukkadam_id),
         allocated_area: parseFloat(allocationForm.allocated_area),
         work_date: allocationForm.work_date,
-        crew_size: allocationForm.crew_size ? parseInt(allocationForm.crew_size) : null,
+        crew_size: finalCrewSize,
         mukkadam_price: parseFloat(allocationForm.mukkadam_price),
         transport_type: allocationForm.transport_type,
         transport_provider_id: allocationForm.transport_type === 'provider' 
