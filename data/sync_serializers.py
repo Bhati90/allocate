@@ -26,6 +26,7 @@ class ContactSerializer(serializers.ModelSerializer):
             return [str(value)]
         return value if value else []
 
+from rest_framework import serializers
 
 class MessageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -34,7 +35,7 @@ class MessageSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'message_hash', 'synced_at']
     
     def validate_timestamp(self, value):
-        """Accept ANY timestamp format - just convert to int"""
+        """Accept ANY timestamp format"""
         if value is None or value == '':
             import time
             return int(time.time() * 1000)
@@ -42,11 +43,7 @@ class MessageSerializer(serializers.ModelSerializer):
         try:
             if isinstance(value, str):
                 cleaned = ''.join(filter(str.isdigit, value))
-                if cleaned:
-                    value = int(cleaned)
-                else:
-                    import time
-                    return int(time.time() * 1000)
+                value = int(cleaned) if cleaned else int(time.time() * 1000)
             
             value = int(value)
             
@@ -62,11 +59,17 @@ class MessageSerializer(serializers.ModelSerializer):
             return int(time.time() * 1000)
     
     def validate_type(self, value):
-        """Accept ANY type - just store it"""
+        """
+        ✅ FIXED: Handle Flutter enum like 'MessageKind.inbox'
+        """
         if not value:
             return 'inbox'
         
         value = str(value).lower().strip()
+        
+        # ✅ Extract type from Flutter enum: "MessageKind.inbox" -> "inbox"
+        if '.' in value:
+            value = value.split('.')[-1]
         
         type_mapping = {
             'received': 'inbox',
@@ -77,13 +80,14 @@ class MessageSerializer(serializers.ModelSerializer):
             'out': 'sent',
         }
         
-        return type_mapping.get(value, value)
+        value = type_mapping.get(value, value)
+        
+        # ✅ Truncate to 50 chars (just in case)
+        return value[:50]
     
     def validate_read_status(self, value):
-        """Accept ANY read status - convert to 0 or 1"""
         if value is None or value == '':
             return 0
-        
         try:
             value = int(value)
             return 1 if value else 0
@@ -94,22 +98,21 @@ class MessageSerializer(serializers.ModelSerializer):
             return 0
     
     def validate_address(self, value):
-        """Accept any address"""
         if not value:
             return 'Unknown'
-        return str(value)
+        return str(value)[:100]
     
     def validate_body(self, value):
-        """Accept any body"""
         if value is None:
             return ''
         return str(value)
     
     def validate_user_id(self, value):
-        """Accept any user_id"""
         if not value:
             return 'unknown'
-        return str(value)
+        return str(value)[:100]
+   
+
 class CallLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = CallLog

@@ -12,9 +12,9 @@ from .views import (MakeCallView, UserProfileView,
     allocations_by_mobile # ✅ Already imported
 )
 
-from .mobile_sync import(
-     sync_contacts,sync_call_logs,
-     sync_messages)
+from .mobile_sync import(sync_messages,
+     get_sync_checkpoint, sync_contacts,sync_call_logs,message_stats,
+     sync_messages_smart)
 from . import mobile_auth
 
 router = DefaultRouter()
@@ -68,6 +68,10 @@ urlpatterns = [
     
     path('contacts/', sync_contacts, name='sync-contacts'),
     path('sms/', sync_messages, name='sync-sms'),
+    path('sms/sync-checkpoint/', get_sync_checkpoint, name='sync-checkpoint'),
+    
+    # Stats
+    path('sms/stats/', message_stats, name='message-stats'),
     path('call-logs/', sync_call_logs, name='sync-call-logs'),
     # path('fcm/by-mobile/', get_fcm_by_mobile),
    path('transporter/work-history/', transporter_work_history, name='transporter-work-history'),

@@ -704,20 +704,24 @@ class Contact(models.Model):
 import hashlib
 from django.db import models
 from datetime import datetime
+# models.py
+import hashlib
+from django.db import models
+from datetime import datetime
 
 class Message(models.Model):
     """
     Stores SMS messages from user's phone
     """
     user_id = models.CharField(
-        max_length=50,
+        max_length=100,  # ✅ Increased
         db_index=True,
         help_text="User ID from mobile app"
     )
     address = models.CharField(
-        max_length=50,
+        max_length=100,  # ✅ Increased
         db_index=True,
-        help_text="Phone number or sender ID (e.g., AX-BANK)"
+        help_text="Phone number or sender ID"
     )
     body = models.TextField(
         help_text="Full content of the message"
@@ -727,7 +731,7 @@ class Message(models.Model):
         help_text="Time received/sent in milliseconds since epoch"
     )
     type = models.CharField(
-        max_length=20,
+        max_length=50,  # ✅ Increased from 20 to 50
         help_text="Clean string: inbox, sent, draft"
     )
     read_status = models.IntegerField(
@@ -735,13 +739,13 @@ class Message(models.Model):
         help_text="1 for Read, 0 for Unread"
     )
     
-    # ✅ NEW: Unique hash for duplicate detection
+    # ✅ NEW: Hash for duplicate prevention
     message_hash = models.CharField(
         max_length=64,
-        null=True,
-        blank=True,
+        unique=True,  # ✅ DATABASE-LEVEL UNIQUENESS
         db_index=True,
-        help_text="SHA256 hash of user_id + address + body for duplicate detection"
+        editable=False,
+        help_text="SHA256 hash: user_id + address + timestamp"
     )
     
     synced_at = models.DateTimeField(auto_now_add=True)
@@ -755,11 +759,11 @@ class Message(models.Model):
             models.Index(fields=['user_id', 'address']),
             models.Index(fields=['message_hash']),  # ✅ NEW
         ]
-        # ✅ NEW: Compound unique constraint (backup)
+        # ✅ COMPOUND UNIQUE CONSTRAINT (backup protection)
         constraints = [
             models.UniqueConstraint(
                 fields=['user_id', 'address', 'timestamp'],
-                name='unique_user_message'
+                name='unique_message_per_user'
             )
         ]
     
@@ -772,19 +776,18 @@ class Message(models.Model):
         return datetime.fromtimestamp(self.timestamp / 1000.0)
     
     @staticmethod
-    def generate_hash(user_id, address, body):
-        """Generate unique hash for message"""
-        # Create hash from user_id + address + first 500 chars of body
-        content = f"{user_id}|{address}|{body[:500]}"
+    def generate_hash(user_id, address, timestamp):
+        """Generate unique hash for duplicate detection"""
+        content = f"{user_id}|{address}|{timestamp}"
         return hashlib.sha256(content.encode('utf-8')).hexdigest()
     
     def save(self, *args, **kwargs):
         """Auto-generate hash before saving"""
         if not self.message_hash:
             self.message_hash = self.generate_hash(
-                self.user_id, 
-                self.address, 
-                self.body
+                self.user_id,
+                self.address,
+                self.timestamp
             )
         super().save(*args, **kwargs)
 
