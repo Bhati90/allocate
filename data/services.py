@@ -6,17 +6,28 @@ from django.db import transaction
 from .models import Allocation, PaymentRequest, TransportPaymentRequest, ActivityLog
 from django.conf import settings
 import requests
+from django.core.cache import cache
 # Setup logging (Hooks into Django's logging system)
 logger = logging.getLogger(__name__)
 
 
-class whatsappService:
+class WhatsAppService:
 
     @classmethod
     def send_allocation_to_mukkadam(cls, allocation):
         """Notify Mukkadam about a new job allocation"""
-        token = cls._get_token()
-        if not token or not allocation.mukkadam_mobile: # Ensure mobile exists
+        print("Starting the WHatsapp Service")
+        print(allocation)
+        mukkadam_id = allocation.mukkadam_id
+        if not mukkadam_id: # Ensure mobile exists
+            return False
+        mukkadam_number = cache.get(f'mukkadam_{mukkadam_id}')
+        if not mukkadam_number:
+            print("No Mukkadam cache Have been found, cache miss")
+            return False
+        mukkadam_number = mukkadam_number.get("mobile_numbers",None)
+        if not mukkadam_number:
+            print("NO mukkadam number have been found on this")
             return False
         try:
             url = f"https://graph.facebook.com/v19.0/{settings.PHONE_NUMBER_ID}/messages"
@@ -28,7 +39,7 @@ class whatsappService:
 
             payload = {
                 "messaging_product": "whatsapp",
-                "to": allocation.mukkadam_mobile,
+                "to": mukkadam_number,
                 "type": "template",
                 "template": {
                     "name": "job_allocated_template",
@@ -67,7 +78,18 @@ class whatsappService:
     def send_allocation_to_transporter(cls, allocation):
         """Notify Transporter about a new pickup/drop requirement"""
         # Only send if a transporter is actually assigned to this allocation
-        if not hasattr(allocation, 'transporter') or not allocation.transporter:
+        print("Starting the WHatsapp Service")
+        print(allocation)
+        mukkadam_id = allocation.transport_provider_id
+        if not mukkadam_id: # Ensure mobile exists
+            return False
+        mukkadam_number = cache.get(f'transport_provider_{mukkadam_id}')
+        if not mukkadam_number:
+            print("No Transport cache Have been found, cache miss")
+            return False
+        mukkadam_number = mukkadam_number.get("contact_number",None)
+        if not mukkadam_number:
+            print("NO Transport number have been found on this")
             return False
 
         try:
@@ -80,7 +102,7 @@ class whatsappService:
 
             payload = {
                 "messaging_product": "whatsapp",
-                "to": allocation.transporter.contact_number,
+                "to": mukkadam_number,
                 "type": "template",
                 "template": {
                     "name": "job_allocated_template",
