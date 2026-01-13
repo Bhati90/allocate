@@ -1746,7 +1746,8 @@ def transporter_work_history(request):
             'name': provider_data.get('name'),
             'mobile': provider_data.get('contact_number'),
             'vehicle': provider_data.get('vehicle_type'),
-            'base_location': provider_data.get('base_location')
+            'base_location': provider_data.get('base_location'),
+            'central_team_phone': "+91-804-7361465"
         },
         'stats': {
             'total_trips': len(allocations),
