@@ -16,6 +16,20 @@ class UserSerializer(serializers.ModelSerializer):
         full = f"{obj.first_name} {obj.last_name}".strip()
         return full if full else obj.username
 
+from rest_framework import serializers
+from django.contrib.auth.models import User
+from .models import UserProfile
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    # We fetch these fields from the related 'profile' model
+    full_name = serializers.CharField(source='profile.full_name')
+    mobile_number = serializers.CharField(source='profile.mobile_number')
+    role = serializers.CharField(source='profile.role')
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'full_name', 'mobile_number', 'role']
+
 
 class JobActivitySerializer(serializers.ModelSerializer):
     remaining_area = serializers.ReadOnlyField()
