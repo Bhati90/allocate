@@ -14,10 +14,12 @@ import ProtectedRoute from "./ProtectedRoute";
 import AdminRoute from "./AdminRoute";
 
 import { AuthProvider } from "./context/auth";
-import AllocationAnalytics from "./analyatics";
+// import AllocationAnalytics from "./analyatics";
 import SupplyHealthDashboard from "./health";
-import MukkadamPerformanceDashboard from "./analyatics";
-import ActiveMukkadamsDashboard from "./analyatics";
+import MukkadamScorecard from "./Score";
+import MukkadamDetails from "./ScoreDetails";
+// import MukkadamPerformanceDashboard from "./analyatics";
+// import ActiveMukkadamsDashboard from "./analyatics";
 const queryClient = new QueryClient();
 
 // wrapper to read the route param and pass it to FarmerProfil
@@ -33,8 +35,11 @@ const App = () => (
           <Route path="/login" element={<Login />} />
           
           <Route path="/analyatics" element={
-            <ProtectedRoute><ActiveMukkadamsDashboard /></ProtectedRoute>
+            <AdminRoute><MukkadamScorecard /></AdminRoute>
           } />
+
+          <Route path="/mukkadam-details/:mukkadamId" element={<AdminRoute><MukkadamDetails /></AdminRoute>} /> {/* ← Add this */}
+        
           <Route path="/allocations/new" element={<ProtectedRoute><AllocationDashboard /></ProtectedRoute>} />
           {/* <Route path="/allocations/new" element={<ComplexAllocationDashboard />} /> */}
           <Route path="/allocations/:id" element={<AllocationView />} />

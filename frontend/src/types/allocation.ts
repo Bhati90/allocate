@@ -96,6 +96,7 @@ export interface Mukkadam {
   mobile_numbers: string;
   village: string;
   crew_size: string;
+  is_permanent: boolean;
 }
 
 export interface TransportProvider {

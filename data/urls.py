@@ -3,8 +3,10 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
+
 from .views import (MakeCallView, UserProfileView,
-   
+   mukkadam_scorecard_details,UserListAPIView,
+    mukkadam_scorecard_summary,
     JobActivityViewSet, get_job_details,get_user_calls,get_call_details,
     AllocationViewSet,transporter_work_history,ExotelWebhookView,
     jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,
@@ -64,11 +66,14 @@ urlpatterns = [
     # ========================================
     # ROUTER ENDPOINTS (MUST BE LAST)
     # ========================================
+    
+    path('mukkadam-scorecard-summary/', mukkadam_scorecard_summary, name='mukkadam-scorecard-summary'),
+    path('mukkadam-scorecard-details/<int:mukkadam_id>/', mukkadam_scorecard_details, name='mukkadam-scorecard-details'),
 
 
 
    path('job-details/<str:job_id>/', get_job_details, name='get-job-details'),
-    
+    path('users/all/', UserListAPIView.as_view(), name='user-list-api'),
     path('contacts/', sync_contacts, name='sync-contacts'),
     path('sms/', sync_messages, name='sync-sms'),
     path('sms/sync-checkpoint/', get_sync_checkpoint, name='sync-checkpoint'),
