@@ -34,7 +34,7 @@ const { isAdmin, userData, logout: authLogout, isLoading } = useAuth();
 
         {isAdmin && (
             <button 
-              onClick={() => navigate('/analytics')} 
+              onClick={() => navigate('/analyatics')} 
               className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white p-8 rounded-xl shadow-lg flex flex-col items-center hover:from-emerald-600 hover:to-emerald-700 transition transform hover:scale-105"
             >
               <MapPin size={48} className="mb-4" />

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect ,useMemo} from 'react';
 import axios from 'axios';
 import {
   Users, Truck, X, Calendar, MapPin, TrendingUp,
-  CheckCircle, AlertCircle, ArrowRight, Layers
+  CheckCircle, AlertCircle, ArrowRight, Layers,ChevronDown,Search
 } from 'lucide-react';
 import { getAuthConfig } from './utils/auth';
 
@@ -53,20 +53,21 @@ const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
   });
   const [allocating, setAllocating] = useState(false);
   const [crewCapacity, setCrewCapacity] = useState<any>(null);
-
+  const [isPriceTbd, setIsPriceTbd] = useState(false);
   // Calculate auto-price when area changes
   useEffect(() => {
-    if (selectedActivity && allocationForm.allocated_area) {
-      const area = parseFloat(allocationForm.allocated_area);
-      if (!isNaN(area) && area > 0) {
-        const price = area * selectedActivity.rate_per_acre;
-        setAllocationForm(prev => ({
-          ...prev,
-          mukkadam_price: price.toFixed(2)
-        }));
-      }
+  // Only auto-calculate if NOT in TBD mode
+  if (selectedActivity && allocationForm.allocated_area && !isPriceTbd) {
+    const area = parseFloat(allocationForm.allocated_area);
+    if (!isNaN(area) && area > 0) {
+      const price = area * selectedActivity.rate_per_acre;
+      setAllocationForm(prev => ({
+        ...prev,
+        mukkadam_price: price.toFixed(2)
+      }));
     }
-  }, [allocationForm.allocated_area, selectedActivity]);
+  }
+}, [allocationForm.allocated_area, selectedActivity, isPriceTbd]);
 
   // Calculate crew capacity when mukkadam is selected OR crew_size changes
   useEffect(() => {
@@ -190,8 +191,10 @@ const maxAllowedArea = editMode && existingAllocation
     try {
       // ✅ Use finalCrewSize in the notes
       let notes = `Activity ID: ${selectedActivity.activity_id}`;
-      notes += `\nCrew Size: ${finalCrewSize} workers ${!allocationForm.crew_size ? '(Full Default)' : ''}`;
-
+    notes += `\nCrew Size: ${finalCrewSize} workers`;
+    if (isPriceTbd) {
+      notes += `\nPRICE STATUS: To Be Decided Later`;
+    }
       const payload = {
         activity_id: selectedActivity.activity_id,
         job_id: job.work_id,
@@ -207,7 +210,7 @@ const maxAllowedArea = editMode && existingAllocation
         allocated_area: parseFloat(allocationForm.allocated_area),
         work_date: allocationForm.work_date,
         crew_size: finalCrewSize,
-        mukkadam_price: parseFloat(allocationForm.mukkadam_price),
+        mukkadam_price: isPriceTbd ? 0 : parseFloat(allocationForm.mukkadam_price),
         transport_type: allocationForm.transport_type,
         transport_provider_id: allocationForm.transport_type === 'provider' 
           ? parseInt(allocationForm.transport_provider_id) 
@@ -274,6 +277,29 @@ const maxAllowedArea = editMode && existingAllocation
       setAllocating(false);
     }
   };
+
+  const [mukkadamSearch, setMukkadamSearch] = useState('');
+const [transportSearch, setTransportSearch] = useState('');
+const [isMukkadamOpen, setIsMukkadamOpen] = useState(false);
+const [isTransportOpen, setIsTransportOpen] = useState(false);
+// 2. Add this logic before the return statement
+const filteredMukkadams = useMemo(() => {
+  return [...mukkadams]
+    .filter(m => 
+      m.mukkadam_name.toLowerCase().includes(mukkadamSearch.toLowerCase()) ||
+      m.village?.toLowerCase().includes(mukkadamSearch.toLowerCase())
+    )
+    .sort((a, b) => a.mukkadam_name.localeCompare(b.mukkadam_name));
+}, [mukkadams, mukkadamSearch]);
+
+const filteredProviders = useMemo(() => {
+  return [...transportProviders]
+    .filter(p => 
+      p.name.toLowerCase().includes(transportSearch.toLowerCase()) ||
+      p.base_location?.toLowerCase().includes(transportSearch.toLowerCase())
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+}, [transportProviders, transportSearch]);
 
   const selectedMukkadam = mukkadams.find(m => m.id === parseInt(allocationForm.mukkadam_id));
   const selectedProvider = transportProviders.find(p => p.id === parseInt(allocationForm.transport_provider_id));
@@ -522,19 +548,56 @@ const maxAllowedArea = editMode && existingAllocation
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Select Mukkadam <span className="text-red-500">*</span>
                       </label>
-                      <select
-                        required
-                        value={allocationForm.mukkadam_id}
-                        onChange={(e) => setAllocationForm({...allocationForm, mukkadam_id: e.target.value})}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                      >
-                        <option value="">-- Select Mukkadam --</option>
-                        {mukkadams.map(m => (
-                          <option key={m.id} value={m.id}>
-                            {m.mukkadam_name} - {m.village} (Crew: {m.crew_size})
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative">
+  <div 
+    className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white cursor-pointer flex justify-between items-center"
+    onClick={() => setIsMukkadamOpen(!isMukkadamOpen)}
+  >
+    <span className={selectedMukkadam ? "text-gray-900 font-semibold" : "text-gray-400"}>
+      {selectedMukkadam ? `${selectedMukkadam.mukkadam_name} - ${selectedMukkadam.village}` : "-- Search or Select Mukkadam --"}
+    </span>
+    <ChevronDown size={18} className={`text-gray-400 transition-transform ${isMukkadamOpen ? 'rotate-180' : ''}`} />
+  </div>
+
+  {isMukkadamOpen && (
+    <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl overflow-hidden">
+      <div className="p-2 border-b bg-gray-50 sticky top-0">
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
+          <input 
+            type="text"
+            autoFocus
+            placeholder="Search by name or village..."
+            className="w-full pl-10 pr-4 py-2 text-sm border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+            value={mukkadamSearch}
+            onChange={(e) => setMukkadamSearch(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      </div>
+      <div className="max-h-60 overflow-y-auto">
+        {filteredMukkadams.length > 0 ? (
+          filteredMukkadams.map(m => (
+            <div 
+              key={m.id}
+              className={`px-4 py-2.5 text-sm hover:bg-indigo-50 cursor-pointer border-b last:border-0 ${allocationForm.mukkadam_id === m.id.toString() ? 'bg-indigo-50 font-bold text-indigo-700' : 'text-gray-700'}`}
+              onClick={() => {
+                setAllocationForm({...allocationForm, mukkadam_id: m.id.toString()});
+                setIsMukkadamOpen(false);
+                setMukkadamSearch('');
+              }}
+            >
+              <p>{m.mukkadam_name} <span className="text-xs text-gray-500 ml-2">({m.village})</span></p>
+              <p className="text-[10px] text-gray-400">Crew Size: {m.crew_size}</p>
+            </div>
+          ))
+        ) : (
+          <div className="px-4 py-4 text-center text-gray-500 text-sm">No results found</div>
+        )}
+      </div>
+    </div>
+  )}
+</div>
 
                       {selectedMukkadam && (
                         <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-200 mt-3">
@@ -649,23 +712,43 @@ const maxAllowedArea = editMode && existingAllocation
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Mukkadam Price (₹) <span className="text-red-500">*</span>
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-4 top-3 text-gray-500 font-semibold">₹</span>
-                        <input
-                          required
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={allocationForm.mukkadam_price}
-                          onChange={(e) => setAllocationForm({...allocationForm, mukkadam_price: e.target.value})}
-                          className="w-full pl-8 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                          placeholder="Auto-calculated"
-                        />
-                      </div>
-                    </div>
+  <div className="flex justify-between items-center mb-2">
+    <label className="block text-sm font-medium text-gray-700">
+      Mukkadam Price (₹) <span className="text-red-500">*</span>
+    </label>
+    <label className="flex items-center text-xs font-semibold text-indigo-600 cursor-pointer">
+      <input
+        type="checkbox"
+        className="mr-1 rounded border-gray-300"
+        checked={isPriceTbd}
+        onChange={(e) => {
+          setIsPriceTbd(e.target.checked);
+          if (e.target.checked) {
+            setAllocationForm(prev => ({ ...prev, mukkadam_price: '0' }));
+          }
+        }}
+      />
+      To Be Decided Later
+    </label>
+  </div>
+
+  <div className="relative">
+    <span className="absolute left-4 top-3 text-gray-500 font-semibold">₹</span>
+    <input
+      required={!isPriceTbd}
+      disabled={isPriceTbd}
+      type="number"
+      step="0.01"
+      min="0"
+      value={isPriceTbd ? "" : allocationForm.mukkadam_price}
+      onChange={(e) => setAllocationForm({...allocationForm, mukkadam_price: e.target.value})}
+      className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 ${
+        isPriceTbd ? 'bg-gray-100 text-gray-400 italic' : 'bg-white'
+      }`}
+      placeholder={isPriceTbd ? "Price will be decided later" : "Auto-calculated"}
+    />
+  </div>
+</div>
                   </div>
 
                   {/* Transport Selection */}
@@ -721,19 +804,51 @@ const maxAllowedArea = editMode && existingAllocation
                           <label className="block text-sm font-medium text-gray-700 mb-2">
                             Select Transport Provider <span className="text-red-500">*</span>
                           </label>
-                          <select
-                            required
-                            value={allocationForm.transport_provider_id}
-                            onChange={(e) => setAllocationForm({...allocationForm, transport_provider_id: e.target.value})}
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
-                          >
-                            <option value="">-- Select Transport Provider --</option>
-                            {transportProviders.map(t => (
-                              <option key={t.id} value={t.id}>
-                                {t.name} - {t.base_location} (Max: {t.max_distance}km)
-                              </option>
-                            ))}
-                          </select>
+                          <div className="relative">
+  <div 
+    className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white cursor-pointer flex justify-between items-center"
+    onClick={() => setIsTransportOpen(!isTransportOpen)}
+  >
+    <span className={selectedProvider ? "text-gray-900 font-semibold" : "text-gray-400"}>
+      {selectedProvider ? `${selectedProvider.name} - ${selectedProvider.base_location}` : "-- Search or Select Provider --"}
+    </span>
+    <ChevronDown size={18} className={`text-gray-400 transition-transform ${isTransportOpen ? 'rotate-180' : ''}`} />
+  </div>
+
+  {isTransportOpen && (
+    <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl overflow-hidden">
+      <div className="p-2 border-b bg-gray-50 sticky top-0">
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
+          <input 
+            type="text"
+            autoFocus
+            placeholder="Search provider..."
+            className="w-full pl-10 pr-4 py-2 text-sm border rounded focus:ring-2 focus:ring-orange-500 outline-none"
+            value={transportSearch}
+            onChange={(e) => setTransportSearch(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      </div>
+      <div className="max-h-48 overflow-y-auto">
+        {filteredProviders.map(p => (
+          <div 
+            key={p.id}
+            className={`px-4 py-2.5 text-sm hover:bg-orange-50 cursor-pointer border-b last:border-0 ${allocationForm.transport_provider_id === p.id.toString() ? 'bg-orange-50 font-bold' : ''}`}
+            onClick={() => {
+              setAllocationForm({...allocationForm, transport_provider_id: p.id.toString()});
+              setIsTransportOpen(false);
+              setTransportSearch('');
+            }}
+          >
+            {p.name} <span className="text-xs text-gray-500 ml-2">({p.base_location})</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )}
+</div>
                         </div>
 
                         {selectedProvider && (
@@ -816,9 +931,11 @@ const maxAllowedArea = editMode && existingAllocation
                           <p className="text-2xl font-bold text-blue-600">{allocationForm.allocated_area} acres</p>
                         </div>
                         <div>
-                          <p className="text-sm text-gray-600">Mukkadam Price</p>
-                          <p className="text-2xl font-bold text-indigo-600">₹{parseFloat(allocationForm.mukkadam_price).toLocaleString()}</p>
-                        </div>
+  <p className="text-sm text-gray-600">Mukkadam Price</p>
+  <p className={`text-2xl font-bold ${isPriceTbd ? 'text-orange-500' : 'text-indigo-600'}`}>
+    {isPriceTbd ? 'To Be Decided' : `₹${parseFloat(allocationForm.mukkadam_price || '0').toLocaleString()}`}
+  </p>
+</div>
                         <div>
                           <p className="text-sm text-gray-600">Transport Cost</p>
                           <p className="text-2xl font-bold text-orange-600">

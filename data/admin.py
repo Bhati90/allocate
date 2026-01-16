@@ -9,6 +9,117 @@ from .models import (
     Message,
     CallLog
 )
+from django.contrib import admin
+from django.utils import timezone
+from .models import PaymentRequest, TransportPaymentRequest
+
+
+# -------------------------
+# PaymentRequest Admin
+# -------------------------
+@admin.register(PaymentRequest)
+class PaymentRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'mukkadam_id',
+        'allocation',
+        'requested_amount',
+        'status',
+        'requested_at',
+        'paid_at',
+    )
+
+    list_filter = ('status', 'requested_at')
+    search_fields = ('id', 'mukkadam_id', 'allocation__id')
+    ordering = ('-requested_at',)
+
+    readonly_fields = (
+        'allocation',
+        'mukkadam_id',
+        'requested_amount',
+        'requested_at',
+        'requested_by',
+        'paid_at',
+        'paid_by',
+        'rejected_at',
+        'rejected_by',
+    )
+
+    actions = ['mark_as_paid', 'mark_as_rejected']
+
+    def mark_as_paid(self, request, queryset):
+        updated = queryset.filter(status='pending').update(
+            status='paid',
+            paid_at=timezone.now(),
+            paid_by=request.user
+        )
+        self.message_user(request, f"{updated} payment request(s) marked as PAID.")
+
+    mark_as_paid.short_description = "Mark selected payment requests as PAID"
+
+    def mark_as_rejected(self, request, queryset):
+        updated = queryset.filter(status='pending').update(
+            status='rejected',
+            rejected_at=timezone.now(),
+            rejected_by=request.user
+        )
+        self.message_user(request, f"{updated} payment request(s) marked as REJECTED.")
+
+    mark_as_rejected.short_description = "Reject selected payment requests"
+
+
+# -------------------------
+# TransportPaymentRequest Admin
+# -------------------------
+@admin.register(TransportPaymentRequest)
+class TransportPaymentRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'transport_provider_id',
+        'allocation',
+        'requested_amount',
+        'status',
+        'requested_at',
+        'paid_at',
+    )
+
+    list_filter = ('status', 'requested_at')
+    search_fields = ('id', 'transport_provider_id', 'allocation__id')
+    ordering = ('-requested_at',)
+
+    readonly_fields = (
+        'allocation',
+        'transport_provider_id',
+        'requested_amount',
+        'requested_at',
+        'requested_by',
+        'paid_at',
+        'paid_by',
+        'rejected_at',
+        'rejected_by',
+    )
+
+    actions = ['mark_as_paid', 'mark_as_rejected']
+
+    def mark_as_paid(self, request, queryset):
+        updated = queryset.filter(status='pending').update(
+            status='paid',
+            paid_at=timezone.now(),
+            paid_by=request.user
+        )
+        self.message_user(request, f"{updated} transport payment(s) marked as PAID.")
+
+    mark_as_paid.short_description = "Mark selected transport payments as PAID"
+
+    def mark_as_rejected(self, request, queryset):
+        updated = queryset.filter(status='pending').update(
+            status='rejected',
+            rejected_at=timezone.now(),
+            rejected_by=request.user
+        )
+        self.message_user(request, f"{updated} transport payment(s) marked as REJECTED.")
+
+    mark_as_rejected.short_description = "Reject selected transport payments"
 
 # -----------------------------
 # User Profile Admin
