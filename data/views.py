@@ -389,6 +389,7 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'allocation_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
         try:
             allocation = Allocation.objects.get(id=allocation_id)
         except Allocation.DoesNotExist:
@@ -396,15 +397,54 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'Allocation not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
+        
         # Check if payment request already exists
         if hasattr(allocation, 'payment_request'):
-            return Response(
-                {
-                    'error': 'Payment request already exists for this allocation',
-                    'existing_request': PaymentRequestSerializer(allocation.payment_request).data
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            existing_request = allocation.payment_request
+            
+            # ✅ If rejected, update and resubmit the existing request
+            if existing_request.status == 'rejected':
+                existing_request.status = 'pending'
+                existing_request.requested_at = timezone.now()
+                existing_request.requested_by = request.user if request.user.is_authenticated else None
+                existing_request.notes = request.data.get('notes', existing_request.notes)
+                existing_request.save()
+                
+                # Log the re-request activity
+                ActivityLog.objects.create(
+                    activity_type='payment_requested',
+                    description="Payment re-requested after rejection",
+                    payment_request=existing_request,
+                    allocation=allocation,
+                    performed_by=request.user if request.user.is_authenticated else None,
+                    job_id=allocation.farmer_work_id,
+                    mukkadam_id=allocation.mukkadam_id,
+                    metadata={"notes": existing_request.notes}
+                )
+                
+                serializer = self.get_serializer(existing_request)
+                return Response({
+                    'message': 'Payment request resubmitted successfully',
+                    'payment_request': serializer.data
+                }, status=status.HTTP_200_OK)
+            
+            # ✅ If pending or paid, return error
+            elif existing_request.status == 'pending':
+                return Response(
+                    {
+                        'error': 'Payment request already exists and is pending approval',
+                        'existing_request': PaymentRequestSerializer(existing_request).data
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            elif existing_request.status == 'paid':
+                return Response(
+                    {
+                        'error': 'Payment has already been made for this allocation',
+                        'existing_request': PaymentRequestSerializer(existing_request).data
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         # Calculate amount from allocation
         requested_amount = float(allocation.mukkadam_price) 
@@ -417,13 +457,21 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
             requested_by=request.user if request.user.is_authenticated else None,
             notes=request.data.get('notes', '')
         )
+        
+        # Log the creation
+        ActivityLog.objects.create(
+            activity_type='payment_requested',
+            description="New payment request created",
+            payment_request=payment_request,
+            allocation=allocation,
+            performed_by=request.user if request.user.is_authenticated else None,
+            job_id=allocation.farmer_work_id,
+            mukkadam_id=allocation.mukkadam_id,
+            metadata={"notes": payment_request.notes}
+        )
 
         serializer = self.get_serializer(payment_request)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        # In PaymentRequestViewSet
-    # In PaymentRequestViewSet
-
     # ... existing imports ...
     # Ensure you import ActivityLog
     # from .models import ActivityLog

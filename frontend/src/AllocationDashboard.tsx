@@ -2309,6 +2309,8 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                             <th className="px-4 py-3 text-left">Activity</th>
                             <th className="px-4 py-3 text-left">Mukkadam</th>
                             <th className="px-4 py-3 text-left">Area</th>
+                            <th className="px-4 py-3 text-left">Crew</th>
+                            <th className="px-4 py-3 text-left">Transport</th>
                             <th className="px-4 py-3 text-left">Cost</th>
                             <th className="px-4 py-3 text-left">Work Date</th>
                             <th className="px-4 py-3 text-left">Actions</th>
@@ -2320,7 +2322,9 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                               <td className="px-4 py-3 font-medium">{allocation.activity_name}</td>
                               <td className="px-4 py-3">{mukkadams.find(m => m.id === allocation.mukkadam_id)?.mukkadam_name}</td>
                               <td className="px-4 py-3">{allocation.allocated_area} ac</td>
-                              <td className="px-4 py-3 font-bold text-purple-600">₹{(parseFloat(allocation.mukkadam_price) + parseFloat(allocation.transport_price)).toLocaleString()}</td>
+                                <td className="px-4 py-3 font-bold text-teal-600">{allocation.crew_size}</td>
+                                <td className="px-4 py-3 text-orange-600 font-medium">₹{parseFloat(allocation.transport_price).toLocaleString()}</td>
+                                <td className="px-4 py-3 font-bold text-purple-600">₹{(parseFloat(allocation.mukkadam_price) + parseFloat(allocation.transport_price)).toLocaleString()}</td>
                               <td className="px-4 py-3">{allocation.work_date ? new Date(allocation.work_date).toLocaleDateString('en-IN') : 'N/A'}</td>
                               <td className="px-4 py-3">
                                 <div className="flex items-center space-x-3">
@@ -2351,7 +2355,6 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
   </div>
 )}
 {/* ✅ COMPLETED TAB - NEW */}
-
 {activeTab === 'completed' && (
   <div className="p-6">
     <div className="mb-4 flex items-center justify-between">
@@ -2403,29 +2406,36 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
     </div>
 
     {(() => {
-        const filteredCompletedList = getCompletedAllocations().filter(allocation => {
-            const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
-            const farmerName = job?.farmer?.farmer_name || '';
-            const searchLower = searchTerm.toLowerCase();
+        const filteredCompletedList = getCompletedAllocations()
+            .filter(allocation => {
+                const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
+                const farmerName = job?.farmer?.farmer_name || '';
+                const searchLower = searchTerm.toLowerCase();
 
-            if (selectedFilterDate) {
-              if (!allocation.work_date || !allocation.work_date.startsWith(selectedFilterDate)) {
-                return false;
-              }
-            }
+                if (selectedFilterDate) {
+                  if (!allocation.work_date || !allocation.work_date.startsWith(selectedFilterDate)) {
+                    return false;
+                  }
+                }
 
-            if (!searchTerm) return true;
-            const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
-            const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
+                if (!searchTerm) return true;
+                const mukkadam = mukkadams.find(m => m.id === allocation.mukkaad_id);
+                const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
 
-            return (
-                String(allocation.farmer_work_id || '').toLowerCase().includes(searchLower) ||
-                String(allocation.activity_name || '').toLowerCase().includes(searchLower) ||
-                farmerName.toLowerCase().includes(searchLower) ||
-                String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower) ||
-                String(provider?.name || '').toLowerCase().includes(searchLower)
-            );
-        });
+                return (
+                    String(allocation.farmer_work_id || '').toLowerCase().includes(searchLower) ||
+                    String(allocation.activity_name || '').toLowerCase().includes(searchLower) ||
+                    farmerName.toLowerCase().includes(searchLower) ||
+                    String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower) ||
+                    String(provider?.name || '').toLowerCase().includes(searchLower)
+                );
+            })
+            .sort((a, b) => {
+                // Sort by work_date descending (newest first)
+                const dateA = new Date(a.work_date);
+                const dateB = new Date(b.work_date);
+                return dateB - dateA;
+            });
 
         if (filteredCompletedList.length === 0) {
             return (
@@ -2617,7 +2627,6 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
     })()}
   </div>
 )}
-
 {activeTab === 'pending' && (
   <div>
     {/* --- Filter Bar Section (Synced with Allocated Tab) --- */}

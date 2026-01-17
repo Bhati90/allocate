@@ -637,7 +637,7 @@ const filteredProviders = useMemo(() => {
                   </div>
 
 {/* Mukkadam Selection */}
-<div className="space-y-4 relative"> {/* Added relative here to anchor the dropdown */}
+{/* Added relative here to anchor the dropdown */}
   <h3 className="text-lg font-bold text-gray-900 flex items-center border-b-2 border-indigo-200 pb-2">
     <Users className="mr-2 text-indigo-500" /> Mukkadam & Area
   </h3>
@@ -919,10 +919,163 @@ const filteredProviders = useMemo(() => {
           )}
         </div>
       )}
+      
     </div>
+
+
+    {selectedMukkadam && (
+                        <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-200 mt-3">
+                          <h4 className="font-semibold text-gray-700 mb-2">Selected Mukkadam:</h4>
+                          <div className="grid grid-cols-2 gap-3 text-sm">
+                            <div>
+                              <span className="text-gray-600">Name:</span>
+                              <span className="font-semibold ml-2">{selectedMukkadam.mukkadam_name}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Mobile:</span>
+                              <span className="font-semibold ml-2">{selectedMukkadam.mobile_numbers}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Village:</span>
+                              <span className="font-semibold ml-2">{selectedMukkadam.village}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Default Crew Size:</span>
+                              <span className="font-semibold ml-2">{selectedMukkadam.crew_size}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedMukkadam && (
+                        <div className="mt-3">
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Crew Size for This Job
+                            <span className="text-gray-500 font-normal ml-2">(Optional - defaults to {selectedMukkadam.crew_size})</span>
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="200"
+                            value={allocationForm.crew_size}
+                            onChange={(e) => setAllocationForm({...allocationForm, crew_size: e.target.value})}
+                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                            placeholder={`Default: ${selectedMukkadam.crew_size} workers`}
+                          />
+                          <p className="text-xs text-gray-500 mt-1">
+                            💡 Override if mukkadam is bringing a different number of workers for this specific job
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {crewCapacity && (
+                      <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-200">
+                        <h4 className="font-semibold text-gray-700 mb-2">
+                          Crew Capacity Analysis
+                          {allocationForm.crew_size && (
+                            <span className="ml-2 text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
+                              Custom Size
+                            </span>
+                          )}
+                        </h4>
+                        <div className="grid grid-cols-3 gap-3 text-sm">
+                          <div>
+                            <p className="text-gray-600">Crew Size</p>
+                            <p className="font-bold text-indigo-600">{crewCapacity.crew_size} workers</p>
+                          </div>
+                          <div>
+                            <p className="text-gray-600">Workers/Acre</p>
+                            <p className="font-bold text-indigo-600">{crewCapacity.workers_per_acre}</p>
+                          </div>
+                          <div>
+                            <p className="text-gray-600">Max Area/Day</p>
+                            <p className="font-bold text-green-600">{crewCapacity.max_area_per_day} acres</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Area to Allocate (acres) <span className="text-red-500">*</span>
+                        </label>
+                        <input
+  required
+  type="number"
+  step="0.01"
+  min="0.01"
+  max={editMode && existingAllocation 
+    ? selectedActivity.remaining_area + parseFloat(String(existingAllocation.allocated_area || 0))
+    : selectedActivity.remaining_area}
+  value={allocationForm.allocated_area}
+  onChange={(e) => setAllocationForm({...allocationForm, allocated_area: e.target.value})}
+  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+  placeholder="5.00"
+/>
+                        <p className="text-xs text-gray-500 mt-1">
+  Max: {(editMode && existingAllocation 
+    ? selectedActivity.remaining_area + parseFloat(String(existingAllocation.allocated_area || 0))
+    : selectedActivity.remaining_area).toFixed(2)} acres
+</p>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Work Date <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          required
+                          type="date"
+                          value={allocationForm.work_date}
+                          onChange={(e) => setAllocationForm({...allocationForm, work_date: e.target.value})}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+  <div className="flex justify-between items-center mb-2">
+    <label className="block text-sm font-medium text-gray-700">
+      Mukkadam Price (₹) <span className="text-red-500">*</span>
+    </label>
+    <label className="flex items-center text-xs font-semibold text-indigo-600 cursor-pointer">
+      <input
+        type="checkbox"
+        className="mr-1 rounded border-gray-300"
+        checked={isPriceTbd}
+        onChange={(e) => {
+          setIsPriceTbd(e.target.checked);
+          if (e.target.checked) {
+            setAllocationForm(prev => ({ ...prev, mukkadam_price: '0' }));
+          }
+        }}
+      />
+      To Be Decided Later
+    </label>
   </div>
 
+  <div className="relative">
+    <span className="absolute left-4 top-3 text-gray-500 font-semibold">₹</span>
+    <input
+      required={!isPriceTbd}
+      disabled={isPriceTbd}
+      type="number"
+      step="0.01"
+      min="0"
+      value={isPriceTbd ? "" : allocationForm.mukkadam_price}
+      onChange={(e) => setAllocationForm({...allocationForm, mukkadam_price: e.target.value})}
+      className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 ${
+        isPriceTbd ? 'bg-gray-100 text-gray-400 italic' : 'bg-white'
+      }`}
+      placeholder={isPriceTbd ? "Price will be decided later" : "Auto-calculated"}
+    />
   </div>
+</div>
+                  
+
+
 
                   {/* Transport Selection */}
                   <div className="space-y-4">
