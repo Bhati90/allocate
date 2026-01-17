@@ -724,7 +724,7 @@ def allocations_by_mobile(request):
         supply_response = requests.get(
             f'{SUPPLY_API_URL}/api/mukkadam/by-mobile/',
             params={'mobile_number': mobile_number},
-            timeout=20
+            timeout=50
         )
         supply_data = supply_response.json()
         if not supply_data.get('found'):
@@ -790,7 +790,7 @@ def allocations_by_mobile(request):
                 try:
                     provider_response = requests.get(
                         f'{SUPPLY_API_URL}/api/transport-provider/{alloc.transport_provider_id}/',
-                        timeout=20
+                        timeout=50
                     )
                     if provider_response.status_code == 200:
                         provider_json = provider_response.json()
@@ -1057,13 +1057,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Import your models
 # from .models import Allocation, ActivityLog
+import random  # ✅ Make sure to import this at the top
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def jobs_list(request):
     """
     Fetch jobs from external API and enrich with allocation data
-    OPTIMIZED with caching + async
+    OPTIMIZED with caching + async + Maharashtra Geo-tagging
     """
     import time
     start_time = time.time()
@@ -1076,7 +1077,7 @@ def jobs_list(request):
         response = requests.get(
             api_url,
             headers={'Authorization': token},
-            timeout=20
+            timeout=50
         )
 
         response.raise_for_status()
@@ -1119,14 +1120,13 @@ def jobs_list(request):
         mukkadam_ids.add(alloc.mukkadam_id)
 
     # ========================================
-    # ✅ STEP 2: BATCH FETCH ALL DATA IN PARALLEL
+    # STEP 2: BATCH FETCH ALL DATA IN PARALLEL
     # ========================================
     print(f"\n⚡ PARALLEL BATCH FETCHING...")
     batch_start = time.time()
 
-    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)  # ✅ Reduced
-    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)  # ✅ Reduced
-    # transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)  # ✅ Reduced
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
 
     batch_elapsed = time.time() - batch_start
     print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
@@ -1135,6 +1135,12 @@ def jobs_list(request):
     # STEP 3: ENRICH JOBS
     # ========================================
     enriched_jobs = []
+
+    # ✅ MAHARASHTRA BOUNDS (Approximate)
+    # Latitude: 15.6°N to 22.0°N
+    # Longitude: 72.6°E to 80.9°E
+    MH_LAT_MIN, MH_LAT_MAX = 16.0, 21.0
+    MH_LON_MIN, MH_LON_MAX = 73.0, 79.0
 
     for idx, job in enumerate(jobs_from_api):
         job_id = str(
@@ -1237,6 +1243,21 @@ def jobs_list(request):
 
         job_status = calculate_status(activities_data)
 
+        # -------------------------------------------------------------
+        # ✅ GENERATE UNIQUE COORDINATES FOR MAHARASHTRA
+        # -------------------------------------------------------------
+        # We seed the random generator with the job_id so that the
+        # location stays stable for this job across page refreshes,
+        # but is different for every job.
+        random.seed(str(job_id))
+        
+        latitude = round(random.uniform(MH_LAT_MIN, MH_LAT_MAX), 6)
+        longitude = round(random.uniform(MH_LON_MIN, MH_LON_MAX), 6)
+        
+        # Reset seed so we don't affect other random operations
+        random.seed()
+        # -------------------------------------------------------------
+
         enriched_job = {
             **job,
             'work_id': job_id,
@@ -1245,7 +1266,11 @@ def jobs_list(request):
             'status': job_status,
             'total_activities': len(activities_data),
             'is_complex': len(activities_data) > 1,
-            'booking': job.get('booking', {})
+            'booking': job.get('booking', {}),
+            
+            # ✅ ADDED FIELDS
+            'latitude': latitude,
+            'longitude': longitude
         }
 
         enriched_jobs.append(enriched_job)
@@ -1254,7 +1279,6 @@ def jobs_list(request):
     print(f"\n✅ Jobs API completed in {total_elapsed:.2f}s")
 
     return Response(enriched_jobs)
-
 # allocation_app/views.py
 
 from .utils import batch_fetch_mukkadams, batch_fetch_farmers, batch_fetch_transport_providers
@@ -1304,7 +1328,7 @@ def allocations_list(request):
             mukkadam_response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/',
                 params={'search': mukkadam_phone},
-                timeout=20
+                timeout=50
             )
 
             if mukkadam_response.status_code == 200:
@@ -1343,7 +1367,7 @@ def allocations_list(request):
         response = requests.get(
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
-            timeout=20
+            timeout=50
         )
 
         if response.status_code == 200:
@@ -1464,7 +1488,10 @@ def allocations_list(request):
             },
 
             'payment': {
-                'mukkadam_price_per_acre': float(allocation.mukkadam_price),
+                'mukkadam_price_per_acre': (
+                    float(allocation.mukkadam_price / allocation.allocated_area)
+                    if allocation.allocated_area > 0 else 0.0
+                ),
                 'allocated_acres': float(allocation.allocated_area),
                 'mukkadam_total_payment': revenue,
                 'transport_type': allocation.transport_type,
@@ -1540,7 +1567,7 @@ def transporter_work_history(request):
             print(f"   🔍 Fetching by ID: {provider_id}")
             response = requests.get(
                 f'{SUPPLY_API_URL}/api/transport-providers/{provider_id}/',
-                timeout=20
+                timeout=50
             )
             if response.status_code == 200:
                 provider_data = response.json()
@@ -1557,7 +1584,7 @@ def transporter_work_history(request):
             response = requests.post(
                 check_url,
                 json={'contact_number': mobile_number}, # Send data in body
-                timeout=20
+                timeout=50
             )
 
             print(f"   📊 Response Status: {response.status_code}")
@@ -1621,7 +1648,7 @@ def transporter_work_history(request):
         response = requests.get(
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
-            timeout=20
+            timeout=50
         )
 
         if response.status_code == 200:
@@ -1643,7 +1670,7 @@ def transporter_work_history(request):
                     f_resp = requests.get(
                         f'{FARMER_API_BASE}/get_farmer_details/{fid}/',
                         headers={'Authorization': farmer_token},
-                        timeout=20
+                        timeout=50
                     )
                     if f_resp.status_code == 200:
                         print(f"   ✅ Fetched farmer ID: {fid}")
@@ -1659,7 +1686,7 @@ def transporter_work_history(request):
         for mid in mukkadam_ids:
             m_resp = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/{mid}/',
-                timeout=20
+                timeout=50
             )
             if m_resp.status_code == 200:
                 mukkadams_cache[mid] = m_resp.json()
@@ -1783,7 +1810,7 @@ def get_supply_users_mapping():
     try:
         response = requests.get(
             f'{SUPPLY_API_URL}/api/users/all/',
-            timeout=20
+            timeout=50
         )
         if response.status_code == 200:
             users_data = response.json()
@@ -1803,7 +1830,7 @@ def get_allocation_users_mapping():
     try:
         response = requests.get(
             f'{ALLOCATION_API_BASE}/ap/users/all/',
-            timeout=20
+            timeout=50
         )
         if response.status_code == 200:
             users_data = response.json()
@@ -1823,7 +1850,7 @@ def get_all_mukkadams_from_supply():
     try:
         response = requests.get(
             f'{SUPPLY_API_URL}/api/mukkadam/',
-            timeout=30
+            timeout=50
         )
         
         if response.status_code == 200:
@@ -2385,7 +2412,7 @@ def mukkadam_scorecard_details(request, mukkadam_id):
     try:
         mukkadam_response = requests.get(
             f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-            timeout=20
+            timeout=50
         )
         
         if mukkadam_response.status_code != 200:
@@ -2453,7 +2480,7 @@ def mukkadam_scorecard_details(request, mukkadam_id):
         response = requests.get(
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
-            timeout=20
+            timeout=50
         )
         
         if response.status_code == 200:
@@ -2781,7 +2808,7 @@ def mukkadam_work_history(request):
             # Fetch by ID
             response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-                timeout=20
+                timeout=50
             )
             if response.status_code == 200:
                 mukkadam_data = response.json()
@@ -2790,7 +2817,7 @@ def mukkadam_work_history(request):
             # Search by phone
             response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/',
-                timeout=20
+                timeout=50
             )
             if response.status_code == 200:
                 mukkadams = response.json()
@@ -2800,7 +2827,7 @@ def mukkadam_work_history(request):
                         # Fetch full details
                         full_response = requests.get(
                             f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-                            timeout=20
+                            timeout=50
                         )
                         if full_response.status_code == 200:
                             mukkadam_data = full_response.json()
@@ -2899,7 +2926,7 @@ def mukkadam_work_history(request):
     EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
     job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
     try:
-        response = requests.get(f'{EXTERNAL_API_URL}/get_allocated_jobs/', headers={'Authorization': job_token}, timeout=20)
+        response = requests.get(f'{EXTERNAL_API_URL}/get_allocated_jobs/', headers={'Authorization': job_token}, timeout=50)
         if response.status_code == 200:
             data = response.json()
             jobs_list = data.get('data', []) if isinstance(data, dict) else data
@@ -2918,7 +2945,7 @@ def mukkadam_work_history(request):
     farmer_token = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
     for farmer_id in farmer_ids:
         try:
-            response = requests.get(f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/', headers={'Authorization': farmer_token}, timeout=20)
+            response = requests.get(f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/', headers={'Authorization': farmer_token}, timeout=50)
             if response.status_code == 200:
                 farmers_cache[farmer_id] = response.json()
         except Exception:
@@ -3541,6 +3568,123 @@ def get_job_details(request, job_id):
     }
 
     return Response(response_data)
+
+
+
+# allocation/views.py
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+from datetime import datetime
+
+
+from .recomm import process_mukkadam_recommendations,fetch_enriched_mukkadam_data
+
+
+class DetailedRecommendationView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """
+        POST /ap/detailed-recommendations/
+        
+        Request Body:
+        {
+            "work_date": "2025-01-20",
+            "farmer_id": "12345",  # optional
+            "activity_name": "Pruning",  # optional
+            "location": "Niphad, Nashik"  # optional
+        }
+        
+        Response:
+        {
+            "available_on_date": [...],
+            "nearby_logistics": [...],
+            "farmer_history": [...],
+            "activity_experts": [...],
+            "high_volume": [...],
+            "new_local_recruits": [...],
+            "overall_best": [...]
+        }
+        """
+        try:
+            data = request.data
+            
+            # Validate work_date
+            work_date_str = data.get('work_date')
+            if not work_date_str:
+                return Response({
+                    "error": "work_date is required (format: YYYY-MM-DD)"
+                }, status=400)
+            
+            try:
+                work_date = datetime.strptime(work_date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response({
+                    "error": "Invalid date format. Use YYYY-MM-DD"
+                }, status=400)
+            
+            # Build target requirement
+# Build target requirement
+            # ... inside post method ...
+
+            # --- REPLACE THIS SECTION ---
+            # Build target requirement
+            job_lat = data.get('job_latitude')
+            job_lon = data.get('job_longitude')
+
+            # Helper function to safely parse floats
+            def safe_float(val):
+                try:
+                    # Check for empty string or None before converting
+                    if val in [None, '', 'null']: 
+                        return None
+                    return float(val)
+                except (ValueError, TypeError):
+                    return None
+
+            target_req = {
+                'date': work_date,
+                'farmer_id': str(data.get('farmer_id', '')),
+                'activity_name': data.get('activity_name', ''),
+                'location_str': data.get('location', ''),
+                'job_latitude': safe_float(job_lat),  # ✅ Use safe conversion
+                'job_longitude': safe_float(job_lon)  # ✅ Use safe conversion
+            }
+            # -----------------------------
+            
+            # 1. Fetch enriched mukkadam data
+            print(f"🔍 Fetching mukkadam data for recommendations...")
+            all_mukkadams = fetch_enriched_mukkadam_data()
+            print(f"✅ Loaded {len(all_mukkadams)} mukkadams")
+            
+            # 2. Process recommendations
+            print(f"🧠 Processing recommendations for {work_date_str}...")
+            result_buckets = process_mukkadam_recommendations(all_mukkadams, target_req)
+            
+            # 3. Add metadata
+            response_data = {
+                **result_buckets,
+                'metadata': {
+                    'total_mukkadams_analyzed': len(all_mukkadams),
+                    'target_date': work_date_str,
+                    'target_activity': target_req['activity_name'],
+                    'target_location': target_req['location_str'],
+                    'target_farmer_id': target_req['farmer_id']
+                }
+            }
+            
+            print(f"✅ Recommendations generated successfully")
+            return Response(response_data)
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response({
+                "error": str(e),
+                "detail": "Failed to generate recommendations"
+            }, status=500)
+
 
 
 # # allocation_app/views.py

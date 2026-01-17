@@ -2,6 +2,8 @@ export interface Job {
   id: number;
   work_id: string;
   farmer_id?: string;
+latitude: number;  // ✅ Change Number to number (primitive)
+  longitude: number;
   
   // ✅ FARMER DETAILS (enriched by backend)
   farmer?: {
@@ -97,6 +99,14 @@ export interface Mukkadam {
   village: string;
   crew_size: string;
   is_permanent: boolean;
+
+  price_metrics?: {
+    asking_price: number | null;
+    is_base_price: boolean;
+    historical_price_per_acre: number | null;
+    historical_jobs_count: number;
+    price_display: string;
+  };
 }
 
 export interface TransportProvider {
