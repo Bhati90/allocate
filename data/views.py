@@ -43,8 +43,8 @@ from .serializers import (
 # External API base URL
 EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
 
-SUPPLY_API_URL = 'https://supply.bharatintelligence.ai' # Change to your actual Supply App URL
-# SUPPLY_API_URL = 'http://localhost:8000'
+# SUPPLY_API_URL = 'https://supply.bharatintelligence.ai' # Change to your actual Supply App URL
+SUPPLY_API_URL = 'http://localhost:8000'
 def about(request):
     return render(request,'data/index.html')
 
@@ -359,7 +359,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
 from .models import PaymentRequest, TransportPaymentRequest, Allocation
 from .serializers import PaymentRequestSerializer, TransportPaymentRequestSerializer
-
+from .signals import get_mukkadam_name,get_transport_provider_name
 class PaymentRequestViewSet(viewsets.ModelViewSet):
     """ViewSet for mukkadam payment requests"""
     serializer_class = PaymentRequestSerializer
@@ -511,16 +511,35 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
     def reject(self, request, pk=None):
         """Reject a payment request"""
         payment_request = self.get_object()
+        
         if payment_request.status == 'paid':
             return Response(
                 {'error': 'Cannot reject a payment that has already been paid'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # ✅ Store old status for logging
+        old_status = payment_request.status
+        
+        # Update payment request
         payment_request.status = 'rejected'
+        payment_request.rejected_at = timezone.now()
+        payment_request.rejected_by = request.user if request.user.is_authenticated else None
+        payment_request.rejection_reason = request.data.get('rejection_reason', '')
         payment_request.save()
 
-        # ✅ FIX: Use ActivityLog
+        # ✅ UPDATE ALLOCATION STATUS BACK TO ALLOCATED
+        allocation = payment_request.allocation
+        old_allocation_status = allocation.status
+        
+        if allocation.status == 'completed':
+            allocation.status = 'allocated'
+            allocation.completed_at = None  # ✅ Clear completion timestamp
+            allocation.save()
+            
+            print(f"✅ Allocation #{allocation.id} status changed: {old_allocation_status} → allocated")
+
+        # ✅ Log the rejection with status change details
         ActivityLog.objects.create(
             activity_type='payment_rejected',
             description=request.data.get('rejection_reason', 'Payment request rejected'),
@@ -529,28 +548,59 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
             performed_by=request.user if request.user.is_authenticated else None,
             job_id=payment_request.allocation.farmer_work_id,
             mukkadam_id=payment_request.mukkadam_id,
-            amount=payment_request.requested_amount
+            mukkadam_name=get_mukkadam_name(payment_request.mukkadam_id),  # ✅ Add name
+            amount=payment_request.requested_amount,
+            changes={
+                'payment_status': {
+                    'label': 'Payment Status',
+                    'old': old_status,
+                    'new': 'rejected'
+                },
+                'allocation_status': {
+                    'label': 'Allocation Status',
+                    'old': old_allocation_status,
+                    'new': allocation.status
+                }
+            },
+            metadata={
+                'rejection_reason': payment_request.rejection_reason,
+                'activity_name': allocation.job_activity.activity_name,
+            }
         )
+        
         serializer = self.get_serializer(payment_request)
         return Response({
             'message': 'Payment request rejected successfully',
-            'payment_request': serializer.data
+            'payment_request': serializer.data,
+            'allocation': {
+                'id': allocation.id,
+                'status': allocation.status,
+                'status_changed': old_allocation_status != allocation.status
+            }
         })
 
     @action(detail=True, methods=['post'])
     def mark_paid(self, request, pk=None):
         """Mark payment as paid"""
         payment_request = self.get_object()
+        
+        # ✅ Store old status for logging
+        old_payment_status = payment_request.status
+        
+        # Update payment request
         payment_request.status = 'paid'
         payment_request.paid_at = timezone.now()
         payment_request.paid_by = request.user if request.user.is_authenticated else None
         payment_request.save()
+        
         # Update allocation status
         allocation = payment_request.allocation
+        old_allocation_status = allocation.status
         allocation.status = 'completed'
         allocation.completed_at = timezone.now()
         allocation.save()
-        # ✅ FIX: Use ActivityLog (This caused your NameError)
+        
+        # ✅ Enhanced logging with status changes
         ActivityLog.objects.create(
             activity_type='payment_paid',
             description=f"Payment marked as paid by {request.user.username if request.user.is_authenticated else 'Unknown'}",
@@ -559,8 +609,26 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
             performed_by=request.user if request.user.is_authenticated else None,
             job_id=allocation.farmer_work_id,
             mukkadam_id=allocation.mukkadam_id,
-            amount=payment_request.requested_amount
+            mukkadam_name=get_mukkadam_name(allocation.mukkadam_id),  # ✅ Add name
+            amount=payment_request.requested_amount,
+            changes={
+                'payment_status': {
+                    'label': 'Payment Status',
+                    'old': old_payment_status,
+                    'new': 'paid'
+                },
+                'allocation_status': {
+                    'label': 'Allocation Status',
+                    'old': old_allocation_status,
+                    'new': 'completed'
+                }
+            },
+            metadata={
+                'activity_name': allocation.job_activity.activity_name,
+                'paid_at': str(payment_request.paid_at),
+            }
         )
+        
         return Response({
             'message': 'Payment marked as paid successfully',
             'allocation': AllocationSerializer(allocation).data,
@@ -1850,8 +1918,8 @@ from decimal import Decimal
 from .models import Allocation, JobActivity, PaymentRequest
 
 
-# ALLOCATION_API_BASE = 'http://localhost:8001'  # ← Change to your actual allocation API URL
-ALLOCATION_API_BASE = 'https://allocation.bharatintelligence.ai'
+ALLOCATION_API_BASE = 'http://localhost:8001'  # ← Change to your actual allocation API URL
+# ALLOCATION_API_BASE = 'https://allocation.bharatintelligence.ai'
 
 def get_supply_users_mapping():
     """Fetch all users from Supply API for created_by mapping"""

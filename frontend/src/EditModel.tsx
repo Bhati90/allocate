@@ -235,6 +235,13 @@ const addAvailabilitySlot = () => {
 
       const config = getAuthConfig();
 
+          // ✅ ADD THESE HEADERS TO IDENTIFY EXTERNAL USER
+        config.headers = {
+        ...config.headers,
+        'X-External-User-ID': localStorage.getItem('user_id') || '37', // ✅ Get current user ID
+        'X-Source-Panel': 'allocation_panel'  // ✅ Identify this panel
+        };
+
       await axios.patch(
         `${API_BASE_URL}/api/mukkadam/${mukkadam.id}/`,
         payload,

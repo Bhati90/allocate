@@ -10,8 +10,8 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
 # API URLs
-# SUPPLY_API_URL = getattr(settings, 'SUPPLY_API_URL', 'http://localhost:8000')
-SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'  # Change to your actual Supply App URL
+SUPPLY_API_URL = getattr(settings, 'SUPPLY_API_URL', 'http://localhost:8000')
+# SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'  # Change to your actual Supply App URL
 FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
 FARMER_TOKEN = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
 

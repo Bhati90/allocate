@@ -169,7 +169,8 @@ def calculate_transport_cost(mukkadam, job_lat, job_lon):
         result['free_km'] = free_km
         result['rate_per_km'] = rate
         result['billable_km'] = billable_km
-        result['estimated_cost'] = round(cost, 2)
+        # result['estimated_cost'] = round(cost, 2)
+        result['estimated_cost'] = 100.0
         
         if free_km > 0:
             result['calculation_breakdown'] = f"{one_way_km}km × 2 (round-trip) = {round_trip_km}km | Free: {free_km}km | Billable: {billable_km}km × ₹{rate}/km = ₹{cost:.0f}"
@@ -191,7 +192,8 @@ def calculate_transport_cost(mukkadam, job_lat, job_lon):
         
         result['rate_per_km'] = rate
         result['billable_km'] = round_trip_km
-        result['estimated_cost'] = round(cost, 2)
+        # result['estimated_cost'] = round(cost, 2)
+        result['estimated_cost'] = 100.0
         result['calculation_breakdown'] = f"{one_way_km}km × 2 (round-trip) = {round_trip_km}km × ₹{rate}/km = ₹{cost:.0f}"
     
     else:  # no_vehicle or other
@@ -201,7 +203,8 @@ def calculate_transport_cost(mukkadam, job_lat, job_lon):
         
         result['rate_per_km'] = rate
         result['billable_km'] = round_trip_km
-        result['estimated_cost'] = round(cost, 2)
+        # result['estimated_cost'] = round(cost, 2)
+        result['estimated_cost'] = 100.0
         result['calculation_breakdown'] = f"{one_way_km}km × 2 (round-trip) = {round_trip_km}km × ₹{rate}/km (default) = ₹{cost:.0f}"
     
     return result
@@ -669,6 +672,7 @@ def process_mukkadam_recommendations(all_mukkadams, target_req):
         if job_lat and job_lon:
             transport_cost = calculate_transport_cost(muk, job_lat, job_lon)
             muk['transport_cost'] = transport_cost
+            # muk['transport_cost'] = 0
             
             # ✅ This works for 0, because 0 is not None. 
             # If it was "if transport_cost['estimated_cost']:" it would fail for 0.
