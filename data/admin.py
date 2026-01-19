@@ -12,7 +12,169 @@ from .models import (
 from django.contrib import admin
 from django.utils import timezone
 from .models import PaymentRequest, TransportPaymentRequest
+from django.contrib import admin
+from django.utils.html import format_html
+from .models import FarmerCall
 
+
+@admin.register(FarmerCall)
+class FarmerCallAdmin(admin.ModelAdmin):
+    # --------------------
+    # LIST VIEW
+    # --------------------
+    list_display = (
+        'mobile_number',
+        'purpose',
+        'status_badge',
+        'direction',
+        'duration',
+        'talk_time',
+        'has_recording_display',
+        'initiated_at',
+    )
+
+    list_filter = (
+        'status',
+        'purpose',
+        'direction',
+        'initiated_at',
+    )
+
+    search_fields = (
+        'mobile_number',
+        'call_sid',
+        'job_id',
+        'user_id',
+        'from_number',
+    )
+
+    ordering = ('-initiated_at',)
+
+    # --------------------
+    # READONLY FIELDS
+    # --------------------
+    readonly_fields = (
+        'call_sid',
+        'initiated_at',
+        'answered_at',
+        'completed_at',
+        'created_time',
+        'updated_time',
+        'recording_preview',
+        'webhook_data',
+        'created_by',
+    )
+
+    # --------------------
+    # FIELD GROUPING
+    # --------------------
+    fieldsets = (
+        ('Call Identifiers', {
+            'fields': (
+                'call_sid',
+                'user_id',
+                'job_id',
+                'created_by',
+            )
+        }),
+
+        ('Call Parties', {
+            'fields': (
+                'mobile_number',
+                'from_number',
+                'virtual_number',
+                'direction',
+            )
+        }),
+
+        ('Call Status', {
+            'fields': (
+                'purpose',
+                'status',
+                'state',
+            )
+        }),
+
+        ('Call Metrics', {
+            'fields': (
+                'duration',
+                'talk_time',
+                'price',
+            )
+        }),
+
+        ('Recording', {
+            'fields': (
+                'recording_preview',
+                'recording_url',
+                'recording_urls',
+            )
+        }),
+
+        ('Timestamps', {
+            'fields': (
+                'initiated_at',
+                'answered_at',
+                'completed_at',
+                'created_time',
+                'updated_time',
+            )
+        }),
+
+        ('Exotel Metadata', {
+            'fields': (
+                'custom_field',
+                'legs_url',
+                'webhook_data',
+            )
+        }),
+
+        ('Notes', {
+            'fields': ('notes',)
+        }),
+    )
+
+    # --------------------
+    # BADGES & HELPERS
+    # --------------------
+    def status_badge(self, obj):
+        color_map = {
+            'completed': 'green',
+            'answered': 'blue',
+            'in-progress': 'orange',
+            'ringing': 'orange',
+            'failed': 'red',
+            'busy': 'red',
+            'no-answer': 'gray',
+            'cancelled': 'gray',
+            'pending': 'gray',
+            'queued': 'gray',
+            'terminal': 'black',
+        }
+        color = color_map.get(obj.status, 'gray')
+
+        return format_html(
+            '<span style="padding:4px 8px; border-radius:6px; background:{}; color:white;">{}</span>',
+            color,
+            obj.status.upper()
+        )
+    status_badge.short_description = "Status"
+
+    def has_recording_display(self, obj):
+        return "🎧 Yes" if obj.has_recording else "—"
+    has_recording_display.short_description = "Recording"
+
+    def recording_preview(self, obj):
+        url = obj.primary_recording_url
+        if url:
+            return format_html(
+                '<audio controls style="width:300px;">'
+                '<source src="{}" type="audio/mpeg">'
+                '</audio>',
+                url
+            )
+        return "No recording available"
+    recording_preview.short_description = "Play Recording"
 
 # -------------------------
 # PaymentRequest Admin

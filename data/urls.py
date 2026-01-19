@@ -4,7 +4,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
 
-from .views import (MakeCallView, UserProfileView,
+from .views import (DetailedRecommendationView, MakeCallView, UserProfileView,
    mukkadam_scorecard_details,UserListAPIView,
     mukkadam_scorecard_summary,
     JobActivityViewSet, get_job_details,get_user_calls,get_call_details,
@@ -49,7 +49,9 @@ urlpatterns = [
     # path('auth/me/', mobile_auth.get_current_user, name='current-user'),
 
     path('auth/me/', UserProfileView.as_view(), name='user-profile'),
-
+    
+    path('detailed-recommendations/', DetailedRecommendationView.as_view(), name='detailed-recs'),
+    
     # ========================================
     # CUSTOM ENDPOINTS (BEFORE ROUTER)
     # ========================================
