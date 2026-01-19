@@ -33,7 +33,7 @@ from decimal import Decimal
 import requests
 import json
 
-from .models import JobActivity, Allocation, AllocationStats
+from .models import JobActivity, Allocation, AllocationStats,ActivityLog
 from .serializers import (
     JobActivitySerializer,
     AllocationSerializer,
