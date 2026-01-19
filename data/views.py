@@ -43,8 +43,8 @@ from .serializers import (
 # External API base URL
 EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
 
-# SUPPLY_API_URL = 'https://supply.bharatintelligence.ai' # Change to your actual Supply App URL
-SUPPLY_API_URL = 'http://localhost:8000'
+SUPPLY_API_URL = 'https://supply.bharatintelligence.ai' # Change to your actual Supply App URL
+# SUPPLY_API_URL = 'http://localhost:8000'
 def about(request):
     return render(request,'data/index.html')
 
@@ -389,7 +389,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'allocation_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
         try:
             allocation = Allocation.objects.get(id=allocation_id)
         except Allocation.DoesNotExist:
@@ -397,7 +396,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
                 {'error': 'Allocation not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
         # Check if payment request already exists
         if hasattr(allocation, 'payment_request'):
             existing_request = allocation.payment_request
@@ -511,7 +509,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
     def reject(self, request, pk=None):
         """Reject a payment request"""
         payment_request = self.get_object()
-        
         if payment_request.status == 'paid':
             return Response(
                 {'error': 'Cannot reject a payment that has already been paid'},
@@ -567,7 +564,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
                 'activity_name': allocation.job_activity.activity_name,
             }
         )
-        
         serializer = self.get_serializer(payment_request)
         return Response({
             'message': 'Payment request rejected successfully',
@@ -592,15 +588,13 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
         payment_request.paid_at = timezone.now()
         payment_request.paid_by = request.user if request.user.is_authenticated else None
         payment_request.save()
-        
         # Update allocation status
         allocation = payment_request.allocation
         old_allocation_status = allocation.status
         allocation.status = 'completed'
         allocation.completed_at = timezone.now()
         allocation.save()
-        
-        # ✅ Enhanced logging with status changes
+        # ✅ FIX: Use ActivityLog (This caused your NameError)
         ActivityLog.objects.create(
             activity_type='payment_paid',
             description=f"Payment marked as paid by {request.user.username if request.user.is_authenticated else 'Unknown'}",
@@ -628,7 +622,6 @@ class PaymentRequestViewSet(viewsets.ModelViewSet):
                 'paid_at': str(payment_request.paid_at),
             }
         )
-        
         return Response({
             'message': 'Payment marked as paid successfully',
             'allocation': AllocationSerializer(allocation).data,
@@ -1918,8 +1911,8 @@ from decimal import Decimal
 from .models import Allocation, JobActivity, PaymentRequest
 
 
-ALLOCATION_API_BASE = 'http://localhost:8001'  # ← Change to your actual allocation API URL
-# ALLOCATION_API_BASE = 'https://allocation.bharatintelligence.ai'
+# ALLOCATION_API_BASE = 'http://localhost:8001'  # ← Change to your actual allocation API URL
+ALLOCATION_API_BASE = 'https://allocation.bharatintelligence.ai'
 
 def get_supply_users_mapping():
     """Fetch all users from Supply API for created_by mapping"""
