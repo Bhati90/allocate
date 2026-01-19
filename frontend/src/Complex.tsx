@@ -1,10 +1,17 @@
 import React, { useState, useEffect ,useMemo} from 'react';
 import axios from 'axios';
 import {
-  Users, Truck, X, Calendar, MapPin, TrendingUp,
-  CheckCircle, AlertCircle, ArrowRight, Layers,ChevronDown,Search
+  Users, Truck, X, Calendar, MapPin, TrendingUp,Edit,
+  CheckCircle, AlertCircle, ArrowRight, Layers,ChevronDown,Search,Star, AlertTriangle,DollarSign,
+  Users as UsersIcon, Award, Briefcase, Filter
 } from 'lucide-react';
 import { getAuthConfig } from './utils/auth';
+
+// At the top, add state
+
+
+// Import the component
+import EditMukkadamModal from './EditModel';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL_SUPPLY;
 const API_BASE_URL_A = import.meta.env.VITE_API_BASE_URL_ALLOCATION;
@@ -29,7 +36,34 @@ interface ComplexAllocationModalProps {
   mukkadams: Mukkadam[];
   transportProviders: TransportProvider[];
 }
+interface RecommendationBuckets {
+  all: any[];  // ✅ NEW
+  overall_best: any[];
+  available_on_date: any[];
+  nearby_logistics: any[];
+  farmer_history: any[];
+  activity_experts: any[];
+  high_volume: any[];
+  new_local_recruits: any[];
+  cost_effective: any[]; 
+  transport_cost: any[];  // ✅ ADD 
+}
 
+// Add this helper for better UX
+const getBucketLabel = (key: string): string => {
+  const labels: Record<string, string> = {
+    overall_best: 'Top Recommendations',
+    available_on_date: 'Available on This Date',
+    nearby_logistics: 'Working Nearby (±3 days)',
+    farmer_history: 'Previously Worked for This Farmer',
+    activity_experts: 'Activity Specialists',
+    high_volume: 'High Volume Workers',
+    new_local_recruits: 'New Local Recruits',
+    cost_effective: 'Most Cost-Effective' , // ✅ ADD THIS
+    transport_cost: 'Lowest Transport Cost'  // ✅ ADD
+  };
+  return labels[key] || key;
+};
 const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
   job,
   onClose,
@@ -54,6 +88,10 @@ const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
   const [allocating, setAllocating] = useState(false);
   const [crewCapacity, setCrewCapacity] = useState<any>(null);
   const [isPriceTbd, setIsPriceTbd] = useState(false);
+
+// Import the logic
+
+
   // Calculate auto-price when area changes
   useEffect(() => {
   // Only auto-calculate if NOT in TBD mode
@@ -68,6 +106,56 @@ const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
     }
   }
 }, [allocationForm.allocated_area, selectedActivity, isPriceTbd]);
+
+// --- STATE ---
+  const [recBuckets, setRecBuckets] = useState<RecommendationBuckets | null>(null);
+  const [activeTab, setActiveTab] = useState<keyof RecommendationBuckets>('overall_best');
+  const [loadingRecs, setLoadingRecs] = useState(false);
+const [editingMukkadam, setEditingMukkadam] = useState<any>(null);
+  // --- API CALL ---
+// ComplexAllocationModal.tsx - Update the recommendation fetch
+
+useEffect(() => {
+  const fetchRecommendations = async () => {
+    if (!selectedActivity || !allocationForm.work_date) return;
+
+    try {
+      setLoadingRecs(true);
+      const payload = {
+        work_date: allocationForm.work_date,
+        farmer_id: job?.farmer_id || "",
+        activity_name: selectedActivity.activity_name,
+        location: `${job.farmer?.village || ''}, ${job.farmer?.taluka || ''}, ${job.farmer?.district || ''}`.trim(),
+
+        job_latitude: job?.latitude ? parseFloat(String(job.latitude)) : null,
+        job_longitude: job?.longitude ? parseFloat(String(job.longitude)) : null
+      };
+
+      const response = await axios.post(
+        `${API_BASE_URL_A}/ap/detailed-recommendations/`, 
+        payload, 
+        
+      );
+      if (response.data) {
+        setRecBuckets(response.data);
+        setActiveTab('overall_best');
+      }
+
+    } catch (err) {
+      console.error("Failed to fetch recommendations", err);
+    } finally {
+      setLoadingRecs(false);
+    }
+  };
+
+  const timer = setTimeout(() => {
+    fetchRecommendations();
+  }, 300);
+
+  return () => clearTimeout(timer);
+
+}, [selectedActivity, allocationForm.work_date, job.farmer]);
+
 
   // Calculate crew capacity when mukkadam is selected OR crew_size changes
   useEffect(() => {
@@ -199,11 +287,14 @@ const maxAllowedArea = editMode && existingAllocation
         activity_id: selectedActivity.activity_id,
         job_id: job.work_id,
         activity_name: selectedActivity.activity_name,
+        location: `${job.farmer?.village || ''}, ${job.farmer?.taluka || ''}, ${job.farmer?.district || ''}`.trim(),
+        job_latitude: job?.latitude,      // ✅ ADD
+        job_longitude: job?.longitude ,    // ✅ ADD
         activity_type: selectedActivity.activity_type,
         scheduled_datetime: selectedActivity.scheduled_date,
         total_area: selectedActivity.total_area,
         total_price: selectedActivity.total_price,
-        location: selectedActivity.location,
+        // location: selectedActivity.location,
         estimated_workers: selectedActivity.estimated_workers,
         rate_per_acre: selectedActivity.rate_per_acre,
         mukkadam_id: parseInt(allocationForm.mukkadam_id),
@@ -283,14 +374,21 @@ const [transportSearch, setTransportSearch] = useState('');
 const [isMukkadamOpen, setIsMukkadamOpen] = useState(false);
 const [isTransportOpen, setIsTransportOpen] = useState(false);
 // 2. Add this logic before the return statement
+  // --- FILTER LOGIC ---
 const filteredMukkadams = useMemo(() => {
-  return [...mukkadams]
-    .filter(m => 
-      m.mukkadam_name.toLowerCase().includes(mukkadamSearch.toLowerCase()) ||
-      m.village?.toLowerCase().includes(mukkadamSearch.toLowerCase())
-    )
-    .sort((a, b) => a.mukkadam_name.localeCompare(b.mukkadam_name));
-}, [mukkadams, mukkadamSearch]);
+  let sourceList: any[] = [];
+
+  if (recBuckets) {
+    sourceList = recBuckets[activeTab] || [];
+  } else {
+    sourceList = mukkadams;
+  }
+
+  return sourceList.filter((m: any) => 
+    m.mukkadam_name.toLowerCase().includes(mukkadamSearch.toLowerCase()) ||
+    (m.village || "").toLowerCase().includes(mukkadamSearch.toLowerCase())
+  );
+}, [recBuckets, activeTab, mukkadams, mukkadamSearch]);
 
 const filteredProviders = useMemo(() => {
   return [...transportProviders]
@@ -538,68 +636,294 @@ const filteredProviders = useMemo(() => {
                     </div>
                   </div>
 
-                  {/* Mukkadam Selection */}
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-bold text-gray-900 flex items-center border-b-2 border-indigo-200 pb-2">
-                      <Users className="mr-2 text-indigo-500" /> Mukkadam & Area
-                    </h3>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Select Mukkadam <span className="text-red-500">*</span>
-                      </label>
-                      <div className="relative">
-  <div 
-    className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-white cursor-pointer flex justify-between items-center"
-    onClick={() => setIsMukkadamOpen(!isMukkadamOpen)}
-  >
-    <span className={selectedMukkadam ? "text-gray-900 font-semibold" : "text-gray-400"}>
-      {selectedMukkadam ? `${selectedMukkadam.mukkadam_name} - ${selectedMukkadam.village}` : "-- Search or Select Mukkadam --"}
-    </span>
-    <ChevronDown size={18} className={`text-gray-400 transition-transform ${isMukkadamOpen ? 'rotate-180' : ''}`} />
-  </div>
+{/* Mukkadam Selection */}
+{/* Added relative here to anchor the dropdown */}
+  <h3 className="text-lg font-bold text-gray-900 flex items-center border-b-2 border-indigo-200 pb-2">
+    <Users className="mr-2 text-indigo-500" /> Mukkadam & Area
+  </h3>
 
-  {isMukkadamOpen && (
-    <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl overflow-hidden">
-      <div className="p-2 border-b bg-gray-50 sticky top-0">
-        <div className="relative">
-          <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
-          <input 
-            type="text"
-            autoFocus
-            placeholder="Search by name or village..."
-            className="w-full pl-10 pr-4 py-2 text-sm border rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-            value={mukkadamSearch}
-            onChange={(e) => setMukkadamSearch(e.target.value)}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
+  <div>
+    <label className="block text-sm font-medium text-gray-700 mb-2">
+      Select Mukkadam <span className="text-red-500">*</span>
+    </label>
+    
+    <div className="relative">
+      {/* Trigger Button */}
+      <div
+        className="w-full px-3 py-2.5 border-2 border-gray-300 rounded-lg bg-white cursor-pointer flex justify-between items-center hover:border-indigo-400 transition-all"
+        onClick={() => setIsMukkadamOpen(!isMukkadamOpen)}
+      >
+        <span className={selectedMukkadam ? "text-gray-900 font-semibold text-xs" : "text-gray-400 text-xs"}>
+          {selectedMukkadam
+            ? `✅ ${selectedMukkadam.mukkadam_name} • ${selectedMukkadam.village} • ${selectedMukkadam.crew_size}👥`
+            : "Search or Select Mukkadam..."
+          }
+        </span>
+        <ChevronDown
+          size={18}
+          className={`text-gray-400 transition-transform ${isMukkadamOpen ? 'rotate-180 text-indigo-600' : ''}`}
+        />
       </div>
-      <div className="max-h-60 overflow-y-auto">
-        {filteredMukkadams.length > 0 ? (
-          filteredMukkadams.map(m => (
-            <div 
-              key={m.id}
-              className={`px-4 py-2.5 text-sm hover:bg-indigo-50 cursor-pointer border-b last:border-0 ${allocationForm.mukkadam_id === m.id.toString() ? 'bg-indigo-50 font-bold text-indigo-700' : 'text-gray-700'}`}
-              onClick={() => {
-                setAllocationForm({...allocationForm, mukkadam_id: m.id.toString()});
-                setIsMukkadamOpen(false);
-                setMukkadamSearch('');
-              }}
-            >
-              <p>{m.mukkadam_name} <span className="text-xs text-gray-500 ml-2">({m.village})</span></p>
-              <p className="text-[10px] text-gray-400">Crew Size: {m.crew_size}</p>
+
+      {/* Dropdown */}
+      {isMukkadamOpen && (
+        <div className="absolute top-full left-0 right-0 z-[60] mt-2 bg-white border-2 border-gray-300 rounded-xl shadow-2xl flex flex-col max-h-[550px] w-full">
+          
+          {/* ✅ FIXED: Unified Sticky Header Wrapper (Contains Search + Tabs) */}
+          <div className="sticky top-0 z-20 bg-white border-b border-gray-200 shadow-sm">
+            
+            {/* Search Bar */}
+            <div className="p-3 bg-gradient-to-r from-gray-50 to-white">
+              <div className="relative">
+                <Search size={18} className="absolute left-3 top-3 text-gray-400" />
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Search by name or village..."
+                  className="w-full pl-10 pr-4 py-2.5 text-sm border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                  value={mukkadamSearch}
+                  onChange={(e) => setMukkadamSearch(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </div>
             </div>
-          ))
-        ) : (
-          <div className="px-4 py-4 text-center text-gray-500 text-sm">No results found</div>
-        )}
-      </div>
-    </div>
-  )}
-</div>
 
-                      {selectedMukkadam && (
+            {/* Category Tabs */}
+            {recBuckets && (
+              <div className="overflow-x-auto px-2 py-2 bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 border-t border-indigo-100">
+                <div className="flex gap-1.5 min-w-max">
+                  {[
+                    { id: 'all', label: 'All', icon: Filter, color: 'gray' },
+                    { id: 'overall_best', label: 'Top', icon: Star, color: 'indigo' },
+                    { id: 'cost_effective', label: 'Cost', icon: DollarSign, color: 'green' },
+                    { id: 'transport_cost', label: 'Transport', icon: Truck, color: 'gray' },
+                    { id: 'nearby_logistics', label: 'Nearby', icon: MapPin, color: 'blue' },
+                    { id: 'farmer_history', label: 'Known', icon: UsersIcon, color: 'purple' },
+                    { id: 'activity_experts', label: 'Expert', icon: Award, color: 'orange' },
+                    { id: 'available_on_date', label: 'Free', icon: Calendar, color: 'green' },
+                  ].map((tab) => {
+                    const count = recBuckets[tab.id as keyof RecommendationBuckets]?.length || 0;
+                    const isActive = activeTab === tab.id;
+                    const Icon = tab.icon;
+
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveTab(tab.id as any);
+                        }}
+                        disabled={count === 0 && tab.id !== 'all'}
+                        className={`
+                          flex items-center gap-1 flex-shrink-0 px-2.5 py-1.5 rounded-md text-[11px] font-bold transition-all
+                          ${isActive
+                            ? `bg-${tab.color}-600 text-white shadow-md`
+                            : `bg-white text-${tab.color}-700 hover:bg-${tab.color}-50 border border-${tab.color}-200`
+                          }
+                          ${count === 0 && tab.id !== 'all' ? 'opacity-30 cursor-not-allowed' : ''}
+                        `}
+                      >
+                        <Icon size={12} />
+                        {tab.label}
+                        {count > 0 && (
+                          <span className={`px-1 py-0.5 rounded text-[9px] font-bold ${isActive ? 'bg-white/30' : `bg-${tab.color}-100`}`}>
+                            {count}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Mukkadam List - Scrollable Area */}
+          <div className="overflow-y-auto flex-1 divide-y divide-gray-100 bg-white">
+            {loadingRecs && (
+              <div className="p-8 text-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-4 border-indigo-600 border-t-transparent mx-auto mb-2"></div>
+                <p className="text-gray-500 text-xs font-medium">Analyzing mukkadams...</p>
+              </div>
+            )}
+
+            {!loadingRecs && filteredMukkadams.length > 0 ? (
+              filteredMukkadams.map((m: any) => {
+                const isSelected = allocationForm.mukkadam_id === m.id.toString();
+                const isBlocked = m.is_blocked;
+                const isNew = recBuckets?.new_local_recruits?.some((nm: any) => nm.id === m.id);
+                const score = m.recommendation_score || 0;
+
+                return (
+                  <div
+                    key={m.id}
+                    className={`
+                      px-4 py-2.5 cursor-pointer transition-all duration-150
+                      ${isSelected
+                        ? 'bg-gradient-to-r from-indigo-50 to-purple-50 border-l-4 border-l-indigo-600'
+                        : 'hover:bg-gray-50 border-l-4 border-l-transparent hover:border-l-gray-300'
+                      }
+                    `}
+                    onClick={() => {
+                      if (isBlocked) {
+                        const confirmed = window.confirm(
+                          `⚠️ WARNING: ${m.mukkadam_name} is already booked on this date.\n\nDo you still want to select them?`
+                        );
+                        if (!confirmed) return;
+                      }
+
+                      setAllocationForm({ ...allocationForm, mukkadam_id: m.id.toString() });
+                      setIsMukkadamOpen(false);
+                      setMukkadamSearch('');
+                    }}
+                  >
+                    <div className="flex justify-between items-start gap-3">
+                      <div className="flex-1 min-w-0">
+                        {/* Name & Status */}
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <h4 className="font-bold text-sm text-gray-900 truncate">
+                            {m.mukkadam_name}
+                          </h4>
+                          {isSelected && <CheckCircle size={12} className="text-indigo-600 flex-shrink-0" />}
+                          {isNew && <span className="px-1.5 py-0.5 bg-green-500 text-white text-[9px] font-bold rounded">NEW</span>}
+                          {isBlocked && <span className="px-1.5 py-0.5 bg-red-500 text-white text-[9px] font-bold rounded animate-pulse">BOOKED</span>}
+                        </div>
+
+                        {/* Location */}
+                        <div className="flex items-center gap-2 text-[10px] text-gray-600 mb-1">
+                          <span className="flex items-center gap-0.5 truncate max-w-[200px]">
+                            <MapPin size={10} className="text-gray-400 flex-shrink-0" />
+                            {m.village || m.taluka || m.district || 'Unknown'}
+                          </span>
+                          <span className="w-1 h-1 rounded-full bg-gray-300 flex-shrink-0"></span>
+                          <span className="flex items-center gap-0.5 flex-shrink-0">
+                            <Users size={10} className="text-gray-400" />
+                            {m.crew_size}
+                          </span>
+                        </div>
+
+                        {/* Price Metrics */}
+                        {m.price_metrics && m.price_metrics.price_display !== 'N/A' && (
+                          <div className="flex items-center gap-1 mb-1 text-[10px]">
+                            {m.price_metrics.asking_price && (
+                              <span className={`px-1.5 py-0.5 rounded font-semibold ${m.price_metrics.is_base_price
+                                  ? 'bg-gray-100 text-gray-700'
+                                  : 'bg-green-100 text-green-700'
+                                }`}>
+                                ₹{m.price_metrics.asking_price.toFixed(0)} {m.price_metrics.is_base_price ? '(Base)' : '(Asked)'}
+                              </span>
+                            )}
+                            {m.price_metrics.historical_price_per_acre && (
+                              <span className="px-1.5 py-0.5 rounded font-semibold bg-blue-100 text-blue-700">
+                                ₹{m.price_metrics.historical_price_per_acre.toFixed(0)}/ac (Hist)
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        
+                        {/* Transport Cost Badge */}
+                        {m.transport_cost && m.transport_cost.estimated_cost && (
+                          <div className="bg-cyan-50 border border-cyan-200 rounded px-2 py-1 mb-1 inline-block">
+                            <div className="flex items-center gap-1 text-[10px]">
+                              <Truck size={10} className="text-cyan-600" />
+                              <span className="font-bold text-cyan-700">
+                                ₹{m.transport_cost.estimated_cost.toFixed(0)}
+                              </span>
+                              <span className="text-cyan-600">
+                                ({m.transport_cost.distance_km}km)
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Recommendation Tags */}
+                        {m.recommendation_reasons && m.recommendation_reasons.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {m.recommendation_reasons.slice(0, 3).map((reason: string, idx: number) => {
+                              let colorClass = 'bg-gray-100 text-gray-700';
+                              if (reason.includes('⛔')) colorClass = 'bg-red-100 text-red-700';
+                              else if (reason.includes('✅')) colorClass = 'bg-green-100 text-green-700';
+                              else if (reason.includes('⭐')) colorClass = 'bg-yellow-100 text-yellow-800';
+                              else if (reason.includes('🚚')) colorClass = 'bg-blue-100 text-blue-700';
+
+                              return (
+                                <span
+                                  key={idx}
+                                  className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${colorClass}`}
+                                >
+                                  {reason}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Score Badge */}
+                      {score > 0 && (
+                        <div
+                          className={`
+                            flex items-center gap-1 px-2 py-1 rounded-md font-bold text-[10px] shadow-sm flex-shrink-0
+                            ${score >= 150
+                              ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white'
+                              : score >= 100
+                                ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white'
+                                : 'bg-indigo-100 text-indigo-700'
+                            }
+                          `}
+                        >
+                          <Star size={10} className={score >= 100 ? 'fill-current' : ''} />
+                          {Math.floor(score)}
+                        </div>
+                      )}
+
+                       {/* Edit Button */}
+                        {activeTab === 'all' && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingMukkadam(m);
+                            }}
+                            className="flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 hover:bg-purple-200 rounded text-[9px] font-bold transition ml-1"
+                          >
+                            <Edit size={10} />
+                          </button>
+                        )}
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              !loadingRecs && (
+                <div className="p-12 text-center">
+                  <Users size={48} className="mx-auto mb-3 text-gray-300" />
+                  <p className="text-gray-500 font-semibold text-sm">No mukkadams found</p>
+                  <p className="text-gray-400 text-xs mt-1">Try adjusting your filters</p>
+                </div>
+              )
+            )}
+          </div>
+
+          {/* Footer */}
+          {!loadingRecs && filteredMukkadams.length > 0 && (
+            <div className="px-5 py-3 bg-gray-50 border-t-2 border-gray-100 flex justify-between items-center text-xs rounded-b-xl">
+              <span className="text-gray-600">
+                Showing <span className="font-bold text-gray-900">{filteredMukkadams.length}</span> results
+              </span>
+              <span className="text-gray-500 font-medium truncate ml-2">
+                {activeTab === 'all' ? 'All Mukkadams' : getBucketLabel(activeTab)}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+      
+    </div>
+
+
+    {selectedMukkadam && (
                         <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-200 mt-3">
                           <h4 className="font-semibold text-gray-700 mb-2">Selected Mukkadam:</h4>
                           <div className="grid grid-cols-2 gap-3 text-sm">
@@ -749,7 +1073,9 @@ const filteredProviders = useMemo(() => {
     />
   </div>
 </div>
-                  </div>
+                  
+
+
 
                   {/* Transport Selection */}
                   <div className="space-y-4">
@@ -985,9 +1311,27 @@ const filteredProviders = useMemo(() => {
             </div>
           </div>
         </div>
+
+        {editingMukkadam && (
+          <EditMukkadamModal
+            mukkadam={editingMukkadam}
+            onClose={() => setEditingMukkadam(null)}
+            onSuccess={() => {
+              setEditingMukkadam(null);
+              // Simple reload to refresh data
+              if (selectedActivity && allocationForm.work_date) {
+                 // Trigger a refresh logic here
+                 // For now, if you want to be safe:
+                 window.location.reload();
+              }
+            }}
+          />
+        )}
       </div>
     </div>
   );
 };
 
 export default ComplexAllocationModal;
+
+

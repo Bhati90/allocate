@@ -69,7 +69,7 @@ def get_mukkadam_cached(mukkadam_id: int) -> Optional[Dict]:
     try:
         response = session.get(
             f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-            timeout=30  # ✅ Increased from 3 to 10 seconds
+            timeout=60  # ✅ Increased from 3 to 10 seconds
         )
         
         if response.status_code == 200:
@@ -147,7 +147,7 @@ def get_farmer_cached(farmer_id: str) -> Optional[Dict]:
         response = session.get(
             f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/',
             headers={'Authorization': FARMER_TOKEN},
-            timeout=20  # ✅ Increased from 3 to 15 seconds (external API is slower)
+            timeout=60  # ✅ Increased from 3 to 15 seconds (external API is slower)
         )
         
         if response.status_code == 200:
@@ -195,7 +195,7 @@ def get_transport_provider_cached(provider_id: int) -> Optional[Dict]:
     try:
         response = session.get(
             f'{SUPPLY_API_URL}/api/transport-provider/{provider_id}/',
-            timeout=30  # ✅ Increased from 3 to 10 seconds
+            timeout=60  # ✅ Increased from 3 to 10 seconds
         )
         
         if response.status_code == 200:
@@ -414,7 +414,7 @@ def get_all_mukkadams_from_api() -> List[Dict]:
         print("📡 Fetching all mukkadams from Supply API...")
         response = session.get(
             f'{SUPPLY_API_URL}/api/mukkadam/',
-            timeout=30
+            timeout=60
         )
         
         if response.status_code == 200:
@@ -470,7 +470,7 @@ def get_all_transport_providers_from_api() -> List[Dict]:
         print("📡 Fetching all transport providers from Supply API...")
         response = session.get(
             f'{SUPPLY_API_URL}/api/transport-providers/',
-            timeout=30
+            timeout=60
         )
         
         if response.status_code == 200:

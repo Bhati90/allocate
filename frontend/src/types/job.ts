@@ -10,6 +10,8 @@ export interface Job {
   id: number;
   work_id: string;
   farmer_id?: string;
+  lattitude:Number;
+  longitude:Number;
   
   // ✅ FARMER DETAILS (enriched by backend)
   farmer?: {
