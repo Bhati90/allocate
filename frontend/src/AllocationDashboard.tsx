@@ -2309,8 +2309,6 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                             <th className="px-4 py-3 text-left">Activity</th>
                             <th className="px-4 py-3 text-left">Mukkadam</th>
                             <th className="px-4 py-3 text-left">Area</th>
-                            <th className="px-4 py-3 text-left">Crew</th>
-                            <th className="px-4 py-3 text-left">Transport</th>
                             <th className="px-4 py-3 text-left">Cost</th>
                             <th className="px-4 py-3 text-left">Work Date</th>
                             <th className="px-4 py-3 text-left">Actions</th>
