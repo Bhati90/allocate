@@ -37,6 +37,8 @@ const AllocationView: React.FC = () => {
     //   const t = 'Token 307a2e56b1bb0e13c173ac0fabf6d05629dcd203'
     const t = 'Token b5920d610d85bff62bb0ab70f971ed6a44eb1b8c'
 
+    const supply = '307a2e56b1bb0e13c173ac0fabf6d05629dcd203'
+
       try {
         // ✅ 1. PARALLEL FETCH: Get Allocation & Payments immediately
         const [allocationRes, mukkadamPayRes, transportPayRes] = await Promise.all([
@@ -67,7 +69,9 @@ const AllocationView: React.FC = () => {
         // Fetch Provider (if exists)
         if (currentAllocation.transport_type === 'provider' && currentAllocation.transport_provider_id) {
           secondaryPromises.push(
-             axios.get(`${API_BASE_URL}/api/transport-providers/${currentAllocation.transport_provider_id}/`, config)
+             axios.get(`${API_BASE_URL}/api/transport-providers/${currentAllocation.transport_provider_id}/`, 
+              { headers: { 'Authorization': `Token ${supply}` } }
+             )
              .then(res => setProvider(res.data))
              .catch(err => console.error('Failed to fetch provider', err))
           );
