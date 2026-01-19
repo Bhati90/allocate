@@ -36,6 +36,9 @@ import {
   MapPin,
   Loader2
 } from 'lucide-react';
+import { useNavigate } from "react-router-dom";
+
+
 
 // const API_BASE_URL = 'http://localhost:8001'; // ← Change to your Django backend URL
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL_ALLOCATION;
@@ -117,7 +120,7 @@ export default function MukkadamScorecard() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [locationFilter, setLocationFilter] = useState('');
-
+const navigate = useNavigate();
 
 const fetchScorecard = async () => {
   setLoading(true);
@@ -243,10 +246,14 @@ const handleResetFilters = () => {
     );
   };
   
-  const handleViewDetails = (mukkadamId: number) => {
-    // Navigate to details page
-    window.location.href = `/mukkadam-details/${mukkadamId}`;
-  };
+
+
+
+
+// const handleViewDetails = (mukkadamId: number) => {
+//   navigate(`/mukkadam-details/${mukkadamId}`);
+// };
+
   
   return (
     <div className="container mx-auto p-6 space-y-6 max-w-[1600px]">
@@ -611,14 +618,15 @@ const handleResetFilters = () => {
                       </TableCell>
                       <TableCell className="text-center">
                         <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleViewDetails(mukkadam.id)}
-                          className="hover:bg-blue-50 hover:text-blue-600 hover:border-blue-600"
-                        >
-                          <Eye className="w-4 h-4 mr-1" />
-                          Details
-                        </Button>
+  size="sm"
+  variant="outline"
+  onClick={() => navigate(`/mukkadam-details/${mukkadam.id}`)}
+  className="hover:bg-blue-50 hover:text-blue-600 hover:border-blue-600 flex items-center text-xs font-bold"
+>
+  <Eye className="w-4 h-4 mr-1" />
+  View Detail
+</Button>
+
                       </TableCell>
                     </TableRow>
                   ))}
