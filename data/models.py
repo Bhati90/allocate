@@ -259,7 +259,7 @@ class Allocation(models.Model):
         null=True, 
         blank=True
     )
-    completed_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
@@ -482,9 +482,8 @@ class TransportPaymentRequest(models.Model):
     
     def __str__(self):
         return f"Transport Payment #{self.id} - Provider #{self.transport_provider_id} - ₹{self.requested_amount} ({self.status})"
-
 class ActivityLog(models.Model):
-    """Unified activity log for all actions in the system"""
+    """Unified activity log with detailed change tracking"""
     
     ACTIVITY_TYPES = [
         ('allocation_created', 'Allocation Created'),
@@ -505,21 +504,24 @@ class ActivityLog(models.Model):
     # Related objects
     allocation = models.ForeignKey(
         Allocation,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,  # ✅ Changed from CASCADE to SET_NULL to keep logs
         null=True,
         blank=True,
         related_name='activity_logs'
     )
+    # ❌ REMOVE THIS LINE - Django creates allocation_id automatically
+    # allocation_id = models.IntegerField(null=True, blank=True, db_index=True)
+    
     payment_request = models.ForeignKey(
         PaymentRequest,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,  # ✅ Keep logs even if payment deleted
         null=True,
         blank=True,
         related_name='activity_logs'
     )
     transport_payment_request = models.ForeignKey(
         TransportPaymentRequest,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,  # ✅ Keep logs even if transport payment deleted
         null=True,
         blank=True,
         related_name='activity_logs'
@@ -528,7 +530,9 @@ class ActivityLog(models.Model):
     # IDs for reference (in case objects are deleted)
     job_id = models.CharField(max_length=100, db_index=True)
     mukkadam_id = models.IntegerField(db_index=True)
+    mukkadam_name = models.CharField(max_length=255, blank=True, null=True)
     transport_provider_id = models.IntegerField(null=True, blank=True)
+    transport_name = models.CharField(max_length=255, blank=True, null=True)
     
     # Financial data
     amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
@@ -542,6 +546,13 @@ class ActivityLog(models.Model):
     )
     performed_at = models.DateTimeField(auto_now_add=True, db_index=True)
     
+    # ✅ Detailed change tracking
+    changes = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Stores field-by-field changes: {'field_name': {'old': value, 'new': value}}"
+    )
+    
     # Additional metadata
     metadata = models.JSONField(default=dict, blank=True)
     
@@ -551,12 +562,12 @@ class ActivityLog(models.Model):
             models.Index(fields=['activity_type', '-performed_at']),
             models.Index(fields=['job_id', '-performed_at']),
             models.Index(fields=['mukkadam_id', '-performed_at']),
+            # ✅ Use the auto-generated allocation_id field for indexing
+            models.Index(fields=['allocation_id', '-performed_at']),
         ]
     
     def __str__(self):
         return f"{self.get_activity_type_display()} - {self.job_id} at {self.performed_at}"
-
-
 # core/models.py (add to your existing models)
 from django.db import models
 from django.utils import timezone

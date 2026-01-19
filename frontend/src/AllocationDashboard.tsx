@@ -3541,12 +3541,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
           return (
             <div
               key={log.id}
-              className={`${bgColor} p-4 rounded-xl border-l-4 ${borderColor} hover:shadow-md transition cursor-pointer`}
-              onClick={() => {
-                if (log.allocation_id) {
-                  navigate(`/allocations/${log.allocation_id}`);
-                }
-              }}
+              className={`${bgColor} p-4 rounded-xl border-l-4 ${borderColor} hover:shadow-md transition`}
             >
               <div className="flex items-start space-x-4">
                 {/* Icon */}
@@ -3584,9 +3579,47 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                   </div>
 
                   {/* Description */}
-                  <p className="text-sm text-gray-700 mb-2">{log.description}</p>
+                  <p className="text-sm text-gray-700 mb-3">{log.description}</p>
 
-                  
+                  {/* ✅ CHANGES SECTION - NEW */}
+                  {log.formatted_changes && log.formatted_changes.length > 0 && (
+                    <div className="mb-3 p-3 bg-white rounded-lg border border-gray-200">
+                      <p className="text-xs font-bold text-gray-600 mb-2 flex items-center">
+                        <Edit size={12} className="mr-1" />
+                        Changes ({log.formatted_changes.length})
+                      </p>
+                      <div className="space-y-2">
+                        {log.formatted_changes.map((change, idx) => (
+                          <div key={idx} className="flex items-center text-xs">
+                            <span className="font-semibold text-gray-700 w-32">
+                              {change.label}:
+                            </span>
+                            <div className="flex items-center space-x-2 flex-1">
+                              {change.old_value !== null && change.old_value !== 'None' ? (
+                                <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through">
+                                  {change.old_value}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-1 bg-gray-100 text-gray-500 rounded text-xs italic">
+                                  Not set
+                                </span>
+                              )}
+                              <span className="text-gray-400">→</span>
+                              {change.new_value !== null && change.new_value !== 'None' ? (
+                                <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold">
+                                  {change.new_value}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-1 bg-gray-100 text-gray-500 rounded text-xs italic">
+                                  Removed
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Details Grid */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
@@ -3610,7 +3643,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                     )}
                     <div>
                       <p className="text-gray-500">By</p>
-                      <p className="font-semibold text-gray-900">{log.performed_by_name}</p>
+                      <p className="font-semibold text-gray-900">{log.performed_by_name || 'System'}</p>
                     </div>
                   </div>
 
@@ -3621,6 +3654,17 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                         <strong>Reason:</strong> {log.metadata.rejection_reason}
                       </p>
                     </div>
+                  )}
+                  
+                  {/* View Allocation Button */}
+                  {log.allocation_id && (
+                    <button
+                      onClick={() => navigate(`/allocations/${log.allocation_id}`)}
+                      className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center"
+                    >
+                      <Eye size={12} className="mr-1" />
+                      View Allocation Details
+                    </button>
                   )}
                 </div>
               </div>
