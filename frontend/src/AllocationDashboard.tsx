@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { 
-  Users, Truck, DollarSign,ChevronDown,ChevronUp, FileText, CheckCircle, CheckSquare,Ban,
+  Users, Truck,Edit2, DollarSign,ChevronDown,ChevronUp, FileText, CheckCircle, CheckSquare,Ban,
   XCircle, TrendingUp,TrendingDown, Calendar, Filter, Search,Activity,AlertCircle,ExternalLink,
   Eye, Edit, Plus, X, MapPin, BarChart3, Clock, Layers
 } from 'lucide-react';
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL_SUPPLY;
 const API_BASE_URL_A = import.meta.env.VITE_API_BASE_URL_ALLOCATION;
+
+import EditActivityModal from './UpdateEditActivity';
 
 import { useNavigate } from 'react-router-dom';
 import { getAuthToken, getAuthConfig } from './utils/auth';
@@ -43,6 +45,10 @@ const AllocationDashboard: React.FC = () => {
   const navigate = useNavigate();
 
   
+// Add these state variables at the top of your component
+const [editingActivity, setEditingActivity] = useState(null);
+const [editingJobId, setEditingJobId] = useState(null);
+const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
 // Expandable card states
 const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set());
@@ -497,6 +503,7 @@ const refreshAllocations = async (
 const [activityFilter, setActivityFilter] = useState<string>('all');
 
 // Add to refreshAllocations
+
 
 
 // Filter activity logs
@@ -1152,6 +1159,22 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
 });
 
 
+// Add this function to handle opening the edit modal
+const handleEditActivity = (activity, jobId) => {
+  setEditingActivity(activity);
+  setEditingJobId(jobId);
+  setIsEditModalOpen(true);
+};
+
+// Add this function to handle successful save and refresh
+const handleSaveSuccess = async () => {
+  console.log('✅ Activity updated, refreshing jobs...');
+  // Refetch jobs from API
+   getAllocatedAllocations(); // Call your existing function that fetches jobs
+  
+  // Optional: Show success toast
+  // toast.success('Activity updated successfully!');
+};
 
 
   return (
@@ -2309,7 +2332,10 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                             <th className="px-4 py-3 text-left">Activity</th>
                             <th className="px-4 py-3 text-left">Mukkadam</th>
                             <th className="px-4 py-3 text-left">Area</th>
-                            <th className="px-4 py-3 text-left">Cost</th>
+                            <th className="px-4 py-3 text-left">Crew</th>
+                            <th className="px-4 py-3 text-left">T Cost</th>
+                            <th className="px-4 py-3 text-left">M Cost</th>
+                            <th className="px-4 py-3 text-left">Total Cost</th>
                             <th className="px-4 py-3 text-left">Work Date</th>
                             <th className="px-4 py-3 text-left">Actions</th>
                           </tr>
@@ -2322,6 +2348,7 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                               <td className="px-4 py-3">{allocation.allocated_area} ac</td>
                                 <td className="px-4 py-3 font-bold text-teal-600">{allocation.crew_size}</td>
                                 <td className="px-4 py-3 text-orange-600 font-medium">₹{parseFloat(allocation.transport_price).toLocaleString()}</td>
+                                <td className="px-4 py-3 text-orange-600 font-medium">₹{parseFloat(allocation.mukkadam_price).toLocaleString()}</td>
                                 <td className="px-4 py-3 font-bold text-purple-600">₹{(parseFloat(allocation.mukkadam_price) + parseFloat(allocation.transport_price)).toLocaleString()}</td>
                               <td className="px-4 py-3">{allocation.work_date ? new Date(allocation.work_date).toLocaleDateString('en-IN') : 'N/A'}</td>
                               <td className="px-4 py-3">
@@ -2808,30 +2835,62 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
                   </div>
                 </div>
 
-                {isExpanded && (
-                  <div className="px-6 pb-6 border-t border-yellow-300 animate-fadeIn bg-white">
-                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {job.activities?.map((activity) => (
-                        <div key={activity.id} className="p-4 rounded-lg border-2 border-gray-200 bg-gray-50">
-                          <div className="flex items-start justify-between mb-2">
-                            <span className="font-semibold text-sm text-gray-900">{activity.activity_name}</span>
-                            <XCircle size={16} className="text-gray-400" />
-                          </div>
-                          <div className="space-y-1 text-xs text-gray-600">
-                            <div className="flex justify-between">
-                              <span>Area:</span>
-                              <span className="font-semibold">{activity.total_area} acres</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Rate:</span>
-                              <span className="font-semibold">₹{activity.rate_per_acre}/acre</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+{isExpanded && (
+  <div className="p-4 bg-gray-50 border-t">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {job.activities?.map((activity) => (
+      <div 
+  key={activity.activity_id || activity.id}
+  className="bg-white p-4 rounded-xl border border-gray-200 hover:border-yellow-400 transition shadow-sm relative"
+>
+  {/* Activity Header with Close Icon */}
+  <div className="flex items-start justify-between mb-4">
+    <h4 className="font-semibold text-gray-800 text-base">
+      {activity.activity_name}
+    </h4>
+    
+  </div>
+          
+          {/* ✨ NEW: Edit Button */}
+          {/* <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleEditActivity(activity, job.work_id);
+            }}
+            className="ml-3 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition flex items-center gap-2 font-medium text-sm"
+            title="Edit activity details"
+          >
+            <Edit2 size={14} />
+            Edit
+          </button> */}
+        {/* </div> */}
+
+        {/* Activity Details */}
+
+  {/* Activity Details - Compact */}
+  <div className="space-y-2 text-sm">
+    <div className="flex justify-between">
+      <span className="text-gray-500">Area:</span>
+      <span className="font-medium text-gray-900">{activity.total_area} acres</span>
+    </div>
+    <div className="flex justify-between">
+      <span className="text-gray-500">Rate:</span>
+      <span className="font-medium text-gray-900">₹{activity.rate_per_acre}/acre</span>
+    </div>
+    <div className="flex justify-between">
+      <span className="text-gray-500">Total Price:</span>
+      <span className="font-medium text-gray-900">₹{activity.total_price}</span>
+    </div>
+    <div className="flex justify-between">
+      <span className="text-gray-500">Scheduled:</span>
+      <span className="font-medium text-gray-900">{activity.scheduled_date || 'Not set'}</span>
+    </div>
+  </div>
+</div>
+      // </div>
+    ))}
+    </div>
+  </div>)}
               </div>
             );
           })}
@@ -2840,6 +2899,18 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
     })()}
   </div>
 )}
+
+<EditActivityModal
+  activity={editingActivity}
+  jobId={editingJobId}
+  isOpen={isEditModalOpen}
+  onClose={() => {
+    setIsEditModalOpen(false);
+    setEditingActivity(null);
+    setEditingJobId(null);
+  }}
+  onSaveSuccess={handleSaveSuccess}
+/>
             {/* Partially Allocated Jobs Tab */}
 {/* Partially Allocated Jobs Tab */}
 {activeTab === 'partially' && (

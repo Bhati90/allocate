@@ -1391,7 +1391,114 @@ def jobs_list(request):
 # allocation_app/views.py
 
 from .utils import batch_fetch_mukkadams, batch_fetch_farmers, batch_fetch_transport_providers
+# allocation_app/views.py
+# Add this new endpoint to your views.py file
 
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+import requests
+
+EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
+
+@api_view(['PATCH'])
+@permission_classes([AllowAny])
+def update_activity(request):
+    """
+    Forward activity update to external ops API
+    
+    Expected payload:
+    {
+        "job_id": "616",
+        "activity_id": "183",
+        "updates": {
+            "activity_name": "Finger Thinning",
+            "acres": 2.5,
+            "date_time": "2026-01-15T10:00:00",
+            "total_price": 5000.0
+        }
+    }
+    """
+    try:
+        # Get data from request
+        job_id = request.data.get('job_id')
+        activity_id = request.data.get('activity_id')
+        updates = request.data.get('updates', {})
+        
+        # Validate required fields
+        if not job_id or not activity_id:
+            return Response(
+                {'error': 'job_id and activity_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not updates:
+            return Response(
+                {'error': 'No updates provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Prepare payload for ops API
+        payload = {
+            'job_id': job_id,
+            'activity_id': activity_id,
+            'updates': updates
+        }
+        
+        # Forward to ops API
+        # TODO: Replace with actual endpoint URL from ops team
+        ops_update_url = f'{EXTERNAL_API_URL}/update_activity/'
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        
+        print(f"\n📤 Forwarding activity update to ops API...")
+        print(f"   Job ID: {job_id}")
+        print(f"   Activity ID: {activity_id}")
+        print(f"   Updates: {updates}")
+        
+        response = requests.patch(
+            ops_update_url,
+            json=payload,
+            headers={
+                'Authorization': token,
+                'Content-Type': 'application/json'
+            },
+            timeout=30
+        )
+        
+        response.raise_for_status()
+        
+        print(f"✅ Update successful: {response.status_code}")
+        
+        return Response({
+            'success': True,
+            'message': 'Activity updated successfully',
+            'data': response.json() if response.text else {}
+        }, status=status.HTTP_200_OK)
+        
+    except requests.exceptions.HTTPError as e:
+        error_detail = str(e)
+        try:
+            error_detail = e.response.json()
+        except:
+            pass
+            
+        return Response({
+            'success': False,
+            'error': f'Ops API error: {error_detail}'
+        }, status=status.HTTP_502_BAD_GATEWAY)
+        
+    except requests.exceptions.RequestException as e:
+        return Response({
+            'success': False,
+            'error': f'Failed to connect to ops API: {str(e)}'
+        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        
+    except Exception as e:
+        return Response({
+            'success': False,
+            'error': f'Unexpected error: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def allocations_list(request):
