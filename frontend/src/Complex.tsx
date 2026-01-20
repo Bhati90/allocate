@@ -265,6 +265,32 @@ const maxAllowedArea = editMode && existingAllocation
       alert('Please select transport provider');
       return;
     }
+
+    // Inside handleSubmit function...
+
+    // if (allocationForm.transport_type === 'provider' && !allocationForm.transport_price) {
+    //   alert('Please enter transport price');
+    //   return;
+    // }
+
+    // --- 🟢 ADD THIS BLOCK ---
+    if (!isPriceTbd && selectedActivity.total_price) {
+      const enteredPrice = parseFloat(allocationForm.mukkadam_price);
+      const maxAllowedPrice = selectedActivity.total_price * 1.15; // 90% limit
+
+      if (enteredPrice > maxAllowedPrice) {
+        alert(
+          `⛔ Price Too High!\n\n` +
+          `You entered: ₹${enteredPrice.toLocaleString()}\n` +
+          `Limit (115%): ₹${maxAllowedPrice.toLocaleString()}\n\n` +
+          `Not allowed. Please find someone better.`
+        );
+        return; 
+      }
+    }
+    // --- 🟢 END OF NEW BLOCK ---
+
+
     if (allocationForm.transport_type === 'own' && !allocationForm.own_transport_price) {
       alert('Please enter own transport price');
       return;
@@ -273,6 +299,41 @@ const maxAllowedArea = editMode && existingAllocation
       alert('Please enter transport price');
       return;
     }
+
+// Inside handleSubmit function...
+
+    // ... (Existing Mukkadam check is here) ...
+
+    // --- 🟢 ADD THIS NEW BLOCK: Overall Cost Validation ---
+    if (!isPriceTbd && selectedActivity.total_price) {
+      // 1. Calculate actual transport price based on type
+      const activeTransportPrice = allocationForm.transport_type === 'provider' 
+        ? (parseFloat(allocationForm.transport_price) || 0)
+        : allocationForm.transport_type === 'own'
+        ? (parseFloat(allocationForm.own_transport_price) || 0)
+        : 0;
+
+      // 2. Calculate total allocation cost
+      const currentMukkadamPrice = parseFloat(allocationForm.mukkadam_price) || 0;
+      const totalAllocationCost = currentMukkadamPrice + activeTransportPrice;
+      
+      // 3. Define the limit (90% of Revenue)
+      const maxOverallLimit = selectedActivity.total_price * 1.155;
+
+      if (totalAllocationCost > maxOverallLimit) {
+        alert(
+          `⛔ Total Cost Too High!\n\n` +
+          `Mukkadam: ₹${currentMukkadamPrice.toLocaleString()}\n` +
+          `Transport: ₹${activeTransportPrice.toLocaleString()}\n` +
+          `Total: ₹${totalAllocationCost.toLocaleString()}\n\n` +
+          `Limit (115% of Revenue): ₹${maxOverallLimit.toLocaleString()}\n` +
+          `You are exceeding by ₹${(totalAllocationCost - maxOverallLimit).toLocaleString()}\n\n` +
+          `Not allowed. Please find someone better to reduce costs.`
+        );
+        return;
+      }
+    }
+    // --- 🟢 END OF NEW BLOCK ---
 
     setAllocating(true);
 
@@ -498,16 +559,16 @@ const filteredProviders = useMemo(() => {
               
               <div className="space-y-3">
                 {job.activities?.map((activity) => (
-                  <button
-                    key={activity.id}
-                    onClick={() => handleActivitySelect(activity)}
-                    className={`w-full text-left p-4 rounded-lg border-2 transition ${
-                      selectedActivity?.id === activity.id
-                        ? 'border-blue-500 bg-blue-50'
-                        : activity.is_fully_allocated
-                        ? 'border-green-300 bg-green-50'
-                        : 'border-gray-200 bg-white hover:border-blue-300'
-                    }`}
+                    <button
+                      key={activity.activity_id || activity.id} // ✅ Use activity_id for key
+                      onClick={() => handleActivitySelect(activity)}
+                      className={`w-full text-left p-4 rounded-lg border-2 transition ${
+                        selectedActivity?.activity_id === activity.activity_id  // ✅ CHANGE THIS LINE
+                          ? 'border-blue-500 bg-blue-50'
+                          : activity.is_fully_allocated
+                          ? 'border-green-300 bg-green-50'
+                          : 'border-gray-200 bg-white hover:border-blue-300'
+                      }`}
                     disabled={
                       activity.is_fully_allocated || 
                       (editMode && selectedActivity?.id !== activity.id)  // ✅ NEW: Disable other activities in edit mode
@@ -1036,6 +1097,9 @@ const filteredProviders = useMemo(() => {
                     </div>
 
                     <div>
+{/* ... inside the render, locate the Mukkadam Price section ... */}
+
+<div>
   <div className="flex justify-between items-center mb-2">
     <label className="block text-sm font-medium text-gray-700">
       Mukkadam Price (₹) <span className="text-red-500">*</span>
@@ -1066,12 +1130,28 @@ const filteredProviders = useMemo(() => {
       min="0"
       value={isPriceTbd ? "" : allocationForm.mukkadam_price}
       onChange={(e) => setAllocationForm({...allocationForm, mukkadam_price: e.target.value})}
+      // 🟢 CHANGED: Add conditional styling for error state
       className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 ${
-        isPriceTbd ? 'bg-gray-100 text-gray-400 italic' : 'bg-white'
+        isPriceTbd 
+          ? 'bg-gray-100 text-gray-400 italic' 
+          : (!isPriceTbd && selectedActivity && parseFloat(allocationForm.mukkadam_price) > (selectedActivity.total_price || 0) * 1.15)
+            ? 'border-red-500 text-red-600 focus:ring-red-500 bg-red-50' // Error style
+            : 'bg-white border-gray-300'
       }`}
       placeholder={isPriceTbd ? "Price will be decided later" : "Auto-calculated"}
     />
   </div>
+
+  {/* 🟢 ADD THIS: Error Message Display */}
+  {!isPriceTbd && selectedActivity && parseFloat(allocationForm.mukkadam_price) > (selectedActivity.total_price || 0) * 1.15 && (
+    <div className="mt-2 text-xs font-bold text-red-600 flex items-center animate-pulse">
+      <AlertTriangle size={14} className="mr-1" />
+      <span>
+        Not allowed. Limit is ₹{((selectedActivity.total_price || 0) * 1.15).toLocaleString()}. Please find someone better.
+      </span>
+    </div>
+  )}
+</div>
 </div>
                   
 
@@ -1248,39 +1328,95 @@ const filteredProviders = useMemo(() => {
                   </div>
 
                   {/* Summary */}
-                  {allocationForm.mukkadam_price && (
-                    <div className="bg-green-50 p-6 rounded-lg border-2 border-green-200">
-                      <h3 className="font-bold text-gray-800 mb-3">Allocation Summary</h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <p className="text-sm text-gray-600">Area</p>
-                          <p className="text-2xl font-bold text-blue-600">{allocationForm.allocated_area} acres</p>
-                        </div>
-                        <div>
-  <p className="text-sm text-gray-600">Mukkadam Price</p>
-  <p className={`text-2xl font-bold ${isPriceTbd ? 'text-orange-500' : 'text-indigo-600'}`}>
-    {isPriceTbd ? 'To Be Decided' : `₹${parseFloat(allocationForm.mukkadam_price || '0').toLocaleString()}`}
-  </p>
-</div>
-                        <div>
-                          <p className="text-sm text-gray-600">Transport Cost</p>
-                          <p className="text-2xl font-bold text-orange-600">
-                            ₹{(allocationForm.transport_type === 'provider' 
-                              ? parseFloat(allocationForm.transport_price || '0')
-                              : allocationForm.transport_type === 'own'
-                              ? parseFloat(allocationForm.own_transport_price || '0')
-                              : 0).toLocaleString()}
-                          </p>
-                        </div>
-                        <div className="col-span-2 pt-3 border-t-2 border-green-300">
-                          <p className="text-sm text-gray-600">Total Cost</p>
-                          <p className="text-3xl font-bold text-green-600">
-                            ₹{totalCost.toLocaleString()}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  {/* ... inside the render ... */}
+
+{allocationForm.mukkadam_price && (
+  // 🟢 CHANGED: Dynamic background color based on total cost
+  <div className={`p-6 rounded-lg border-2 transition-colors ${
+    (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+      ? 'bg-red-50 border-red-300' // Error State
+      : 'bg-green-50 border-green-200' // Normal State
+  }`}>
+    <div className="flex justify-between items-start mb-3">
+      <h3 className={`font-bold ${
+        (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+        ? 'text-red-800'
+        : 'text-gray-800'
+      }`}>
+        Allocation Summary
+      </h3>
+      
+      {/* 🟢 ADD THIS: Visual Warning Badge */}
+      {!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15 && (
+        <span className="px-2 py-1 bg-red-100 text-red-700 text-xs font-bold rounded flex items-center border border-red-200">
+          <AlertTriangle size={12} className="mr-1" />
+          Exceeds 115% Limit
+        </span>
+      )}
+    </div>
+
+    <div className="grid grid-cols-2 gap-4">
+      <div>
+        <p className="text-sm text-gray-600">Area</p>
+        <p className="text-2xl font-bold text-blue-600">{allocationForm.allocated_area} acres</p>
+      </div>
+      <div>
+        <p className="text-sm text-gray-600">Mukkadam Price</p>
+        <p className={`text-2xl font-bold ${isPriceTbd ? 'text-orange-500' : 'text-indigo-600'}`}>
+          {isPriceTbd ? 'To Be Decided' : `₹${parseFloat(allocationForm.mukkadam_price || '0').toLocaleString()}`}
+        </p>
+      </div>
+      <div>
+        <p className="text-sm text-gray-600">Transport Cost</p>
+        <p className="text-2xl font-bold text-orange-600">
+          ₹{(allocationForm.transport_type === 'provider' 
+            ? parseFloat(allocationForm.transport_price || '0')
+            : allocationForm.transport_type === 'own'
+            ? parseFloat(allocationForm.own_transport_price || '0')
+            : 0).toLocaleString()}
+        </p>
+      </div>
+      
+      {/* Total Cost Section */}
+      <div className={`col-span-2 pt-3 border-t-2 ${
+        (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+        ? 'border-red-200'
+        : 'border-green-300'
+      }`}>
+        <div className="flex justify-between items-end">
+          <div>
+            <p className="text-sm text-gray-600">Total Cost</p>
+            <p className={`text-3xl font-bold ${
+              (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+              ? 'text-red-600'
+              : 'text-green-600'
+            }`}>
+              ₹{totalCost.toLocaleString()}
+            </p>
+          </div>
+          
+          {/* 🟢 ADD THIS: Comparison to Limit */}
+          {!isPriceTbd && selectedActivity && (
+            <div className="text-right">
+              <p className="text-xs text-gray-500">Max Allowed (115%)</p>
+              <p className="text-sm font-semibold text-gray-700">
+                ₹{((selectedActivity.total_price || 0) * 1.15).toLocaleString()}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* 🟢 ADD THIS: Error Message */}
+        {!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15 && (
+          <p className="text-xs font-bold text-red-600 mt-2 flex items-center">
+            <AlertTriangle size={14} className="mr-1" />
+            Not allowed. Please find someone better.
+          </p>
+        )}
+      </div>
+    </div>
+  </div>
+)}
 
                   {/* ✅ UPDATED: Action Buttons with dynamic text */}
                   <div className="flex space-x-3 pt-4">

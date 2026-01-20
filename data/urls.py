@@ -6,7 +6,7 @@ from rest_framework.authtoken.views import obtain_auth_token
 
 from .views import (DetailedRecommendationView, MakeCallView, UserProfileView,
    mukkadam_scorecard_details,UserListAPIView,
-    mukkadam_scorecard_summary,
+    mukkadam_scorecard_summary,update_activity,
     JobActivityViewSet, get_job_details,get_user_calls,get_call_details,
     AllocationViewSet,transporter_work_history,ExotelWebhookView,
     jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,
@@ -61,7 +61,7 @@ urlpatterns = [
     # ✅ ADD THIS: Allocations by mobile number
     path('allocations/by-mobile/', allocations_by_mobile, name='allocations-by-mobile'),
 
-
+    path('update-activity/', update_activity, name='update_activity'),
     path('mukkadam-history/', mukkadam_work_history, name='mukkadam-work-history'),
     path('allocations/by-mobile/main/', allocations_list, name='allocations-by-mobile_main'),
     
