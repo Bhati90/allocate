@@ -14,7 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import { getAuthToken, getAuthConfig } from './utils/auth';
 import ComplexAllocationModal from './Complex';
 const DEMAND_API_BASE_URL = 'https://ops.bharatintelligence.ai';
-
+import { useAuth } from './context/auth';
 import type {
   Job,
 
@@ -28,6 +28,7 @@ import type {
 } from './types/allocation';
 interface Activity {
   id: string;
+  is_lost:boolean;
   activity_type: string;
   activity_name: string;
   location: string;
@@ -43,13 +44,30 @@ interface Activity {
 
 const AllocationDashboard: React.FC = () => {
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
 
   
 // Add these state variables at the top of your component
 const [editingActivity, setEditingActivity] = useState(null);
+// Add these near line 25-30 where other state is defined
+const [showEditActivityModal, setShowEditActivityModal] = useState(false);
+const [showMarkLostModal, setShowMarkLostModal] = useState(false);
+const [selectedActivityForEdit, setSelectedActivityForEdit] = useState<any>(null);
+const [selectedJobForEdit, setSelectedJobForEdit] = useState<any>(null);
+const [editReason, setEditReason] = useState('');
+const [lostReason, setLostReason] = useState('');
 const [editingJobId, setEditingJobId] = useState(null);
 const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-
+// ADD these new state variables:
+const [editFormData, setEditFormData] = useState({
+  activity_name: '',
+  total_area: 0,
+  scheduled_date: '',
+  total_price: 0,
+   transport_cost: 0,     // ✅ NEW
+  other_cost: 0,    
+  rate_per_acre: 0
+});
 // Expandable card states
 const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set());
 const [expandedActivities, setExpandedActivities] = useState<Set<string>>(new Set());
@@ -302,7 +320,7 @@ const toggleSection = (section: 'complexJobs' | 'activityTypes' | 'crewDistribut
 
 
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'allocated' |'completed'| 'pending' | 'partially' | 'mukkadams' | 'transport' | 'activity'| 'analytics' >('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'allocated' |'completed'| 'pending' | 'partially' | 'mukkadams' | 'transport' | 'activity'| 'lost' >('overview');
   // State declarations - USE ONLY Job type (which now includes all properties)
   const [jobs, setJobs] = useState<Job[]>([]);
   const [allocations, setAllocations] = useState<Allocation[]>([]);
@@ -874,19 +892,20 @@ const getActivityStats = (jobId: string, activityName: string, totalArea: number
 };
 
 // ✅ IMPROVED: Calculate job status dynamically
+// REPLACE WITH:
 const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' => {
-  if (!job.activities || job.activities.length === 0) {
-    // Fallback for simple jobs
-    const hasAllocation = allocations.some(a => a.farmer_work_id === job.work_id);
-    return hasAllocation ? 'fully_allocated' : 'pending';
+  // ✅ FILTER OUT LOST ACTIVITIES
+  const activeActivities = job.activities?.filter(a => !a.is_lost) || [];
+  
+  if (activeActivities.length === 0) {
+    return 'pending';
   }
 
-  const totalActivities = job.activities.length;
+  const totalActivities = activeActivities.length;
   let fullyAllocatedCount = 0;
   let hasAnyAllocation = false;
 
-  job.activities.forEach(activity => {
-    // Use our helper to check real-time status
+  activeActivities.forEach(activity => {
     const { isFullyAllocated, allocated } = getActivityStats(job.work_id, activity.activity_name, activity.total_area);
     
     if (isFullyAllocated) fullyAllocatedCount++;
@@ -914,42 +933,45 @@ const calculateRevenueStats = () => {
   let paidMukkadamAmount = 0;
   let paidTransportAmount = 0;
 
-  allocations.forEach(allocation => {
-    // 1. Calculate Revenue & Profitability (Existing Logic)
-    const job = jobs.find((j: any) => j.work_id === allocation.farmer_work_id);
-    if (job) {
-      const activity = job.activities?.find((a: any) => 
-        a.activity_name === allocation.activity_name
-      );
-      
-      if (activity) {
-        const revenue = activity.total_price || 0;
-        totalRevenue += revenue;
-
-        const cost = parseFloat(String(allocation.mukkadam_price || '0')) + 
-                     parseFloat(String(allocation.transport_price || '0'));
-        const profit = revenue - cost;
-        const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
-
-        if (profit > 0) profitableCount++;
-        if (profit < 0) lossCount++;
-        if (profit >= 0 && margin < 20) lowMarginCount++;
+allocations.forEach(allocation => {
+  // 1. Calculate Revenue & Profitability
+  const job = jobs.find((j: any) => j.work_id === allocation.farmer_work_id);
+  if (job) {
+    const activity = job.activities?.find((a: any) => 
+      a.activity_name === allocation.activity_name
+    );
+    
+    if (activity) {
+      // ✅ SKIP IF ACTIVITY IS LOST
+      if (activity.is_lost) {
+        return; // Don't include in revenue calculations
       }
-    }
+      
+      const revenue = activity.total_price || 0;
+      totalRevenue += revenue;
 
-    // 2. Calculate Actual Paid Amounts (New Logic)
-    // Check Mukkadam Payment
-    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-    if (mukkadamPayment && mukkadamPayment.status === 'paid') {
-        paidMukkadamAmount += parseFloat(String(allocation.mukkadam_price || '0'));
-    }
+      const cost = parseFloat(String(allocation.mukkadam_price || '0')) + 
+                   parseFloat(String(allocation.transport_price || '0'));
+      const profit = revenue - cost;
+      const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
 
-    // Check Transport Payment
-    const transportPayment = getTransportPaymentRequest(allocation.id);
-    if (transportPayment && transportPayment.status === 'paid') {
-        paidTransportAmount += parseFloat(String(allocation.transport_price || '0'));
+      if (profit > 0) profitableCount++;
+      if (profit < 0) lossCount++;
+      if (profit >= 0 && margin < 20) lowMarginCount++;
     }
-  });
+  }
+
+  // 2. Calculate Actual Paid Amounts (existing logic - keep as is)
+  const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+  if (mukkadamPayment && mukkadamPayment.status === 'paid') {
+    paidMukkadamAmount += parseFloat(String(allocation.mukkadam_price || '0'));
+  }
+
+  const transportPayment = getTransportPaymentRequest(allocation.id);
+  if (transportPayment && transportPayment.status === 'paid') {
+    paidTransportAmount += parseFloat(String(allocation.transport_price || '0'));
+  }
+});
 
   const totalAllocatedMukkadam = allocations.reduce((sum, a) => sum + parseFloat(String(a.mukkadam_price || '0')), 0);
   const totalAllocatedTransport = allocations.reduce((sum, a) => sum + parseFloat(String(a.transport_price || '0')), 0);
@@ -978,7 +1000,10 @@ const stats = {
   allocatedJobs: getAllocatedUniqueJobCount(),  // ✅ Count unique jobs
   completedJobs: getCompletedUniqueJobCount(),  // ✅ Count unique jobs
   partiallyAllocatedJobs: partiallyAllocatedJobs.length,
-  pendingJobs: pendingJobs.length,
+  pendingJobs: pendingJobs.filter(job => {
+    const nonLostActivities = job.activities?.filter(a => !a.is_lost) || [];
+    return nonLostActivities.length > 0;
+  }).length,
   totalMukkadamPayout: allocations.reduce((sum, a) => 
     sum + parseFloat(String(a.mukkadam_price || '0')), 0
   ),
@@ -998,6 +1023,13 @@ const stats = {
   // ✅ NEW: Actual Paid Amounts
   paidMukkadamAmount: revenueStats.paidMukkadamAmount,
   paidTransportAmount: revenueStats.paidTransportAmount,
+};
+
+const getActivePendingJobsCount = () => {
+  return pendingJobs.filter(job => {
+    const nonLostActivities = job.activities?.filter(a => !a.is_lost) || [];
+    return nonLostActivities.length > 0;
+  }).length;
 };
 // const filteredActivityLogs = activityLogs.filter(log => {
 //   const searchLower = searchTerm.toLowerCase();
@@ -1160,10 +1192,114 @@ const filteredTransportAllocations = transportAllocations.filter(ta => {
 
 
 // Add this function to handle opening the edit modal
-const handleEditActivity = (activity, jobId) => {
-  setEditingActivity(activity);
-  setEditingJobId(jobId);
-  setIsEditModalOpen(true);
+// REPLACE the entire handleEditActivity function with this:
+const handleEditActivity = async (activity: any, jobId: string) => {
+  if (!editReason.trim()) {
+    alert('❌ Please provide a reason for editing');
+    return;
+  }
+
+  try {
+    const config = getAuthConfig();
+    await axios.patch(
+      `${API_BASE_URL_A}/ap/edit-activity/`,
+      {
+        job_id: jobId,
+        activity_id: activity.activity_id,
+        reason: editReason,
+        updates: {
+          activity_name: editFormData.activity_name,
+          total_area: editFormData.total_area,
+          scheduled_datetime: editFormData.scheduled_date,
+          total_price: editFormData.total_price,
+          rate_per_acre: editFormData.rate_per_acre
+        }
+      },
+      config
+    );
+    
+    alert('✅ Activity updated successfully!');
+    setShowEditActivityModal(false);
+    setEditReason('');
+    setSelectedActivityForEdit(null);
+    setEditFormData({
+      activity_name: '',
+      total_area: 0,
+      scheduled_date: '',
+      total_price: 0,
+      rate_per_acre: 0
+    });
+    await refreshAllocations();
+  } catch (error: any) {
+    console.error('Error editing activity:', error);
+    alert(`❌ ${error.response?.data?.error || 'Failed to edit activity'}`);
+  }
+};
+// ✅ NEW: Mark Activity Lost
+// UPDATE handleMarkActivityLost function (around line 470):
+
+const handleMarkActivityLost = async (activity: any, jobId: string) => {
+  if (!lostReason.trim()) {
+    alert('❌ Please provide a reason for marking as lost');
+    return;
+  }
+
+  if (!confirm(`Mark "${activity.activity_name}" as LOST? This will exclude it from revenue calculations.`)) {
+    return;
+  }
+
+  try {
+    const config = getAuthConfig();
+    await axios.post(
+      `${API_BASE_URL_A}/ap/mark-activity-lost/`,
+      {
+        job_id: jobId,
+        activity_id: activity.activity_id,
+        reason: lostReason,
+        // ✅ PASS ACTIVITY DATA for DB creation if missing
+        activity_name: activity.activity_name,
+        total_area: activity.total_area,
+        total_price: activity.total_price
+      },
+      config
+    );
+    
+    alert('✅ Activity marked as lost');
+    setShowMarkLostModal(false);
+    setLostReason('');
+    setSelectedActivityForEdit(null);
+    await refreshAllocations();
+  } catch (error: any) {
+    console.error('Error marking lost:', error);
+    alert(`❌ ${error.response?.data?.error || 'Failed to mark as lost'}`);
+  }
+};
+// ✅ NEW: Unmark Activity Lost
+const handleUnmarkActivityLost = async (activity: any, jobId: string) => {
+  const reason = prompt('Reason for restoring this activity:');
+  if (!reason?.trim()) {
+    alert('❌ Reason is required');
+    return;
+  }
+
+  try {
+    const config = getAuthConfig();
+    await axios.post(
+      `${API_BASE_URL_A}/ap/unmark-activity-lost/`,
+      {
+        job_id: jobId,
+        activity_id: activity.activity_id,
+        reason: reason
+      },
+      config
+    );
+    
+    alert('✅ Activity restored successfully');
+    await refreshAllocations();
+  } catch (error: any) {
+    console.error('Error unmarking lost:', error);
+    alert(`❌ ${error.response?.data?.error || 'Failed to restore activity'}`);
+  }
 };
 
 // Add this function to handle successful save and refresh
@@ -1240,16 +1376,28 @@ const handleSaveSuccess = async () => {
   Partially Allocated ({stats.partiallyAllocatedJobs})
 </button>
               <button
-                onClick={() => setActiveTab('pending')}
-                className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-                  activeTab === 'pending'
-                    ? 'border-yellow-500 text-yellow-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <XCircle className="inline-block mr-2" size={18} />
-                Pending ({stats.pendingJobs})
-              </button>
+  onClick={() => setActiveTab('pending')}
+  className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
+    activeTab === 'pending'
+      ? 'border-yellow-500 text-yellow-600'
+      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+  }`}
+>
+  <XCircle className="inline-block mr-2" size={18} />
+  Pending ({getActivePendingJobsCount()})
+</button>
+
+              <button
+  onClick={() => setActiveTab('lost')}
+  className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
+    activeTab === 'lost'
+      ? 'border-red-500 text-red-600'
+      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+  }`}
+>
+  <Ban className="inline-block mr-2" size={18} />
+  Lost Jobs ({jobs.filter(j => j.activities?.some(a => a.is_lost)).length})
+</button>
               <button
                 onClick={() => setActiveTab('mukkadams')}
                 className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
@@ -1283,6 +1431,7 @@ const handleSaveSuccess = async () => {
                 <Activity className="inline-block mr-2" size={18} />
                 Activity Log ({activityLogs.length})
               </button>
+
               {/* <button
                 onClick={() => setActiveTab('analytics')}
                 className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
@@ -2532,116 +2681,140 @@ const handleSaveSuccess = async () => {
                                         {new Date(allocation.work_date).toLocaleDateString('en-IN')}
                                     </td>
 
-                                    {/* Mukkadam Payment Status with Reject Button */}
-                                    <td className="px-4 py-4">
-                                        <div className="space-y-2">
-                                            <div className="font-bold text-green-600">₹{mukkadamAmount.toLocaleString()}</div>
-                                            {mukkadamPayment ? (
-                                                <div>
-                                                    {mukkadamPayment.status === 'paid' ? (
-                                                        <div className="flex items-center">
-                                                            <CheckCircle size={16} className="text-green-600 mr-1" />
-                                                            <span className="text-xs font-semibold text-green-700">PAID</span>
-                                                        </div>
-                                                    ) : mukkadamPayment.status === 'pending' ? (
-                                                        <div className="flex flex-col space-y-1">
-                                                            <button
-                                                                onClick={() => handleMarkMukkadamPaid(mukkadamPayment.id)}
-                                                                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
-                                                            >
-                                                                <CheckCircle size={14} className="mr-1" /> Mark Paid
-                                                            </button>
-                                                            {/* ✅ REJECT BUTTON */}
-                                                            <button
-                                                                onClick={() => handleRejectMukkadamPayment(mukkadamPayment.id)}
-                                                                className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
-                                                            >
-                                                                <XCircle size={14} className="mr-1" /> Reject
-                                                            </button>
-                                                        </div>
-                                                    ) : (
-                                                        <div className="flex items-center">
-                                                            <Ban size={16} className="text-red-600 mr-1" />
-                                                            <span className="text-xs font-semibold text-red-700">REJECTED</span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            ) : (
-                                                <span className="text-xs text-gray-500 italic">Not requested</span>
-                                            )}
-                                        </div>
-                                    </td>
+                                    {/* --- Mukkadam Payment Column --- */}
+<td className="px-4 py-4">
+  <div className="space-y-2">
+    <div className="font-bold text-green-600">₹{mukkadamAmount.toLocaleString()}</div>
+    {mukkadamPayment ? (
+      <div>
+        {mukkadamPayment.status === 'paid' ? (
+          <div className="flex items-center">
+            <CheckCircle size={16} className="text-green-600 mr-1" />
+            <span className="text-xs font-semibold text-green-700">PAID</span>
+          </div>
+        ) : mukkadamPayment.status === 'pending' ? (
+          // ✅ LOGIC UPDATE: Check isAdmin before showing buttons
+          isAdmin ? (
+            <div className="flex flex-col space-y-1">
+              <button
+                onClick={() => handleMarkMukkadamPaid(mukkadamPayment.id)}
+                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
+              >
+                <CheckCircle size={14} className="mr-1" /> Mark Paid
+              </button>
+              <button
+                onClick={() => handleRejectMukkadamPayment(mukkadamPayment.id)}
+                className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
+              >
+                <XCircle size={14} className="mr-1" /> Reject
+              </button>
+            </div>
+          ) : (
+            // Non-Admins see a simple status badge
+            <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
+              <Clock size={14} className="text-yellow-600 mr-1" />
+              <span className="text-xs font-semibold text-yellow-700">PENDING</span>
+            </div>
+          )
+        ) : (
+          <div className="flex items-center">
+            <Ban size={16} className="text-red-600 mr-1" />
+            <span className="text-xs font-semibold text-red-700">REJECTED</span>
+          </div>
+        )}
+      </div>
+    ) : (
+      <span className="text-xs text-gray-500 italic">Not requested</span>
+    )}
+  </div>
+</td>
 
-                                    {/* Transport Payment Status with Reject Button */}
-                                    <td className="px-4 py-4">
-                                        {allocation.transport_type === 'provider' && allocation.transport_provider_id ? (
-                                            <div className="space-y-2">
-                                                <div className="font-bold text-orange-600">₹{transportAmount.toLocaleString()}</div>
-                                                <div className="text-xs text-gray-600">{provider?.name || 'Unknown'}</div>
-                                                
-                                                {transportPayment ? (
-                                                    <div>
-                                                        {transportPayment.status === 'paid' ? (
-                                                            <div className="flex items-center">
-                                                                <CheckCircle size={16} className="text-green-600 mr-1" />
-                                                                <span className="text-xs font-semibold text-green-700">PAID</span>
-                                                            </div>
-                                                        ) : transportPayment.status === 'pending' ? (
-                                                            <div className="flex flex-col space-y-1">
-                                                                <button
-                                                                    onClick={() => handleMarkTransportPaid(transportPayment.id)}
-                                                                    className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
-                                                                >
-                                                                    <CheckCircle size={14} className="mr-1" /> Mark Paid
-                                                                </button>
-                                                                {/* ✅ REJECT BUTTON */}
-                                                                <button
-                                                                    onClick={() => handleRejectTransportPayment(transportPayment.id)}
-                                                                    className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
-                                                                >
-                                                                    <XCircle size={14} className="mr-1" /> Reject
-                                                                </button>
-                                                            </div>
-                                                        ) : (
-                                                            <div className="flex items-center">
-                                                                <Ban size={16} className="text-red-600 mr-1" />
-                                                                <span className="text-xs font-semibold text-red-700">REJECTED</span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                ) : (
-                                                    <span className="text-xs text-gray-500 italic">Not requested</span>
-                                                )}
-                                            </div>
-                                        ) : allocation.transport_type === 'own' ? (
-                                            <div className="space-y-2">
-                                                <div className="font-bold text-blue-600">₹{transportAmount.toLocaleString()}</div>
-                                                <div className="text-xs text-gray-600">Own Transport</div>
-                                            </div>
-                                        ) : (
-                                            <div className="text-xs text-gray-500">No Transport</div>
-                                        )}
-                                    </td>
+{/* --- Transport Payment Column --- */}
+<td className="px-4 py-4">
+  {allocation.transport_type === 'provider' && allocation.transport_provider_id ? (
+    <div className="space-y-2">
+      <div className="font-bold text-orange-600">₹{transportAmount.toLocaleString()}</div>
+      <div className="text-xs text-gray-600">{provider?.name || 'Unknown'}</div>
+      
+      {transportPayment ? (
+        <div>
+          {transportPayment.status === 'paid' ? (
+            <div className="flex items-center">
+              <CheckCircle size={16} className="text-green-600 mr-1" />
+              <span className="text-xs font-semibold text-green-700">PAID</span>
+            </div>
+          ) : transportPayment.status === 'pending' ? (
+            // ✅ LOGIC UPDATE: Check isAdmin before showing buttons
+            isAdmin ? (
+              <div className="flex flex-col space-y-1">
+                <button
+                  onClick={() => handleMarkTransportPaid(transportPayment.id)}
+                  className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
+                >
+                  <CheckCircle size={14} className="mr-1" /> Mark Paid
+                </button>
+                <button
+                  onClick={() => handleRejectTransportPayment(transportPayment.id)}
+                  className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
+                >
+                  <XCircle size={14} className="mr-1" /> Reject
+                </button>
+              </div>
+            ) : (
+              // Non-Admins see a simple status badge
+              <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
+                <Clock size={14} className="text-yellow-600 mr-1" />
+                <span className="text-xs font-semibold text-yellow-700">PENDING</span>
+              </div>
+            )
+          ) : (
+            <div className="flex items-center">
+              <Ban size={16} className="text-red-600 mr-1" />
+              <span className="text-xs font-semibold text-red-700">REJECTED</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <span className="text-xs text-gray-500 italic">Not requested</span>
+      )}
+    </div>
+  ) : allocation.transport_type === 'own' ? (
+    <div className="space-y-2">
+      <div className="font-bold text-blue-600">₹{transportAmount.toLocaleString()}</div>
+      <div className="text-xs text-gray-600">Own Transport</div>
+    </div>
+  ) : (
+    <div className="text-xs text-gray-500">No Transport</div>
+  )}
+</td>
 
-                                    <td className="px-4 py-4">
-                                        <div className="flex flex-col space-y-2">
-                                          <button
-                                              onClick={() => navigate(`/allocations/${allocation.id}`)}
-                                              className="text-blue-600 hover:text-blue-900 font-bold flex items-center text-xs"
-                                          >
-                                              <Eye size={14} className="mr-1" /> View Detail
-                                          </button>
-                                          <button 
-                                            onClick={() => {
-                                              setAllocationToEdit(allocation); 
-                                              setShowEditModal(true);
-                                            }}
-                                            className="text-orange-600 hover:text-orange-800 font-bold flex items-center text-xs"
-                                          >
-                                            <Edit size={14} className="mr-1" /> Edit/Reallocate
-                                          </button>
-                                        </div>
-                                    </td>
+                                    
+                           
+                                            <td className="px-4 py-4">
+  <div className="flex flex-col space-y-2">
+    {/* View Detail - Visible to Everyone */}
+    <button
+      onClick={() => navigate(`/allocations/${allocation.id}`)}
+      className="text-blue-600 hover:text-blue-900 font-bold flex items-center text-xs"
+    >
+      <Eye size={14} className="mr-1" /> View Detail
+    </button>
+    
+    {/* ✅ EDIT BUTTON: Visible ONLY if (User is Admin) AND (Not Paid) */}
+    {isAdmin && !(mukkadamPayment?.status === 'paid' || transportPayment?.status === 'paid') && (
+      <button 
+        onClick={() => {
+          setAllocationToEdit(allocation); 
+          setShowEditModal(true);
+        }}
+        className="text-orange-600 hover:text-orange-800 font-bold flex items-center text-xs"
+      >
+        <Edit size={14} className="mr-1" /> Edit/Reallocate
+      </button>
+    )}
+  </div>
+</td>
+                                   
                                 </tr>
                             );
                         })}
@@ -2725,8 +2898,13 @@ const handleSaveSuccess = async () => {
       };
 
       // 1. FILTER & SORT LOGIC
+      // 1. FILTER & SORT LOGIC
       const filteredAndSortedPendingJobs = pendingJobs
         .filter(job => {
+          // ✅ CRITICAL FIX: Exclude jobs where all activities are lost
+          const nonLostActivities = job.activities?.filter(a => !a.is_lost) || [];
+          if (nonLostActivities.length === 0) return false;
+
           const jobTime = getEffectiveJobDate(job);
           const jobDateString = jobTime > 0 ? new Date(jobTime).toISOString().split('T')[0] : '';
 
@@ -2736,7 +2914,7 @@ const handleSaveSuccess = async () => {
           // B. Activity Text Search Filter
           if (selectedActivityName) {
             const actSearch = selectedActivityName.toLowerCase();
-            const hasMatch = job.activities?.some(a => 
+            const hasMatch = nonLostActivities.some(a =>  // ✅ Use nonLostActivities
               String(a.activity_name || '').toLowerCase().includes(actSearch)
             );
             if (!hasMatch) return false;
@@ -2754,7 +2932,6 @@ const handleSaveSuccess = async () => {
           );
         })
         .sort((a, b) => {
-          // --- FORCED ASCENDING SORT (History to Future) ---
           return getEffectiveJobDate(a) - getEffectiveJobDate(b);
         });
 
@@ -2885,7 +3062,69 @@ const handleSaveSuccess = async () => {
       <span className="text-gray-500">Scheduled:</span>
       <span className="font-medium text-gray-900">{activity.scheduled_date || 'Not set'}</span>
     </div>
+
+
+
   </div>
+
+  {isAdmin && !activity.is_lost && (
+  <div className="mt-3 pt-3 border-t border-gray-200 flex gap-2">
+<button
+  onClick={(e) => {
+    e.stopPropagation();
+    setSelectedActivityForEdit(activity);
+    setSelectedJobForEdit(job);
+    // ✅ POPULATE ALL FORM DATA INCLUDING NEW COST FIELDS
+    setEditFormData({
+      activity_name: activity.activity_name,
+      total_area: activity.total_area,
+      scheduled_date: activity.scheduled_date || '',
+      total_price: activity.total_price,
+      transport_cost: activity.transport_cost || 0,  // ✅ NEW
+      other_cost: activity.other_cost || 0,          // ✅ NEW
+      rate_per_acre: activity.rate_per_acre
+    });
+    setShowEditActivityModal(true);
+  }}
+  className="flex-1 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition flex items-center justify-center gap-1 text-sm font-medium"
+>
+  <Edit2 size={14} />
+  Edit
+</button>
+    <button
+  onClick={(e) => {
+    e.stopPropagation();
+    setSelectedActivityForEdit(activity);
+    setSelectedJobForEdit(job);
+    setShowMarkLostModal(true);
+  }}
+      className="flex-1 px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition flex items-center justify-center gap-1 text-sm font-medium"
+    >
+      <Ban size={14} />
+      Mark Lost
+    </button>
+  </div>
+)}
+
+{activity.is_lost && (
+  <div className="mt-3 pt-3 border-t border-red-200">
+    <div className="px-3 py-2 bg-red-100 border border-red-300 rounded text-xs text-red-800">
+      <Ban size={12} className="inline mr-1" />
+      <strong>LOST:</strong> {activity.lost_reason}
+    </div>
+    {isAdmin && (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          handleUnmarkActivityLost(activity, job.work_id);
+        }}
+        className="mt-2 w-full px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-xs font-bold"
+      >
+        Restore Activity
+      </button>
+    )}
+  </div>
+)}
 </div>
       // </div>
     ))}
@@ -2912,7 +3151,6 @@ const handleSaveSuccess = async () => {
   onSaveSuccess={handleSaveSuccess}
 />
             {/* Partially Allocated Jobs Tab */}
-{/* Partially Allocated Jobs Tab */}
 {activeTab === 'partially' && (
   <div>
     {/* --- Filter Bar Section --- */}
@@ -3197,6 +3435,7 @@ const handleSaveSuccess = async () => {
     })()}
   </div>
 )}
+
 
 {/* Mukkadams Tab */}
 {activeTab === 'mukkadams' && (
@@ -3742,6 +3981,436 @@ const handleSaveSuccess = async () => {
         })}
       </div>
     )}
+  </div>
+)}
+
+{activeTab === 'lost' && (
+  <div>
+    <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
+      <p className="text-sm text-red-800">
+        <Ban className="inline mr-2" size={16} />
+        These jobs have at least one activity marked as <strong>LOST</strong>. 
+        Lost activities are excluded from revenue calculations.
+      </p>
+    </div>
+
+    {(() => {
+      const lostJobs = jobs.filter(job => 
+        job.activities?.some(a => a.is_lost)
+      );
+
+      if (lostJobs.length === 0) {
+        return (
+          <div className="text-center py-12 bg-white rounded-xl border border-dashed">
+            <Ban size={48} className="mx-auto text-gray-300 mb-4" />
+            <p className="text-gray-600">No lost jobs</p>
+          </div>
+        );
+      }
+
+      return (
+        <div className="space-y-3">
+          {lostJobs.map(job => {
+            const lostActivities = job.activities.filter(a => a.is_lost);
+            
+            return (
+              <div key={job.work_id} className="border-2 border-red-300 bg-red-50 rounded-xl p-4">
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <div className="flex items-center space-x-2 mb-2">
+                      <span className="font-mono font-bold text-blue-600">{job.work_id}</span>
+                      <span className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-bold">
+                        {lostActivities.length} LOST
+                      </span>
+                    </div>
+                    {job.farmer && (
+                      <p className="text-sm text-gray-700">
+                        {job.farmer.farmer_name} • {job.farmer.phone_number}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="font-semibold text-gray-800 text-sm">Lost Activities:</h4>
+                  {lostActivities.map(activity => (
+                    <div key={activity.activity_id} className="bg-white border-2 border-red-200 rounded-lg p-3">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2 mb-1">
+                            <Ban size={14} className="text-red-600" />
+                            <span className="font-semibold text-gray-800 line-through">
+                              {activity.activity_name}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-600">
+                            Area: {activity.total_area} acres • Price: ₹{activity.total_price}
+                          </p>
+                          <div className="mt-2 bg-red-100 border border-red-300 rounded p-2">
+                            <p className="text-xs text-red-800">
+                              <strong>Reason:</strong> {activity.lost_reason}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        {isAdmin && (
+                          <button
+                            onClick={() => handleUnmarkActivityLost(activity, job.work_id)}
+                            className="ml-3 px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-xs font-bold"
+                          >
+                            Restore
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    })()}
+  </div>
+)}
+
+{/* ✅ ENHANCED EDIT ACTIVITY MODAL - WITH INDIVIDUAL COSTS */}
+{showEditActivityModal && selectedActivityForEdit && (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div className="bg-white rounded-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-bold text-gray-900">Edit Activity</h3>
+        <button onClick={() => {
+          setShowEditActivityModal(false);
+          setEditReason('');
+          setEditFormData({
+            activity_name: '',
+            total_area: 0,
+            scheduled_date: '',
+            total_price: 0,
+            transport_cost: 0,
+            other_cost: 0,
+            rate_per_acre: 0
+          });
+        }} className="text-gray-400 hover:text-gray-600">
+          <X size={20} />
+        </button>
+      </div>
+      
+      {/* Job Info */}
+      <div className="mb-4 bg-blue-50 border border-blue-200 rounded p-3">
+        <p className="text-sm text-gray-700">
+          <strong>Job ID:</strong> {selectedJobForEdit?.work_id}
+        </p>
+      </div>
+
+      {/* Editable Fields */}
+      <div className="space-y-4 mb-4">
+        {/* Activity Name */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Activity Name <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            value={editFormData.activity_name}
+            onChange={(e) => setEditFormData({...editFormData, activity_name: e.target.value})}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            placeholder="e.g., Pasting, Pruning"
+          />
+        </div>
+
+        {/* Total Area */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Total Area (acres) <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={editFormData.total_area}
+            onChange={(e) => {
+              const newArea = parseFloat(e.target.value) || 0;
+              const subtotal = editFormData.total_price + editFormData.transport_cost + editFormData.other_cost;
+              const newRatePerAcre = newArea > 0 ? subtotal / newArea : 0;
+              setEditFormData({
+                ...editFormData, 
+                total_area: newArea,
+                rate_per_acre: newRatePerAcre
+              });
+            }}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            placeholder="14.00"
+          />
+        </div>
+
+        {/* Scheduled Date */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Scheduled Date <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="date"
+            value={editFormData.scheduled_date}
+            onChange={(e) => setEditFormData({...editFormData, scheduled_date: e.target.value})}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+
+        {/* ✅ COST BREAKDOWN SECTION */}
+        <div className="border-t-2 border-purple-200 pt-4">
+          <h4 className="font-semibold text-gray-800 mb-3 flex items-center">
+            <DollarSign size={18} className="mr-2 text-purple-600" />
+            Cost Breakdown
+          </h4>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Mukkadam Price */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Mukkadam Price (₹) <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={editFormData.total_price}
+                onChange={(e) => {
+                  const newMukkadamPrice = parseFloat(e.target.value) || 0;
+                  const subtotal = newMukkadamPrice + editFormData.transport_cost + editFormData.other_cost;
+                  const newRatePerAcre = editFormData.total_area > 0 ? subtotal / editFormData.total_area : 0;
+                  setEditFormData({
+                    ...editFormData, 
+                    total_price: newMukkadamPrice,
+                    rate_per_acre: newRatePerAcre
+                  });
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                placeholder="100.00"
+              />
+            </div>
+
+            {/* Transport Cost */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Transport Cost (₹)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={editFormData.transport_cost}
+                onChange={(e) => {
+                  const newTransportCost = parseFloat(e.target.value) || 0;
+                  const subtotal = editFormData.total_price + newTransportCost + editFormData.other_cost;
+                  const newRatePerAcre = editFormData.total_area > 0 ? subtotal / editFormData.total_area : 0;
+                  setEditFormData({
+                    ...editFormData, 
+                    transport_cost: newTransportCost,
+                    rate_per_acre: newRatePerAcre
+                  });
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                placeholder="100.00"
+              />
+            </div>
+
+            {/* Other Cost */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Other Cost (₹)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={editFormData.other_cost}
+                onChange={(e) => {
+                  const newOtherCost = parseFloat(e.target.value) || 0;
+                  const subtotal = editFormData.total_price + editFormData.transport_cost + newOtherCost;
+                  const newRatePerAcre = editFormData.total_area > 0 ? subtotal / editFormData.total_area : 0;
+                  setEditFormData({
+                    ...editFormData, 
+                    other_cost: newOtherCost,
+                    rate_per_acre: newRatePerAcre
+                  });
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                placeholder="100.00"
+              />
+            </div>
+          </div>
+
+          {/* Subtotal Display */}
+          <div className="mt-4 bg-purple-50 border-2 border-purple-300 rounded-lg p-3">
+            <div className="flex justify-between items-center">
+              <span className="text-sm font-medium text-gray-700">Subtotal (Auto-calculated):</span>
+              <span className="text-2xl font-bold text-purple-600">
+                ₹{(editFormData.total_price + editFormData.transport_cost + editFormData.other_cost).toFixed(2)}
+              </span>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Mukkadam (₹{editFormData.total_price.toFixed(2)}) + Transport (₹{editFormData.transport_cost.toFixed(2)}) + Other (₹{editFormData.other_cost.toFixed(2)})
+            </p>
+          </div>
+        </div>
+
+        {/* Rate Per Acre (Auto-calculated, Read-only) */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Rate Per Acre (₹) <span className="text-gray-500">(Auto-calculated)</span>
+          </label>
+          <input
+            type="text"
+            value={`₹${editFormData.rate_per_acre.toFixed(2)}`}
+            readOnly
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 cursor-not-allowed"
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Calculated as: Subtotal ÷ Total Area
+          </p>
+        </div>
+      </div>
+
+      {/* Reason for Editing */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          Reason for Editing <span className="text-red-500">*</span>
+        </label>
+        <textarea
+          value={editReason}
+          onChange={(e) => setEditReason(e.target.value)}
+          placeholder="e.g., Updated cost breakdown after negotiation with farmer"
+          rows={3}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
+      {/* Summary Box */}
+      <div className="mb-4 bg-green-50 border border-green-200 rounded p-3">
+        <h4 className="font-semibold text-sm text-gray-800 mb-2">Summary of Changes:</h4>
+        <div className="space-y-1 text-xs text-gray-700">
+          {editFormData.activity_name !== selectedActivityForEdit.activity_name && (
+            <p>• Name: <span className="line-through text-red-600">{selectedActivityForEdit.activity_name}</span> → <span className="font-bold text-green-600">{editFormData.activity_name}</span></p>
+          )}
+          {editFormData.total_area !== selectedActivityForEdit.total_area && (
+            <p>• Area: <span className="line-through text-red-600">{selectedActivityForEdit.total_area} acres</span> → <span className="font-bold text-green-600">{editFormData.total_area} acres</span></p>
+          )}
+          {editFormData.scheduled_date !== selectedActivityForEdit.scheduled_date && (
+            <p>• Date: <span className="line-through text-red-600">{selectedActivityForEdit.scheduled_date || 'Not set'}</span> → <span className="font-bold text-green-600">{editFormData.scheduled_date}</span></p>
+          )}
+          {editFormData.total_price !== selectedActivityForEdit.total_price && (
+            <p>• Mukkadam Price: <span className="line-through text-red-600">₹{selectedActivityForEdit.total_price}</span> → <span className="font-bold text-green-600">₹{editFormData.total_price}</span></p>
+          )}
+          {editFormData.transport_cost !== (selectedActivityForEdit.transport_cost || 0) && (
+            <p>• Transport Cost: <span className="line-through text-red-600">₹{selectedActivityForEdit.transport_cost || 0}</span> → <span className="font-bold text-green-600">₹{editFormData.transport_cost}</span></p>
+          )}
+          {editFormData.other_cost !== (selectedActivityForEdit.other_cost || 0) && (
+            <p>• Other Cost: <span className="line-through text-red-600">₹{selectedActivityForEdit.other_cost || 0}</span> → <span className="font-bold text-green-600">₹{editFormData.other_cost}</span></p>
+          )}
+        </div>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="flex gap-3">
+        <button
+          onClick={() => {
+            setShowEditActivityModal(false);
+            setEditReason('');
+            setEditFormData({
+              activity_name: '',
+              total_area: 0,
+              scheduled_date: '',
+              total_price: 0,
+              transport_cost: 0,
+              other_cost: 0,
+              rate_per_acre: 0
+            });
+          }}
+          className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 font-medium"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => handleEditActivity(selectedActivityForEdit, selectedJobForEdit.work_id)}
+          disabled={!editReason.trim() || !editFormData.activity_name || editFormData.total_area <= 0 || editFormData.total_price < 0}
+          className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
+        >
+          Save Changes
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+{/* ✅ MARK LOST MODAL */}
+{showMarkLostModal && selectedActivityForEdit && (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div className="bg-white rounded-xl p-6 max-w-md w-full">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-bold text-red-600 flex items-center">
+          <Ban size={20} className="mr-2" />
+          Mark Activity as Lost
+        </h3>
+        <button onClick={() => {
+          setShowMarkLostModal(false);
+          setLostReason('');
+        }} className="text-gray-400 hover:text-gray-600">
+          <X size={20} />
+        </button>
+      </div>
+      
+      <div className="mb-4 bg-red-50 border border-red-200 rounded p-3">
+        <p className="text-sm text-red-800">
+          <AlertCircle size={16} className="inline mr-1" />
+          This activity will be excluded from revenue calculations
+        </p>
+      </div>
+
+      <div className="mb-4">
+        <p className="text-sm text-gray-600 mb-2">
+          <strong>Job:</strong> {selectedJobForEdit?.work_id}
+        </p>
+        <p className="text-sm text-gray-600 mb-2">
+          <strong>Activity:</strong> {selectedActivityForEdit.activity_name}
+        </p>
+        <p className="text-sm text-gray-600">
+          <strong>Revenue Loss:</strong> ₹{selectedActivityForEdit.total_price}
+        </p>
+      </div>
+
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          Reason for Marking as Lost <span className="text-red-500">*</span>
+        </label>
+        <textarea
+          value={lostReason}
+          onChange={(e) => setLostReason(e.target.value)}
+          placeholder="e.g., Farmer cancelled the work"
+          rows={3}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+        />
+      </div>
+
+      <div className="flex gap-3">
+        <button
+          onClick={() => {
+            setShowMarkLostModal(false);
+            setLostReason('');
+          }}
+          className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => handleMarkActivityLost(selectedActivityForEdit, selectedJobForEdit.work_id)}
+          disabled={!lostReason.trim()}
+          className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+        >
+          Mark as Lost
+        </button>
+      </div>
+    </div>
   </div>
 )}
 {/* 

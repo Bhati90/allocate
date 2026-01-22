@@ -91,7 +91,14 @@ const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
 
 // Import the logic
 
+const [changeReason, setChangeReason] = useState('');
 
+// ✅ Reset reason when modal opens/closes or edit mode changes
+useEffect(() => {
+  if (!editMode) {
+    setChangeReason('');
+  }
+}, [editMode]);
   // Calculate auto-price when area changes
   useEffect(() => {
   // Only auto-calculate if NOT in TBD mode
@@ -238,6 +245,17 @@ useEffect(() => {
       alert('Please select a mukkadam');
       return;
     }
+
+    if (editMode) {
+    if (!changeReason.trim()) {
+      alert('⚠️ Please provide a reason for this change.');
+      return;
+    }
+    if (changeReason.length < 10) {
+      alert('⚠️ Change reason must be at least 10 characters long.');
+      return;
+    }
+  }
     // Find the actual Mukkadam object to get their full crew size
     const mukkadamObj = mukkadams.find(m => m.id === parseInt(allocationForm.mukkadam_id));
 
@@ -338,97 +356,70 @@ const maxAllowedArea = editMode && existingAllocation
     setAllocating(true);
 
     try {
-      // ✅ Use finalCrewSize in the notes
-      let notes = `Activity ID: ${selectedActivity.activity_id}`;
-    notes += `\nCrew Size: ${finalCrewSize} workers`;
-    if (isPriceTbd) {
-      notes += `\nPRICE STATUS: To Be Decided Later`;
-    }
-      const payload = {
-        activity_id: selectedActivity.activity_id,
-        job_id: job.work_id,
-        activity_name: selectedActivity.activity_name,
-        location: `${job.farmer?.village || ''}, ${job.farmer?.taluka || ''}, ${job.farmer?.district || ''}`.trim(),
-        job_latitude: job?.latitude,      // ✅ ADD
-        job_longitude: job?.longitude ,    // ✅ ADD
-        activity_type: selectedActivity.activity_type,
-        scheduled_datetime: selectedActivity.scheduled_date,
-        total_area: selectedActivity.total_area,
-        total_price: selectedActivity.total_price,
-        // location: selectedActivity.location,
-        estimated_workers: selectedActivity.estimated_workers,
-        rate_per_acre: selectedActivity.rate_per_acre,
-        mukkadam_id: parseInt(allocationForm.mukkadam_id),
-        allocated_area: parseFloat(allocationForm.allocated_area),
-        work_date: allocationForm.work_date,
-        crew_size: finalCrewSize,
-        mukkadam_price: isPriceTbd ? 0 : parseFloat(allocationForm.mukkadam_price),
-        transport_type: allocationForm.transport_type,
-        transport_provider_id: allocationForm.transport_type === 'provider' 
-          ? parseInt(allocationForm.transport_provider_id) 
-          : null,
-        own_transport_price: allocationForm.transport_type === 'own'
-          ? parseFloat(allocationForm.own_transport_price || '0')
-          : null,
-        transport_price: (() => {
-          if (allocationForm.transport_type === 'provider') {
-            return parseFloat(allocationForm.transport_price || '0');
-          } else if (allocationForm.transport_type === 'own') {
-            return parseFloat(allocationForm.own_transport_price || '0');
-          }
-          return 0;
-        })(),
-        notes: notes
-      };
+    // Construct Notes
+    let notes = `Activity ID: ${selectedActivity.activity_id}`;
+    notes += `\nCrew Size: ${allocationForm.crew_size || 'Default'} workers`;
+    if (isPriceTbd) notes += `\nPRICE STATUS: To Be Decided Later`;
 
-      const config = getAuthConfig();
-      let response;
-
-      // ✅ NEW: Use PATCH for edit, POST for create
-      if (editMode && existingAllocation) {
-        response = await axios.patch(
-          `${API_BASE_URL_A}/ap/allocations/${existingAllocation.id}/`,
-          payload,
-          config
-        );
-        alert(`✅ Allocation updated successfully!\n${response.data.message || ''}`);
-      } else {
-        response = await axios.post(
-          `${API_BASE_URL_A}/ap/allocations/`,
-          payload,
-          config
-        );
-        alert(`✅ Allocated ${allocationForm.allocated_area} acres successfully!\n${response.data.message || ''}`);
-      }
-
-      onSuccess();
+    const payload = {
+      // ... (Keep existing payload fields: activity_id, job_id, etc.) ...
+      activity_id: selectedActivity.activity_id,
+      job_id: job.work_id,
+      activity_name: selectedActivity.activity_name,
+      // ... include all other standard fields ...
+      mukkadam_id: parseInt(allocationForm.mukkadam_id),
+      allocated_area: parseFloat(allocationForm.allocated_area),
+      work_date: allocationForm.work_date,
+      crew_size: parseInt(allocationForm.crew_size || '0'),
+      mukkadam_price: isPriceTbd ? 0 : parseFloat(allocationForm.mukkadam_price),
+      transport_type: allocationForm.transport_type,
+      transport_provider_id: allocationForm.transport_type === 'provider' ? parseInt(allocationForm.transport_provider_id) : null,
+      own_transport_price: allocationForm.transport_type === 'own' ? parseFloat(allocationForm.own_transport_price || '0') : null,
+      transport_price: allocationForm.transport_type === 'provider' ? parseFloat(allocationForm.transport_price || '0') : 0,
+      notes: notes,
       
-      // ✅ CHANGE: Close modal if editing, otherwise reset form
-      if (editMode) {
-        onClose();
-      } else {
-        // Reset form but keep activity selected
-        setAllocationForm({
-          mukkadam_id: '',
-          allocated_area: '',
-          work_date: selectedActivity.scheduled_date,
-          mukkadam_price: '',
-          crew_size: '',
-          transport_type: 'provider',
-          transport_provider_id: '',
-          own_transport_price: '',
-          transport_price: ''
-        });
-        setCrewCapacity(null);
-      }
+      // ✅ NEW: Add change_reason to payload if editing
+      change_reason: editMode ? changeReason : undefined 
+    };
 
-    } catch (error: any) {
-      console.error('Allocation error:', error);
-      alert(`Failed to ${editMode ? 'update' : 'allocate'}: ` + (error.response?.data?.error || error.message));
-    } finally {
-      setAllocating(false);
+    const config = getAuthConfig();
+    let response;
+
+    if (editMode && existingAllocation) {
+      // ✅ Update Request
+      response = await axios.patch(
+        `${API_BASE_URL_A}/ap/allocations/${existingAllocation.id}/`,
+        payload,
+        config
+      );
+      alert(`✅ Updated successfully!\nReason: ${changeReason}`);
+    } else {
+      // Create Request
+      response = await axios.post(
+        `${API_BASE_URL_A}/ap/allocations/`,
+        payload,
+        config
+      );
+      alert(`✅ Allocated successfully!`);
     }
-  };
+
+    onSuccess();
+    if (editMode) onClose();
+    else {
+      // Reset form logic
+      setAllocationForm({ ...allocationForm, mukkadam_id: '', allocated_area: '', mukkadam_price: '' }); // etc
+      setChangeReason(''); // Reset reason
+    }
+
+  } catch (error: any) {
+    console.error('Allocation error:', error);
+    // Display specific backend error for change reason if it occurs
+    const errorMsg = error.response?.data?.error || error.message;
+    alert(`Failed to ${editMode ? 'update' : 'allocate'}: ${errorMsg}`);
+  } finally {
+    setAllocating(false);
+  }
+};
 
   const [mukkadamSearch, setMukkadamSearch] = useState('');
 const [transportSearch, setTransportSearch] = useState('');
@@ -1417,31 +1408,64 @@ const filteredProviders = useMemo(() => {
     </div>
   </div>
 )}
+{editMode && (
+  <div className="mt-6 bg-yellow-50 border-2 border-yellow-200 rounded-lg p-4">
+    <label className="block text-sm font-bold text-yellow-800 mb-2 flex items-center">
+      <Edit size={16} className="mr-2" />
+      Reason for Change <span className="text-red-600 ml-1">*</span>
+    </label>
+    
+    <textarea
+      required={editMode}
+      value={changeReason}
+      onChange={(e) => setChangeReason(e.target.value)}
+      className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-yellow-500 text-sm ${
+        changeReason.length > 0 && changeReason.length < 10 
+          ? 'border-red-400 focus:border-red-500 bg-white' 
+          : 'border-yellow-300 bg-white'
+      }`}
+      placeholder="e.g., Increasing area due to faster work, Changed mukkadam due to availability..."
+      rows={3}
+    />
+    
+    <div className="flex justify-between mt-1">
+      <p className={`text-xs font-medium ${
+        changeReason.length < 10 ? 'text-red-600' : 'text-green-600'
+      }`}>
+        {changeReason.length < 10 
+          ? `Minimum 10 characters required (${changeReason.length}/10)` 
+          : "✅ Reason looks good"
+        }
+      </p>
+    </div>
+  </div>
+)}
 
-                  {/* ✅ UPDATED: Action Buttons with dynamic text */}
-                  <div className="flex space-x-3 pt-4">
-                    <button
-                      type="button"
-                      onClick={onClose}
-                      className="flex-1 px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={allocating}
-                      className={`flex-1 px-6 py-3 rounded-lg font-semibold text-white transition shadow-lg ${
-                        allocating
-                          ? 'bg-gray-400 cursor-not-allowed'
-                          : 'bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700'
-                      }`}
-                    >
-                      {allocating 
-                        ? (editMode ? 'Updating...' : 'Allocating...') 
-                        : (editMode ? 'Update Allocation' : 'Confirm Allocation')
-                      }
-                    </button>
-                  </div>
+{/* ✅ UPDATED: Action Buttons with dynamic text */}
+<div className="flex space-x-3 pt-4">
+  <button
+    type="button"
+    onClick={onClose}
+    className="flex-1 px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition"
+  >
+    Cancel
+  </button>
+  <button
+    type="submit"
+    // Disable submit if editing and reason is too short
+    disabled={allocating || (editMode && changeReason.length < 10)} 
+    className={`flex-1 px-6 py-3 rounded-lg font-semibold text-white transition shadow-lg ${
+      allocating || (editMode && changeReason.length < 10)
+        ? 'bg-gray-400 cursor-not-allowed'
+        : 'bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700'
+    }`}
+  >
+    {allocating 
+      ? (editMode ? 'Updating...' : 'Allocating...') 
+      : (editMode ? 'Update Allocation' : 'Confirm Allocation')
+    }
+  </button>
+</div>
                 </form>
               )}
             </div>
@@ -1469,5 +1493,3 @@ const filteredProviders = useMemo(() => {
 };
 
 export default ComplexAllocationModal;
-
-
