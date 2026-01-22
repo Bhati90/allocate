@@ -5,7 +5,7 @@ from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
 
 from .views import (DetailedRecommendationView, MakeCallView, UserProfileView,
-   mukkadam_scorecard_details,UserListAPIView,
+   mukkadam_scorecard_details,UserListAPIView,edit_activity,mark_activity_lost,unmark_activity_lost,
     mukkadam_scorecard_summary,update_activity,
     JobActivityViewSet, get_job_details,get_user_calls,get_call_details,
     AllocationViewSet,transporter_work_history,ExotelWebhookView,
@@ -72,6 +72,9 @@ urlpatterns = [
     path('mukkadam-scorecard-summary/', mukkadam_scorecard_summary, name='mukkadam-scorecard-summary'),
     path('mukkadam-scorecard-details/<int:mukkadam_id>/', mukkadam_scorecard_details, name='mukkadam-scorecard-details'),
 
+    path('edit-activity/', edit_activity, name='edit_activity'),
+    path('mark-activity-lost/', mark_activity_lost, name='mark_activity_lost'),
+    path('unmark-activity-lost/', unmark_activity_lost, name='unmark_activity_lost'),
 
 
    path('job-details/<str:job_id>/', get_job_details, name='get-job-details'),
