@@ -356,57 +356,6 @@ const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const [mukkadamAllocations, setMukkadamAllocations] = useState<MukkadamAllocation[]>([]);
   const [transportAllocations, setTransportAllocations] = useState<TransportAllocation[]>([]);
 
-  // ... rest of the component code stays the same ...
-//   useEffect(() => {
-//     refreshAllocations();
-//   }, []);
-
-//   const fetchdataAllocations = async () => {
-//     setLoading(true);
-//     const token = getAuthToken();
-//     console.log('🔑 Token:', token ? 'EXISTS' : 'NOT FOUND');
-//     const config = getAuthConfig();
-
-//     const t = 'Token 53942f5d4e74ad0f0202c0c409dfe9e0a2456803'
-    
-//     try {
-//       const [jobsRes, allocationsRes, mukkadamRes, transportRes] = await Promise.all([
-//         axios.get(`${API_BASE_URL_A}/ap/jobs/`,config),
-//     //     axios.get(`${DEMAND_API_BASE_URL}/ops/api/get_allocated_jobs/`, {
-//     //   headers: { Authorization: `Token ${t}` }
-//     // }),
-    
-//         axios.get(`${API_BASE_URL_A}/ap/allocations/`, config),
-//         axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`),
-//         axios.get(`${API_BASE_URL}/api/transport-providers/dropdown_list/`)
-//       ]);
-
-//       setJobs(jobsRes.data);
-//       setAllocations(allocationsRes.data);
-//       setMukkadams(mukkadamRes.data);
-//       setTransportProviders(transportRes.data);
-      
-//       // Set registered counts
-//       setTotalMukkadamsRegistered(mukkadamRes.data.length);
-//       setTotalTransportersRegistered(transportRes.data.length);
-
-//       processMukkadamAllocations(allocationsRes.data, mukkadamRes.data);
-//       processTransportAllocations(allocationsRes.data, transportRes.data);
-//       buildActivityLogs(allocationsRes.data, mukkadamRes.data, transportRes.data);
-//       buildDailyStats(allocationsRes.data);
-
-//       const activityRes = await axios.get(`${API_BASE_URL_A}/ap/activity-logs/`, config);
-// setActivityLogs(activityRes.data);
-      
-//     } catch (error) {
-//       console.error('Error fetching data:', error);
-//     } finally {
-//       setLoading(false);
-//     }
-//   };
-// ... existing imports and state ...
-
-// ... state definitions ...
 
 // ✅ NEW: Handle Mark Complete (Creates Payment Request)
 const handleMarkComplete = async (allocationId: number) => {
@@ -713,103 +662,12 @@ const handleReallocate = async (allocationId: number) => {
 
 
 
-
-// Fix filtered arrays
-// Fix: Don't use allocations to determine allocated/pending
-// Use the job's status field instead!
-// Fix: Separate pending, partially allocated, and fully allocated jobs
-// In AllocationDashboard.tsx
-
-// // ✅ IMPROVED: Calculate job status based on allocations
-// const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' => {
-//   if (!job.is_complex) {
-//     // For simple jobs, check if any allocation exists
-//     return allocations.some(a => a.farmer_work_id === job.work_id) 
-//       ? 'fully_allocated' 
-//       : 'pending';
-//   }
-  
-//   // For complex jobs, check activities
-//   if (!job.activities || job.activities.length === 0) {
-//     return 'pending';
-//   }
-  
-//   const totalActivities = job.activities.length;
-//   const fullyAllocated = job.activities.filter(a => a.is_fully_allocated).length;
-//   const partiallyAllocated = job.activities.filter(a => 
-//     a.allocated_area > 0 && !a.is_fully_allocated
-//   ).length;
-  
-//   if (fullyAllocated === totalActivities) {
-//     return 'fully_allocated';
-//   } else if (fullyAllocated > 0 || partiallyAllocated > 0) {
-//     return 'partially_allocated';
-//   }
-  
-//   return 'pending';
-// };
 // ✅ NEW: Payment request states
   const [mukkadamPaymentRequests, setMukkadamPaymentRequests] = useState<any[]>([]);
   const [transportPaymentRequests, setTransportPaymentRequests] = useState<any[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(false);
 
-  // Fetch data on mount
-  // useEffect(() => {
-  //   fetchAllData();
-  // }, []);
 
-  // const fetchAllData = async () => {
-  //   const config = getAuthConfig();
-    
-  //   try {
-  //     // Fetch allocations
-  //     const allocRes = await axios.get(`${API_BASE_URL_A}/ap/allocations/`, config);
-  //     setAllocations(allocRes.data);
-
-  //     // Fetch jobs
-  //     const jobsRes = await axios.get(`${API_BASE_URL_A}/ap/jobs/`, config);
-  //     setJobs(jobsRes.data);
-
-  //     // Fetch mukkadams
-  //     const mukkadamRes = await axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`, config);
-  //     setMukkadams(mukkadamRes.data);
-
-  //     // Fetch transport providers
-  //     const transportRes = await axios.get(`${API_BASE_URL}/api/transport-providers/`, config);
-  //     setTransportProviders(transportRes.data);
-
-  //     // ✅ Fetch payment requests
-  //     await fetchPaymentRequests();
-  //   } catch (error) {
-  //     console.error('Error fetching data:', error);
-  //   }
-  // };
-
-  // // ✅ NEW: Fetch payment requests
-  // const fetchPaymentRequests = async () => {
-  //   setLoadingPayments(true);
-  //   try {
-  //     const config = getAuthConfig();
-
-  //     // Fetch mukkadam payment requests
-  //     const mukkadamPayRes = await axios.get(
-  //       `${API_BASE_URL_A}/ap/payment-requests/`,
-  //       config
-  //     );
-  //     setMukkadamPaymentRequests(mukkadamPayRes.data);
-
-  //     // Fetch transport payment requests
-  //     const transportPayRes = await axios.get(
-  //       `${API_BASE_URL_A}/ap/transport-payment-requests/`,
-  //       config
-  //     );
-  //     setTransportPaymentRequests(transportPayRes.data);
-  //   } catch (error) {
-  //     console.error('Error fetching payment requests:', error);
-  //   } finally {
-  //     setLoadingPayments(false);
-  //   }
-  // };
 
   // ✅ NEW: Mark mukkadam payment as paid
   const handleMarkMukkadamPaid = async (paymentRequestId: number) => {
@@ -1210,6 +1068,8 @@ const handleEditActivity = async (activity: any, jobId: string) => {
         updates: {
           activity_name: editFormData.activity_name,
           total_area: editFormData.total_area,
+          transport_cost:editFormData.transport_cost,
+          other_cost :editFormData.transport_cost,
           scheduled_datetime: editFormData.scheduled_date,
           total_price: editFormData.total_price,
           rate_per_acre: editFormData.rate_per_acre
@@ -1227,6 +1087,8 @@ const handleEditActivity = async (activity: any, jobId: string) => {
       total_area: 0,
       scheduled_date: '',
       total_price: 0,
+      transport_cost:0,
+      other_cost:0,
       rate_per_acre: 0
     });
     await refreshAllocations();
@@ -1447,7 +1309,7 @@ const handleSaveSuccess = async () => {
           </div>
 
           {/* Search Bar */}
-          {( activeTab === 'activity') && (
+          {/* {( activeTab === 'activity') && (
             <div className="p-4 border-b border-gray-200">
               <div className="relative">
                 <Search className="absolute left-3 top-3 text-gray-400" size={20} />
@@ -1464,7 +1326,7 @@ const handleSaveSuccess = async () => {
                 />
               </div>
             </div>
-          )}
+          )} */}
 
           {/* Tab Content */}
           <div className="p-6">
@@ -3726,264 +3588,378 @@ const handleSaveSuccess = async () => {
 
 {activeTab === 'activity' && (
   <div>
-    {/* Filter Bar */}
-    <div className="mb-6 flex flex-wrap gap-3">
-      <button
-        onClick={() => setActivityFilter('all')}
-        className={`px-4 py-2 rounded-lg font-medium transition ${
-          activityFilter === 'all'
-            ? 'bg-blue-600 text-white'
-            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-        }`}
-      >
-        All Activities ({filteredActivityLogs.length})
-      </button>
-      <button
-        onClick={() => setActivityFilter('allocation_created')}
-        className={`px-4 py-2 rounded-lg font-medium transition ${
-          activityFilter === 'allocation_created'
-            ? 'bg-green-600 text-white'
-            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-        }`}
-      >
-        <Plus size={16} className="inline mr-1" />
-        Allocations
-      </button>
-      <button
-        onClick={() => setActivityFilter('allocation_updated')}
-        className={`px-4 py-2 rounded-lg font-medium transition ${
-          activityFilter === 'allocation_updated'
-            ? 'bg-orange-600 text-white'
-            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-        }`}
-      >
-        <Edit size={16} className="inline mr-1" />
-        Reallocations
-      </button>
-      <button
-        onClick={() => setActivityFilter('payment')}
-        className={`px-4 py-2 rounded-lg font-medium transition ${
-          activityFilter === 'payment'
-            ? 'bg-purple-600 text-white'
-            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-        }`}
-      >
-        <DollarSign size={16} className="inline mr-1" />
-        Payments
-      </button>
+    {/* ✅ ENHANCED FILTER BAR WITH DATE */}
+    <div className="mb-6 space-y-4">
+      {/* Row 1: Activity Type Filter Buttons */}
+      <div className="flex flex-wrap gap-3">
+        <button
+          onClick={() => setActivityFilter('all')}
+          className={`px-4 py-2 rounded-lg font-medium transition ${
+            activityFilter === 'all'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          All Activities
+        </button>
+        <button
+          onClick={() => setActivityFilter('allocation_created')}
+          className={`px-4 py-2 rounded-lg font-medium transition ${
+            activityFilter === 'allocation_created'
+              ? 'bg-green-600 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          <Plus size={16} className="inline mr-1" />
+          Allocations
+        </button>
+        <button
+          onClick={() => setActivityFilter('allocation_updated')}
+          className={`px-4 py-2 rounded-lg font-medium transition ${
+            activityFilter === 'allocation_updated'
+              ? 'bg-orange-600 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          <Edit size={16} className="inline mr-1" />
+          Updates
+        </button>
+        <button
+          onClick={() => setActivityFilter('payment')}
+          className={`px-4 py-2 rounded-lg font-medium transition ${
+            activityFilter === 'payment'
+              ? 'bg-purple-600 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          <DollarSign size={16} className="inline mr-1" />
+          Payments
+        </button>
+      </div>
+
+      {/* Row 2: Search + Date Filter */}
+      <div className="flex gap-4">
+        {/* Search */}
+        <div className="flex-1 relative">
+          <Search className="absolute left-3 top-3 text-gray-400" size={18} />
+          <input
+            type="text"
+            placeholder="Search by job ID, mukkadam, or description..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+
+        {/* Date Filter */}
+        <div className="flex gap-2">
+          <input
+            type="date"
+            value={selectedFilterDate}
+            onChange={(e) => setSelectedFilterDate(e.target.value)}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          />
+          {selectedFilterDate && (
+            <button
+              onClick={() => setSelectedFilterDate('')}
+              className="px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 font-medium"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
     </div>
 
-    {filteredActivityLogs.length === 0 ? (
-      <div className="text-center py-12">
-        <Activity size={48} className="mx-auto text-gray-400 mb-4" />
-        <p className="text-gray-600">No activity logs found</p>
-      </div>
-    ) : (
-      <div className="space-y-3">
-        {filteredActivityLogs.map((log) => {
-          // Determine icon and color based on activity type
-          let icon, bgColor, borderColor, iconColor;
-          
-          switch (log.activity_type) {
-            case 'allocation_created':
-              icon = <Plus size={20} />;
-              bgColor = 'bg-green-50';
-              borderColor = 'border-green-500';
-              iconColor = 'text-green-600';
-              break;
-            case 'allocation_updated':
-              icon = <Edit size={20} />;
-              bgColor = 'bg-orange-50';
-              borderColor = 'border-orange-500';
-              iconColor = 'text-orange-600';
-              break;
-            case 'allocation_deleted':
-              icon = <X size={20} />;
-              bgColor = 'bg-red-50';
-              borderColor = 'border-red-500';
-              iconColor = 'text-red-600';
-              break;
-            case 'payment_requested':
-              icon = <DollarSign size={20} />;
-              bgColor = 'bg-yellow-50';
-              borderColor = 'border-yellow-500';
-              iconColor = 'text-yellow-600';
-              break;
-            case 'payment_paid':
-              icon = <CheckCircle size={20} />;
-              bgColor = 'bg-green-50';
-              borderColor = 'border-green-500';
-              iconColor = 'text-green-600';
-              break;
-            case 'payment_rejected':
-              icon = <Ban size={20} />;
-              bgColor = 'bg-red-50';
-              borderColor = 'border-red-500';
-              iconColor = 'text-red-600';
-              break;
-            case 'transport_payment_requested':
-              icon = <Truck size={20} />;
-              bgColor = 'bg-blue-50';
-              borderColor = 'border-blue-500';
-              iconColor = 'text-blue-600';
-              break;
-            case 'transport_payment_paid':
-              icon = <CheckCircle size={20} />;
-              bgColor = 'bg-teal-50';
-              borderColor = 'border-teal-500';
-              iconColor = 'text-teal-600';
-              break;
-            case 'transport_payment_rejected':
-              icon = <Ban size={20} />;
-              bgColor = 'bg-red-50';
-              borderColor = 'border-red-500';
-              iconColor = 'text-red-600';
-              break;
-            default:
-              icon = <Activity size={20} />;
-              bgColor = 'bg-gray-50';
-              borderColor = 'border-gray-500';
-              iconColor = 'text-gray-600';
-          }
+    {/* ✅ ACTIVITY LOGS LIST WITH EXPANDABLE CARDS */}
+    {(() => {
+      // Filter logs
+      const filtered = (Array.isArray(activityLogs) ? activityLogs : []).filter(log => {
+        // Date Filter
+        if (selectedFilterDate) {
+          const logDate = new Date(log.performed_at || log.timestamp).toISOString().split('T')[0];
+          if (logDate !== selectedFilterDate) return false;
+        }
 
-          return (
-            <div
-              key={log.id}
-              className={`${bgColor} p-4 rounded-xl border-l-4 ${borderColor} hover:shadow-md transition`}
-            >
-              <div className="flex items-start space-x-4">
-                {/* Icon */}
-                <div className={`w-12 h-12 rounded-full ${bgColor} flex items-center justify-center ${iconColor} flex-shrink-0 border-2 ${borderColor}`}>
-                  {icon}
-                </div>
+        // Search Filter
+        const searchLower = searchTerm.toLowerCase();
+        const matchesSearch = 
+          String(log.job_id || '').toLowerCase().includes(searchLower) ||
+          String(log.mukkadam_name || '').toLowerCase().includes(searchLower) ||
+          String(log.transport_name || '').toLowerCase().includes(searchLower) ||
+          String(log.performed_by_name || '').toLowerCase().includes(searchLower) ||
+          String(log.description || '').toLowerCase().includes(searchLower);
+        
+        if (!matchesSearch) return false;
+        
+        // Activity Type Filter
+        if (activityFilter === 'all') return true;
+        if (activityFilter === 'payment') {
+          return log.activity_type.includes('payment');
+        }
+        return log.activity_type === activityFilter;
+      });
 
-                {/* Content */}
-                <div className="flex-1">
-                  {/* Header */}
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center space-x-2">
-                      <span className={`px-3 py-1 ${bgColor} ${iconColor} rounded-full text-xs font-bold border ${borderColor}`}>
-                        {log.activity_type_display}
-                      </span>
-                      <span className="font-mono text-sm font-bold text-blue-600">
-                        {log.job_id}
-                      </span>
-                      {log.metadata?.activity_name && (
-                        <span className="text-sm text-gray-600">
-                          • {log.metadata.activity_name}
-                        </span>
-                      )}
+      if (filtered.length === 0) {
+        return (
+          <div className="text-center py-12">
+            <Activity size={48} className="mx-auto text-gray-400 mb-4" />
+            <p className="text-gray-600">No activity logs found</p>
+          </div>
+        );
+      }
+
+      return (
+        <div className="space-y-3">
+          {filtered.map((log) => {
+            const isExpanded = expandedActivities.has(log.id.toString());
+            
+            // Determine icon and colors
+            let icon, bgColor, borderColor, iconColor;
+            
+            switch (log.activity_type) {
+              case 'allocation_created':
+                icon = <Plus size={20} />;
+                bgColor = 'bg-green-50';
+                borderColor = 'border-green-500';
+                iconColor = 'text-green-600';
+                break;
+              case 'allocation_updated':
+              case 'activity_marked_edited':
+                icon = <Edit size={20} />;
+                bgColor = 'bg-orange-50';
+                borderColor = 'border-orange-500';
+                iconColor = 'text-orange-600';
+                break;
+              case 'activity_marked_lost':
+                icon = <Ban size={20} />;
+                bgColor = 'bg-red-50';
+                borderColor = 'border-red-500';
+                iconColor = 'text-red-600';
+                break;
+              case 'activity_marked_restored':
+                icon = <CheckCircle size={20} />;
+                bgColor = 'bg-green-50';
+                borderColor = 'border-green-500';
+                iconColor = 'text-green-600';
+                break;
+              case 'payment_requested':
+                icon = <DollarSign size={20} />;
+                bgColor = 'bg-yellow-50';
+                borderColor = 'border-yellow-500';
+                iconColor = 'text-yellow-600';
+                break;
+              case 'payment_paid':
+              case 'transport_payment_paid':
+                icon = <CheckCircle size={20} />;
+                bgColor = 'bg-green-50';
+                borderColor = 'border-green-500';
+                iconColor = 'text-green-600';
+                break;
+              case 'payment_rejected':
+              case 'transport_payment_rejected':
+                icon = <Ban size={20} />;
+                bgColor = 'bg-red-50';
+                borderColor = 'border-red-500';
+                iconColor = 'text-red-600';
+                break;
+              default:
+                icon = <Activity size={20} />;
+                bgColor = 'bg-gray-50';
+                borderColor = 'border-gray-500';
+                iconColor = 'text-gray-600';
+            }
+
+            // Extract changes for display
+            const hasChanges = log.changes && Object.keys(log.changes).length > 0;
+            const changedFields = hasChanges ? Object.keys(log.changes) : [];
+
+            return (
+              <div
+                key={log.id}
+                className={`${bgColor} rounded-xl border-l-4 ${borderColor} hover:shadow-md transition cursor-pointer`}
+                onClick={() => toggleActivity(log.id.toString())}
+              >
+                {/* ✅ COLLAPSED VIEW - Always Visible */}
+                <div className="p-4">
+                  <div className="flex items-start space-x-4">
+                    {/* Icon */}
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${bgColor} ${iconColor} border-2 ${borderColor}`}>
+                      {icon}
                     </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">
-                        {new Date(log.performed_at).toLocaleDateString('en-IN', {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
-                      </p>
+
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+                      {/* Header Row */}
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center space-x-2 flex-wrap">
+                          <span className={`px-2 py-1 ${bgColor} ${iconColor} rounded-full text-xs font-bold border ${borderColor}`}>
+                            {log.activity_type_display || log.activity_type?.replace(/_/g, ' ')}
+                          </span>
+                          <span className="font-mono text-sm font-bold text-blue-600">
+                            {log.job_id}
+                          </span>
+                          {log.metadata?.activity_name && (
+                            <span className="text-sm text-gray-600">
+                              • {log.metadata.activity_name}
+                            </span>
+                          )}
+                        </div>
+                        
+                        {/* Date + Expand Icon */}
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs text-gray-500">
+                            {new Date(log.timestamp || log.performed_at).toLocaleDateString('en-IN', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                          {isExpanded ? (
+                            <ChevronUp size={20} className={iconColor} />
+                          ) : (
+                            <ChevronDown size={20} className={iconColor} />
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Description */}
+                      <p className="text-sm text-gray-700 mb-2">{log.description}</p>
+
+                      {/* Quick Info Row */}
+                      <div className="flex items-center gap-4 text-xs text-gray-600">
+                        <span>👤 {log.performed_by_name || 'System'}</span>
+                        {log.mukkadam_name && log.mukkadam_name !== 'N/A (Job-level)' && (
+                          <span>🔧 {log.mukkadam_name}</span>
+                        )}
+                        {log.amount && (
+                          <span className={`font-bold ${iconColor}`}>
+                            ₹{log.amount.toLocaleString()}
+                          </span>
+                        )}
+                        {hasChanges && (
+                          <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">
+                            {changedFields.length} field{changedFields.length > 1 ? 's' : ''} changed
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
+                </div>
 
-                  {/* Description */}
-                  <p className="text-sm text-gray-700 mb-3">{log.description}</p>
-
-                  {/* ✅ CHANGES SECTION - NEW */}
-                  {log.formatted_changes && log.formatted_changes.length > 0 && (
-                    <div className="mb-3 p-3 bg-white rounded-lg border border-gray-200">
-                      <p className="text-xs font-bold text-gray-600 mb-2 flex items-center">
-                        <Edit size={12} className="mr-1" />
-                        Changes ({log.formatted_changes.length})
-                      </p>
-                      <div className="space-y-2">
-                        {log.formatted_changes.map((change, idx) => (
-                          <div key={idx} className="flex items-center text-xs">
-                            <span className="font-semibold text-gray-700 w-32">
-                              {change.label}:
-                            </span>
-                            <div className="flex items-center space-x-2 flex-1">
-                              {change.old_value !== null && change.old_value !== 'None' ? (
-                                <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through">
-                                  {change.old_value}
-                                </span>
-                              ) : (
-                                <span className="px-2 py-1 bg-gray-100 text-gray-500 rounded text-xs italic">
-                                  Not set
-                                </span>
-                              )}
-                              <span className="text-gray-400">→</span>
-                              {change.new_value !== null && change.new_value !== 'None' ? (
-                                <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold">
-                                  {change.new_value}
-                                </span>
-                              ) : (
-                                <span className="px-2 py-1 bg-gray-100 text-gray-500 rounded text-xs italic">
-                                  Removed
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Details Grid */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                    <div>
-                      <p className="text-gray-500">Mukkadam</p>
-                      <p className="font-semibold text-gray-900">{log.mukkadam_name}</p>
-                    </div>
-                    {log.transport_name && (
-                      <div>
-                        <p className="text-gray-500">Transport</p>
-                        <p className="font-semibold text-gray-900">{log.transport_name}</p>
-                      </div>
-                    )}
-                    {log.amount && (
-                      <div>
-                        <p className="text-gray-500">Amount</p>
-                        <p className={`font-bold ${iconColor}`}>
-                          ₹{log.amount.toLocaleString()}
+                {/* ✅ EXPANDED VIEW - Details Section */}
+                {isExpanded && (
+                  <div className="px-4 pb-4 border-t border-gray-200 pt-4 bg-white">
+                    {/* Admin: Show Reason */}
+                    {isAdmin && log.reason && (
+                      <div className="mb-4 p-3 bg-yellow-50 border-2 border-yellow-300 rounded-lg">
+                        <p className="text-xs font-bold text-yellow-800 mb-1 flex items-center">
+                          <AlertCircle size={14} className="mr-1" />
+                          Reason for Change (Admin Only)
+                        </p>
+                        <p className="text-sm text-yellow-900 font-medium">
+                          {log.reason}
                         </p>
                       </div>
                     )}
-                    <div>
-                      <p className="text-gray-500">By</p>
-                      <p className="font-semibold text-gray-900">{log.performed_by_name || 'System'}</p>
-                    </div>
-                  </div>
 
-                  {/* Rejection Reason */}
-                  {log.metadata?.rejection_reason && (
-                    <div className="mt-2 p-2 bg-red-100 rounded border border-red-300">
-                      <p className="text-xs text-red-700">
-                        <strong>Reason:</strong> {log.metadata.rejection_reason}
-                      </p>
+                    {/* Changes Section */}
+                    {hasChanges && (
+                      <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <p className="text-sm font-bold text-gray-800 mb-3 flex items-center">
+                          <Edit size={14} className="mr-2" />
+                          Changes Made ({changedFields.length})
+                        </p>
+
+                        <div className="space-y-3">
+                          {Object.entries(log.changes).map(([field, changeData]: [string, any]) => {
+                            const fieldLabel = field
+                              .replace(/_/g, ' ')
+                              .replace(/\b\w/g, (l) => l.toUpperCase());
+
+                            return (
+                              <div key={field} className="bg-white p-3 rounded border border-gray-200">
+                                {/* Admin: Show Full Details */}
+                                {isAdmin ? (
+                                  <>
+                                    <p className="text-xs font-semibold text-gray-700 mb-2">
+                                      {fieldLabel}
+                                    </p>
+                                    <div className="flex items-center gap-2 text-xs">
+                                      <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through">
+                                        {changeData.old_value || changeData.old || 'Not set'}
+                                      </span>
+                                      <span className="text-gray-400">→</span>
+                                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold">
+                                        {changeData.new_value || changeData.new}
+                                      </span>
+                                    </div>
+                                  </>
+                                ) : (
+                                  /* Non-Admin: Only Show Field Name */
+                                  <p className="text-sm font-medium text-gray-700">
+                                    {fieldLabel} was updated
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Full Details Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-gray-50 p-3 rounded">
+                      <div>
+                        <p className="text-gray-500 font-medium">Mukkadam</p>
+                        <p className="font-semibold text-gray-900">{log.mukkadam_name}</p>
+                      </div>
+                      {log.transport_name && (
+                        <div>
+                          <p className="text-gray-500 font-medium">Transport</p>
+                          <p className="font-semibold text-gray-900">{log.transport_name}</p>
+                        </div>
+                      )}
+                      {log.amount && (
+                        <div>
+                          <p className="text-gray-500 font-medium">Amount</p>
+                          <p className={`font-bold ${iconColor}`}>
+                            ₹{log.amount.toLocaleString()}
+                          </p>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-gray-500 font-medium">Performed By</p>
+                        <p className="font-semibold text-gray-900">
+                          {log.performed_by_name || 'System'}
+                        </p>
+                      </div>
                     </div>
-                  )}
-                  
-                  {/* View Allocation Button */}
-                  {log.allocation_id && (
-                    <button
-                      onClick={() => navigate(`/allocations/${log.allocation_id}`)}
-                      className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center"
-                    >
-                      <Eye size={12} className="mr-1" />
-                      View Allocation Details
-                    </button>
-                  )}
-                </div>
+
+                    {/* View Allocation Link */}
+                    {log.allocation_id && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/allocations/${log.allocation_id}`);
+                        }}
+                        className="mt-3 text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center"
+                      >
+                        <Eye size={12} className="mr-1" />
+                        View Allocation Details
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          );
-        })}
-      </div>
-    )}
+            );
+          })}
+        </div>
+      );
+    })()}
   </div>
 )}
-
 {activeTab === 'lost' && (
   <div>
     <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
@@ -4413,548 +4389,8 @@ const handleSaveSuccess = async () => {
     </div>
   </div>
 )}
-{/* 
-                                          {activeTab === 'analytics' && (
-                <div className="space-y-6">
-                    
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                 
-                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 border-2 border-blue-200">
-                        <h3 className="text-sm font-bold text-gray-700 mb-4">Job Status</h3>
-                        <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Fully Allocated</span>
-                            <span className="font-bold text-green-600">{allocatedJobs.length}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Partially Allocated</span>
-                            <span className="font-bold text-orange-600">{partiallyAllocatedJobs.length}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Pending</span>
-                            <span className="font-bold text-yellow-600">{pendingJobs.length}</span>
-                        </div>
-                        <div className="pt-2 border-t border-blue-300">
-                            <div className="flex justify-between items-center">
-                            <span className="text-xs font-bold text-gray-700">Total Jobs</span>
-                            <span className="text-xl font-bold text-blue-600">{jobs.length}</span>
-                            </div>
-                        </div>
-                        </div>
-                    </div>
 
-                    
-                    <div className="bg-gradient-to-br from-teal-50 to-cyan-50 rounded-xl p-6 border-2 border-teal-200">
-                        <h3 className="text-sm font-bold text-gray-700 mb-4">Workforce</h3>
-                        <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Active Workers</span>
-                            <span className="font-bold text-teal-600">{totalActiveWorkers}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Active Mukkadams</span>
-                            <span className="font-bold text-blue-600">{workerDetails.length}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Total Registered</span>
-                            <span className="font-bold text-indigo-600">{totalMukkadamsRegistered}</span>
-                        </div>
-                        <div className="pt-2 border-t border-teal-300">
-                            <div className="flex justify-between items-center">
-                            <span className="text-xs font-bold text-gray-700">Utilization</span>
-                            <span className="text-xl font-bold text-teal-600">
-                                {totalMukkadamsRegistered > 0 
-                                ? ((workerDetails.length / totalMukkadamsRegistered) * 100).toFixed(0)
-                                : 0}%
-                            </span>
-                            </div>
-                        </div>
-                        </div>
-                    </div>
-
-                   
-                    <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-6 border-2 border-purple-200">
-                        <h3 className="text-sm font-bold text-gray-700 mb-4">Financials</h3>
-                        <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Mukkadam Cost</span>
-                            <span className="font-bold text-green-600">₹{(stats.totalMukkadamPayout / 1000).toFixed(1)}K</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Transport Cost</span>
-                            <span className="font-bold text-orange-600">₹{(stats.totalTransportPayout / 1000).toFixed(1)}K</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Avg per Job</span>
-                            <span className="font-bold text-blue-600">
-                            ₹{allocations.length > 0 ? (stats.totalPayout / allocations.length).toFixed(0) : 0}
-                            </span>
-                        </div>
-                        <div className="pt-2 border-t border-purple-300">
-                            <div className="flex justify-between items-center">
-                            <span className="text-xs font-bold text-gray-700">Total Payout</span>
-                            <span className="text-xl font-bold text-purple-600">₹{(stats.totalPayout / 1000).toFixed(1)}K</span>
-                            </div>
-                        </div>
-                        </div>
-                    </div>
-
-                    
-                    <div className="bg-gradient-to-br from-amber-50 to-yellow-50 rounded-xl p-6 border-2 border-amber-200">
-                        <h3 className="text-sm font-bold text-gray-700 mb-4">Efficiency</h3>
-                        <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Completion Rate</span>
-                            <span className="font-bold text-green-600">
-                            {jobs.length > 0 ? ((allocatedJobs.length / jobs.length) * 100).toFixed(0) : 0}%
-                            </span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Avg Workers/Job</span>
-                            <span className="font-bold text-blue-600">
-                            {allocations.filter(a => a.crew_size).length > 0
-                                ? (allocations.reduce((sum, a) => sum + (a.crew_size || 0), 0) / 
-                                allocations.filter(a => a.crew_size).length).toFixed(1)
-                                : 'N/A'}
-                            </span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Total Allocations</span>
-                            <span className="font-bold text-purple-600">{allocations.length}</span>
-                        </div>
-                        <div className="pt-2 border-t border-amber-300">
-                            <div className="flex justify-between items-center">
-                            <span className="text-xs font-bold text-gray-700">Complex Jobs</span>
-                            <span className="text-xl font-bold text-amber-600">
-                                {jobs.filter(j => j.is_complex).length}
-                            </span>
-                            </div>
-                        </div>
-                        </div>
-                    </div>
-                    </div>
-
-                    
-                    {jobs.filter(j => j.is_complex).length > 0 && (
-                    <div className="bg-white rounded-xl shadow-lg border border-purple-200 overflow-hidden">
-                        <button
-                        onClick={() => toggleSection('complexJobs')}
-                        className="w-full px-6 py-4 flex items-center justify-between hover:bg-purple-50 transition"
-                        >
-                        <h3 className="text-xl font-bold text-gray-900 flex items-center">
-                            <Layers className="mr-2 text-purple-600" />
-                            Complex Jobs Progress ({jobs.filter(j => j.is_complex).length} jobs)
-                        </h3>
-                        <div className="flex items-center space-x-2">
-                            <span className="text-sm text-gray-500">
-                            {expandedSections.complexJobs ? 'Click to collapse' : 'Click to expand'}
-                            </span>
-                            {expandedSections.complexJobs ? (
-                            <ChevronUp className="text-purple-600" size={24} />
-                            ) : (
-                            <ChevronDown className="text-purple-600" size={24} />
-                            )}
-                        </div>
-                        </button>
-                        
-                        {expandedSections.complexJobs && (
-                        <div className="p-6 border-t border-gray-200 space-y-4 animate-fadeIn">
-                            {jobs.filter(j => j.is_complex).map(job => {
-                            if (!job.activities) return null;
-                            const totalActivities = job.activities.length;
-                            const fullyAllocated = job.activities.filter(a => a.is_fully_allocated).length;
-                            const partiallyAllocated = job.activities.filter(a => a.allocated_area > 0 && !a.is_fully_allocated).length;
-                            const pending = totalActivities - fullyAllocated - partiallyAllocated;
-                            const completionRate = (fullyAllocated / totalActivities) * 100;
-                            
-                            return (
-                                <div key={job.id} className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                                <div className="flex justify-between items-start mb-3">
-                                    <div>
-                                    <span className="font-mono text-sm font-bold text-blue-600">{job.work_id}</span>
-                                    <p className="text-sm text-gray-700 mt-1">{job.title}</p>
-                                    </div>
-                                    <div className="text-right">
-                                    <p className="text-2xl font-bold text-purple-600">{completionRate.toFixed(0)}%</p>
-                                    <p className="text-xs text-gray-500">Complete</p>
-                                    </div>
-                                </div>
-                                
-                                <div className="mb-3">
-                                    <div className="bg-gray-200 rounded-full h-6 overflow-hidden">
-                                    <div className="h-full flex">
-                                        <div 
-                                        className="bg-green-500 flex items-center justify-center text-xs text-white font-semibold"
-                                        style={{ width: `${(fullyAllocated / totalActivities) * 100}%` }}
-                                        >
-                                        {fullyAllocated > 0 && fullyAllocated}
-                                        </div>
-                                        <div 
-                                        className="bg-yellow-500 flex items-center justify-center text-xs text-white font-semibold"
-                                        style={{ width: `${(partiallyAllocated / totalActivities) * 100}%` }}
-                                        >
-                                        {partiallyAllocated > 0 && partiallyAllocated}
-                                        </div>
-                                        <div 
-                                        className="bg-gray-400 flex items-center justify-center text-xs text-white font-semibold"
-                                        style={{ width: `${(pending / totalActivities) * 100}%` }}
-                                        >
-                                        {pending > 0 && pending}
-                                        </div>
-                                    </div>
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-3 gap-3 text-xs">
-                                    <div className="flex items-center">
-                                    <div className="w-3 h-3 bg-green-500 rounded mr-2"></div>
-                                    <span className="text-gray-600">Allocated: <strong>{fullyAllocated}</strong></span>
-                                    </div>
-                                    <div className="flex items-center">
-                                    <div className="w-3 h-3 bg-yellow-500 rounded mr-2"></div>
-                                    <span className="text-gray-600">Partial: <strong>{partiallyAllocated}</strong></span>
-                                    </div>
-                                    <div className="flex items-center">
-                                    <div className="w-3 h-3 bg-gray-400 rounded mr-2"></div>
-                                    <span className="text-gray-600">Pending: <strong>{pending}</strong></span>
-                                    </div>
-                                </div>
-                                </div>
-                            );
-                            })}
-                        </div>
-                        )}
-                    </div>
-                    )}
-
-                    {(() => {
-                    const activityStats: Record<string, {count: number, totalArea: number, totalWorkers: number, totalCost: number}> = {};
-                    
-                    jobs.filter(j => j.is_complex && j.activities).forEach(job => {
-                        job.activities!.forEach(activity => {
-                        if (!activityStats[activity.activity_name]) {
-                            activityStats[activity.activity_name] = {
-                            count: 0,
-                            totalArea: 0,
-                            totalWorkers: 0,
-                            totalCost: 0
-                            };
-                        }
-                        activityStats[activity.activity_name].count += 1;
-                        activityStats[activity.activity_name].totalArea += activity.total_area;
-                        
-                        if (activity.allocations) {
-                            activity.allocations.forEach((alloc: any) => {
-                            activityStats[activity.activity_name].totalWorkers += alloc.crew_size || 0;
-                            activityStats[activity.activity_name].totalCost += (alloc.mukkadam_price || 0) + (alloc.transport_price || 0);
-                            });
-                        }
-                        });
-                    });
-
-                    const sortedActivities = Object.entries(activityStats).sort(([, a], [, b]) => b.count - a.count);
-
-                    if (sortedActivities.length === 0) return null;
-
-                    return (
-                        <div className="bg-white rounded-xl shadow-lg border border-green-200 overflow-hidden">
-                        <button
-                            onClick={() => toggleSection('activityTypes')}
-                            className="w-full px-6 py-4 flex items-center justify-between hover:bg-green-50 transition"
-                        >
-                            <h3 className="text-xl font-bold text-gray-900 flex items-center">
-                            <Activity className="mr-2 text-green-600" />
-                            Activity Type Analytics ({sortedActivities.length} types)
-                            </h3>
-                            <div className="flex items-center space-x-2">
-                            <span className="text-sm text-gray-500">
-                                {expandedSections.activityTypes ? 'Click to collapse' : 'Click to expand'}
-                            </span>
-                            {expandedSections.activityTypes ? (
-                                <ChevronUp className="text-green-600" size={24} />
-                            ) : (
-                                <ChevronDown className="text-green-600" size={24} />
-                            )}
-                            </div>
-                        </button>
-                        
-                        {expandedSections.activityTypes && (
-                            <div className="p-6 border-t border-gray-200 animate-fadeIn">
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full">
-                                <thead className="bg-gray-50">
-                                    <tr>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Count</th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Area</th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Workers</th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Cost</th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Avg Cost/Acre</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {sortedActivities.map(([activityName, stats]) => (
-                                    <tr key={activityName} className="hover:bg-gray-50">
-                                        <td className="px-4 py-3 text-sm font-semibold text-gray-900">{activityName}</td>
-                                        <td className="px-4 py-3">
-                                        <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-semibold">
-                                            {stats.count}
-                                        </span>
-                                        </td>
-                                        <td className="px-4 py-3 text-sm font-semibold text-gray-700">
-                                        {stats.totalArea.toFixed(1)} acres
-                                        </td>
-                                        <td className="px-4 py-3 text-sm font-bold text-teal-600">
-                                        {stats.totalWorkers} workers
-                                        </td>
-                                        <td className="px-4 py-3 text-sm font-bold text-purple-600">
-                                        ₹{stats.totalCost.toLocaleString()}
-                                        </td>
-                                        <td className="px-4 py-3 text-sm font-semibold text-green-600">
-                                        ₹{stats.totalArea > 0 ? (stats.totalCost / stats.totalArea).toFixed(0) : 0}/acre
-                                        </td>
-                                    </tr>
-                                    ))}
-                                </tbody>
-                                </table>
-                            </div>
-                            </div>
-                        )}
-                        </div>
-                    );
-                    })()}
-
-                   
-                    {(() => {
-                    const crewSizeDistribution: Record<string, number> = {
-                        '1-5': 0,
-                        '6-10': 0,
-                        '11-15': 0,
-                        '16-20': 0,
-                        '21+': 0
-                    };
-
-                    allocations.forEach(a => {
-                        if (!a.crew_size) return;
-                        const size = a.crew_size;
-                        if (size <= 5) crewSizeDistribution['1-5']++;
-                        else if (size <= 10) crewSizeDistribution['6-10']++;
-                        else if (size <= 15) crewSizeDistribution['11-15']++;
-                        else if (size <= 20) crewSizeDistribution['16-20']++;
-                        else crewSizeDistribution['21+']++;
-                    });
-
-                    const maxCount = Math.max(...Object.values(crewSizeDistribution));
-
-                    return (
-                        <div className="bg-white rounded-xl shadow-lg border border-indigo-200 overflow-hidden">
-                        <button
-                            onClick={() => toggleSection('crewDistribution')}
-                            className="w-full px-6 py-4 flex items-center justify-between hover:bg-indigo-50 transition"
-                        >
-                            <h3 className="text-xl font-bold text-gray-900 flex items-center">
-                            <Users className="mr-2 text-indigo-600" />
-                            Crew Size Distribution
-                            </h3>
-                            <div className="flex items-center space-x-2">
-                            <span className="text-sm text-gray-500">
-                                {expandedSections.crewDistribution ? 'Click to collapse' : 'Click to expand'}
-                            </span>
-                            {expandedSections.crewDistribution ? (
-                                <ChevronUp className="text-indigo-600" size={24} />
-                            ) : (
-                                <ChevronDown className="text-indigo-600" size={24} />
-                            )}
-                            </div>
-                        </button>
-                        
-                        {expandedSections.crewDistribution && (
-                            <div className="p-6 border-t border-gray-200 animate-fadeIn">
-                            <div className="space-y-3">
-                                {Object.entries(crewSizeDistribution).map(([range, count]) => (
-                                <div key={range} className="flex items-center">
-                                    <span className="text-sm font-medium text-gray-700 w-24">{range} workers</span>
-                                    <div className="flex-1 mx-4">
-                                    <div className="bg-gray-200 rounded-full h-8 overflow-hidden">
-                                        <div
-                                        className="bg-gradient-to-r from-indigo-500 to-purple-600 h-full flex items-center justify-end pr-3"
-                                        style={{ 
-                                            width: maxCount > 0 ? `${(count / maxCount) * 100}%` : '0%',
-                                            minWidth: count > 0 ? '40px' : '0px'
-                                        }}
-                                        >
-                                        {count > 0 && (
-                                            <span className="text-white text-sm font-bold">{count}</span>
-                                        )}
-                                        </div>
-                                    </div>
-                                    </div>
-                                    <span className="text-sm text-gray-600 w-20 text-right">
-                                    {allocations.filter(a => a.crew_size).length > 0
-                                        ? ((count / allocations.filter(a => a.crew_size).length) * 100).toFixed(0)
-                                        : 0}%
-                                    </span>
-                                </div>
-                                ))}
-                            </div>
-                            </div>
-                        )}
-                        </div>
-                    );
-                    })()}
-
-                    
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    
-                    <div className="bg-white rounded-xl shadow-lg p-6">
-                        <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
-                        <TrendingUp className="mr-2 text-green-600" />
-                        7-Day Allocation Trend
-                        </h3>
-                        <div className="space-y-3">
-                        {dailyStats.slice(0, 7).reverse().map((stat) => (
-                            <div key={stat.date} className="flex items-center">
-                            <span className="text-sm text-gray-600 w-20">
-                                {new Date(stat.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
-                            </span>
-                            <div className="flex-1 mx-4">
-                                <div className="bg-gray-200 rounded-full h-8 overflow-hidden">
-                                <div
-                                    className="bg-gradient-to-r from-blue-500 to-blue-600 h-full flex items-center justify-end pr-2"
-                                    style={{
-                                    width: `${dailyStats.length > 0 ? (stat.total_allocations / Math.max(...dailyStats.map(s => s.total_allocations))) * 100 : 0}%`,
-                                    minWidth: '40px'
-                                    }}
-                                >
-                                    <span className="text-white text-xs font-bold">{stat.total_allocations}</span>
-                                </div>
-                                </div>
-                            </div>
-                            <span className="text-sm font-bold text-purple-600 w-24 text-right">
-                                ₹{((stat.total_mukkadam_price + stat.total_transport_price) / 1000).toFixed(1)}K
-                            </span>
-                            </div>
-                        ))}
-                        </div>
-                    </div>
-
-                    
-                    <div className="bg-white rounded-xl shadow-lg p-6">
-                        <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
-                        <BarChart3 className="mr-2 text-purple-600" />
-                        Top Allocators (Last 7 Days)
-                        </h3>
-                        {(() => {
-                        const userTotals: Record<string, number> = {};
-                        dailyStats.slice(0, 7).forEach(stat => {
-                            Object.entries(stat.allocations_by_user).forEach(([user, count]) => {
-                            userTotals[user] = (userTotals[user] || 0) + count;
-                            });
-                        });
-                        
-                        const sortedUsers = Object.entries(userTotals)
-                            .sort(([, a], [, b]) => b - a)
-                            .slice(0, 5);
-                        
-                        const maxCount = sortedUsers.length > 0 ? Math.max(...sortedUsers.map(([, count]) => count)) : 1;
-                        
-                        return (
-                            <div className="space-y-3">
-                            {sortedUsers.length > 0 ? (
-                                sortedUsers.map(([user, count], index) => (
-                                <div key={user} className="flex items-center">
-                                    <span className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center font-bold text-sm">
-                                    {index + 1}
-                                    </span>
-                                    <span className="text-sm font-medium text-gray-700 ml-3 w-24">{user}</span>
-                                    <div className="flex-1 mx-4">
-                                    <div className="bg-gray-200 rounded-full h-8 overflow-hidden">
-                                        <div
-                                        className="bg-gradient-to-r from-purple-500 to-purple-600 h-full flex items-center justify-end pr-2"
-                                        style={{ width: `${(count / maxCount) * 100}%`, minWidth: '40px' }}
-                                        >
-                                        <span className="text-white text-xs font-bold">{count}</span>
-                                        </div>
-                                    </div>
-                                    </div>
-                                </div>
-                                ))
-                            ) : (
-                                <p className="text-gray-500 text-center py-8">No allocation data available</p>
-                            )}
-                            </div>
-                        );
-                        })()}
-                    </div>
-                    </div>
-
-                    
-                    <div className="bg-white rounded-xl shadow-lg">
-                    <div className="px-6 py-4 border-b border-gray-200">
-                        <h2 className="text-xl font-bold text-gray-900 flex items-center">
-                        <Calendar className="mr-3 text-blue-600" />
-                        Day-wise Allocation Statistics
-                        </h2>
-                    </div>
-                    <div className="overflow-x-auto">
-                        <table className="min-w-full">
-                        <thead className="bg-gray-50">
-                            <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Allocations</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam Cost</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport Cost</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Cost</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Allocated By</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {dailyStats.slice(0, 30).map((stat) => (
-                            <tr key={stat.date} className="hover:bg-gray-50">
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                                {new Date(stat.date).toLocaleDateString('en-IN', {
-                                    year: 'numeric',
-                                    month: 'short',
-                                    day: 'numeric',
-                                    weekday: 'short'
-                                })}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap">
-                                <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-semibold">
-                                    {stat.total_allocations}
-                                </span>
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-green-600">
-                                ₹{stat.total_mukkadam_price.toLocaleString()}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-orange-600">
-                                ₹{stat.total_transport_price.toLocaleString()}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-purple-600">
-                                ₹{(stat.total_mukkadam_price + stat.total_transport_price).toLocaleString()}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                <div className="flex flex-wrap gap-2">
-                                    {Object.entries(stat.allocations_by_user).map(([user, count]) => (
-                                    <span
-                                        key={user}
-                                        className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-medium"
-                                    >
-                                        {user}: {count}
-                                    </span>
-                                    ))}
-                                </div>
-                                </td>
-                            </tr>
-                            ))}
-                        </tbody>
-                        </table>
-                    </div>
-                    </div>
-
-                </div>
-                )}  */}
+                           
           </div>
         </div>
 
