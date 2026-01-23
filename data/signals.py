@@ -14,21 +14,24 @@ _thread_locals = threading.local()
 def get_mukkadam_name(mukkadam_id):
     """Fetch mukkadam name from supply service"""
     try:
+        # REMOVED the '$' before {SUPPLY_API_URL}
         response = requests.get(
-            f'${SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-            timeout=2
+            f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/', 
+            timeout=5 # Reduced timeout (70s is too long for a signal)
         )
         if response.status_code == 200:
             return response.json().get('mukkadam_name', f'Mukkadam #{mukkadam_id}')
-    except:
+        else:
+            print(f"Error fetching Mukkadam: Status {response.status_code}") # Debug print
+    except Exception as e:
+        print(f"Exception fetching Mukkadam: {str(e)}") # Print the actual error
         pass
     return f'Mukkadam #{mukkadam_id}'
-
 def get_transport_provider_name(provider_id):
     """Fetch transport provider name from supply service"""
     try:
         response = requests.get(
-            f'${SUPPLY_API_URL}/api/transport-providers/{provider_id}/',
+            f'{SUPPLY_API_URL}/api/transport-providers/{provider_id}/',
             timeout=2
         )
         if response.status_code == 200:

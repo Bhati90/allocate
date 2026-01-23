@@ -190,6 +190,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
         print(f"Raw data: {request.data}")
 
         activity_id = request.data.get('activity_id')
+        job_id = request.data.get('job_id')
 
         if not activity_id:
             return Response(
@@ -202,54 +203,115 @@ class AllocationViewSet(viewsets.ModelViewSet):
             job_activity = JobActivity.objects.filter(pk=activity_id).first()
 
             # If not found, try to find by job_id + activity_id (external ID)
-            if not job_activity:
+            if not job_activity and job_id:
                 print(f"⚠️ JobActivity with pk={activity_id} not found, checking by external ID...")
-
-                # Get job_id from request or from activity
-                job_id = request.data.get('job_id')
-
-                if not job_id:
-                    # Try to extract from the activity_id itself if it's a string like "job123_activity456"
-                    # Or fetch from external API
-                    return Response(
-                        {'error': 'JobActivity not found in database. Please provide job_id to auto-create.'},
-                        status=status.HTTP_404_NOT_FOUND
-                    )
-
-                # Try to find by job_id and external activity_id
+                
                 job_activity = JobActivity.objects.filter(
                     job_id=str(job_id),
                     activity_id=str(activity_id)
                 ).first()
 
                 if not job_activity:
-                    print(f"🔨 Creating new JobActivity for job_id={job_id}, activity_id={activity_id}")
+                    print(f"🔨 JobActivity not in DB. Fetching from external API...")
+                    
+                    # ✅ FETCH FULL JOB DATA FROM EXTERNAL API
+                    try:
+                        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+                        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
+                        
+                        response = requests.get(
+                            api_url,
+                            headers={'Authorization': token},
+                            timeout=30
+                        )
+                        response.raise_for_status()
+                        response_data = response.json()
+                        
+                        # Extract jobs list
+                        if isinstance(response_data, dict):
+                            jobs_from_api = response_data.get('data', response_data.get('results', [response_data]))
+                        else:
+                            jobs_from_api = response_data
+                        
+                        # Find the specific job
+                        target_job = None
+                        for job in jobs_from_api:
+                            if str(job.get('work_id') or job.get('id')) == str(job_id):
+                                target_job = job
+                                break
+                        
+                        if not target_job:
+                            return Response(
+                                {'error': f'Job {job_id} not found in external API'},
+                                status=status.HTTP_404_NOT_FOUND
+                            )
+                        
+                        # Find the specific activity
+                        target_activity = None
+                        for activity in target_job.get('activities', []):
+                            if str(activity.get('id') or activity.get('activity_id')) == str(activity_id):
+                                target_activity = activity
+                                break
+                        
+                        if not target_activity:
+                            return Response(
+                                {'error': f'Activity {activity_id} not found in job {job_id}'},
+                                status=status.HTTP_404_NOT_FOUND
+                            )
+                        
+                        # ✅ CREATE JobActivity with REAL DATA from API
+                        from datetime import datetime
+                        scheduled_date = target_activity.get('date_time') or target_activity.get('scheduled_date')
+                        if scheduled_date and isinstance(scheduled_date, str):
+                            try:
+                                scheduled_datetime = datetime.fromisoformat(scheduled_date.replace('Z', '+00:00'))
+                            except:
+                                scheduled_datetime = timezone.now()
+                        else:
+                            scheduled_datetime = timezone.now()
+                        
+                        total_area = Decimal(str(target_activity.get('acres', 0)))
+                        total_price = Decimal(str(target_activity.get('total_price', 0)))
+                        transport_cost = Decimal(str(target_activity.get('transport_cost', 0)))
+                        other_cost = Decimal(str(target_activity.get('other_cost', 0)))
+                        subtotal = total_price + transport_cost + other_cost
+                        rate_per_acre = total_price / total_area if total_area > 0 else Decimal('0')
+                        
+                        job_activity = JobActivity.objects.create(
+                            job_id=str(job_id),
+                            activity_id=str(activity_id),
+                            activity_name=target_activity.get('activity_name', 'Unknown Activity'),
+                            activity_type=target_activity.get('activity_type', ''),
+                            scheduled_datetime=scheduled_datetime,
+                            total_area=total_area,  # ✅ FROM API
+                            total_price=total_price,  # ✅ FROM API
+                            transport_cost=transport_cost,  # ✅ FROM API
+                            other_cost=other_cost,  # ✅ FROM API
+                            subtotal=subtotal,  # ✅ CALCULATED
+                            location=target_activity.get('location', ''),
+                            estimated_workers=int(target_activity.get('estimated_workers', 10)),
+                            rate_per_acre=rate_per_acre  # ✅ CALCULATED
+                        )
+                        
+                        print(f"✅ Created JobActivity #{job_activity.id} from API data")
+                        print(f"   Total Area: {total_area} acres")
+                        print(f"   Total Price: ₹{total_price}")
+                        print(f"   Rate: ₹{rate_per_acre}/acre")
+                        
+                    except requests.exceptions.RequestException as e:
+                        return Response(
+                            {'error': f'Failed to fetch activity from external API: {str(e)}'},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE
+                        )
+                    except Exception as e:
+                        print(f"❌ Error creating JobActivity from API: {str(e)}")
+                        return Response(
+                            {'error': f'Error processing activity: {str(e)}'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                        )
 
-                    # Create JobActivity from request data
-                    job_activity = JobActivity.objects.create(
-                        job_id=str(job_id),
-                        activity_id=str(activity_id),
-                        activity_name=request.data.get('activity_name', 'Unknown Activity'),
-                        activity_type=request.data.get('activity_type', ''),
-                        scheduled_datetime=request.data.get('scheduled_datetime') or timezone.now(),
-                        total_area=Decimal(str(request.data.get('total_area', 0))),
-                        total_price=Decimal(str(request.data.get('total_price', 0))),
-                        transport_cost=Decimal(str(request.data.get('transport_cost', 0))),
-                        other_cost=Decimal(str(request.data.get('other_cost', 0))),
-                        subtotal=Decimal(str(request.data.get('subtotal', 0))),
-                        location=request.data.get('location', ''),
-                        estimated_workers=int(request.data.get('estimated_workers', 10)),
-                        rate_per_acre=Decimal(str(request.data.get('rate_per_acre', 0)))
-                    )
-                    print(f"✅ Created JobActivity #{job_activity.id}")
+                print(f"✅ Found/Created Activity: {job_activity.activity_name} ({job_activity.total_area} acres)")
 
-            print(f"✅ Found/Created Activity: {job_activity.activity_name} ({job_activity.total_area} acres)")
-
-        except JobActivity.DoesNotExist:
-            return Response(
-                {'error': f'Activity with id {activity_id} not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
         except Exception as e:
             print(f"❌ Error finding/creating JobActivity: {str(e)}")
             return Response(
@@ -259,9 +321,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
         # Prepare data
         data = request.data.copy()
-        data['job_activity'] = job_activity.id  # Use the database ID
+        data['job_activity'] = job_activity.id
         data.pop('activity_id', None)
-        data.pop('job_id', None)  # Remove these since we've processed them
+        data.pop('job_id', None)
 
         # Convert to Decimal for comparison
         allocated_area = Decimal(str(data.get('allocated_area', 0)))
@@ -292,7 +354,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
         job_activity.allocated_area = job_activity.allocated_area + allocated_area
         job_activity.save()
 
-        # 3. ✅ NEW: Trigger WhatsApp Notifications
+        # Send WhatsApp notifications
         self._send_whatsapp_notifications(allocation)
         
         print("="*80)
@@ -313,7 +375,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED
         )
-
     def _send_whatsapp_notifications(self, allocation):
         """Helper to trigger notifications for Mukkadam and Transporter"""
         try:
@@ -1149,6 +1210,10 @@ def allocations_by_mobile(request):
 
 # views.py - REMOVE THE MUKKADAM IMPORT
 # from .models import JobActivity, Allocation, AllocationStats, Mukkadam  # ❌ WRONG
+# allocation/views.py
+
+# allocation/views.py
+# allocation/views.py
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -1165,8 +1230,14 @@ def activity_logs_list(request):
     mukkadam_id = request.query_params.get('mukkadam_id')
     job_id = request.query_params.get('job_id')
     days = request.query_params.get('days', 30)  # Default last 30 days
+    limit = request.query_params.get('limit')  # ✅ NEW: Optional limit
 
     print(f"🔍 Filters: activity_type={activity_type}, mukkadam_id={mukkadam_id}, job_id={job_id}, days={days}")
+
+    # ✅ CHECK IF USER IS ADMIN
+    is_admin = request.user.is_authenticated and (
+        getattr(request.user, 'is_admin', False) or request.user.is_superuser
+    )
 
     # Build queryset
     queryset = ActivityLog.objects.all()
@@ -1183,15 +1254,24 @@ def activity_logs_list(request):
         from_date = timezone.now() - timedelta(days=int(days))
         queryset = queryset.filter(performed_at__gte=from_date)
 
-    queryset = queryset.select_related('performed_by').order_by('-performed_at')[:200]  # Limit to last 200
+    queryset = queryset.select_related('performed_by').order_by('-performed_at')
+    
+    # ✅ APPLY LIMIT ONLY IF SPECIFIED
+    if limit:
+        try:
+            limit_int = int(limit)
+            queryset = queryset[:limit_int]
+        except ValueError:
+            pass  # Ignore invalid limit
+    # ✅ NO DEFAULT LIMIT - Returns ALL logs
 
     # Convert to list to iterate multiple times
     logs_queryset = list(queryset)
 
-    print(f"📊 Found {len(logs_queryset)} activity logs")
+    print(f"📊 Found {len(logs_queryset)} activity logs (Admin: {is_admin})")
 
     if not logs_queryset:
-        return Response([])
+        return Response({'count': 0, 'logs': []})
 
     # ========================================
     # ✅ STEP 1: COLLECT ALL UNIQUE IDs
@@ -1253,7 +1333,7 @@ def activity_logs_list(request):
             else:
                 transport_name = f'Provider #{log.transport_provider_id}'
 
-        logs.append({
+        log_data = {
             'id': log.id,
             'activity_type': log.activity_type,
             'activity_type_display': log.get_activity_type_display(),
@@ -1263,12 +1343,21 @@ def activity_logs_list(request):
             'mukkadam_name': mukkadam_name,
             'transport_provider_id': log.transport_provider_id,
             'transport_name': transport_name,
-            'transport_details': transport_details,  # ✅ Full transport provider details
+            'transport_details': transport_details,
             'amount': float(log.amount) if log.amount else None,
             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
             'performed_at': log.performed_at.isoformat(),
             'metadata': log.metadata,
-        })
+            'changes': log.changes,  # ✅ Include changes for frontend
+            'formatted_changes': format_changes_for_display(log.changes),  # ✅ Helper
+        }
+
+        # ✅ ADMIN-ONLY: Include reason field
+        if is_admin:
+            reason = log.metadata.get('reason')
+            log_data['reason'] = reason  # ✅ Only admins see this
+
+        logs.append(log_data)
 
     total_elapsed = time.time() - start_time
     print(f"\n✅ Activity logs API completed in {total_elapsed:.2f}s")
@@ -1279,6 +1368,7 @@ def activity_logs_list(request):
     return Response({
         'count': len(logs),
         'logs': logs,
+        'is_admin': is_admin,  # ✅ Tell frontend if user is admin
         'performance': {
             'total_time': f'{total_elapsed:.2f}s',
             'batch_fetch_time': f'{batch_elapsed:.2f}s',
@@ -1286,6 +1376,211 @@ def activity_logs_list(request):
             'providers_fetched': len(transport_providers_cache)
         }
     })
+
+
+# ✅ HELPER FUNCTION: Format changes for display
+def format_changes_for_display(changes):
+    """Convert changes dict to user-friendly format"""
+    if not changes:
+        return []
+    
+    formatted = []
+    field_labels = {
+        'activity_name': 'Activity Name',
+        'total_area': 'Total Area',
+        'scheduled_datetime': 'Scheduled Date',
+        'total_price': 'Mukkadam Price',
+        'transport_cost': 'Transport Cost',
+        'other_cost': 'Other Cost',
+        'subtotal': 'Total Price',
+        'rate_per_acre': 'Rate/Acre',
+        'mukkadam_id': 'Mukkadam',
+        'transport_provider_id': 'Transport Provider',
+    }
+    
+    for field, change_data in changes.items():
+        if isinstance(change_data, dict):
+            old_val = change_data.get('old_value', change_data.get('old'))
+            new_val = change_data.get('new_value', change_data.get('new'))
+            
+            formatted.append({
+                'field': field,
+                'label': field_labels.get(field, field.replace('_', ' ').title()),
+                'old_value': old_val,
+                'new_value': new_val,
+            })
+    
+    return formatted
+
+# ✅ HELPER FUNCTION: Format changes for display
+def format_changes_for_display(changes):
+    """Convert changes dict to user-friendly format"""
+    if not changes:
+        return []
+    
+    formatted = []
+    field_labels = {
+        'activity_name': 'Activity Name',
+        'total_area': 'Total Area',
+        'scheduled_datetime': 'Scheduled Date',
+        'total_price': 'Mukkadam Price',
+        'transport_cost': 'Transport Cost',
+        'other_cost': 'Other Cost',
+        'subtotal': 'Total Price',
+        'rate_per_acre': 'Rate/Acre',
+        'mukkadam_id': 'Mukkadam',
+        'transport_provider_id': 'Transport Provider',
+    }
+    
+    for field, change_data in changes.items():
+        if isinstance(change_data, dict):
+            old_val = change_data.get('old_value', change_data.get('old'))
+            new_val = change_data.get('new_value', change_data.get('new'))
+            
+            formatted.append({
+                'field': field,
+                'label': field_labels.get(field, field.replace('_', ' ').title()),
+                'old_value': old_val,
+                'new_value': new_val,
+            })
+    
+    return formatted
+# @api_view(['GET'])
+# @permission_classes([AllowAny])
+# def activity_logs_list(request):
+#     """
+#     Get all activity logs with external data enriched
+#     OPTIMIZED with caching + async
+#     """
+#     import time
+#     start_time = time.time()
+
+#     # Get query parameters
+#     activity_type = request.query_params.get('activity_type')
+#     mukkadam_id = request.query_params.get('mukkadam_id')
+#     job_id = request.query_params.get('job_id')
+#     days = request.query_params.get('days', 30)  # Default last 30 days
+
+#     print(f"🔍 Filters: activity_type={activity_type}, mukkadam_id={mukkadam_id}, job_id={job_id}, days={days}")
+
+#     # Build queryset
+#     queryset = ActivityLog.objects.all()
+
+#     if activity_type:
+#         queryset = queryset.filter(activity_type=activity_type)
+#     if mukkadam_id:
+#         queryset = queryset.filter(mukkadam_id=mukkadam_id)
+#     if job_id:
+#         queryset = queryset.filter(job_id=job_id)
+
+#     # Filter by date range
+#     if days:
+#         from_date = timezone.now() - timedelta(days=int(days))
+#         queryset = queryset.filter(performed_at__gte=from_date)
+
+#     queryset = queryset.select_related('performed_by').order_by('-performed_at')[:200]  # Limit to last 200
+
+#     # Convert to list to iterate multiple times
+#     logs_queryset = list(queryset)
+
+#     print(f"📊 Found {len(logs_queryset)} activity logs")
+
+#     if not logs_queryset:
+#         return Response([])
+
+#     # ========================================
+#     # ✅ STEP 1: COLLECT ALL UNIQUE IDs
+#     # ========================================
+#     mukkadam_ids = set()
+#     transport_provider_ids = set()
+
+#     for log in logs_queryset:
+#         if log.mukkadam_id:
+#             mukkadam_ids.add(log.mukkadam_id)
+#         if log.transport_provider_id:
+#             transport_provider_ids.add(log.transport_provider_id)
+
+#     print(f"   Unique mukkadams: {len(mukkadam_ids)}")
+#     print(f"   Unique transport providers: {len(transport_provider_ids)}")
+
+#     # ========================================
+#     # ✅ STEP 2: BATCH FETCH ALL DATA IN PARALLEL
+#     # ========================================
+#     print("\n⚡ PARALLEL BATCH FETCHING...")
+#     batch_start = time.time()
+
+#     mukkadams_cache = {}
+#     transport_providers_cache = {}
+
+#     if mukkadam_ids:
+#         mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=15)
+
+#     if transport_provider_ids:
+#         transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=10)
+
+#     batch_elapsed = time.time() - batch_start
+#     print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
+
+#     # ========================================
+#     # STEP 3: BUILD LOGS WITH CACHED DATA
+#     # ========================================
+#     print("\n🔄 Building enriched logs...")
+
+#     logs = []
+#     for log in logs_queryset:
+#         # Get mukkadam name from cache
+#         mukkadam_name = 'Unknown'
+#         if log.mukkadam_id:
+#             mukkadam_data = mukkadams_cache.get(log.mukkadam_id)
+#             if mukkadam_data:
+#                 mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{log.mukkadam_id}')
+#             else:
+#                 mukkadam_name = f'Mukkadam #{log.mukkadam_id}'
+
+#         # Get transport provider name from cache
+#         transport_name = None
+#         transport_details = None
+#         if log.transport_provider_id:
+#             transport_data = transport_providers_cache.get(log.transport_provider_id)
+#             if transport_data:
+#                 transport_name = transport_data.get('name', f'Provider #{log.transport_provider_id}')
+#                 transport_details = transport_data
+#             else:
+#                 transport_name = f'Provider #{log.transport_provider_id}'
+
+#         logs.append({
+#             'id': log.id,
+#             'activity_type': log.activity_type,
+#             'activity_type_display': log.get_activity_type_display(),
+#             'description': log.description,
+#             'job_id': log.job_id,
+#             'mukkadam_id': log.mukkadam_id,
+#             'mukkadam_name': mukkadam_name,
+#             'transport_provider_id': log.transport_provider_id,
+#             'transport_name': transport_name,
+#             'transport_details': transport_details,  # ✅ Full transport provider details
+#             'amount': float(log.amount) if log.amount else None,
+#             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
+#             'performed_at': log.performed_at.isoformat(),
+#             'metadata': log.metadata,
+#         })
+
+#     total_elapsed = time.time() - start_time
+#     print(f"\n✅ Activity logs API completed in {total_elapsed:.2f}s")
+#     print(f"   Database query + build: {total_elapsed - batch_elapsed:.2f}s")
+#     print(f"   Batch fetching: {batch_elapsed:.2f}s")
+#     print("="*80)
+
+#     return Response({
+#         'count': len(logs),
+#         'logs': logs,
+#         'performance': {
+#             'total_time': f'{total_elapsed:.2f}s',
+#             'batch_fetch_time': f'{batch_elapsed:.2f}s',
+#             'mukkadams_fetched': len(mukkadams_cache),
+#             'providers_fetched': len(transport_providers_cache)
+#         }
+#     })
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -1417,6 +1712,8 @@ def jobs_list(request):
                 activity_name = db_activity.activity_name
                 total_area = db_activity.total_area
                 total_price = db_activity.total_price
+                transport_cost = db_activity.transport_cost
+                other_cost = db_activity.other_cost
                 scheduled_date = db_activity.scheduled_datetime.date() if db_activity.scheduled_datetime else None
                 rate_per_acre = db_activity.rate_per_acre
                 location = db_activity.location or api_activity.get('location', 'N/A')
@@ -1425,6 +1722,9 @@ def jobs_list(request):
                 activity_name = api_activity.get('activity_name', 'Unknown')
                 total_area = Decimal(str(api_activity.get('acres', 0)))
                 total_price = Decimal(str(api_activity.get('total_price', 0)))
+                transport_cost = Decimal(str(api_activity.get('transport_cost', 0)))  # ✅ FROM API
+                other_cost = Decimal(str(api_activity.get('other_cost', 0)))          # ✅ FROM API
+    
                 scheduled_date = api_activity.get('date_time') or api_activity.get('scheduled_date')
                 rate_per_acre = float(total_price) / float(total_area) if float(total_area) > 0 else 0
                 location = api_activity.get('location', 'N/A')
@@ -1478,8 +1778,8 @@ def jobs_list(request):
                 'estimated_workers': api_activity.get('estimated_workers', 10),
                 'rate_per_acre': float(rate_per_acre),
                 'total_price': float(total_price),
-                'transport_cost': float(api_activity.get('transport_cost', 0)),
-                'other_cost': float(api_activity.get('other_cost', 0)),
+                'transport_cost': float(transport_cost),  # ✅ USE VARIABLE
+                'other_cost': float(other_cost),
                 'subtotal': float(api_activity.get('subtotal', 0)),
                 'is_fully_allocated': is_fully_allocated,
                 'allocations': allocations_data,
@@ -4278,7 +4578,7 @@ def edit_activity(request):
             allocation=None,
             activity_type='activity_marked_edited',
             performed_by=request.user,
-            description=f"Activity '{job_activity.activity_name}' edited. Reason: {reason}",
+            description=f"Activity '{job_activity.activity_name}' edited. ",
             job_id=job_id,
             mukkadam_id=0,
             mukkadam_name='N/A (Job-level)',
@@ -4315,6 +4615,8 @@ def edit_activity(request):
             {'success': False, 'error': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
 # REPLACE the mark_activity_lost function:
 
 @api_view(['POST'])
@@ -4389,7 +4691,7 @@ def mark_activity_lost(request):
             allocation=None,
             activity_type='activity_marked_lost',
             performed_by=request.user,
-            description=f"Activity '{job_activity.activity_name}' marked as LOST. Reason: {reason}",
+            description=f"Activity '{job_activity.activity_name}' marked as LOST.",
             job_id=job_id,  # ✅ ADD
             mukkadam_id=0,  # ✅ ADD (0 or -1 means no mukkadam)
             mukkadam_name='N/A (Job-level)',  # ✅ ADD
@@ -4498,7 +4800,7 @@ def unmark_activity_lost(request):
             allocation=None,
             activity_type='activity_marked_restored',
             performed_by=request.user,
-            description=f"Activity '{job_activity.activity_name}' marked as Restored. Reason: {reason}",
+            description=f"Activity '{job_activity.activity_name}' marked as Restored.",
             job_id=job_id,  # ✅ ADD
             mukkadam_id=0,  # ✅ ADD (0 or -1 means no mukkadam)
             mukkadam_name='N/A (Job-level)',  # ✅ ADD
