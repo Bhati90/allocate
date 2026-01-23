@@ -1778,8 +1778,8 @@ def jobs_list(request):
                 'estimated_workers': api_activity.get('estimated_workers', 10),
                 'rate_per_acre': float(rate_per_acre),
                 'total_price': float(total_price),
-                    'transport_cost': float(transport_cost),  # ✅ USE VARIABLE
-    'other_cost': float(other_cost),
+                'transport_cost': float(transport_cost),  # ✅ USE VARIABLE
+                'other_cost': float(other_cost),
                 'subtotal': float(api_activity.get('subtotal', 0)),
                 'is_fully_allocated': is_fully_allocated,
                 'allocations': allocations_data,
