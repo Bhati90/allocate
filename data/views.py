@@ -1214,32 +1214,69 @@ def allocations_by_mobile(request):
 
 # allocation/views.py
 # allocation/views.py
+# allocation/views.py
+import time
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from django.utils import timezone
+from datetime import timedelta
+from .utils import get_farmer_cached
+# (Assuming imports for ActivityLog, get_farmer_cached, etc. exist)
+# allocation/views.py (INSPECTION VERSION)
+import time
+import pprint # STRICTLY FOR DEBUGGING
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+# allocation/views.py
+import time
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from django.utils import timezone
+from datetime import timedelta
+from decimal import Decimal
+
+# Ensure you import Job alongside ActivityLog
+from .models import ActivityLog
+
+# allocation/views.py
+import time
+import requests
+from decimal import Decimal
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from django.utils import timezone
+from datetime import timedelta
+from django.conf import settings
+
+# Import models
+from .models import ActivityLog
+
+# Ensure these are imported or defined in your file
+# from .utils import batch_fetch_farmers, batch_fetch_mukkadams, batch_fetch_transport_providers
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def activity_logs_list(request):
     """
-    Get all activity logs with external data enriched
+    Get all activity logs with complete details (mirrors allocations_list logic)
     OPTIMIZED with caching + async
     """
-    import time
     start_time = time.time()
-
-    # Get query parameters
+    
+    # ========================================
+    # STEP 1: GET LOGS FROM DATABASE
+    # ========================================
     activity_type = request.query_params.get('activity_type')
     mukkadam_id = request.query_params.get('mukkadam_id')
     job_id = request.query_params.get('job_id')
-    days = request.query_params.get('days', 30)  # Default last 30 days
-    limit = request.query_params.get('limit')  # ✅ NEW: Optional limit
+    days = request.query_params.get('days', 30)
 
-    print(f"🔍 Filters: activity_type={activity_type}, mukkadam_id={mukkadam_id}, job_id={job_id}, days={days}")
-
-    # ✅ CHECK IF USER IS ADMIN
-    is_admin = request.user.is_authenticated and (
-        getattr(request.user, 'is_admin', False) or request.user.is_superuser
-    )
-
-    # Build queryset
     queryset = ActivityLog.objects.all()
 
     if activity_type:
@@ -1248,34 +1285,73 @@ def activity_logs_list(request):
         queryset = queryset.filter(mukkadam_id=mukkadam_id)
     if job_id:
         queryset = queryset.filter(job_id=job_id)
-
-    # Filter by date range
     if days:
         from_date = timezone.now() - timedelta(days=int(days))
         queryset = queryset.filter(performed_at__gte=from_date)
 
-    queryset = queryset.select_related('performed_by').order_by('-performed_at')
-    
-    # ✅ APPLY LIMIT ONLY IF SPECIFIED
-    if limit:
-        try:
-            limit_int = int(limit)
-            queryset = queryset[:limit_int]
-        except ValueError:
-            pass  # Ignore invalid limit
-    # ✅ NO DEFAULT LIMIT - Returns ALL logs
-
-    # Convert to list to iterate multiple times
-    logs_queryset = list(queryset)
-
-    print(f"📊 Found {len(logs_queryset)} activity logs (Admin: {is_admin})")
+    # Fetch 200 most recent logs
+    logs_queryset = list(queryset.select_related('performed_by').order_by('-performed_at')[:200])
 
     if not logs_queryset:
         return Response({'count': 0, 'logs': []})
 
     # ========================================
-    # ✅ STEP 1: COLLECT ALL UNIQUE IDs
+    # STEP 2: FETCH JOBS FROM EXTERNAL API
     # ========================================
+    print("\n🔄 Fetching job details from external API...")
+    
+    # Collect all Job IDs from the logs
+    job_ids = set()
+    for log in logs_queryset:
+        if log.job_id:
+            job_ids.add(str(log.job_id))
+
+    jobs_cache = {}
+    
+    # CONFIG (Ensure these match your settings)
+    EXTERNAL_API_URL = getattr(settings, 'EXTERNAL_API_URL', 'https://ops.bharatintelligence.ai/ops/api')
+    job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+
+    if job_ids:
+        try:
+            # We fetch all allocated jobs (or you could filter by IDs if API supports it)
+            response = requests.get(
+                f'{EXTERNAL_API_URL}/get_allocated_jobs/',
+                headers={'Authorization': job_token},
+                timeout=50
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                # Handle list vs dict response structure
+                jobs_list = data.get('data', data) if isinstance(data, dict) else data
+                
+                if isinstance(jobs_list, list):
+                    for job in jobs_list:
+                        # Normalize ID extraction
+                        j_id = str(job.get('work_id') or job.get('id') or job.get('job_id'))
+                        
+                        # Only cache if this job is relevant to our logs
+                        if j_id in job_ids:
+                            jobs_cache[j_id] = job
+            else:
+                print(f"⚠️ Job API returned status {response.status_code}")
+
+        except Exception as e:
+            print(f"❌ Error fetching jobs: {str(e)}")
+
+    # ========================================
+    # STEP 3: COLLECT ALL UNIQUE IDs
+    # ========================================
+    farmer_ids = set()
+    
+    # Extract Farmer IDs from the JOBS we just fetched
+    for job in jobs_cache.values():
+        f_id = job.get('farmer_id')
+        if f_id:
+            farmer_ids.add(str(f_id))
+
+    # Extract Mukkadam & Transport IDs from LOGS
     mukkadam_ids = set()
     transport_provider_ids = set()
 
@@ -1285,268 +1361,249 @@ def activity_logs_list(request):
         if log.transport_provider_id:
             transport_provider_ids.add(log.transport_provider_id)
 
-    print(f"   Unique mukkadams: {len(mukkadam_ids)}")
-    print(f"   Unique transport providers: {len(transport_provider_ids)}")
-
     # ========================================
-    # ✅ STEP 2: BATCH FETCH ALL DATA IN PARALLEL
+    # STEP 4: BATCH FETCH ALL DATA IN PARALLEL
     # ========================================
     print("\n⚡ PARALLEL BATCH FETCHING...")
     batch_start = time.time()
 
-    mukkadams_cache = {}
-    transport_providers_cache = {}
-
-    if mukkadam_ids:
-        mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=15)
-
-    if transport_provider_ids:
-        transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=10)
+    # Reuse your existing batch functions
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
+    transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)
 
     batch_elapsed = time.time() - batch_start
     print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
 
     # ========================================
-    # STEP 3: BUILD LOGS WITH CACHED DATA
+    # STEP 5: BUILD ENRICHED LOGS
     # ========================================
-    print("\n🔄 Building enriched logs...")
-
     logs = []
+
     for log in logs_queryset:
-        # Get mukkadam name from cache
+        # 1. Mukkadam Data
         mukkadam_name = 'Unknown'
         if log.mukkadam_id:
-            mukkadam_data = mukkadams_cache.get(log.mukkadam_id)
-            if mukkadam_data:
-                mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{log.mukkadam_id}')
-            else:
-                mukkadam_name = f'Mukkadam #{log.mukkadam_id}'
+            m_data = mukkadams_cache.get(log.mukkadam_id)
+            mukkadam_name = m_data.get('mukkadam_name', f'#{log.mukkadam_id}') if m_data else f'#{log.mukkadam_id}'
 
-        # Get transport provider name from cache
+        # 2. Transport Data
         transport_name = None
-        transport_details = None
         if log.transport_provider_id:
-            transport_data = transport_providers_cache.get(log.transport_provider_id)
-            if transport_data:
-                transport_name = transport_data.get('name', f'Provider #{log.transport_provider_id}')
-                transport_details = transport_data
-            else:
-                transport_name = f'Provider #{log.transport_provider_id}'
+            t_data = transport_providers_cache.get(log.transport_provider_id)
+            transport_name = t_data.get('name', f'#{log.transport_provider_id}') if t_data else f'#{log.transport_provider_id}'
 
-        log_data = {
+        # 3. Job & Farmer Data (The Bridge)
+        farmer_name = None
+        farmer_details = None
+        job_details = None
+        
+        if log.job_id:
+            job_data = jobs_cache.get(str(log.job_id))
+            
+            if job_data:
+                # Get Farmer ID from the Job
+                f_id = str(job_data.get('farmer_id', ''))
+                
+                # Get Farmer Details from Cache
+                f_details = farmers_cache.get(f_id)
+                if f_details:
+                    farmer_details = f_details
+                    # Robust name extraction
+                    farmer_name = (
+                        f_details.get('farmer_name') or 
+                        f_details.get('name') or 
+                        f_details.get('full_name') or 
+                        f_details.get('first_name')
+                    )
+                else:
+                    farmer_name = f'Farmer #{f_id}' if f_id else 'Unknown Farmer'
+
+                # Store basic job info for the log
+                job_details = {
+                    'job_name': job_data.get('job_name'),
+                    'location': job_data.get('location'),
+                    'scheduled_date': job_data.get('scheduled_date')
+                }
+
+        # 4. Construct Final Object
+        logs.append({
             'id': log.id,
             'activity_type': log.activity_type,
             'activity_type_display': log.get_activity_type_display(),
             'description': log.description,
             'job_id': log.job_id,
+            'job_details': job_details, # Added this for extra context
+            
             'mukkadam_id': log.mukkadam_id,
             'mukkadam_name': mukkadam_name,
+            
             'transport_provider_id': log.transport_provider_id,
             'transport_name': transport_name,
-            'transport_details': transport_details,
+            
+            # ✅ CORRECTED FARMER FIELDS
+            'farmer_id': farmer_details.get('id') if farmer_details else None,
+            'farmer_name': farmer_name,
+            'farmer_details': farmer_details,
+            
             'amount': float(log.amount) if log.amount else None,
             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
             'performed_at': log.performed_at.isoformat(),
             'metadata': log.metadata,
-            'changes': log.changes,  # ✅ Include changes for frontend
-            'formatted_changes': format_changes_for_display(log.changes),  # ✅ Helper
-        }
-
-        # ✅ ADMIN-ONLY: Include reason field
-        if is_admin:
-            reason = log.metadata.get('reason')
-            log_data['reason'] = reason  # ✅ Only admins see this
-
-        logs.append(log_data)
+        })
 
     total_elapsed = time.time() - start_time
-    print(f"\n✅ Activity logs API completed in {total_elapsed:.2f}s")
-    print(f"   Database query + build: {total_elapsed - batch_elapsed:.2f}s")
-    print(f"   Batch fetching: {batch_elapsed:.2f}s")
-    print("="*80)
-
+    
     return Response({
         'count': len(logs),
         'logs': logs,
-        'is_admin': is_admin,  # ✅ Tell frontend if user is admin
         'performance': {
             'total_time': f'{total_elapsed:.2f}s',
             'batch_fetch_time': f'{batch_elapsed:.2f}s',
-            'mukkadams_fetched': len(mukkadams_cache),
-            'providers_fetched': len(transport_providers_cache)
+            'farmers_fetched': len(farmers_cache)
         }
-    })
-
-
-# ✅ HELPER FUNCTION: Format changes for display
-def format_changes_for_display(changes):
-    """Convert changes dict to user-friendly format"""
-    if not changes:
-        return []
-    
-    formatted = []
-    field_labels = {
-        'activity_name': 'Activity Name',
-        'total_area': 'Total Area',
-        'scheduled_datetime': 'Scheduled Date',
-        'total_price': 'Mukkadam Price',
-        'transport_cost': 'Transport Cost',
-        'other_cost': 'Other Cost',
-        'subtotal': 'Total Price',
-        'rate_per_acre': 'Rate/Acre',
-        'mukkadam_id': 'Mukkadam',
-        'transport_provider_id': 'Transport Provider',
-    }
-    
-    for field, change_data in changes.items():
-        if isinstance(change_data, dict):
-            old_val = change_data.get('old_value', change_data.get('old'))
-            new_val = change_data.get('new_value', change_data.get('new'))
-            
-            formatted.append({
-                'field': field,
-                'label': field_labels.get(field, field.replace('_', ' ').title()),
-                'old_value': old_val,
-                'new_value': new_val,
-            })
-    
-    return formatted
-
-# ✅ HELPER FUNCTION: Format changes for display
-def format_changes_for_display(changes):
-    """Convert changes dict to user-friendly format"""
-    if not changes:
-        return []
-    
-    formatted = []
-    field_labels = {
-        'activity_name': 'Activity Name',
-        'total_area': 'Total Area',
-        'scheduled_datetime': 'Scheduled Date',
-        'total_price': 'Mukkadam Price',
-        'transport_cost': 'Transport Cost',
-        'other_cost': 'Other Cost',
-        'subtotal': 'Total Price',
-        'rate_per_acre': 'Rate/Acre',
-        'mukkadam_id': 'Mukkadam',
-        'transport_provider_id': 'Transport Provider',
-    }
-    
-    for field, change_data in changes.items():
-        if isinstance(change_data, dict):
-            old_val = change_data.get('old_value', change_data.get('old'))
-            new_val = change_data.get('new_value', change_data.get('new'))
-            
-            formatted.append({
-                'field': field,
-                'label': field_labels.get(field, field.replace('_', ' ').title()),
-                'old_value': old_val,
-                'new_value': new_val,
-            })
-    
-    return formatted
-# @api_view(['GET'])
+    })# @api_view(['GET'])
 # @permission_classes([AllowAny])
 # def activity_logs_list(request):
-#     """
-#     Get all activity logs with external data enriched
-#     OPTIMIZED with caching + async
-#     """
-#     import time
 #     start_time = time.time()
+#     print("\n" + "="*50)
+#     print("🚀 STARTING DEBUG REQUEST")
+#     print("="*50)
 
-#     # Get query parameters
+#     # --- Filter Logic (Standard) ---
 #     activity_type = request.query_params.get('activity_type')
 #     mukkadam_id = request.query_params.get('mukkadam_id')
 #     job_id = request.query_params.get('job_id')
-#     days = request.query_params.get('days', 30)  # Default last 30 days
+#     days = request.query_params.get('days', 30)
 
-#     print(f"🔍 Filters: activity_type={activity_type}, mukkadam_id={mukkadam_id}, job_id={job_id}, days={days}")
-
-#     # Build queryset
 #     queryset = ActivityLog.objects.all()
-
 #     if activity_type:
 #         queryset = queryset.filter(activity_type=activity_type)
 #     if mukkadam_id:
 #         queryset = queryset.filter(mukkadam_id=mukkadam_id)
 #     if job_id:
 #         queryset = queryset.filter(job_id=job_id)
-
-#     # Filter by date range
 #     if days:
 #         from_date = timezone.now() - timedelta(days=int(days))
 #         queryset = queryset.filter(performed_at__gte=from_date)
 
-#     queryset = queryset.select_related('performed_by').order_by('-performed_at')[:200]  # Limit to last 200
-
-#     # Convert to list to iterate multiple times
+#     queryset = queryset.select_related('performed_by').order_by('-performed_at')[:200]
 #     logs_queryset = list(queryset)
-
-#     print(f"📊 Found {len(logs_queryset)} activity logs")
 
 #     if not logs_queryset:
 #         return Response([])
 
 #     # ========================================
-#     # ✅ STEP 1: COLLECT ALL UNIQUE IDs
+#     # [DEBUG 1] ID EXTRACTION
 #     # ========================================
+#     print("\n--- [DEBUG STEP 1] Extracting IDs ---")
+#     farmer_ids = set()
 #     mukkadam_ids = set()
 #     transport_provider_ids = set()
+    
+#     # Counter to avoid spamming console
+#     debug_print_count = 0 
 
 #     for log in logs_queryset:
-#         if log.mukkadam_id:
-#             mukkadam_ids.add(log.mukkadam_id)
-#         if log.transport_provider_id:
-#             transport_provider_ids.add(log.transport_provider_id)
-
-#     print(f"   Unique mukkadams: {len(mukkadam_ids)}")
-#     print(f"   Unique transport providers: {len(transport_provider_ids)}")
+#         if log.mukkadam_id: mukkadam_ids.add(log.mukkadam_id)
+#         if log.transport_provider_id: transport_provider_ids.add(log.transport_provider_id)
+        
+#         # --- Farmer Extraction ---
+#         raw_f_id = getattr(log, 'farmer_id', None)
+#         source = "Model Field"
+        
+#         if not raw_f_id and log.metadata:
+#             raw_f_id = log.metadata.get('farmer_id')
+#             source = "Metadata"
+            
+#         if raw_f_id:
+#             # FORCE STRING
+#             str_id = str(raw_f_id).strip()
+#             farmer_ids.add(str_id)
+            
+#             # Print details for the first 3 found farmers only
+#             if debug_print_count < 3:
+#                 print(f"✅ Found Farmer ID: {raw_f_id} (Type: {type(raw_f_id)}) -> Converted to key: '{str_id}' (Source: {source})")
+#                 debug_print_count += 1
+    
+#     print(f"📋 Total Unique Farmer IDs to fetch: {len(farmer_ids)}")
+#     print(f"📋 IDs List: {list(farmer_ids)}")
 
 #     # ========================================
-#     # ✅ STEP 2: BATCH FETCH ALL DATA IN PARALLEL
+#     # [DEBUG 2] BATCH FETCH
 #     # ========================================
-#     print("\n⚡ PARALLEL BATCH FETCHING...")
-#     batch_start = time.time()
-
-#     mukkadams_cache = {}
-#     transport_providers_cache = {}
+#     print("\n--- [DEBUG STEP 2] Fetching Data ---")
+    
+#     mukkadams_cache = {} # (Assume these work)
+#     transport_providers_cache = {} # (Assume these work)
+#     farmers_cache = {}
 
 #     if mukkadam_ids:
-#         mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=15)
-
+#         # Placeholder for existing function
+#         # mukkadams_cache = batch_fetch_mukkadams(...)
+#         pass
 #     if transport_provider_ids:
-#         transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=10)
+#         # Placeholder for existing function
+#         # transport_providers_cache = batch_fetch_transport_providers(...)
+#         pass
 
-#     batch_elapsed = time.time() - batch_start
-#     print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
+#     if farmer_ids:
+#         # CALLING THE DEBUGGABLE BATCH FUNCTION BELOW
+#         farmers_cache = batch_fetch_farmers_debug(list(farmer_ids))
 
 #     # ========================================
-#     # STEP 3: BUILD LOGS WITH CACHED DATA
+#     # [DEBUG 3] MAPPING BACK
 #     # ========================================
-#     print("\n🔄 Building enriched logs...")
+#     print("\n--- [DEBUG STEP 3] Mapping Data to Logs ---")
 
+#     # ========================================
+#     # ✅ STEP 3: BUILD ENRICHED LOGS
+#     # ========================================
 #     logs = []
 #     for log in logs_queryset:
-#         # Get mukkadam name from cache
+#         # --- Mukkadam Logic ---
 #         mukkadam_name = 'Unknown'
 #         if log.mukkadam_id:
-#             mukkadam_data = mukkadams_cache.get(log.mukkadam_id)
-#             if mukkadam_data:
-#                 mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{log.mukkadam_id}')
-#             else:
-#                 mukkadam_name = f'Mukkadam #{log.mukkadam_id}'
+#             m_data = mukkadams_cache.get(log.mukkadam_id)
+#             mukkadam_name = m_data.get('mukkadam_name', f'#{log.mukkadam_id}') if m_data else f'#{log.mukkadam_id}'
 
-#         # Get transport provider name from cache
+#         # --- Transport Logic ---
 #         transport_name = None
-#         transport_details = None
 #         if log.transport_provider_id:
-#             transport_data = transport_providers_cache.get(log.transport_provider_id)
-#             if transport_data:
-#                 transport_name = transport_data.get('name', f'Provider #{log.transport_provider_id}')
-#                 transport_details = transport_data
+#             t_data = transport_providers_cache.get(log.transport_provider_id)
+#             transport_name = t_data.get('name', f'#{log.transport_provider_id}') if t_data else f'#{log.transport_provider_id}'
+
+#         farmer_name = None
+#         farmer_details = None
+        
+#         # RE-EXTRACT ID
+#         raw_f_id = getattr(log, 'farmer_id', None)
+#         if not raw_f_id and log.metadata:
+#             raw_f_id = log.metadata.get('farmer_id')
+            
+#         if raw_f_id:
+#             f_id_str = str(raw_f_id).strip()
+            
+#             # LOOKUP
+#             f_data = farmers_cache.get(f_id_str)
+            
+#             if f_data:
+#                 # TRY TO FIND A NAME
+#                 # Check for common keys
+#                 farmer_name = (
+#                     f_data.get('farmer_name') or 
+#                     f_data.get('name') or 
+#                     f_data.get('full_name') or
+#                     f_data.get('first_name')
+#                 )
+#                 farmer_details = f_data
+#                 mapped_count += 1
 #             else:
-#                 transport_name = f'Provider #{log.transport_provider_id}'
+#                 farmer_name = f'Farmer #{f_id_str}'
+#                 failed_count += 1
+#                 # Log the first failure only to see what went wrong
+#                 if failed_count == 1:
+#                      print(f"❌ MAPPING FAIL: Log ID {log.id} has ID '{f_id_str}' but it is NOT in farmers_cache keys: {list(farmers_cache.keys())}")
 
 #         logs.append({
 #             'id': log.id,
@@ -1558,7 +1615,12 @@ def format_changes_for_display(changes):
 #             'mukkadam_name': mukkadam_name,
 #             'transport_provider_id': log.transport_provider_id,
 #             'transport_name': transport_name,
-#             'transport_details': transport_details,  # ✅ Full transport provider details
+            
+#             # ✅ Corrected Farmer Fields
+#             'farmer_id': raw_f_id,
+#             'farmer_name': farmer_name,
+#             'farmer_details': farmer_details,
+            
 #             'amount': float(log.amount) if log.amount else None,
 #             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
 #             'performed_at': log.performed_at.isoformat(),
@@ -1566,21 +1628,116 @@ def format_changes_for_display(changes):
 #         })
 
 #     total_elapsed = time.time() - start_time
-#     print(f"\n✅ Activity logs API completed in {total_elapsed:.2f}s")
-#     print(f"   Database query + build: {total_elapsed - batch_elapsed:.2f}s")
-#     print(f"   Batch fetching: {batch_elapsed:.2f}s")
-#     print("="*80)
-
+    
 #     return Response({
 #         'count': len(logs),
 #         'logs': logs,
 #         'performance': {
 #             'total_time': f'{total_elapsed:.2f}s',
-#             'batch_fetch_time': f'{batch_elapsed:.2f}s',
-#             'mukkadams_fetched': len(mukkadams_cache),
-#             'providers_fetched': len(transport_providers_cache)
+#             # 'batch_fetch_time': f'{batch_elapsed:.2f}s',
+#             'farmers_fetched': len(farmers_cache)
 #         }
 #     })
+
+def batch_fetch_farmers_debug(farmer_ids, max_workers=5):
+    print(f"🔄 Executing batch_fetch for: {farmer_ids}")
+    results = {}
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_id = {
+            executor.submit(get_farmer_cached, f_id): str(f_id) 
+            for f_id in farmer_ids
+        }
+        
+        first_success_printed = False
+        
+        for future in as_completed(future_to_id):
+            f_id_str = future_to_id[future]
+            try:
+                data = future.result()
+                
+                if data:
+                    results[f_id_str] = data
+                    
+                    # CRITICAL: Print the structure of the first successful result
+                    if not first_success_printed:
+                        print(f"\n🔎 [INSPECT API DATA] Result for ID {f_id_str}:")
+                        pprint.pprint(data)
+                        print(f"👉 Available Keys: {list(data.keys())}\n")
+                        first_success_printed = True
+                else:
+                    print(f"⚠️ API returned None/Empty for ID: {f_id_str}")
+                    
+            except Exception as e:
+                print(f"❌ EXCEPTION for ID {f_id_str}: {e}")
+                
+    return results# ✅ HELPER FUNCTION: Format changes for display
+def format_changes_for_display(changes):
+    """Convert changes dict to user-friendly format"""
+    if not changes:
+        return []
+    
+    formatted = []
+    field_labels = {
+        'activity_name': 'Activity Name',
+        'total_area': 'Total Area',
+        'scheduled_datetime': 'Scheduled Date',
+        'total_price': 'Mukkadam Price',
+        'transport_cost': 'Transport Cost',
+        'other_cost': 'Other Cost',
+        'subtotal': 'Total Price',
+        'rate_per_acre': 'Rate/Acre',
+        'mukkadam_id': 'Mukkadam',
+        'transport_provider_id': 'Transport Provider',
+    }
+    
+    for field, change_data in changes.items():
+        if isinstance(change_data, dict):
+            old_val = change_data.get('old_value', change_data.get('old'))
+            new_val = change_data.get('new_value', change_data.get('new'))
+            
+            formatted.append({
+                'field': field,
+                'label': field_labels.get(field, field.replace('_', ' ').title()),
+                'old_value': old_val,
+                'new_value': new_val,
+            })
+    
+    return formatted
+
+# ✅ HELPER FUNCTION: Format changes for display
+def format_changes_for_display(changes):
+    """Convert changes dict to user-friendly format"""
+    if not changes:
+        return []
+    
+    formatted = []
+    field_labels = {
+        'activity_name': 'Activity Name',
+        'total_area': 'Total Area',
+        'scheduled_datetime': 'Scheduled Date',
+        'total_price': 'Mukkadam Price',
+        'transport_cost': 'Transport Cost',
+        'other_cost': 'Other Cost',
+        'subtotal': 'Total Price',
+        'rate_per_acre': 'Rate/Acre',
+        'mukkadam_id': 'Mukkadam',
+        'transport_provider_id': 'Transport Provider',
+    }
+    
+    for field, change_data in changes.items():
+        if isinstance(change_data, dict):
+            old_val = change_data.get('old_value', change_data.get('old'))
+            new_val = change_data.get('new_value', change_data.get('new'))
+            
+            formatted.append({
+                'field': field,
+                'label': field_labels.get(field, field.replace('_', ' ').title()),
+                'old_value': old_val,
+                'new_value': new_val,
+            })
+    
+    return formatted
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
