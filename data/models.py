@@ -97,6 +97,15 @@ class JobActivity(models.Model):
         decimal_places=2, 
         help_text="Total acres for this activity"
     )
+
+    # ✅ ADD THIS NEW FIELD
+    farmer_work_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="Farmer work ID from external farmer management system"
+    )
     
     # Pricing from API
     total_price = models.DecimalField(
@@ -287,8 +296,9 @@ class Allocation(models.Model):
     
     @property
     def farmer_work_id(self):
-        """Get work_id from job_activity"""
-        return self.job_activity.job_id
+        """Get farmer_work_id from job_activity"""
+        # ✅ Use the new field if it exists, otherwise fall back to job_id
+        return self.job_activity.farmer_work_id or self.job_activity.job_id
     
     @property
     def created_by(self):
@@ -528,6 +538,9 @@ class ActivityLog(models.Model):
         ('allocation_updated', 'Allocation Updated'),
         ('allocation_deleted', 'Allocation Deleted'),
         ('payment_requested', 'Payment Requested'),
+        ('activity_marked_edited', 'Activity Edited'),  # ✅ ADD THIS
+        ('activity_marked_lost', 'Activity Marked Lost'),  # ✅ ADD THIS (if you use it)
+        ('activity_marked_restored', 'Activity Restored'),  
         ('payment_paid', 'Payment Paid'),
         ('payment_rejected', 'Payment Rejected'),
         ('transport_payment_requested', 'Transport Payment Requested'),

@@ -195,30 +195,43 @@ useEffect(() => {
   }, [allocationForm.mukkadam_id, allocationForm.crew_size, selectedActivity, editMode]);
 
   // ✅ Pre-fill form when in edit mode
-  useEffect(() => {
-    if (editMode && existingAllocation) {
-      const activity = job.activities?.find(a => 
-        a.activity_name === existingAllocation.activity_name
-      );
-      
-      if (activity) {
-        setSelectedActivity(activity);
-        
-        setAllocationForm({
-          mukkadam_id: existingAllocation.mukkadam_id.toString(),
-          allocated_area: existingAllocation.allocated_area?.toString() || '',
-          work_date: existingAllocation.work_date || '',
-          mukkadam_price: existingAllocation.mukkadam_price?.toString() || '',
-          crew_size: existingAllocation.crew_size?.toString() || '',
-          transport_type: existingAllocation.transport_type || 'provider',
-          transport_provider_id: existingAllocation.transport_provider_id?.toString() || '',
-          own_transport_price: existingAllocation.own_transport_price?.toString() || '',
-          transport_price: existingAllocation.transport_price?.toString() || ''
-        });
+// ✅ FIXED: Pre-fill form when in edit mode - Match by activity ID
+// ✅ Pre-fill form when in edit mode
+useEffect(() => {
+  if (editMode && existingAllocation) {
+    // Find the specific activity by its unique ID
+    const activity = job.activities?.find(a => {
+      // Priority 1: Match by database ID
+      if (existingAllocation.job_activity && a.id === existingAllocation.job_activity) {
+        return true;
       }
+      // Priority 2: Match by activity_id (external/API ID)
+      if (existingAllocation.activity_id && a.activity_id === existingAllocation.activity_id) {
+        return true;
+      }
+      // Priority 3: Match by name (fallback, less reliable)
+      return a.activity_name === existingAllocation.activity_name;
+    });
+    
+    if (activity) {
+      setSelectedActivity(activity);
+      
+      setAllocationForm({
+        mukkadam_id: existingAllocation.mukkadam_id.toString(),
+        allocated_area: existingAllocation.allocated_area?.toString() || '',
+        work_date: existingAllocation.work_date || '',
+        mukkadam_price: existingAllocation.mukkadam_price?.toString() || '',
+        crew_size: existingAllocation.crew_size?.toString() || '',
+        transport_type: existingAllocation.transport_type || 'provider',
+        transport_provider_id: existingAllocation.transport_provider_id?.toString() || '',
+        own_transport_price: existingAllocation.own_transport_price?.toString() || '',
+        transport_price: existingAllocation.transport_price?.toString() || ''
+      });
+    } else {
+      console.warn('⚠️ Could not find matching activity for allocation:', existingAllocation);
     }
-  }, [editMode, existingAllocation, job.activities]);
-
+  }
+}, [editMode, existingAllocation, job.activities]);
   const handleActivitySelect = (activity: Activity) => {
     setSelectedActivity(activity);
     setAllocationForm({
@@ -356,7 +369,7 @@ if (!isPriceTbd && !isTransportPriceTbd && selectedActivity.total_price) {
     try {
 // Update notes
 let notes = `Activity ID: ${selectedActivity.activity_id}`;
-notes += `\nCrew Size: ${allocationForm.crew_size || 'Default'} workers`;
+notes += `\nCrew Size: ${finalCrewSize} workers`;
 if (isPriceTbd) notes += `\nMUKKADAM PRICE: To Be Decided Later`;
 if (isTransportPriceTbd) notes += `\nTRANSPORT PRICE: To Be Decided Later`; // ✅ NEW
 
@@ -367,7 +380,7 @@ const payload = {
   mukkadam_id: parseInt(allocationForm.mukkadam_id),
   allocated_area: parseFloat(allocationForm.allocated_area),
   work_date: allocationForm.work_date,
-  crew_size: parseInt(allocationForm.crew_size || '0'),
+  crew_size: finalCrewSize,
   mukkadam_price: isPriceTbd ? 0 : parseFloat(allocationForm.mukkadam_price),
   transport_type: allocationForm.transport_type,
   transport_provider_id: allocationForm.transport_type === 'provider' ? parseInt(allocationForm.transport_provider_id) : null,
@@ -540,87 +553,85 @@ const totalCost = (
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             
-            {/* Left: Activities List */}
-            <div className="lg:col-span-1">
-              <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
-                <Layers className="mr-2 text-blue-600" />
-                Activities ({job.activities?.length || 0})
-              </h3>
-              
-              {/* ✅ UPDATED: Show info message in edit mode */}
-              {editMode && (
-                <div className="mb-4 bg-yellow-50 p-3 rounded-lg border border-yellow-200">
-                  <p className="text-xs text-yellow-800">
-                    📝 You are editing an existing allocation. The activity cannot be changed.
-                  </p>
-                </div>
-              )}
-              
-              <div className="space-y-3">
-                {job.activities?.map((activity) => (
-                    <button
-                      key={activity.activity_id || activity.id} // ✅ Use activity_id for key
-                      onClick={() => handleActivitySelect(activity)}
-                      className={`w-full text-left p-4 rounded-lg border-2 transition ${
-                        selectedActivity?.activity_id === activity.activity_id  // ✅ CHANGE THIS LINE
-                          ? 'border-blue-500 bg-blue-50'
-                          : activity.is_fully_allocated
-                          ? 'border-green-300 bg-green-50'
-                          : 'border-gray-200 bg-white hover:border-blue-300'
-                      }`}
-                    disabled={
-                      activity.is_fully_allocated || 
-                      (editMode && selectedActivity?.id !== activity.id)  // ✅ NEW: Disable other activities in edit mode
-                    }
-                  >
-                    <div className="flex items-start justify-between mb-2">
-                      <span className="font-semibold text-gray-900 text-sm">
-                        {activity.activity_name}
-                      </span>
-                      {activity.is_fully_allocated ? (
-                        <CheckCircle size={18} className="text-green-600 flex-shrink-0" />
-                      ) : (
-                        <AlertCircle size={18} className="text-yellow-600 flex-shrink-0" />
-                      )}
-                    </div>
-                    
-                    <div className="space-y-1 text-xs text-gray-600">
-                      {/* <div className="flex items-center">
-                        <MapPin size={12} className="mr-1" />
-                        {activity.location}
-                      </div> */}
-                      <div className="flex items-center">
-                        <Calendar size={12} className="mr-1" />
-                        {new Date(activity.scheduled_date).toLocaleDateString()}
-                      </div>
-                      <div className="flex items-center">
-                        <TrendingUp size={12} className="mr-1" />
-                        {activity.allocated_area}/{activity.total_area} acres
-                      </div>
-                      <div className="flex items-center justify-between pt-1 border-t border-gray-300">
-                        <span className="text-green-600 font-semibold">₹{activity.total_price?.toLocaleString() || 0}</span>
-                      </div>
-                    </div>
+ {/* Left: Activities List */}
+<div className="lg:col-span-1">
+  <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+    <Layers className="mr-2 text-blue-600" />
+    {/* ✅ Show count of active (non-lost) activities only */}
+    Activities ({job.activities?.filter(a => !a.is_lost).length || 0})
+  </h3>
+  
+  {/* ✅ UPDATED: Show info message in edit mode */}
+  {editMode && (
+    <div className="mb-4 bg-yellow-50 p-3 rounded-lg border border-yellow-200">
+      <p className="text-xs text-yellow-800">
+        📝 You are editing an existing allocation. The activity cannot be changed.
+      </p>
+    </div>
+  )}
+  
+  <div className="space-y-3">
+    {/* ✅ FILTER OUT LOST ACTIVITIES */}
+    {job.activities?.filter(a => !a.is_lost).map((activity) => (
+      <button
+        key={activity.activity_id || activity.id}
+        onClick={() => handleActivitySelect(activity)}
+        className={`w-full text-left p-4 rounded-lg border-2 transition ${
+          selectedActivity?.activity_id === activity.activity_id
+            ? 'border-blue-500 bg-blue-50'
+            : activity.is_fully_allocated
+            ? 'border-green-300 bg-green-50'
+            : 'border-gray-200 bg-white hover:border-blue-300'
+        }`}
+        disabled={
+          activity.is_fully_allocated || 
+          (editMode && selectedActivity?.activity_id !== activity.activity_id)
+        }
+      >
+        <div className="flex items-start justify-between mb-2">
+          <span className="font-semibold text-gray-900 text-sm">
+            {activity.activity_name}
+          </span>
+          {activity.is_fully_allocated ? (
+            <CheckCircle size={18} className="text-green-600 flex-shrink-0" />
+          ) : (
+            <AlertCircle size={18} className="text-yellow-600 flex-shrink-0" />
+          )}
+        </div>
+        
+        <div className="space-y-1 text-xs text-gray-600">
+          <div className="flex items-center">
+            <Calendar size={12} className="mr-1" />
+            {new Date(activity.scheduled_date).toLocaleDateString()}
+          </div>
+          <div className="flex items-center">
+            <TrendingUp size={12} className="mr-1" />
+            {activity.allocated_area}/{activity.total_area} acres
+          </div>
+          <div className="flex items-center justify-between pt-1 border-t border-gray-300">
+            <span className="text-green-600 font-semibold">₹{activity.total_price?.toLocaleString() || 0}</span>
+          </div>
+        </div>
 
-                    {!activity.is_fully_allocated && (
-                      <div className="mt-2">
-                        <div className="bg-gray-200 rounded-full h-2">
-                          <div
-                            className="bg-blue-500 h-2 rounded-full transition-all"
-                            style={{
-                              width: `${(activity.allocated_area / activity.total_area) * 100}%`
-                            }}
-                          />
-                        </div>
-                        <p className="text-xs text-gray-600 mt-1">
-                          {activity.remaining_area.toFixed(2)} acres remaining
-                        </p>
-                      </div>
-                    )}
-                  </button>
-                ))}
-              </div>
+        {!activity.is_fully_allocated && (
+          <div className="mt-2">
+            <div className="bg-gray-200 rounded-full h-2">
+              <div
+                className="bg-blue-500 h-2 rounded-full transition-all"
+                style={{
+                  width: `${(activity.allocated_area / activity.total_area) * 100}%`
+                }}
+              />
             </div>
+            <p className="text-xs text-gray-600 mt-1">
+              {activity.remaining_area.toFixed(2)} acres remaining
+            </p>
+          </div>
+        )}
+      </button>
+    ))}
+  </div>
+</div>
 
             {/* Right: Allocation Form */}
             <div className="lg:col-span-2">

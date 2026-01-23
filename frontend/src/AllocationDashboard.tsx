@@ -731,15 +731,21 @@ const handleReallocate = async (allocationId: number) => {
   // };
 
 
-// ✅ Helper to get real-time stats for an activity
-const getActivityStats = (jobId: string, activityName: string, totalArea: number) => {
-  // Find all allocations for this specific job and activity
-  const activityAllocations = allocations.filter(a => 
-    (a.farmer_work_id === jobId || a.job_id === jobId) && 
-    a.activity_name === activityName
-  );
+// ✅ FIXED: Match allocations by specific activity ID, not just name
+const getActivityStats = (jobId: string, activity: any, totalArea: number) => {
+  // Match allocations by the specific activity ID (database ID)
+  const activityAllocations = allocations.filter(a => {
+    const matchesJob = a.farmer_work_id === jobId || a.job_id === jobId;
+    
+    // ✅ CRITICAL FIX: Match by specific activity database ID
+    // This ensures we only count allocations for THIS specific activity instance
+    const matchesActivity = a.job_activity === activity.id || 
+                           a.activity_id === activity.activity_id;
+    
+    return matchesJob && matchesActivity;
+  });
 
-  // Sum up the allocated area
+  // Sum up the allocated area for this specific activity
   const allocated = activityAllocations.reduce((sum, a) => sum + Number(a.allocated_area), 0);
   const remaining = totalArea - allocated;
   
@@ -748,7 +754,6 @@ const getActivityStats = (jobId: string, activityName: string, totalArea: number
 
   return { allocated, remaining, isFullyAllocated, count: activityAllocations.length };
 };
-
 // ✅ IMPROVED: Calculate job status dynamically
 // REPLACE WITH:
 const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' => {
@@ -764,7 +769,12 @@ const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated'
   let hasAnyAllocation = false;
 
   activeActivities.forEach(activity => {
-    const { isFullyAllocated, allocated } = getActivityStats(job.work_id, activity.activity_name, activity.total_area);
+    // ✅ PASS FULL ACTIVITY OBJECT
+    const { isFullyAllocated, allocated } = getActivityStats(
+      job.work_id, 
+      activity,  // ✅ Changed from activity.activity_name
+      activity.total_area
+    );
     
     if (isFullyAllocated) fullyAllocatedCount++;
     if (allocated > 0) hasAnyAllocation = true;
@@ -774,7 +784,6 @@ const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated'
   if (hasAnyAllocation) return 'partially_allocated';
   return 'pending';
 };
-
 // ✅ UPDATE: Use calculated status instead of job.status
 const allocatedJobs = jobs.filter(j => calculateJobStatus(j) === 'fully_allocated');
 const partiallyAllocatedJobs = jobs.filter(j => calculateJobStatus(j) === 'partially_allocated');
@@ -3059,6 +3068,7 @@ const handleSaveSuccess = async () => {
         let dStr = job.scheduled_date;
         if (!dStr && job.activities?.length > 0) {
           const sortedDates = job.activities
+            .filter(a => !a.is_lost)  // ✅ FILTER LOST ACTIVITIES
             .map(a => a.scheduled_date)
             .filter(Boolean)
             .sort();
@@ -3084,11 +3094,10 @@ const handleSaveSuccess = async () => {
             job.title?.toLowerCase().includes(searchLower) ||
             job.farmer?.farmer_name?.toLowerCase().includes(searchLower) ||
             job.farmer?.location?.toLowerCase().includes(searchLower) ||
-            job.activities?.some(a => a.activity_name?.toLowerCase().includes(searchLower))
+            job.activities?.some(a => !a.is_lost && a.activity_name?.toLowerCase().includes(searchLower))  // ✅ FILTER LOST
           );
         })
         .sort((a, b) => {
-          // --- FORCED ASCENDING SORT (History to Future) ---
           return getEffectiveJobDate(a) - getEffectiveJobDate(b);
         });
 
@@ -3117,7 +3126,12 @@ const handleSaveSuccess = async () => {
         <div className="space-y-3">
           {finalFilteredJobs.map(job => {
             const isExpanded = expandedJobs.has(job.work_id);
-            const completedActivities = job.activities?.filter(a => a.is_fully_allocated).length || 0;
+            
+            // ✅ FIX: Filter out lost activities when counting
+            const activeActivities = job.activities?.filter(a => !a.is_lost) || [];
+            const completedActivities = activeActivities.filter(a => a.is_fully_allocated).length;
+            const totalActiveActivities = activeActivities.length;
+            
             const farmer = job.farmer;
             
             return (
@@ -3133,9 +3147,10 @@ const handleSaveSuccess = async () => {
                     <div className="flex-1">
                       <div className="flex items-center space-x-3 mb-2">
                         <span className="text-lg font-mono font-bold text-blue-600">{job.work_id}</span>
+                        {/* ✅ FIX: Show correct count excluding lost activities */}
                         <span className="px-2 py-1 bg-orange-500 text-white rounded-full text-xs font-bold flex items-center">
                           <TrendingUp size={14} className="mr-1" />
-                          {completedActivities}/{job.total_activities} DONE
+                          {completedActivities}/{totalActiveActivities} DONE
                         </span>
                         <span className="text-sm font-medium text-gray-700">{job.title}</span>
                       </div>
@@ -3185,10 +3200,11 @@ const handleSaveSuccess = async () => {
                       </h4>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {job.activities.map((activity) => {
+                        {/* ✅ FIX: Filter out lost activities when rendering */}
+                        {activeActivities.map((activity) => {
                           const { allocated, remaining, isFullyAllocated } = getActivityStats(
                             job.work_id,
-                            activity.activity_name,
+                            activity,
                             activity.total_area
                           );
 
@@ -3297,7 +3313,6 @@ const handleSaveSuccess = async () => {
     })()}
   </div>
 )}
-
 
 {/* Mukkadams Tab */}
 {activeTab === 'mukkadams' && (
@@ -3672,33 +3687,34 @@ const handleSaveSuccess = async () => {
     </div>
 
     {/* ✅ ACTIVITY LOGS LIST WITH EXPANDABLE CARDS */}
-    {(() => {
-      // Filter logs
-      const filtered = (Array.isArray(activityLogs) ? activityLogs : []).filter(log => {
-        // Date Filter
-        if (selectedFilterDate) {
-          const logDate = new Date(log.performed_at || log.timestamp).toISOString().split('T')[0];
-          if (logDate !== selectedFilterDate) return false;
-        }
+{(() => {
+  // Filter logs
+  const filtered = (Array.isArray(activityLogs) ? activityLogs : []).filter(log => {
+    // Date Filter
+    if (selectedFilterDate) {
+      const logDate = new Date(log.performed_at || log.timestamp).toISOString().split('T')[0];
+      if (logDate !== selectedFilterDate) return false;
+    }
 
-        // Search Filter
-        const searchLower = searchTerm.toLowerCase();
-        const matchesSearch = 
-          String(log.job_id || '').toLowerCase().includes(searchLower) ||
-          String(log.mukkadam_name || '').toLowerCase().includes(searchLower) ||
-          String(log.transport_name || '').toLowerCase().includes(searchLower) ||
-          String(log.performed_by_name || '').toLowerCase().includes(searchLower) ||
-          String(log.description || '').toLowerCase().includes(searchLower);
-        
-        if (!matchesSearch) return false;
-        
-        // Activity Type Filter
-        if (activityFilter === 'all') return true;
-        if (activityFilter === 'payment') {
-          return log.activity_type.includes('payment');
-        }
-        return log.activity_type === activityFilter;
-      });
+    // Search Filter
+    const searchLower = searchTerm.toLowerCase();
+    const matchesSearch = 
+      String(log.job_id || '').toLowerCase().includes(searchLower) ||
+      String(log.mukkadam_name || '').toLowerCase().includes(searchLower) ||
+      String(log.transport_name || '').toLowerCase().includes(searchLower) ||
+      String(log.performed_by_name || '').toLowerCase().includes(searchLower) ||
+      String(log.description || '').toLowerCase().includes(searchLower) ||
+      String(log.farmer_name || '').toLowerCase().includes(searchLower);  // ✅ NEW
+    
+    if (!matchesSearch) return false;
+    
+    // Activity Type Filter
+    if (activityFilter === 'all') return true;
+    if (activityFilter === 'payment') {
+      return log.activity_type.includes('payment');
+    }
+    return log.activity_type === activityFilter;
+  });
 
       if (filtered.length === 0) {
         return (
@@ -3828,130 +3844,210 @@ const handleSaveSuccess = async () => {
                       <p className="text-sm text-gray-700 mb-2">{log.description}</p>
 
                       {/* Quick Info Row */}
-                      <div className="flex items-center gap-4 text-xs text-gray-600">
-                        <span>👤 {log.performed_by_name || 'System'}</span>
-                        {log.mukkadam_name && log.mukkadam_name !== 'N/A (Job-level)' && (
-                          <span>🔧 {log.mukkadam_name}</span>
-                        )}
-                        {log.amount && (
-                          <span className={`font-bold ${iconColor}`}>
-                            ₹{log.amount.toLocaleString()}
-                          </span>
-                        )}
-                        {hasChanges && (
-                          <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">
-                            {changedFields.length} field{changedFields.length > 1 ? 's' : ''} changed
-                          </span>
-                        )}
-                      </div>
+                      {/* Quick Info Row */}
+<div className="flex items-center gap-4 text-xs text-gray-600 flex-wrap">
+  <span>👤 {log.performed_by_name || 'System'}</span>
+  
+  {/* ✅ NEW: Farmer Name */}
+  {log.farmer_name && log.farmer_name !== 'Unknown' && (
+    <span className="flex items-center">
+      <span className="w-1 h-1 rounded-full bg-gray-300 mx-2"></span>
+      👨‍🌾 {log.farmer_name}
+    </span>
+  )}
+  
+  {log.mukkadam_name && log.mukkadam_name !== 'N/A (Job-level)' && (
+    <>
+      <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+      <span>🔧 {log.mukkadam_name}</span>
+    </>
+  )}
+  
+  {log.amount && (
+    <>
+      <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+      <span className={`font-bold ${iconColor}`}>
+        ₹{log.amount.toLocaleString()}
+      </span>
+    </>
+  )}
+  
+  {hasChanges && (
+    <>
+      <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+      <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">
+        {changedFields.length} field{changedFields.length > 1 ? 's' : ''} changed
+      </span>
+    </>
+  )}
+</div>
                     </div>
                   </div>
                 </div>
 
-                {/* ✅ EXPANDED VIEW - Details Section */}
-                {isExpanded && (
-                  <div className="px-4 pb-4 border-t border-gray-200 pt-4 bg-white">
-                    {/* Admin: Show Reason */}
-                    {isAdmin && log.reason && (
-                      <div className="mb-4 p-3 bg-yellow-50 border-2 border-yellow-300 rounded-lg">
-                        <p className="text-xs font-bold text-yellow-800 mb-1 flex items-center">
-                          <AlertCircle size={14} className="mr-1" />
-                          Reason for Change (Admin Only)
-                        </p>
-                        <p className="text-sm text-yellow-900 font-medium">
-                          {log.reason}
-                        </p>
-                      </div>
-                    )}
+{/* ✅ EXPANDED VIEW - Details Section */}
+{isExpanded && (
+  <div className="px-4 pb-4 border-t border-gray-200 pt-4 bg-white">
+    {/* ✅ NEW: Activity Edit Details (Admin Only) */}
+    {/* ✅ NEW: Handle Metadata Changes (Matches your JSON structure) */}
+{isAdmin && log.activity_type === 'activity_marked_edited' && log.metadata?.changes && (
+  <div className="mb-4 p-4 bg-purple-50 border-2 border-purple-300 rounded-lg">
+    <p className="text-sm font-bold text-purple-800 mb-3 flex items-center">
+      <Edit size={16} className="mr-2" />
+      Activity Edit Details (Admin Only)
+    </p>
 
-                    {/* Changes Section */}
-                    {hasChanges && (
-                      <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                        <p className="text-sm font-bold text-gray-800 mb-3 flex items-center">
-                          <Edit size={14} className="mr-2" />
-                          Changes Made ({changedFields.length})
-                        </p>
+    {/* Reason from Metadata */}
+    {log.metadata.reason && (
+      <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded">
+        <p className="text-xs font-bold text-yellow-800 mb-1">Reason:</p>
+        <p className="text-sm text-yellow-900 font-medium">
+          {log.metadata.reason}
+        </p>
+      </div>
+    )}
 
-                        <div className="space-y-3">
-                          {Object.entries(log.changes).map(([field, changeData]: [string, any]) => {
-                            const fieldLabel = field
-                              .replace(/_/g, ' ')
-                              .replace(/\b\w/g, (l) => l.toUpperCase());
+    {/* Changes List */}
+    <div className="space-y-2">
+      <p className="text-xs font-bold text-gray-700">Changes Made:</p>
+      {Object.entries(log.metadata.changes).map(([field, values]: [string, any]) => {
+        const fieldLabel = field
+          .replace(/_/g, ' ')
+          .replace(/\b\w/g, (l) => l.toUpperCase());
 
-                            return (
-                              <div key={field} className="bg-white p-3 rounded border border-gray-200">
-                                {/* Admin: Show Full Details */}
-                                {isAdmin ? (
-                                  <>
-                                    <p className="text-xs font-semibold text-gray-700 mb-2">
-                                      {fieldLabel}
-                                    </p>
-                                    <div className="flex items-center gap-2 text-xs">
-                                      <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through">
-                                        {changeData.old_value || changeData.old || 'Not set'}
-                                      </span>
-                                      <span className="text-gray-400">→</span>
-                                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold">
-                                        {changeData.new_value || changeData.new}
-                                      </span>
-                                    </div>
-                                  </>
-                                ) : (
-                                  /* Non-Admin: Only Show Field Name */
-                                  <p className="text-sm font-medium text-gray-700">
-                                    {fieldLabel} was updated
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
+        // Handle nested structure from your JSON: { new_value: ..., old_value: ... }
+        const oldValue = values.old_value !== undefined ? values.old_value : 'N/A';
+        const newValue = values.new_value !== undefined ? values.new_value : 'N/A';
 
-                    {/* Full Details Grid */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-gray-50 p-3 rounded">
-                      <div>
-                        <p className="text-gray-500 font-medium">Mukkadam</p>
-                        <p className="font-semibold text-gray-900">{log.mukkadam_name}</p>
-                      </div>
-                      {log.transport_name && (
-                        <div>
-                          <p className="text-gray-500 font-medium">Transport</p>
-                          <p className="font-semibold text-gray-900">{log.transport_name}</p>
-                        </div>
-                      )}
-                      {log.amount && (
-                        <div>
-                          <p className="text-gray-500 font-medium">Amount</p>
-                          <p className={`font-bold ${iconColor}`}>
-                            ₹{log.amount.toLocaleString()}
-                          </p>
-                        </div>
-                      )}
-                      <div>
-                        <p className="text-gray-500 font-medium">Performed By</p>
-                        <p className="font-semibold text-gray-900">
-                          {log.performed_by_name || 'System'}
-                        </p>
-                      </div>
+        return (
+          <div key={field} className="bg-white p-3 rounded border border-purple-200">
+            <p className="text-xs font-semibold text-purple-700 mb-2">
+              {fieldLabel}
+            </p>
+            <div className="flex items-center gap-2 text-xs flex-wrap">
+              <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through max-w-[200px] truncate">
+                {String(oldValue)}
+              </span>
+              <span className="text-gray-400 font-bold">→</span>
+              <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold max-w-[200px] truncate">
+                {String(newValue)}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+)}
+
+    {/* Admin: Show Reason (for other types) */}
+    {isAdmin && log.reason && log.activity_type !== 'activity_marked_edited' && (
+      <div className="mb-4 p-3 bg-yellow-50 border-2 border-yellow-300 rounded-lg">
+        <p className="text-xs font-bold text-yellow-800 mb-1 flex items-center">
+          <AlertCircle size={14} className="mr-1" />
+          Reason for Change (Admin Only)
+        </p>
+        <p className="text-sm text-yellow-900 font-medium">
+          {log.reason}
+        </p>
+      </div>
+    )}
+
+    {/* Changes Section (for allocation updates) */}
+    {hasChanges && log.activity_type !== 'activity_marked_edited' && (
+      <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+        <p className="text-sm font-bold text-gray-800 mb-3 flex items-center">
+          <Edit size={14} className="mr-2" />
+          Changes Made ({changedFields.length})
+        </p>
+
+        <div className="space-y-3">
+          {Object.entries(log.changes).map(([field, changeData]: [string, any]) => {
+            const fieldLabel = field
+              .replace(/_/g, ' ')
+              .replace(/\b\w/g, (l) => l.toUpperCase());
+
+            return (
+              <div key={field} className="bg-white p-3 rounded border border-gray-200">
+                {/* Admin: Show Full Details */}
+                {isAdmin ? (
+                  <>
+                    <p className="text-xs font-semibold text-gray-700 mb-2">
+                      {fieldLabel}
+                    </p>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through">
+                        {changeData.old_value || changeData.old || 'Not set'}
+                      </span>
+                      <span className="text-gray-400">→</span>
+                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold">
+                        {changeData.new_value || changeData.new}
+                      </span>
                     </div>
-
-                    {/* View Allocation Link */}
-                    {log.allocation_id && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/allocations/${log.allocation_id}`);
-                        }}
-                        className="mt-3 text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center"
-                      >
-                        <Eye size={12} className="mr-1" />
-                        View Allocation Details
-                      </button>
-                    )}
-                  </div>
+                  </>
+                ) : (
+                  /* Non-Admin: Only Show Field Name */
+                  <p className="text-sm font-medium text-gray-700">
+                    {fieldLabel} was updated
+                  </p>
                 )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )}
+
+    {/* Full Details Grid */}
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-gray-50 p-3 rounded">
+      {/* ✅ NEW: Farmer Name */}
+      {log.farmer_name && (
+        <div>
+          <p className="text-gray-500 font-medium">Farmer</p>
+          <p className="font-semibold text-gray-900">{log.farmer_name}</p>
+        </div>
+      )}
+      <div>
+        <p className="text-gray-500 font-medium">Mukkadam</p>
+        <p className="font-semibold text-gray-900">{log.mukkadam_name}</p>
+      </div>
+      {log.transport_name && (
+        <div>
+          <p className="text-gray-500 font-medium">Transport</p>
+          <p className="font-semibold text-gray-900">{log.transport_name}</p>
+        </div>
+      )}
+      {log.amount && (
+        <div>
+          <p className="text-gray-500 font-medium">Amount</p>
+          <p className={`font-bold ${iconColor}`}>
+            ₹{log.amount.toLocaleString()}
+          </p>
+        </div>
+      )}
+      <div>
+        <p className="text-gray-500 font-medium">Performed By</p>
+        <p className="font-semibold text-gray-900">
+          {log.performed_by_name || 'System'}
+        </p>
+      </div>
+    </div>
+
+    {/* View Allocation Link */}
+    {log.allocation_id && (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          navigate(`/allocations/${log.allocation_id}`);
+        }}
+        className="mt-3 text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center"
+      >
+        <Eye size={12} className="mr-1" />
+        View Allocation Details
+      </button>
+    )}
+  </div>
+)}
               </div>
             );
           })}
