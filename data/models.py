@@ -518,6 +518,8 @@ class AllocationChangeLog(models.Model):
     
     def __str__(self):
         return f"{self.allocation.id} - {self.field_name} changed on {self.changed_at}"
+
+
 class ActivityLog(models.Model):
     """Unified activity log with detailed change tracking"""
     
@@ -604,6 +606,8 @@ class ActivityLog(models.Model):
     
     def __str__(self):
         return f"{self.get_activity_type_display()} - {self.job_id} at {self.performed_at}"
+
+
 # core/models.py (add to your existing models)
 from django.db import models
 from django.utils import timezone
