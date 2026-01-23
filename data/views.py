@@ -159,7 +159,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             'created': created_count,
             'updated': updated_count
         })
-
+from .models import AllocationChangeLog
+from django.db import transaction
 
 class AllocationViewSet(viewsets.ModelViewSet):
     queryset = Allocation.objects.all()
@@ -349,6 +350,139 @@ class AllocationViewSet(viewsets.ModelViewSet):
         clear_mukkadam_cache(allocation.mukkadam_id)
         return allocation
     
+
+    def update(self, request, *args, **kwargs):
+        """Update allocation with mandatory change reason"""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        # ✅ REQUIRE change_reason for any edit
+        change_reason = request.data.get('change_reason', '').strip()
+        if not change_reason:
+            return Response(
+                {'error': 'Change reason is required when editing an allocation'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if len(change_reason) < 10:
+            return Response(
+                {'error': 'Change reason must be at least 10 characters long'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Store old values for comparison
+        old_values = {
+            'allocated_area': str(instance.allocated_area),
+            'work_date': str(instance.work_date),
+            'crew_size': str(instance.crew_size) if instance.crew_size else None,
+            'mukkadam_price': str(instance.mukkadam_price),
+            'transport_type': instance.transport_type,
+            'transport_provider_id': str(instance.transport_provider_id) if instance.transport_provider_id else None,
+            'own_transport_price': str(instance.own_transport_price) if instance.own_transport_price else None,
+            'transport_price': str(instance.transport_price) if instance.transport_price else None,
+            'mukkadam_id': str(instance.mukkadam_id),
+        }
+        
+        # Validate area changes
+        if 'allocated_area' in request.data:
+            new_area = Decimal(str(request.data['allocated_area']))
+            old_area = instance.allocated_area
+            job_activity = instance.job_activity
+            
+            # Calculate available area (including current allocation)
+            available_area = job_activity.remaining_area + old_area
+            
+            if new_area > available_area:
+                return Response(
+                    {'error': f'Cannot allocate {new_area} acres. Only {available_area} acres available.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        try:
+            with transaction.atomic():
+                # Update the allocation
+                serializer = self.get_serializer(instance, data=request.data, partial=partial)
+                serializer.is_valid(raise_exception=True)
+                
+                # Save the updated allocation
+                self.perform_update(serializer)
+                updated_instance = self.get_object()
+                
+                # Track changes
+                changes_made = []
+                new_values = {
+                    'allocated_area': str(updated_instance.allocated_area),
+                    'work_date': str(updated_instance.work_date),
+                    'crew_size': str(updated_instance.crew_size) if updated_instance.crew_size else None,
+                    'mukkadam_price': str(updated_instance.mukkadam_price),
+                    'transport_type': updated_instance.transport_type,
+                    'transport_provider_id': str(updated_instance.transport_provider_id) if updated_instance.transport_provider_id else None,
+                    'own_transport_price': str(updated_instance.own_transport_price) if updated_instance.own_transport_price else None,
+                    'transport_price': str(updated_instance.transport_price) if updated_instance.transport_price else None,
+                    'mukkadam_id': str(updated_instance.mukkadam_id),
+                }
+                
+                # Create change log entries for each changed field
+                for field, old_val in old_values.items():
+                    new_val = new_values.get(field)
+                    if old_val != new_val:
+                        AllocationChangeLog.objects.create(
+                            allocation=updated_instance,
+                            changed_by=request.user if request.user.is_authenticated else None,
+                            change_reason=change_reason,
+                            field_name=field,
+                            old_value=old_val or '',
+                            new_value=new_val or ''
+                        )
+                        changes_made.append(field)
+                
+                # Update job activity allocated_area if area changed
+                if 'allocated_area' in request.data:
+                    area_diff = updated_instance.allocated_area - instance.allocated_area
+                    job_activity = updated_instance.job_activity
+                    job_activity.allocated_area = job_activity.allocated_area + area_diff
+                    job_activity.save()
+                
+                print(f"✅ Allocation #{updated_instance.id} updated")
+                print(f"   Changed fields: {', '.join(changes_made)}")
+                print(f"   Reason: {change_reason}")
+                
+                return Response({
+                    'message': 'Allocation updated successfully',
+                    'changes_made': changes_made,
+                    'data': serializer.data
+                })
+                
+        except Exception as e:
+            print(f"❌ Error updating allocation: {str(e)}")
+            return Response(
+                {'error': f'Failed to update allocation: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def partial_update(self, request, *args, **kwargs):
+        """Handle PATCH requests"""
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+    
+    @action(detail=True, methods=['get'])
+    def change_history(self, request, pk=None):
+        """Get change history for an allocation"""
+        allocation = self.get_object()
+        logs = allocation.change_logs.all()
+        
+        history = []
+        for log in logs:
+            history.append({
+                'changed_at': log.changed_at,
+                'changed_by': log.changed_by.username if log.changed_by else 'System',
+                'field_name': log.field_name,
+                'old_value': log.old_value,
+                'new_value': log.new_value,
+                'reason': log.change_reason
+            })
+        
+        return Response({'history': history})
 
 from .models import JobActivity, Allocation, AllocationStats  # ✅ CORRECT
 
@@ -1267,15 +1401,35 @@ def jobs_list(request):
         activities_from_api = job.get('activities', [])
         activities_data = []
 
+        # REPLACE the entire loop with this:
         for api_activity in activities_from_api:
             activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
 
-            # Check if allocated
+            # ✅ CHECK IF ACTIVITY EXISTS IN DB
             db_activity = JobActivity.objects.filter(
                 job_id=job_id,
                 activity_id=activity_id
             ).prefetch_related('allocations').first()
 
+            # ✅ PRIORITY LOGIC: Use DB data if edited or lost, else use API data
+            if db_activity and (db_activity.is_manually_edited or hasattr(db_activity, 'lost_record')):
+                # 🔵 USE DATABASE DATA (edited or lost activity)
+                activity_name = db_activity.activity_name
+                total_area = db_activity.total_area
+                total_price = db_activity.total_price
+                scheduled_date = db_activity.scheduled_datetime.date() if db_activity.scheduled_datetime else None
+                rate_per_acre = db_activity.rate_per_acre
+                location = db_activity.location or api_activity.get('location', 'N/A')
+            else:
+                # 🟢 USE EXTERNAL API DATA (fresh, unedited activity)
+                activity_name = api_activity.get('activity_name', 'Unknown')
+                total_area = Decimal(str(api_activity.get('acres', 0)))
+                total_price = Decimal(str(api_activity.get('total_price', 0)))
+                scheduled_date = api_activity.get('date_time') or api_activity.get('scheduled_date')
+                rate_per_acre = float(total_price) / float(total_area) if float(total_area) > 0 else 0
+                location = api_activity.get('location', 'N/A')
+
+            # Calculate allocations (same as before)
             allocations_data = []
             allocated_area = Decimal('0')
 
@@ -1283,7 +1437,6 @@ def jobs_list(request):
                 for alloc in db_activity.allocations.all():
                     allocated_area += Decimal(str(alloc.allocated_area))
 
-                    # Get mukkadam from cache
                     mukkadam_data = mukkadams_cache.get(alloc.mukkadam_id, {})
                     mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{alloc.mukkadam_id}')
 
@@ -1301,40 +1454,40 @@ def jobs_list(request):
                     })
 
             # Calculate areas
-            total_area = Decimal(str(api_activity.get('acres', 0)))
             remaining_area = total_area - allocated_area
             is_fully_allocated = allocated_area >= total_area
 
             def safe_date(value):
                 if not value:
                     return ''
-                return str(value).split('T')[0]
+                if isinstance(value, str):
+                    return value.split('T')[0]
+                return str(value)
 
             activities_data.append({
                 'id': db_activity.id if db_activity else None,
                 'activity_id': activity_id,
-                'activity_name': api_activity.get('activity_name', 'Unknown'),
+                'activity_name': activity_name,
                 'activity_type': api_activity.get('activity_type', ''),
-                'location': api_activity.get('location', 'N/A'),
+                'location': location,
                 'total_area': float(total_area),
                 'allocated_area': float(allocated_area),
                 'remaining_area': float(remaining_area),
-                'scheduled_date': safe_date(
-                    api_activity.get('date_time') or
-                    api_activity.get('scheduled_date') or
-                    job.get('scheduled_date')
-                ),
+                'scheduled_date': safe_date(scheduled_date),
                 'scheduled_time': api_activity.get('scheduled_time', ''),
                 'estimated_workers': api_activity.get('estimated_workers', 10),
-                'rate_per_acre': float(api_activity.get('total_price', 0)) / float(total_area) if float(total_area) > 0 else 0,
-                'total_price': float(api_activity.get('total_price', 0)),
+                'rate_per_acre': float(rate_per_acre),
+                'total_price': float(total_price),
                 'transport_cost': float(api_activity.get('transport_cost', 0)),
                 'other_cost': float(api_activity.get('other_cost', 0)),
                 'subtotal': float(api_activity.get('subtotal', 0)),
                 'is_fully_allocated': is_fully_allocated,
-                'allocations': allocations_data
+                'allocations': allocations_data,
+                # ✅ ADD LOST STATUS
+                'is_lost': db_activity.lost_record.is_active if (db_activity and hasattr(db_activity, 'lost_record')) else False,
+                'lost_reason': db_activity.lost_record.reason if (db_activity and hasattr(db_activity, 'lost_record') and db_activity.lost_record.is_active) else None,
+                'edit_history_count': db_activity.edit_history.count() if db_activity else 0,
             })
-
         # Calculate job status
         def calculate_status(activities):
             if not activities:
@@ -1391,6 +1544,116 @@ def jobs_list(request):
 # allocation_app/views.py
 
 from .utils import batch_fetch_mukkadams, batch_fetch_farmers, batch_fetch_transport_providers
+# allocation_app/views.py
+# Add this new endpoint to your views.py file
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+import requests
+
+EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
+
+@api_view(['PATCH'])
+@permission_classes([AllowAny])
+def update_activity(request):
+    """
+    Forward activity update to external ops API
+    
+    Expected payload:
+    {
+        "job_id": "616",
+        "activity_id": "183",
+        "updates": {
+            "activity_name": "Finger Thinning",
+            "acres": 2.5,
+            "date_time": "2026-01-15T10:00:00",
+            "total_price": 5000.0
+        }
+    }
+    """
+    try:
+        # Get data from request
+        job_id = request.data.get('job_id')
+        activity_id = request.data.get('activity_id')
+        updates = request.data.get('updates', {})
+        
+        # Validate required fields
+        if not job_id or not activity_id:
+            return Response(
+                {'error': 'job_id and activity_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not updates:
+            return Response(
+                {'error': 'No updates provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Prepare payload for ops API
+        payload = {
+            'job_id': job_id,
+            'activity_id': activity_id,
+            'updates': updates
+        }
+        
+        # Forward to ops API
+        # TODO: Replace with actual endpoint URL from ops team
+        ops_update_url = f'{EXTERNAL_API_URL}/update_activity/'
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        
+        print(f"\n📤 Forwarding activity update to ops API...")
+        print(f"   Job ID: {job_id}")
+        print(f"   Activity ID: {activity_id}")
+        print(f"   Updates: {updates}")
+        
+        response = requests.patch(
+            ops_update_url,
+            json=payload,
+            headers={
+                'Authorization': token,
+                'Content-Type': 'application/json'
+            },
+            timeout=30
+        )
+        
+        response.raise_for_status()
+        
+        print(f"✅ Update successful: {response.status_code}")
+        
+        return Response({
+            'success': True,
+            'message': 'Activity updated successfully',
+            'data': response.json() if response.text else {}
+        }, status=status.HTTP_200_OK)
+        
+    except requests.exceptions.HTTPError as e:
+        error_detail = str(e)
+        try:
+            error_detail = e.response.json()
+        except:
+            pass
+            
+        return Response({
+            'success': False,
+            'error': f'Ops API error: {error_detail}'
+        }, status=status.HTTP_502_BAD_GATEWAY)
+        
+    except requests.exceptions.RequestException as e:
+        return Response({
+            'success': False,
+            'error': f'Failed to connect to ops API: {str(e)}'
+        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        
+    except Exception as e:
+        return Response({
+            'success': False,
+            'error': f'Unexpected error: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -3794,1593 +4057,478 @@ class DetailedRecommendationView(APIView):
                 "detail": "Failed to generate recommendations"
             }, status=500)
 
-
-
-# # allocation_app/views.py
-# import requests
-# from concurrent.futures import ThreadPoolExecutor, as_completed
-# from rest_framework.decorators import api_view, permission_classes
-# from rest_framework.permissions import AllowAny
-# from rest_framework.response import Response
-# from rest_framework import status
-# from django.contrib.auth.models import User
-# from datetime import datetime, date
-# from decimal import Decimal
-
-# from .models import Allocation, JobActivity, PaymentRequest
-
-# # # API Configuration
-# # SUPPLY_API_URL = 'https://demand.bharatintelligence.ai/supply'
-# EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
-# FARMER_API_BASE = 'https://demand.bharatintelligence.ai/fir/api'
-
-# JOB_TOKEN = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-# FARMER_TOKEN = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
-
-
-# def get_supply_users_mapping():
-#     """Fetch all users from Supply API for created_by mapping"""
-#     try:
-#         response = requests.get(
-#             f'{SUPPLY_API_URL}/api/users/all/',
-#             timeout=20
-#         )
-#         if response.status_code == 200:
-#             users_data = response.json()
-#             return {
-#                 user['id']: user.get('username') or user.get('full_name') or f"User #{user['id']}"
-#                 for user in users_data
-#             }
-#     except Exception as e:
-#         print(f"Error fetching supply users: {e}")
-    
-#     return {}
-
-
-# def get_allocation_users_mapping():
-#     """Get users from Django User model for allocated_by mapping"""
-#     try:
-#         users = User.objects.all().values('id', 'username', 'first_name', 'last_name')
-#         return {
-#             user['id']: user.get('username') or f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or f"User #{user['id']}"
-#             for user in users
-#         }
-#     except Exception as e:
-#         print(f"Error fetching allocation users from DB: {e}")
-#         return {}
-
-
-# def get_all_mukkadams_from_supply():
-#     """Get all mukkadams from Supply API"""
-#     try:
-#         response = requests.get(
-#             f'{SUPPLY_API_URL}/api/mukkadam/',
-#             timeout=30
-#         )
-        
-#         if response.status_code == 200:
-#             data = response.json()
-            
-#             if isinstance(data, list):
-#                 return data
-#             elif isinstance(data, dict) and 'results' in data:
-#                 return data['results']
-#             else:
-#                 return []
-#         else:
-#             print(f"Error fetching mukkadams: {response.status_code}")
-#             return []
-    
-#     except Exception as e:
-#         print(f"Error fetching mukkadams from Supply API: {e}")
-#         return []
-
-
-# def batch_fetch_mukkadams(mukkadam_ids, max_workers=10):
-#     """Fetch mukkadam details in parallel"""
-#     mukkadams_cache = {}
-    
-#     def fetch_single(mid):
-#         try:
-#             response = requests.get(
-#                 f'{SUPPLY_API_URL}/api/mukkadam/{mid}/',
-#                 timeout=20
-#             )
-#             if response.status_code == 200:
-#                 return mid, response.json()
-#         except:
-#             pass
-#         return mid, None
-    
-#     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-#         futures = {executor.submit(fetch_single, mid): mid for mid in mukkadam_ids}
-        
-#         for future in as_completed(futures):
-#             mid, data = future.result()
-#             if data:
-#                 mukkadams_cache[mid] = data
-    
-#     return mukkadams_cache
-
-
-# def batch_fetch_farmers(farmer_ids, max_workers=10):
-#     """Fetch farmer details in parallel"""
-#     farmers_cache = {}
-    
-#     def fetch_single(fid):
-#         try:
-#             response = requests.get(
-#                 f'{FARMER_API_BASE}/get_farmer_details/{fid}/',
-#                 headers={'Authorization': FARMER_TOKEN},
-#                 timeout=20
-#             )
-#             if response.status_code == 200:
-#                 return str(fid), response.json()
-#         except:
-#             pass
-#         return str(fid), None
-    
-#     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-#         futures = {executor.submit(fetch_single, fid): fid for fid in farmer_ids}
-        
-#         for future in as_completed(futures):
-#             fid, data = future.result()
-#             if data:
-#                 farmers_cache[fid] = data
-    
-#     return farmers_cache
-
-
-# @api_view(['GET'])
-# @permission_classes([AllowAny])
-# def mukkadam_scorecard_summary(request):
-#     """
-#     Get mukkadam scorecard summary with all filters
-#     """
-#     print("="*80)
-#     print("📊 MUKKADAM SCORECARD SUMMARY API")
-#     print("="*80)
-    
-#     # ========================================
-#     # STEP 1: FETCH USER MAPPINGS
-#     # ========================================
-#     print("👥 Fetching user mappings...")
-#     supply_users_map = get_supply_users_mapping()
-#     allocation_users_map = get_allocation_users_mapping()
-#     print(f"✅ Loaded {len(supply_users_map)} supply users and {len(allocation_users_map)} allocation users")
-    
-#     # ========================================
-#     # STEP 2: GET ALL MUKKADAMS FROM SUPPLY API
-#     # ========================================
-#     print("🔄 Fetching all mukkadams from Supply API...")
-#     all_mukkadams = get_all_mukkadams_from_supply()
-    
-#     if not all_mukkadams:
-#         return Response({
-#             'error': 'Failed to fetch mukkadams from Supply API',
-#             'count': 0,
-#             'summary': {},
-#             'mukkadams': []
-#         })
-    
-#     print(f"✅ Fetched {len(all_mukkadams)} mukkadams from Supply API")
-    
-#     # ========================================
-#     # STEP 3: APPLY FILTERS ON MUKKADAM DATA
-#     # ========================================
-#     filtered_mukkadams = all_mukkadams
-    
-#     # Search by name or mobile
-#     search = request.GET.get('search')
-#     if search:
-#         filtered_mukkadams = [
-#             m for m in filtered_mukkadams
-#             if search.lower() in m.get('mukkadam_name', '').lower() or
-#                search in m.get('mobile_numbers', '')
-#         ]
-#         print(f"🔍 Search filter: {search} -> {len(filtered_mukkadams)} results")
-    
-#     # Filter by created_by
-#     created_by = request.GET.get('created_by')
-#     if created_by:
-#         try:
-#             created_by_id = int(created_by)
-#             filtered_mukkadams = [
-#                 m for m in filtered_mukkadams
-#                 if m.get('created_by') == created_by_id
-#             ]
-#             print(f"👤 Created by: {created_by} -> {len(filtered_mukkadams)} results")
-#         except ValueError:
-#             pass
-    
-#     # Location filters
-#     district = request.GET.get('district')
-#     if district:
-#         filtered_mukkadams = [
-#             m for m in filtered_mukkadams
-#             if m.get('district', '').lower() == district.lower()
-#         ]
-#         print(f"📍 District: {district} -> {len(filtered_mukkadams)} results")
-    
-#     taluka = request.GET.get('taluka')
-#     if taluka:
-#         filtered_mukkadams = [
-#             m for m in filtered_mukkadams
-#             if m.get('taluka', '').lower() == taluka.lower()
-#         ]
-#         print(f"📍 Taluka: {taluka} -> {len(filtered_mukkadams)} results")
-    
-#     village = request.GET.get('village')
-#     if village:
-#         filtered_mukkadams = [
-#             m for m in filtered_mukkadams
-#             if m.get('village', '').lower() == village.lower()
-#         ]
-#         print(f"📍 Village: {village} -> {len(filtered_mukkadams)} results")
-    
-#     # Registration date filter
-#     date_from = request.GET.get('date_from')
-#     date_to = request.GET.get('date_to')
-#     date_filter_type = request.GET.get('date_filter_type', 'work_date')
-    
-#     if date_filter_type == 'registration' and (date_from or date_to):
-#         def parse_date(date_str):
-#             try:
-#                 return datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
-#             except:
-#                 return None
-        
-#         if date_from:
-#             date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
-#             filtered_mukkadams = [
-#                 m for m in filtered_mukkadams
-#                 if parse_date(m.get('created_at')) and parse_date(m.get('created_at')) >= date_from_obj
-#             ]
-        
-#         if date_to:
-#             date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
-#             filtered_mukkadams = [
-#                 m for m in filtered_mukkadams
-#                 if parse_date(m.get('created_at')) and parse_date(m.get('created_at')) <= date_to_obj
-#             ]
-        
-#         print(f"📅 Registration date filter: {date_from} to {date_to} -> {len(filtered_mukkadams)} results")
-    
-#     mukkadam_ids = [m['id'] for m in filtered_mukkadams]
-    
-#     # ========================================
-#     # STEP 4: GET ALLOCATIONS FROM DATABASE
-#     # ========================================
-#     print("🔄 Fetching allocations from database...")
-    
-#     allocations_qs = Allocation.objects.filter(
-#         mukkadam_id__in=mukkadam_ids
-#     ).select_related('job_activity', 'allocated_by').prefetch_related('payment_request')
-    
-#     # Apply allocation filters
-#     activity_type = request.GET.get('activity_type')
-#     if activity_type:
-#         allocations_qs = allocations_qs.filter(
-#             job_activity__activity_type__iexact=activity_type
-#         )
-#         print(f"🎯 Activity type: {activity_type}")
-    
-#     allocated_by = request.GET.get('allocated_by')
-#     if allocated_by:
-#         allocations_qs = allocations_qs.filter(allocated_by_id=allocated_by)
-#         print(f"👤 Allocated by: {allocated_by}")
-    
-#     if date_filter_type == 'work_date' and (date_from or date_to):
-#         if date_from:
-#             allocations_qs = allocations_qs.filter(work_date__gte=date_from)
-#         if date_to:
-#             allocations_qs = allocations_qs.filter(work_date__lte=date_to)
-#         print(f"📅 Work date filter: {date_from} to {date_to}")
-    
-#     allocations = list(allocations_qs)
-#     print(f"✅ Found {len(allocations)} allocations")
-    
-#     # ========================================
-#     # STEP 5: FETCH EXTERNAL DATA (Jobs & Farmers)
-#     # ========================================
-#     if not allocations:
-#         print("⚠️ No allocations found, skipping external API calls")
-#         jobs_cache = {}
-#         farmers_cache = {}
-#         mukkadams_detail_cache = {}
-#     else:
-#         print("🔄 Fetching job and farmer details from external APIs...")
-        
-#         # Get unique job IDs
-#         job_ids = set(alloc.job_activity.job_id for alloc in allocations if alloc.job_activity)
-        
-#         # Fetch jobs
-#         jobs_cache = {}
-#         try:
-#             response = requests.get(
-#                 f'{EXTERNAL_API_URL}/get_allocated_jobs/',
-#                 headers={'Authorization': JOB_TOKEN},
-#                 timeout=20
-#             )
-            
-#             if response.status_code == 200:
-#                 data = response.json()
-#                 jobs_list = data.get('data', []) if isinstance(data, dict) else data
-                
-#                 for job in jobs_list:
-#                     job_id = str(job.get('work_id') or job.get('id'))
-#                     if job_id in job_ids:
-#                         jobs_cache[job_id] = job
-#         except Exception as e:
-#             print(f"⚠️ Error fetching jobs: {e}")
-        
-#         # Get farmer IDs and fetch them
-#         farmer_ids = set(j.get('farmer_id') for j in jobs_cache.values() if j.get('farmer_id'))
-#         farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
-        
-#         # Get mukkadam details
-#         unique_mukkadam_ids = set(alloc.mukkadam_id for alloc in allocations)
-#         mukkadams_detail_cache = batch_fetch_mukkadams(list(unique_mukkadam_ids), max_workers=5)
-        
-#         print(f"✅ Fetched {len(jobs_cache)} jobs, {len(farmers_cache)} farmers, {len(mukkadams_detail_cache)} mukkadam details")
-    
-#     # ========================================
-#     # STEP 6: BUILD MUKKADAM STATS
-#     # ========================================
-#     mukkadam_stats = {}
-    
-#     for alloc in allocations:
-#         mid = alloc.mukkadam_id
-        
-#         if mid not in mukkadam_stats:
-#             mukkadam_stats[mid] = {
-#                 'allocations': [],
-#                 'unique_jobs': set(),
-#                 'total_area': 0,
-#                 'total_workers': 0,
-#                 'total_earnings': 0,
-#                 'total_paid': 0,
-#                 'total_pending': 0,
-#                 'status_counts': {
-#                     'allocated': 0,
-#                     'in_progress': 0,
-#                     'completed': 0,
-#                     'cancelled': 0
-#                 },
-#                 'first_work_date': None,
-#             }
-        
-#         stats = mukkadam_stats[mid]
-        
-#         # Build enriched allocation data
-#         job_activity = alloc.job_activity
-#         job_id = str(job_activity.job_id) if job_activity else 'Unknown'
-#         activity_id = str(job_activity.activity_id) if job_activity else 'Unknown'
-        
-#         job_data = jobs_cache.get(job_id, {})
-#         farmer_id = str(job_data.get('farmer_id', ''))
-#         farmer_data = farmers_cache.get(farmer_id, {})
-#         mukkadam_detail = mukkadams_detail_cache.get(mid, {})
-        
-#         # Get activity details
-#         activity_name = 'Unknown'
-#         activity_type_val = 'Unknown'
-#         if job_data and 'activities' in job_data:
-#             activity_details = next(
-#                 (a for a in job_data['activities'] if str(a.get('id') or a.get('activity_id')) == activity_id),
-#                 None
-#             )
-#             if activity_details:
-#                 activity_name = activity_details.get('activity_name', 'Unknown')
-#                 activity_type_val = activity_details.get('activity_type', 'Unknown')
-        
-#         # Payment tracking
-#         payment_status = 'unpaid'
-#         if hasattr(alloc, 'payment_request'):
-#             payment_req = alloc.payment_request
-#             payment_status = payment_req.status
-            
-#             if payment_status == 'paid':
-#                 stats['total_paid'] += float(payment_req.requested_amount)
-#             elif payment_status == 'pending':
-#                 stats['total_pending'] += float(payment_req.requested_amount)
-        
-#         location = job_data.get('location') or farmer_data.get('village', 'Unknown')
-        
-#         enriched_alloc = {
-#             'allocation_id': alloc.id,
-#             'job_id': job_id,
-#             'activity_name': activity_name,
-#             'activity_type': activity_type_val,
-#             'work_date': str(alloc.work_date) if alloc.work_date else None,
-#             'location': location,
-#             'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
-#             'farmer_phone': farmer_data.get('phone_number', 'N/A'),
-#             'area': float(alloc.allocated_area),
-#             'crew_size': alloc.crew_size or 0,
-#             'earnings': float(alloc.mukkadam_price),
-#             'status': alloc.status,
-#             'payment_status': payment_status,
-#             'allocated_by': allocation_users_map.get(
-#                 alloc.allocated_by.id,
-#                 f"User #{alloc.allocated_by.id}"
-#             ) if alloc.allocated_by else 'Unknown',
-#         }
-        
-#         stats['allocations'].append(enriched_alloc)
-        
-#         if job_activity:
-#             stats['unique_jobs'].add(job_activity.job_id)
-        
-#         stats['total_area'] += float(alloc.allocated_area)
-#         stats['total_workers'] += (alloc.crew_size or 0)
-#         stats['total_earnings'] += float(alloc.mukkadam_price)
-        
-#         # Status tracking
-#         stats['status_counts'][alloc.status] = stats['status_counts'].get(alloc.status, 0) + 1
-        
-#         # First work date
-#         if alloc.work_date:
-#             if stats['first_work_date'] is None or alloc.work_date < stats['first_work_date']:
-#                 stats['first_work_date'] = alloc.work_date
-    
-#     # ========================================
-#     # STEP 7: BUILD FINAL MUKKADAM LIST
-#     # ========================================
-#     mukkadam_list = []
-#     today = date.today()
-
-#     for mukkadam in filtered_mukkadams:
-#         mid = mukkadam['id']
-#         stats = mukkadam_stats.get(mid, {
-#             'allocations': [],
-#             'unique_jobs': set(),
-#             'total_area': 0,
-#             'total_workers': 0,
-#             'total_earnings': 0,
-#             'total_paid': 0,
-#             'total_pending': 0,
-#             'status_counts': {},
-#             'first_work_date': None,
-#         })
-        
-#         # Calculate active status
-#         has_jobs = len(stats['allocations']) > 0
-        
-#         # ========================================
-#         # ✅ ENHANCED AVAILABILITY LOGIC
-#         # ========================================
-#         start_date = mukkadam.get('start_date')
-#         end_date = mukkadam.get('end_date')
-#         team_availabilities = mukkadam.get('team_availabilities', [])
-        
-#         is_available_now = False
-#         all_availability_periods = []
-        
-#         # Check mukkadam-level dates
-#         if start_date:
-#             try:
-#                 start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
-#                 end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date() if end_date else None
-                
-#                 all_availability_periods.append({
-#                     'type': 'main',
-#                     'start_date': start_date,
-#                     'end_date': end_date,
-#                 })
-                
-#                 # Check if available now
-#                 if end_date_obj:
-#                     if start_date_obj <= today <= end_date_obj:
-#                         is_available_now = True
-#                 else:
-#                     if start_date_obj <= today:
-#                         is_available_now = True
-#             except:
-#                 pass
-        
-#         # Check team availabilities
-#         if team_availabilities:
-#             for team_avail in team_availabilities:
-#                 if team_avail.get('status') == 'Available':
-#                     team_start = team_avail.get('startDate')
-#                     team_end = team_avail.get('endDate')
-                    
-#                     if team_start:
-#                         try:
-#                             team_start_obj = datetime.strptime(team_start, '%Y-%m-%d').date()
-#                             team_end_obj = datetime.strptime(team_end, '%Y-%m-%d').date() if team_end else None
-                            
-#                             all_availability_periods.append({
-#                                 'type': 'team',
-#                                 'team_name': team_avail.get('teamName', 'Unknown Team'),
-#                                 'start_date': team_start,
-#                                 'end_date': team_end,
-#                             })
-                            
-#                             # Check if available now
-#                             if not is_available_now:  # Only check if not already available
-#                                 if team_end_obj:
-#                                     if team_start_obj <= today <= team_end_obj:
-#                                         is_available_now = True
-#                                 else:
-#                                     if team_start_obj <= today:
-#                                         is_available_now = True
-#                         except:
-#                             pass
-        
-#         has_availability = len(all_availability_periods) > 0
-        
-#         # Active logic: has jobs OR is available now
-#         is_active = has_jobs or is_available_now
-        
-#         # Days to first job
-#         days_to_first_job = None
-#         if stats['first_work_date'] and mukkadam.get('created_at'):
-#             try:
-#                 created_date = datetime.fromisoformat(mukkadam['created_at'].replace('Z', '+00:00')).date()
-#                 days_to_first_job = (stats['first_work_date'] - created_date).days
-#             except:
-#                 pass
-        
-#         # Location display
-#         location_parts = []
-#         if mukkadam.get('village'): location_parts.append(mukkadam['village'])
-#         if mukkadam.get('taluka'): location_parts.append(mukkadam['taluka'])
-#         if mukkadam.get('district'): location_parts.append(mukkadam['district'])
-#         location_display = ", ".join(location_parts) if location_parts else "Not Specified"
-        
-#         mukkadam_obj = {
-#             'id': mid,
-#             'mukkadam_name': mukkadam.get('mukkadam_name', 'Unknown'),
-#             'mobile_numbers': mukkadam.get('mobile_numbers', ''),
-#             'village': mukkadam.get('village', ''),
-#             'taluka': mukkadam.get('taluka', ''),
-#             'district': mukkadam.get('district', ''),
-#             'crew_size': mukkadam.get('crew_size', 0),
-#             'is_permanent': mukkadam.get('is_permanent', False),
-#             'created_at': mukkadam.get('created_at'),
-#             'created_by_name': supply_users_map.get(
-#                 mukkadam.get('created_by'),
-#                 f"User #{mukkadam.get('created_by')}"
-#             ) if mukkadam.get('created_by') else 'Unknown',
-#             'location_display': location_display,
-            
-#             # ✅ Enhanced Availability
-#             'start_date': start_date,
-#             'end_date': end_date,
-#             'availability_status': {
-#                 'is_available_now': is_available_now,
-#                 'has_availability': has_availability,
-#                 'all_periods': all_availability_periods,  # ✅ Show all availability periods
-#                 'total_periods': len(all_availability_periods),
-#             },
-            
-#             # Activity status
-#             'is_active': is_active,
-#             'first_allocation_date': str(stats['first_work_date']) if stats['first_work_date'] else None,
-#             'days_to_first_job': days_to_first_job,
-            
-#             # Job statistics
-#             'total_allocations': len(stats['allocations']),
-#             'total_unique_jobs': len(stats['unique_jobs']),
-#             'total_area_allocated': round(stats['total_area'], 2),
-#             'total_workers_supplied': stats['total_workers'],
-#             'total_earnings': round(stats['total_earnings'], 2),
-#             'total_paid': round(stats['total_paid'], 2),
-#             'total_pending': round(stats['total_pending'], 2),
-            
-#             # Status breakdown
-#             'allocations_by_status': stats['status_counts'],
-            
-#             # Job summary (last 10)
-#             'job_summary': stats['allocations'][:10],
-#         }
-        
-#         mukkadam_list.append(mukkadam_obj)
-        
-#     # ========================================
-#     # STEP 8: APPLY POST-FILTERS
-#     # ========================================
-#     has_jobs = request.GET.get('has_jobs')
-#     if has_jobs == 'true':
-#         mukkadam_list = [m for m in mukkadam_list if m['total_allocations'] > 0]
-#     elif has_jobs == 'false':
-#         mukkadam_list = [m for m in mukkadam_list if m['total_allocations'] == 0]
-#     else:
-#         mukkadam_list = [
-#             m for m in mukkadam_list
-#             if m['total_allocations'] > 0 or m['availability_status']['has_availability']
-#         ]
-    
-#     is_active_filter = request.GET.get('is_active')
-#     if is_active_filter:
-#         is_active_bool = is_active_filter.lower() == 'true'
-#         mukkadam_list = [m for m in mukkadam_list if m['is_active'] == is_active_bool]
-    
-#     # ========================================
-#     # STEP 9: CALCULATE SUMMARY
-#     # ========================================
-#     total_mukkadams = len(mukkadam_list)
-#     active_mukkadams = len([m for m in mukkadam_list if m['is_active']])
-    
-#     summary = {
-#         'total_mukkadams': total_mukkadams,
-#         'active_mukkadams': active_mukkadams,
-#         'inactive_mukkadams': total_mukkadams - active_mukkadams,
-#         'total_allocations': sum(m['total_allocations'] for m in mukkadam_list),
-#         'total_unique_jobs': sum(m['total_unique_jobs'] for m in mukkadam_list),
-#         'total_area_allocated': round(sum(m['total_area_allocated'] for m in mukkadam_list), 2),
-#         'total_workers_supplied': sum(m['total_workers_supplied'] for m in mukkadam_list),
-#         'total_earnings': round(sum(m['total_earnings'] for m in mukkadam_list), 2),
-#         'total_paid': round(sum(m['total_paid'] for m in mukkadam_list), 2),
-#         'total_pending': round(sum(m['total_pending'] for m in mukkadam_list), 2),
-#     }
-    
-#     print(f"✅ Final count: {total_mukkadams} mukkadams")
-#     print("="*80)
-    
-#     return Response({
-#         'count': total_mukkadams,
-#         'summary': summary,
-#         'mukkadams': mukkadam_list
-#     })
-# @api_view(['GET'])
-# @permission_classes([AllowAny])
-# def mukkadam_complete_dashboard(request):
-#     """
-#     SUPER API: Combined Mukkadam Profile + Work History +
-#     Utilization (Available vs Worked) + Financials + Activity Logs
-#     """
-#     start_time = time.time()
-
-#     # 1. Input parameters
-#     mukkadam_phone = request.GET.get('mukkadam_phone')
-#     mukkadam_id = request.GET.get('mukkadam_id')
-#     days_history = int(request.GET.get('logs_days', 30))
-
-#     if not mukkadam_phone and not mukkadam_id:
-#         return Response({'error': 'mukkadam_phone or mukkadam_id required'}, status=400)
-
-#     # =========================================================
-#     # STEP 1: FETCH MUKKADAM BASIC PROFILE (SUPPLY APP)
-#     # =========================================================
-#     mukkadam_profile = None
-#     try:
-#         if mukkadam_id:
-#             url = f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/'
-#         else:
-#             # Helper to find ID by phone first
-#             search_res = requests.get(f'{SUPPLY_API_URL}/api/mukkadam/minimal_list/', params={'search': mukkadam_phone}, timeout=5)
-#             m_list = search_res.json()
-#             # Logic to match exact phone
-#             target_m = next((m for m in m_list if mukkadam_phone in m.get('mobile_numbers', '')), None)
-#             if not target_m: return Response({'error': 'Mukkadam not found'}, status=404)
-#             mukkadam_id = target_m['id']
-#             url = f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/'
-#         mukkadam_profile = requests.get(url, timeout=5).json()
-#     except Exception as e:
-#         return Response({'error': f'Supply App Error: {str(e)}'}, status=500)
-
-#     # =========================================================
-#     # STEP 2: DATABASE DATA (ALLOCATIONS & LOGS)
-#     # =========================================================
-#     # Fetch Allocations
-#     allocations_qs = Allocation.objects.filter(mukkadam_id=mukkadam_id).select_related('job_activity').order_by('-work_date')
-#     allocations_list = list(allocations_qs)
-
-#     # Fetch Activity Logs
-#     logs_qs = ActivityLog.objects.filter(
-#         mukkadam_id=mukkadam_id,
-#         performed_at__gte=timezone.now() - timedelta(days=days_history)
-#     ).order_by('-performed_at')[:50]
-
-#     # =========================================================
-#     # STEP 3: EXTERNAL ENRICHMENT (JOBS & FARMERS)
-#     # =========================================================
-#     job_ids = set(str(a.job_activity.job_id) for a in allocations_list if a.job_activity)
-
-#     # Batch fetch helper (parallelizing calls to Ops and Farmer APIs)
-#     jobs_cache = {}
-#     farmers_cache = {}
-
-#     # This is where we call your existing batch_fetch logic
-#     with ThreadPoolExecutor(max_workers=5) as executor:
-#         # Fetch jobs from Ops API
-#         future_jobs = executor.submit(fetch_ops_jobs_batch, list(job_ids))
-#         jobs_cache = future_jobs.result()
-
-#         # Collect Farmer IDs from jobs
-#         farmer_ids = set(str(j.get('farmer_id')) for j in jobs_cache.values() if j.get('farmer_id'))
-
-#         # Fetch farmers from Demand API
-#         future_farmers = executor.submit(batch_fetch_farmers, list(farmer_ids))
-#         farmers_cache = future_farmers.result()
-
-#     # =========================================================
-#     # STEP 4: CALCULATE UTILIZATION & FINANCIALS
-#     # =========================================================
-#     today = date.today()
-
-#     # Utilization Logic
-#     available_start = mukkadam_profile.get('start_date')
-#     available_end = mukkadam_profile.get('end_date')
-
-#     total_available_days = 0
-#     if available_start and available_end:
-#         d1 = datetime.strptime(available_start, '%Y-%m-%d').date()
-#         d2 = datetime.strptime(available_end, '%Y-%m-%d').date()
-#         total_available_days = (d2 - d1).days + 1
-
-#     # Unique dates worked
-#     unique_work_dates = set(a.work_date for a in allocations_list if a.status == 'completed')
-#     actual_days_worked = len(unique_work_dates)
-#     # Utilization Rate
-#     utilization_rate = (actual_days_worked / total_available_days * 100) if total_available_days > 0 else 0
-
-#     # Financials
-#     stats = {
-#         'potential': 0.0, 'paid': 0.0, 'pending_payout': 0.0, 'upcoming': 0.0,
-#         'area_completed': 0.0, 'area_planned': 0.0
-#     }
-
-#     for a in allocations_list:
-#         val = float(a.mukkadam_price) * float(a.allocated_area)
-#         stats['potential'] += val
-#         if a.status == 'completed':
-#             stats['area_completed'] += float(a.allocated_area)
-#             if hasattr(a, 'payment_request') and a.payment_request.status == 'paid':
-#                 stats['paid'] += val
-#             else:
-#                 stats['pending_payout'] += val
-#         else:
-#             stats['area_planned'] += float(a.allocated_area)
-#             stats['upcoming'] += val
-
-#     # =========================================================
-#     # STEP 5: CATEGORIZE WORK HISTORY & LOGS
-#     # =========================================================
-# # =========================================================
-# # STEP 5: CATEGORIZE WORK HISTORY & LOGS (UPDATED)
-# # =========================================================
-#     history = {'completed': [], 'pending': [], 'upcoming': []}
-
-#     for a in allocations_list:
-#         # Build enriched object
-#         job_data = jobs_cache.get(str(a.job_activity.job_id), {})
-#         farmer_id = str(job_data.get('farmer_id', ''))
-
-#         # FIX: Use .get() with a default empty dict {} so farmer_data is never None
-#         farmer_data = farmers_cache.get(farmer_id) or {}
-
-#         entry = {
-#             'id': a.id,
-#             'date': str(a.work_date),
-#             'area': float(a.allocated_area),
-#             'status': a.status,
-#             'job_name': job_data.get('job_name', 'N/A'),
-#             # Now this will safe-fail to 'N/A' if farmer_data is an empty dict
-#             'farmer_name': farmer_data.get('farmer_name', 'N/A'),
-#             'total_cost': float(a.mukkadam_price) * float(a.allocated_area) + float(a.transport_price or 0)
-#         }
-
-#         if a.status == 'completed':
-#             history['completed'].append(entry)
-#         elif a.work_date and a.work_date < today:
-#             history['pending'].append(entry)
-#         else:
-#             history['upcoming'].append(entry)
-#     enriched_logs = []
-#     for log in logs_qs:
-#         # Use get_activity_type_display() instead of activity_type_display
-#         enriched_logs.append({
-#             'type': log.get_activity_type_display(), # ✅ FIXED THIS LINE
-#             'time': log.performed_at.isoformat(),
-#             'desc': log.description,
-#             'changes': log.metadata.get('changes', {}), # Safe get for changes
-#             'user': log.performed_by.username if log.performed_by else "System"
-#         })
-
-#     # =========================================================
-#     # STEP 6: FINAL RESPONSE
-#     # =========================================================
-#     return Response({
-#         'mukkadam': {
-#             'info': mukkadam_profile,
-#             'is_active': len(allocations_list) > 0,
-#             'utilization': {
-#                 'available_days': total_available_days,
-#                 'worked_days': actual_days_worked,
-#                 'utilization_rate': round(utilization_rate, 2),
-#                 'available_from': available_start,
-#                 'available_to': available_end
-#             }
-#         },
-#         'financial_summary': {
-#             'total_earning_potential': round(stats['potential'], 2),
-#             'total_received': round(stats['paid'], 2),
-#             'pending_from_completed': round(stats['pending_payout'], 2),
-#             'upcoming_projected': round(stats['upcoming'], 2),
-#         },
-#         'work_history': history,
-#         'recent_activity': enriched_logs,
-#         'performance': {
-#             'total_time_ms': int((time.time() - start_time) * 1000)
-#         }
-#     })
-
-# # --- Helper function for Jobs ---
-# def fetch_ops_jobs_batch(job_ids):
-#     EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
-#     headers = {'Authorization': 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'}
-#     try:
-#         res = requests.get(f'{EXTERNAL_API_URL}/get_allocated_jobs/', headers=headers, timeout=10)
-#         if res.status_code == 200:
-#             all_jobs = res.json().get('data', [])
-#             return {str(j.get('work_id')): j for j in all_jobs if str(j.get('work_id')) in job_ids}
-#     except: return {}
-
-
-# from rest_framework.decorators import api_view, permission_classes
-# from rest_framework.permissions import AllowAny
-# from rest_framework.response import Response
-# from django.db.models import Count, Sum, Q, F, Prefetch
-# from django.utils import timezone
-# from datetime import timedelta, datetime
-# from collections import defaultdict
-# import requests
-# from .models import Allocation, JobActivity, AllocationStats
-# from .utils import batch_fetch_mukkadams, batch_fetch_transport_providers
-
-# @api_view(['GET'])
-# @permission_classes([AllowAny])
-# def comprehensive_analytics(request):
-#     """
-#     Comprehensive allocation analytics with mukkadam details
-#     GET /api/allocation-analytics/
-#     Query Params:
-#     - start_date: Filter start (default: 30 days ago)
-#     - end_date: Filter end (default: today)
-#     - include_future: Include future allocations (default: true)
-#     """
-#     try:
-#         # === 1. TIME RANGE SETUP ===
-#         end_date_str = request.query_params.get('end_date')
-#         start_date_str = request.query_params.get('start_date')
-#         include_future = request.query_params.get('include_future', 'true').lower() == 'true'
-#         if end_date_str:
-#             end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
-#         else:
-#             end_date = timezone.now().date() + timedelta(days=30 if include_future else 0)
-#         if start_date_str:
-#             start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
-#         else:
-#             start_date = timezone.now().date() - timedelta(days=30)
-
-#         today = timezone.now().date()
-
-#         # === 2. FETCH ALLOCATIONS ===
-#         allocations = Allocation.objects.filter(
-#             work_date__gte=start_date,
-#             work_date__lte=end_date
-#         ).exclude(
-#             status='cancelled'
-#         ).select_related(
-#             'job_activity', 'allocated_by'
-#         ).order_by('work_date')
-#         allocations_data = list(allocations.values(
-#             'id', 'mukkadam_id', 'allocated_area', 'work_date',
-#             'crew_size', 'mukkadam_price', 'transport_price',
-#             'transport_type', 'transport_provider_id', 'status',
-#             'allocated_at', 'notes',
-#             'allocated_by__username', 'allocated_by__first_name', 'allocated_by__last_name',
-#             'job_activity__job_id', 'job_activity__activity_name',
-#             'job_activity__location', 'job_activity__scheduled_datetime'
-#         ))
-
-#         # === 3. FETCH MUKKADAM DETAILS (Batch) ===
-#         mukkadam_ids = list(set([a['mukkadam_id'] for a in allocations_data]))
-#         mukkadams_dict = batch_fetch_mukkadams(mukkadam_ids) if mukkadam_ids else {}
-
-#         # === 4. FETCH TRANSPORT PROVIDER DETAILS (Batch) ===
-#         transport_ids = list(set([
-#             a['transport_provider_id']
-#             for a in allocations_data
-#             if a['transport_provider_id']
-#         ]))
-#         transporters_dict = batch_fetch_transport_providers(transport_ids) if transport_ids else {}
-
-#         # === 5. CALCULATE MUKKADAM UTILIZATION ===
-#         mukkadam_utilization = {}
-
-#         for mukkadam_id in mukkadam_ids:
-#             mukkadam_data = mukkadams_dict.get(mukkadam_id, {})
-
-#             # Get availability schedule
-#             team_availabilities = mukkadam_data.get('team_availabilities', [])
-
-#             # Count available days in date range
-#             available_days = set()
-#             for availability_slot in team_availabilities:
-#                 if availability_slot.get('status') == 'Available':
-#                     slot_start = datetime.strptime(availability_slot['startDate'], '%Y-%m-%d').date()
-#                     slot_end = datetime.strptime(availability_slot['endDate'], '%Y-%m-%d').date()
-
-#                     # Add all days in this availability range that fall within our analysis range
-#                     current = max(slot_start, start_date)
-#                     end = min(slot_end, end_date)
-
-#                     while current <= end:
-#                         if current >= today:  # Only count future availability
-#                             available_days.add(current)
-#                         current += timedelta(days=1)
-
-#             # Count work days (days with allocations)
-#             work_days = set([
-#                 a['work_date']
-#                 for a in allocations_data
-#                 if a['mukkadam_id'] == mukkadam_id
-#             ])
-
-#             # Calculate utilization
-#             total_available = len(available_days)
-#             total_worked = len(work_days)
-#             utilization_rate = (total_worked / total_available * 100) if total_available > 0 else 0
-#             mukkadam_utilization[mukkadam_id] = {
-#                 'mukkadam_id': mukkadam_id,
-#                 'mukkadam_name': mukkadam_data.get('mukkadam_name', f'Mukkadam #{mukkadam_id}'),
-#                 'village': mukkadam_data.get('village', 'Unknown'),
-#                 'mobile_numbers': mukkadam_data.get('mobile_numbers', ''),
-#                 'crew_size': mukkadam_data.get('crew_size', 0),
-#                 'registered_by': mukkadam_data.get('created_by', {}).get('username', 'Unknown') if isinstance(mukkadam_data.get('created_by'), dict) else 'Unknown',
-#                 'registered_at': mukkadam_data.get('created_at', ''),
-#                 'available_days': list(available_days),
-#                 'work_days': list(work_days),
-#                 'total_available_days': total_available,
-#                 'total_work_days': total_worked,
-#                 'idle_days': total_available - total_worked,
-#                 'utilization_rate': round(utilization_rate, 1),
-#                 'total_allocations': len([a for a in allocations_data if a['mukkadam_id'] == mukkadam_id]),
-#                 'total_area_allocated': sum([float(a['allocated_area']) for a in allocations_data if a['mukkadam_id'] == mukkadam_id]),
-#                 'total_earnings': sum([float(a['mukkadam_price']) for a in allocations_data if a['mukkadam_id'] == mukkadam_id]),
-#             }
-#         # === 6. LOCATION-BASED ANALYTICS ===
-#         location_stats = defaultdict(lambda: {
-#             'state': None,
-#             'district': None,
-#             'village': None,
-#             'total_allocations': 0,
-#             'total_workers': 0,
-#             'total_area': 0,
-#             'total_cost': 0,
-#             'mukkadam_cost': 0,
-#             'transport_cost': 0,
-#             'activities': defaultdict(int),
-#             'mukkadams': set(),
-#             'jobs': set(),
-#             'allocated_by': defaultdict(int),
-#         })
-
-#         for alloc in allocations_data:
-#             mukkadam_id = alloc['mukkadam_id']
-#             mukkadam_data = mukkadams_dict.get(mukkadam_id, {})
-
-#             # Use mukkadam's location as primary location
-#             state = mukkadam_data.get('state', 'Unknown')
-#             district = mukkadam_data.get('district', 'Unknown')
-#             village = mukkadam_data.get('village', 'Unknown')
-
-#             location_key = f"{state}|{district}|{village}"
-
-#             stats = location_stats[location_key]
-#             stats['state'] = state
-#             stats['district'] = district
-#             stats['village'] = village
-#             stats['total_allocations'] += 1
-#             stats['total_workers'] += alloc['crew_size'] or 0
-#             stats['total_area'] += float(alloc['allocated_area'])
-#             stats['mukkadam_cost'] += float(alloc['mukkadam_price'])
-#             stats['transport_cost'] += float(alloc['transport_price'] or 0)
-#             stats['total_cost'] += float(alloc['mukkadam_price']) + float(alloc['transport_price'] or 0)
-#             stats['activities'][alloc['job_activity__activity_name']] += 1
-#             stats['mukkadams'].add(mukkadam_id)
-#             stats['jobs'].add(alloc['job_activity__job_id'])
-#             stats['allocated_by'][alloc['allocated_by__username']] += 1
-#         # Convert sets to counts
-#         location_analytics = []
-#         for location_key, stats in location_stats.items():
-#             location_analytics.append({
-#                 'location': f"{stats['village']}, {stats['district']}, {stats['state']}",
-#                 'state': stats['state'],
-#                 'district': stats['district'],
-#                 'village': stats['village'],
-#                 'total_allocations': stats['total_allocations'],
-#                 'unique_mukkadams': len(stats['mukkadams']),
-#                 'unique_jobs': len(stats['jobs']),
-#                 'total_workers': stats['total_workers'],
-#                 'total_area': round(stats['total_area'], 2),
-#                 'total_cost': round(stats['total_cost'], 2),
-#                 'mukkadam_cost': round(stats['mukkadam_cost'], 2),
-#                 'transport_cost': round(stats['transport_cost'], 2),
-#                 'top_activities': dict(sorted(stats['activities'].items(), key=lambda x: x[1], reverse=True)[:3]),
-#                 'allocated_by': dict(stats['allocated_by']),
-#             })
-
-#         # Sort by total cost
-#         location_analytics.sort(key=lambda x: x['total_cost'], reverse=True)
-
-#         # === 7. ALLOCATOR ANALYTICS ===
-#         allocator_stats = defaultdict(lambda: {
-#             'username': None,
-#             'full_name': None,
-#             'total_allocations': 0,
-#             'total_cost': 0,
-#             'unique_mukkadams': set(),
-#             'unique_jobs': set(),
-#         })
-#         for alloc in allocations_data:
-#             username = alloc['allocated_by__username']
-#             if not username:
-#                 continue
-#             stats = allocator_stats[username]
-#             stats['username'] = username
-#             stats['full_name'] = f"{alloc['allocated_by__first_name'] or ''} {alloc['allocated_by__last_name'] or ''}".strip()
-#             stats['total_allocations'] += 1
-#             stats['total_cost'] += float(alloc['mukkadam_price']) + float(alloc['transport_price'] or 0)
-#             stats['unique_mukkadams'].add(alloc['mukkadam_id'])
-#             stats['unique_jobs'].add(alloc['job_activity__job_id'])
-#         allocator_analytics = [
-#             {
-#                 'username': username,
-#                 'full_name': stats['full_name'] or username,
-#                 'total_allocations': stats['total_allocations'],
-#                 'total_cost': round(stats['total_cost'], 2),
-#                 'unique_mukkadams': len(stats['unique_mukkadams']),
-#                 'unique_jobs': len(stats['unique_jobs']),
-#                 'avg_cost_per_allocation': round(stats['total_cost'] / stats['total_allocations'], 2) if stats['total_allocations'] > 0 else 0,
-#             }
-#             for username, stats in allocator_stats.items()
-#         ]
-
-#         allocator_analytics.sort(key=lambda x: x['total_allocations'], reverse=True)
-
-#         # === 8. ACTIVITY TYPE ANALYTICS ===
-#         activity_stats = defaultdict(lambda: {
-#             'activity_name': None,
-#             'total_allocations': 0,
-#             'total_area': 0,
-#             'total_workers': 0,
-#             'total_cost': 0,
-#             'locations': set(),
-#         })
-#         for alloc in allocations_data:
-#             activity = alloc['job_activity__activity_name']
-#             stats = activity_stats[activity]
-#             stats['activity_name'] = activity
-#             stats['total_allocations'] += 1
-#             stats['total_area'] += float(alloc['allocated_area'])
-#             stats['total_workers'] += alloc['crew_size'] or 0
-#             stats['total_cost'] += float(alloc['mukkadam_price']) + float(alloc['transport_price'] or 0)
-
-#             mukkadam_data = mukkadams_dict.get(alloc['mukkadam_id'], {})
-#             location = f"{mukkadam_data.get('district', 'Unknown')}, {mukkadam_data.get('state', 'Unknown')}"
-#             stats['locations'].add(location)
-
-#         activity_analytics = [
-#             {
-#                 'activity_name': activity,
-#                 'total_allocations': stats['total_allocations'],
-#                 'total_area': round(stats['total_area'], 2),
-#                 'total_workers': stats['total_workers'],
-#                 'total_cost': round(stats['total_cost'], 2),
-#                 'unique_locations': len(stats['locations']),
-#                 'avg_cost_per_acre': round(stats['total_cost'] / stats['total_area'], 2) if stats['total_area'] > 0 else 0,
-#             }
-#             for activity, stats in activity_stats.items()
-#         ]
-
-#         activity_analytics.sort(key=lambda x: x['total_cost'], reverse=True)
-
-#         # === 9. DAILY TREND ===
-#         daily_trend = defaultdict(lambda: {
-#             'date': None,
-#             'allocations': 0,
-#             'cost': 0,
-#             'workers': 0,
-#         })
-#         for alloc in allocations_data:
-#             date = alloc['work_date']
-#             daily_trend[date]['date'] = str(date)
-#             daily_trend[date]['allocations'] += 1
-#             daily_trend[date]['cost'] += float(alloc['mukkadam_price']) + float(alloc['transport_price'] or 0)
-#             daily_trend[date]['workers'] += alloc['crew_size'] or 0
-
-#         daily_analytics = sorted(daily_trend.values(), key=lambda x: x['date'])
-
-#         # === 10. SUMMARY STATS ===
-#         past_allocations = [a for a in allocations_data if a['work_date'] <= today]
-#         future_allocations = [a for a in allocations_data if a['work_date'] > today]
-
-#         summary = {
-#             'date_range': {
-#                 'start': str(start_date),
-#                 'end': str(end_date),
-#                 'today': str(today),
-#             },
-#             'totals': {
-#                 'total_allocations': len(allocations_data),
-#                 'past_allocations': len(past_allocations),
-#                 'future_allocations': len(future_allocations),
-#                 'active_mukkadams': len(mukkadam_ids),
-#                 'active_transporters': len(transport_ids),
-#                 'unique_jobs': len(set([a['job_activity__job_id'] for a in allocations_data])),
-#                 'total_workers': sum([a['crew_size'] or 0 for a in allocations_data]),
-#                 'total_area': round(sum([float(a['allocated_area']) for a in allocations_data]), 2),
-#                 'total_cost': round(sum([float(a['mukkadam_price']) + float(a['transport_price'] or 0) for a in allocations_data]), 2),
-#                 'mukkadam_cost': round(sum([float(a['mukkadam_price']) for a in allocations_data]), 2),
-#                 'transport_cost': round(sum([float(a['transport_price'] or 0) for a in allocations_data]), 2),
-#             },
-#             'averages': {
-#                 'avg_crew_size': round(sum([a['crew_size'] or 0 for a in allocations_data]) / len(allocations_data), 1) if allocations_data else 0,
-#                 'avg_area': round(sum([float(a['allocated_area']) for a in allocations_data]) / len(allocations_data), 2) if allocations_data else 0,
-#                 'avg_cost': round(sum([float(a['mukkadam_price']) + float(a['transport_price'] or 0) for a in allocations_data]) / len(allocations_data), 2) if allocations_data else 0,
-#             }
-#         }
-#         # === 11. RETURN RESPONSE ===
-#         return Response({
-#             'success': True,
-#             'summary': summary,
-#             'mukkadam_utilization': list(mukkadam_utilization.values()),
-#             'location_analytics': location_analytics,
-#             'allocator_analytics': allocator_analytics,
-#             'activity_analytics': activity_analytics,
-#             'daily_trend': daily_analytics,
-#             'raw_allocations': allocations_data[:100],  # Limit for performance
-#         })
-#     except Exception as e:
-#         import traceback
-#         print("ERROR in comprehensive_analytics:")
-#         print(traceback.format_exc())
-#         return Response({
-#             'success': False,
-#             'error': str(e)
-#         }, status=500)
-
-# # allocation_app/views.py
-
-# from rest_framework.decorators import api_view, permission_classes
-# from rest_framework.permissions import AllowAny
-# from rest_framework.response import Response
-# from django.db.models import Count, Sum, Q, F, Min, Max
-# from django.utils import timezone
-# from datetime import timedelta, datetime, date
-# from collections import defaultdict
-# from .models import Allocation, JobActivity
-# from .utils import (
-#     batch_fetch_mukkadams,
-#     batch_fetch_transport_providers,
-#     get_all_mukkadams_from_api,
-#     get_all_transport_providers_from_api
-# )
-
-# @api_view(['GET'])
-# @permission_classes([AllowAny])
-# def supply_health_dashboard(request):
-#     """
-#     Complete Supply Health Metrics
-#     GET /api/supply-health/
-
-#     Query Params:
-#     - reference_date: Reference date for "this week" (default: today)
-#     """
-
-#     try:
-#         # === 1. DATE SETUP ===
-#         reference_date_str = request.query_params.get('reference_date')
-#         if reference_date_str:
-#             reference_date = datetime.strptime(reference_date_str, '%Y-%m-%d').date()
-#         else:
-#             reference_date = timezone.now().date()
-
-#         # This week: Monday to Sunday
-#         this_week_start = reference_date - timedelta(days=reference_date.weekday())
-#         this_week_end = this_week_start + timedelta(days=6)
-
-#         # Overall period (last 90 days for averages)
-#         overall_start = reference_date - timedelta(days=90)
-#         overall_end = reference_date
-
-#         print(f"📊 Supply Health Dashboard")
-#         print(f"This Week: {this_week_start} to {this_week_end}")
-#         print(f"Overall: {overall_start} to {overall_end}")
-
-#         # === 2. FETCH ALL MUKKADAMS VIA API ===
-#         all_mukkadams = get_all_mukkadams_from_api()
-#         mukkadam_ids = [m['id'] for m in all_mukkadams]
-
-#         # Create a lookup dictionary for quick access
-#         mukkadams_by_id = {m['id']: m for m in all_mukkadams}
-
-#         print(f"Total Mukkadams from API: {len(mukkadam_ids)}")
-
-#         # === 3. CALCULATE AVAILABILITY & UTILIZATION ===
-#         mukkadam_details = []
-
-#         for mukkadam in all_mukkadams:
-#             mukkadam_id = mukkadam['id']
-
-#             # Get availability schedule
-#             team_availabilities = mukkadam.get('team_availabilities', [])
-
-#             # Available days this week
-#             available_days_this_week = set()
-#             available_days_overall = set()
-
-#             for slot in team_availabilities:
-#                 if slot.get('status') == 'Available':
-#                     try:
-#                         slot_start = datetime.strptime(slot['startDate'], '%Y-%m-%d').date()
-#                         slot_end = datetime.strptime(slot['endDate'], '%Y-%m-%d').date()
-#                         # This week
-#                         current = max(slot_start, this_week_start)
-#                         end = min(slot_end, this_week_end)
-#                         while current <= end:
-#                             available_days_this_week.add(current)
-#                             current += timedelta(days=1)
-#                         # Overall
-#                         current = max(slot_start, overall_start)
-#                         end = min(slot_end, overall_end)
-#                         while current <= end:
-#                             available_days_overall.add(current)
-#                             current += timedelta(days=1)
-#                     except:
-#                         continue
-#             # Get work days from allocations
-#             work_days_this_week = set(
-#                 Allocation.objects.filter(
-#                     mukkadam_id=mukkadam_id,
-#                     work_date__gte=this_week_start,
-#                     work_date__lte=this_week_end
-#                 ).exclude(status='cancelled').values_list('work_date', flat=True)
-#             )
-#             work_days_overall = set(
-#                 Allocation.objects.filter(
-#                     mukkadam_id=mukkadam_id,
-#                     work_date__gte=overall_start,
-#                     work_date__lte=overall_end
-#                 ).exclude(status='cancelled').values_list('work_date', flat=True)
-#             )
-#             # Calculate utilization
-#             total_available_this_week = len(available_days_this_week)
-#             total_work_this_week = len(work_days_this_week)
-#             utilization_this_week = (total_work_this_week / total_available_this_week * 100) if total_available_this_week > 0 else 0
-
-#             total_available_overall = len(available_days_overall)
-#             total_work_overall = len(work_days_overall)
-#             utilization_overall = (total_work_overall / total_available_overall * 100) if total_available_overall > 0 else 0
-
-#             # Idle days (available but no work)
-#             idle_days_this_week = available_days_this_week - work_days_this_week
-#             idle_days_overall = available_days_overall - work_days_overall
-
-#             # Day-by-day breakdown for this week
-#             day_breakdown = []
-#             for day in sorted(available_days_this_week):
-#                 has_work = day in work_days_this_week
-#                 allocations_on_day = Allocation.objects.filter(
-#                     mukkadam_id=mukkadam_id,
-#                     work_date=day
-#                 ).exclude(status='cancelled').values(
-#                     'id', 'allocated_area', 'crew_size',
-#                     'mukkadam_price', 'job_activity__job_id',
-#                     'job_activity__activity_name'
-#                 )
-
-#                 day_breakdown.append({
-#                     'date': str(day),
-#                     'day_name': day.strftime('%A'),
-#                     'has_work': has_work,
-#                     'allocations': list(allocations_on_day),
-#                     'status': '🟢 Working' if has_work else '🔴 Idle'
-#                 })
-#             # Calculate earnings
-#             earnings_this_week = Allocation.objects.filter(
-#                 mukkadam_id=mukkadam_id,
-#                 work_date__gte=this_week_start,
-#                 work_date__lte=this_week_end
-#             ).exclude(status='cancelled').aggregate(
-#                 total=Sum('mukkadam_price')
-#             )['total'] or 0
-#             earnings_overall = Allocation.objects.filter(
-#                 mukkadam_id=mukkadam_id,
-#                 work_date__gte=overall_start,
-#                 work_date__lte=overall_end
-#             ).exclude(status='cancelled').aggregate(
-#                 total=Sum('mukkadam_price')
-#             )['total'] or 0
-#             # Calculate ₹/person/day
-#             crew_size_str = mukkadam.get('crew_size', '1')
-#             try:
-#                 crew_size = int(crew_size_str) if crew_size_str else 1
-#             except (ValueError, TypeError):
-#                 crew_size = 1
-
-#             earnings_per_person_day_this_week = (earnings_this_week / (total_work_this_week * crew_size)) if (total_work_this_week > 0 and crew_size > 0) else 0
-#             earnings_per_person_day_overall = (earnings_overall / (total_work_overall * crew_size)) if (total_work_overall > 0 and crew_size > 0) else 0
-
-#             # First job date
-#             first_allocation = Allocation.objects.filter(
-#                 mukkadam_id=mukkadam_id
-#             ).exclude(status='cancelled').order_by('allocated_at').first()
-#             days_to_first_job = None
-#             if first_allocation and mukkadam.get('created_at'):
-#                 try:
-#                     created_at = datetime.fromisoformat(mukkadam['created_at'].replace('Z', '+00:00'))
-#                     days_to_first_job = (first_allocation.allocated_at.date() - created_at.date()).days
-#                 except:
-#                     days_to_first_job = None
-
-#             # Is active this week?
-#             is_active_this_week = total_available_this_week > 0
-
-#             # Status for utilization
-#             if utilization_this_week >= 75:
-#                 utilization_status = '🟢'
-#             elif utilization_this_week >= 50:
-#                 utilization_status = '🟠'
-#             else:
-#                 utilization_status = '🔴'
-#             # Get created_by username
-#             created_by_username = 'Unknown'
-#             if mukkadam.get('created_by'):
-#                 if isinstance(mukkadam['created_by'], dict):
-#                     created_by_username = mukkadam['created_by'].get('username', 'Unknown')
-#                 else:
-#                     created_by_username = str(mukkadam['created_by'])
-#             mukkadam_details.append({
-#                 'mukkadam_id': mukkadam_id,
-#                 'mukkadam_name': mukkadam.get('mukkadam_name', f'Mukkadam #{mukkadam_id}'),
-#                 'village': mukkadam.get('village', 'Unknown'),
-#                 'mobile_numbers': mukkadam.get('mobile_numbers', 'N/A'),
-#                 'crew_size': crew_size,
-#                 'registered_at': mukkadam.get('created_at'),
-#                 'registered_by': created_by_username,
-#                 # This Week
-#                 'is_active_this_week': is_active_this_week,
-#                 'available_days_this_week': total_available_this_week,
-#                 'work_days_this_week': total_work_this_week,
-#                 'idle_days_this_week': len(idle_days_this_week),
-#                 'utilization_this_week': round(utilization_this_week, 1),
-#                 'utilization_status': utilization_status,
-#                 'earnings_this_week': float(earnings_this_week),
-#                 'earnings_per_person_day_this_week': round(float(earnings_per_person_day_this_week), 2),
-#                 'day_breakdown': day_breakdown,
-#                 # Overall
-#                 'available_days_overall': total_available_overall,
-#                 'work_days_overall': total_work_overall,
-#                 'idle_days_overall': len(idle_days_overall),
-#                 'utilization_overall': round(utilization_overall, 1),
-#                 'earnings_overall': float(earnings_overall),
-#                 'earnings_per_person_day_overall': round(float(earnings_per_person_day_overall), 2),
-#                 # Registration metrics
-#                 'days_to_first_job': days_to_first_job,
-#                 'has_received_job': first_allocation is not None,
-#             })
-
-#         # === 4. SECTION 1: SUPPLY HEALTH SNAPSHOT ===
-#         active_teams_this_week = [m for m in mukkadam_details if m['is_active_this_week']]
-#         active_teams_overall = [m for m in mukkadam_details if m['available_days_overall'] > 0]
-
-#         total_available_days_this_week = sum(m['available_days_this_week'] for m in active_teams_this_week)
-#         total_work_days_this_week = sum(m['work_days_this_week'] for m in active_teams_this_week)
-#         avg_utilization_this_week = (total_work_days_this_week / total_available_days_this_week * 100) if total_available_days_this_week > 0 else 0
-
-#         total_available_days_overall = sum(m['available_days_overall'] for m in active_teams_overall)
-#         total_work_days_overall = sum(m['work_days_overall'] for m in active_teams_overall)
-#         avg_utilization_overall = (total_work_days_overall / total_available_days_overall * 100) if total_available_days_overall > 0 else 0
-
-#         # Idle teams (available but 0 work days)
-#         idle_teams_this_week = [m for m in active_teams_this_week if m['work_days_this_week'] == 0]
-
-#         # Avg earnings per person per day
-#         total_earnings_this_week = sum(m['earnings_this_week'] for m in active_teams_this_week)
-#         total_person_days_this_week = sum(m['work_days_this_week'] * m['crew_size'] for m in active_teams_this_week)
-#         avg_earnings_per_person_day_this_week = (total_earnings_this_week / total_person_days_this_week) if total_person_days_this_week > 0 else 0
-
-#         total_earnings_overall = sum(m['earnings_overall'] for m in active_teams_overall)
-#         total_person_days_overall = sum(m['work_days_overall'] * m['crew_size'] for m in active_teams_overall)
-#         avg_earnings_per_person_day_overall = (total_earnings_overall / total_person_days_overall) if total_person_days_overall > 0 else 0
-
-#         # Transport cost %
-#         allocations_this_week = Allocation.objects.filter(
-#             work_date__gte=this_week_start,
-#             work_date__lte=this_week_end
-#         ).exclude(status='cancelled')
-
-#         total_mukkadam_cost_this_week = allocations_this_week.aggregate(Sum('mukkadam_price'))['mukkadam_price__sum'] or 0
-#         total_transport_cost_this_week = allocations_this_week.aggregate(Sum('transport_price'))['transport_price__sum'] or 0
-#         transport_cost_pct_this_week = (total_transport_cost_this_week / (total_mukkadam_cost_this_week + total_transport_cost_this_week) * 100) if (total_mukkadam_cost_this_week + total_transport_cost_this_week) > 0 else 0
-
-#         allocations_overall = Allocation.objects.filter(
-#             work_date__gte=overall_start,
-#             work_date__lte=overall_end
-#         ).exclude(status='cancelled')
-
-#         total_mukkadam_cost_overall = allocations_overall.aggregate(Sum('mukkadam_price'))['mukkadam_price__sum'] or 0
-#         total_transport_cost_overall = allocations_overall.aggregate(Sum('transport_price'))['transport_price__sum'] or 0
-#         transport_cost_pct_overall = (total_transport_cost_overall / (total_mukkadam_cost_overall + total_transport_cost_overall) * 100) if (total_mukkadam_cost_overall + total_transport_cost_overall) > 0 else 0
-
-#         # Status indicators
-#         def get_status(value, good_threshold, warning_threshold, higher_is_better=True):
-#             if higher_is_better:
-#                 if value >= good_threshold:
-#                     return '🟢'
-#                 elif value >= warning_threshold:
-#                     return '🟠'
-#                 else:
-#                     return '🔴'
-#             else:
-#                 if value <= good_threshold:
-#                     return '🟢'
-#                 elif value <= warning_threshold:
-#                     return '🟠'
-#                 else:
-#                     return '🔴'
-#         supply_health_snapshot = {
-#             'active_teams': {
-#                 'this_week': len(active_teams_this_week),
-#                 'overall_avg': round(len(active_teams_overall) / 13, 1),
-#                 'status': get_status(len(active_teams_this_week), 20, 10, higher_is_better=True)
-#             },
-#             'available_team_days': {
-#                 'this_week': total_available_days_this_week,
-#                 'overall_avg': round(total_available_days_overall / 13, 1),
-#                 'status': get_status(total_available_days_this_week, 100, 50, higher_is_better=True),
-#                 'mukkadam_breakdown': active_teams_this_week
-#             },
-#             'avg_utilization': {
-#                 'this_week': round(avg_utilization_this_week, 1),
-#                 'overall_avg': round(avg_utilization_overall, 1),
-#                 'status': get_status(avg_utilization_this_week, 70, 50, higher_is_better=True)
-#             },
-#             'idle_teams': {
-#                 'this_week': len(idle_teams_this_week),
-#                 'overall_avg': round(len([m for m in active_teams_overall if m['work_days_overall'] == 0]) / 13, 1),
-#                 'status': get_status(len(idle_teams_this_week), 2, 5, higher_is_better=False),
-#                 'idle_team_list': idle_teams_this_week
-#             },
-#             'avg_earnings_per_person_day': {
-#                 'this_week': round(avg_earnings_per_person_day_this_week, 2),
-#                 'overall_avg': round(avg_earnings_per_person_day_overall, 2),
-#                 'status': get_status(avg_earnings_per_person_day_this_week, 500, 300, higher_is_better=True)
-#             },
-#             'transport_cost_pct': {
-#                 'this_week': round(transport_cost_pct_this_week, 1),
-#                 'overall_avg': round(transport_cost_pct_overall, 1),
-#                 'status': get_status(transport_cost_pct_this_week, 15, 25, higher_is_better=False)
-#             }
-#         }
-
-#         # === 5. SECTION 2: SUPPLY INFLOW (THIS WEEK) ===
-#         # Count mukkadams registered this week (from API data)
-#         teams_registered_this_week = len([
-#             m for m in all_mukkadams
-#             if m.get('created_at') and
-#             datetime.fromisoformat(m['created_at'].replace('Z', '+00:00')).date() >= this_week_start and
-#             datetime.fromisoformat(m['created_at'].replace('Z', '+00:00')).date() <= this_week_end + timedelta(days=1)
-#         ])
-
-#         # Fetch transport providers count from API
-#         all_transport_providers = get_all_transport_providers_from_api()
-#         transporters_registered_this_week = len([
-#             t for t in all_transport_providers
-#             if t.get('created_at') and
-#             datetime.fromisoformat(t['created_at'].replace('Z', '+00:00')).date() >= this_week_start and
-#             datetime.fromisoformat(t['created_at'].replace('Z', '+00:00')).date() <= this_week_end + timedelta(days=1)
-#         ])
-#         # Teams confirmed for allocation (have availability set)
-#         teams_confirmed_this_week = len([
-#             m for m in all_mukkadams
-#             if m.get('created_at') and
-#             datetime.fromisoformat(m['created_at'].replace('Z', '+00:00')).date() >= this_week_start and
-#             datetime.fromisoformat(m['created_at'].replace('Z', '+00:00')).date() <= this_week_end + timedelta(days=1) and
-#             m.get('team_availabilities', [])
-#         ])
-#         # Teams allocated this week
-#         teams_allocated_this_week = Allocation.objects.filter(
-#             allocated_at__gte=this_week_start,
-#             allocated_at__lte=this_week_end + timedelta(days=1)
-#         ).exclude(status='cancelled').values('mukkadam_id').distinct().count()
-
-#         # Activation % (teams that got first job / total registered)
-#         activation_pct = (teams_allocated_this_week / teams_registered_this_week * 100) if teams_registered_this_week > 0 else 0
-
-#         # Avg days to first job (for teams registered)
-#         teams_with_jobs = [m for m in mukkadam_details if m['days_to_first_job'] is not None and m['registered_at']]
-#         avg_days_to_first_job = sum(m['days_to_first_job'] for m in teams_with_jobs) / len(teams_with_jobs) if teams_with_jobs else 0
-
-#         # Teams rejected (registered 30+ days ago, no job yet)
-#         cutoff_date = reference_date - timedelta(days=30)
-#         teams_rejected = len([
-#             m for m in all_mukkadams
-#             if m.get('created_at') and
-#             datetime.fromisoformat(m['created_at'].replace('Z', '+00:00')).date() <= cutoff_date and
-#             not any(md['mukkadam_id'] == m['id'] and md['has_received_job'] for md in mukkadam_details)
-#         ])
-#         supply_inflow = {
-#             'teams_registered': teams_registered_this_week,
-#             'transporters_registered': transporters_registered_this_week,
-#             'teams_confirmed': teams_confirmed_this_week,
-#             'teams_allocated': teams_allocated_this_week,
-#             'activation_pct': round(activation_pct, 1),
-#             'avg_days_to_first_job': round(avg_days_to_first_job, 1),
-#             'teams_rejected': teams_rejected
-#         }
-#         # === 6. SECTION 3: UTILIZATION & IDLE RISK ===
-#         utilization_buckets = {
-#             '0-25%': [m for m in mukkadam_details if m['available_days_overall'] > 0 and m['utilization_overall'] < 25],
-#             '25-50%': [m for m in mukkadam_details if 25 <= m['utilization_overall'] < 50],
-#             '50-75%': [m for m in mukkadam_details if 50 <= m['utilization_overall'] < 75],
-#             '75-90%': [m for m in mukkadam_details if 75 <= m['utilization_overall'] < 90],
-#             '90%+': [m for m in mukkadam_details if m['utilization_overall'] >= 90],
-#         }
-
-#         total_teams_with_availability = len([m for m in mukkadam_details if m['available_days_overall'] > 0])
-
-#         utilization_distribution = [
-#             {
-#                 'bucket': '0-25%',
-#                 'count': len(utilization_buckets['0-25%']),
-#                 'percentage': round(len(utilization_buckets['0-25%']) / total_teams_with_availability * 100, 1) if total_teams_with_availability > 0 else 0,
-#                 'teams': utilization_buckets['0-25%']
-#             },
-#             {
-#                 'bucket': '25-50%',
-#                 'count': len(utilization_buckets['25-50%']),
-#                 'percentage': round(len(utilization_buckets['25-50%']) / total_teams_with_availability * 100, 1) if total_teams_with_availability > 0 else 0,
-#                 'teams': utilization_buckets['25-50%']
-#             },
-#             {
-#                 'bucket': '50-75%',
-#                 'count': len(utilization_buckets['50-75%']),
-#                 'percentage': round(len(utilization_buckets['50-75%']) / total_teams_with_availability * 100, 1) if total_teams_with_availability > 0 else 0,
-#                 'teams': utilization_buckets['50-75%']
-#             },
-#             {
-#                 'bucket': '75-90%',
-#                 'count': len(utilization_buckets['75-90%']),
-#                 'percentage': round(len(utilization_buckets['75-90%']) / total_teams_with_availability * 100, 1) if total_teams_with_availability > 0 else 0,
-#                 'teams': utilization_buckets['75-90%']
-#             },
-#             {
-#                 'bucket': '90%+',
-#                 'count': len(utilization_buckets['90%+']),
-#                 'percentage': round(len(utilization_buckets['90%+']) / total_teams_with_availability * 100, 1) if total_teams_with_availability > 0 else 0,
-#                 'teams': utilization_buckets['90%+']
-#             },
-#         ]
-#         # === 7. RETURN RESPONSE ===
-#         return Response({
-#             'success': True,
-#             'reference_date': str(reference_date),
-#             'week_range': {
-#                 'start': str(this_week_start),
-#                 'end': str(this_week_end)
-#             },
-#             'section_1_supply_health_snapshot': supply_health_snapshot,
-#             'section_2_supply_inflow': supply_inflow,
-#             'section_3_utilization_distribution': utilization_distribution,
-#         })
-#     except Exception as e:
-#         import traceback
-#         print("ERROR in supply_health_dashboard:")
-#         print(traceback.format_exc())
-#         return Response({
-#             'success': False,
-#             'error': str(e)
-#         }, status=500)
-
-
-# data/views.py
-# data/views.py
 # allocation_app/views.py
+from .models import ActivityEditHistory,ActivityLostRecord
+from .serializers import JobActivitySerializer,ActivityEditHistorySerializer,ActivityLostRecordSerializer
+# allocation_app/views.py
+
+# REPLACE the entire edit_activity function (around line 450):
+from datetime import datetime, date
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+
+from django.utils import timezone
+from datetime import datetime, date
+from decimal import Decimal
+
+from .models import JobActivity, ActivityEditHistory, ActivityLog
+from .serializers import JobActivitySerializer
+
+
+from datetime import datetime, date
+from decimal import Decimal
+from django.utils import timezone
+
+
+def make_aware_if_needed(value):
+    if isinstance(value, datetime) and timezone.is_naive(value):
+        return timezone.make_aware(value, timezone.get_current_timezone())
+    return value
+
+
+def parse_datetime(value):
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    return make_aware_if_needed(value)
+
+
+def serialize_for_log(value):
+    """
+    Ensure JSON-safe values
+    """
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+
+    if isinstance(value, Decimal):
+        return str(value)
+
+    return value
+
+
+@api_view(['PATCH'])
+@permission_classes([AllowAny])
+def edit_activity(request):
+    """
+    Edit activity - creates JobActivity if missing
+    """
+    try:
+        # -----------------------
+        # 🔐 AUTH CHECK
+        # -----------------------
+        if not request.user.is_authenticated:
+            return Response(
+                {'error': 'Authentication required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        if not getattr(request.user, 'is_admin', False) and not request.user.is_superuser:
+            return Response(
+                {'error': 'Only admins can edit activities'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # -----------------------
+        # 📥 INPUT DATA
+        # -----------------------
+        job_id = request.data.get('job_id')
+        activity_id = request.data.get('activity_id')
+        updates = request.data.get('updates', {})
+        reason = request.data.get('reason', '').strip()
+
+        if not job_id or not activity_id or not updates or not reason:
+            return Response(
+                {'error': 'job_id, activity_id, updates, and reason are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # -----------------------
+        # 🕒 DATETIME
+        # -----------------------
+        scheduled_dt = updates.get('scheduled_datetime') or updates.get('scheduled_date')
+        scheduled_dt = parse_datetime(scheduled_dt) if scheduled_dt else timezone.now()
+
+        # ✅ CALCULATE SUBTOTAL FROM INDIVIDUAL COSTS
+        mukkadam_price = Decimal(str(updates.get('total_price', 0)))
+        transport_cost = Decimal(str(updates.get('transport_cost', 0)))
+        other_cost = Decimal(str(updates.get('other_cost', 0)))
+        calculated_subtotal = mukkadam_price + transport_cost + other_cost
+
+        # -----------------------
+        # 🧱 GET OR CREATE
+        # -----------------------
+        job_activity, created = JobActivity.objects.get_or_create(
+            job_id=str(job_id),
+            activity_id=str(activity_id),
+            defaults={
+                'activity_name': updates.get('activity_name', 'Unknown'),
+                'activity_type': '',
+                'scheduled_datetime': scheduled_dt,
+                'total_area': Decimal(str(updates.get('total_area', 0))),
+                'total_price': mukkadam_price,
+                'transport_cost': transport_cost,
+                'other_cost': other_cost,
+                'subtotal': calculated_subtotal,
+                'location': '',
+                'estimated_workers': 10,
+                'rate_per_acre': Decimal(str(updates.get('rate_per_acre', 0))),
+                'is_manually_edited': True
+            }
+        )
+
+        # -----------------------
+        # 🔍 EXPANDED FIELD MAP
+        # -----------------------
+        field_mapping = {
+            'activity_name': 'activity_name',
+            'total_area': 'total_area',
+            'acres': 'total_area',
+            'scheduled_datetime': 'scheduled_datetime',
+            'scheduled_date': 'scheduled_datetime',
+            'date_time': 'scheduled_datetime',
+            'total_price': 'total_price',         # Mukkadam price
+            'transport_cost': 'transport_cost',   # ✅ NEW
+            'other_cost': 'other_cost',           # ✅ NEW
+            'rate_per_acre': 'rate_per_acre',
+        }
+
+        changes = {}
+
+        # -----------------------
+        # 🔄 BUILD CHANGES
+        # -----------------------
+        for api_field, db_field in field_mapping.items():
+            if api_field not in updates:
+                continue
+
+            new_value = updates[api_field]
+            old_value = getattr(job_activity, db_field, None)
+
+            # ---- DECIMAL FIELDS ----
+            if db_field in ['total_area', 'total_price', 'transport_cost', 'other_cost', 'rate_per_acre']:
+                old_comp = str(old_value) if old_value is not None else None
+                new_comp = str(new_value)
+
+            # ---- DATETIME FIELD ----
+            elif db_field == 'scheduled_datetime':
+                new_value = parse_datetime(new_value)
+                old_value = make_aware_if_needed(old_value)
+
+                old_comp = serialize_for_log(old_value)
+                new_comp = serialize_for_log(new_value)
+
+            # ---- OTHER FIELDS ----
+            else:
+                old_comp = old_value
+                new_comp = new_value
+
+            if old_comp != new_comp:
+                changes[db_field] = {
+                    'old_value': serialize_for_log(old_value),
+                    'new_value': serialize_for_log(new_value)
+                }
+
+        # ✅ CHECK SUBTOTAL CHANGE
+        old_subtotal = job_activity.subtotal
+        if str(old_subtotal) != str(calculated_subtotal):
+            changes['subtotal'] = {
+                'old_value': str(old_subtotal),
+                'new_value': str(calculated_subtotal)
+            }
+
+        if not changes and not created:
+            return Response(
+                {'message': 'No changes detected'},
+                status=status.HTTP_200_OK
+            )
+
+        # -----------------------
+        # 🧾 EDIT HISTORY (JSON SAFE)
+        # -----------------------
+        ActivityEditHistory.objects.create(
+            job_activity=job_activity,
+            edited_by=request.user,
+            reason=reason,
+            changes=changes
+        )
+
+        # -----------------------
+        # 💾 APPLY UPDATES
+        # -----------------------
+        for field, change in changes.items():
+            value = change['new_value']
+
+            if field == 'scheduled_datetime':
+                value = parse_datetime(value)
+
+            elif field in ['total_area', 'total_price', 'transport_cost', 'other_cost', 'subtotal', 'rate_per_acre']:
+                value = Decimal(str(value))
+
+            setattr(job_activity, field, value)
+
+        job_activity.is_manually_edited = True
+        job_activity.save()
+
+        # -----------------------
+        # 🧠 ACTIVITY LOG
+        # -----------------------
+        ActivityLog.objects.create(
+            allocation=None,
+            activity_type='activity_marked_edited',
+            performed_by=request.user,
+            description=f"Activity '{job_activity.activity_name}' edited. Reason: {reason}",
+            job_id=job_id,
+            mukkadam_id=0,
+            mukkadam_name='N/A (Job-level)',
+            transport_provider_id=None,
+            transport_name=None,
+            metadata={
+                'job_id': job_id,
+                'activity_id': activity_id,
+                'activity_name': job_activity.activity_name,
+                'changes': changes,
+                'reason': reason,
+                'cost_breakdown': {
+                    'mukkadam_price': str(mukkadam_price),
+                    'transport_cost': str(transport_cost),
+                    'other_cost': str(other_cost),
+                    'subtotal': str(calculated_subtotal)
+                }
+            }
+        )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Activity updated successfully',
+                'activity': JobActivitySerializer(job_activity).data
+            },
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response(
+            {'success': False, 'error': str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+# REPLACE the mark_activity_lost function:
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def mark_activity_lost(request):
+    """
+    Mark activity as lost - creates JobActivity if missing
+    """
+    try:
+        # Check admin permission
+        if not request.user.is_authenticated:
+            return Response({'error': 'Authentication required'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        if not getattr(request.user, 'is_admin', False) and not request.user.is_superuser:
+            return Response({'error': 'Only admins can mark activities as lost'}, status=status.HTTP_403_FORBIDDEN)
+        
+        # Get data
+        job_id = request.data.get('job_id')
+        activity_id = request.data.get('activity_id')
+        reason = request.data.get('reason', '').strip()
+        
+        # Validate
+        if not job_id or not activity_id or not reason:
+            return Response(
+                {'error': 'job_id, activity_id, and reason are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # ✅ GET OR CREATE JobActivity
+        job_activity, created = JobActivity.objects.get_or_create(
+            job_id=str(job_id),
+            activity_id=str(activity_id),
+            defaults={
+                'activity_name': request.data.get('activity_name', 'Unknown Activity'),
+                'activity_type': '',
+                'scheduled_datetime': timezone.now(),
+                'total_area': Decimal(str(request.data.get('total_area', 0))),
+                'total_price': Decimal(str(request.data.get('total_price', 0))),
+                'transport_cost': Decimal('0'),
+                'other_cost': Decimal('0'),
+                'subtotal': Decimal(str(request.data.get('total_price', 0))),
+                'location': '',
+                'estimated_workers': 10,
+                'rate_per_acre': Decimal('0'),
+                'is_manually_edited': False  # Lost activities don't count as edited
+            }
+        )
+        
+        if created:
+            print(f"✅ Created new JobActivity for lost marking: {job_id} - {activity_id}")
+        
+        # ✅ CHECK IF ALREADY LOST
+        if hasattr(job_activity, 'lost_record') and job_activity.lost_record.is_active:
+            return Response({'error': 'Activity is already marked as lost'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # ✅ CREATE LOST RECORD
+        lost_record, _ = ActivityLostRecord.objects.update_or_create(
+            job_activity=job_activity,
+            defaults={
+                'marked_by': request.user,
+                'marked_at': timezone.now(),
+                'reason': reason,
+                'is_active': True,
+                'unmarked_by': None,
+                'unmarked_at': None,
+                'unmark_reason': None
+            }
+        )
+        
+        # WITH THIS (add required fields with null/empty values):
+        ActivityLog.objects.create(
+            allocation=None,
+            activity_type='activity_marked_lost',
+            performed_by=request.user,
+            description=f"Activity '{job_activity.activity_name}' marked as LOST. Reason: {reason}",
+            job_id=job_id,  # ✅ ADD
+            mukkadam_id=0,  # ✅ ADD (0 or -1 means no mukkadam)
+            mukkadam_name='N/A (Job-level)',  # ✅ ADD
+            transport_provider_id=None,  # ✅ ADD
+            transport_name=None,  # ✅ ADD
+            
+            metadata={
+                'job_id': job_id,
+                'activity_id': activity_id,
+                'activity_name': job_activity.activity_name,
+                'reason': reason,
+                'total_price': float(job_activity.total_price)
+            }
+        )
+        
+        print(f"\n🚫 Activity Marked as LOST")
+        print(f"   Job: {job_id}, Activity: {activity_id}")
+        
+        return Response({
+            'success': True,
+            'message': 'Activity marked as lost successfully',
+            'lost_record': ActivityLostRecordSerializer(lost_record).data
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return Response({'success': False, 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])  # Change to IsAuthenticated in production
+def unmark_activity_lost(request):
+    """
+    Unmark activity as lost (restore it)
+    
+    Payload:
+    {
+        "job_id": "616",
+        "activity_id": "183",
+        "reason": "Farmer changed mind, work will proceed"
+    }
+    """
+    try:
+        # ✅ CHECK ADMIN PERMISSION
+        if not request.user.is_authenticated:
+            return Response(
+                {'error': 'Authentication required'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        if not getattr(request.user, 'is_admin', False) and not request.user.is_superuser:
+            return Response(
+                {'error': 'Only admins can unmark lost activities'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get data
+        job_id = request.data.get('job_id')
+        activity_id = request.data.get('activity_id')
+        reason = request.data.get('reason', '').strip()
+        
+        # Validate
+        if not job_id or not activity_id:
+            return Response(
+                {'error': 'job_id and activity_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not reason:
+            return Response(
+                {'error': 'Reason is required for unmarking activity'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Find activity
+        try:
+            job_activity = JobActivity.objects.get(
+                job_id=str(job_id),
+                activity_id=str(activity_id)
+            )
+        except JobActivity.DoesNotExist:
+            return Response(
+                {'error': f'Activity not found: job_id={job_id}, activity_id={activity_id}'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # ✅ CHECK IF MARKED LOST
+        if not hasattr(job_activity, 'lost_record') or not job_activity.lost_record.is_active:
+            return Response(
+                {'error': 'Activity is not marked as lost'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # ✅ UNMARK
+        lost_record = job_activity.lost_record
+        lost_record.is_active = False
+        lost_record.unmarked_by = request.user
+        lost_record.unmarked_at = timezone.now()
+        lost_record.unmark_reason = reason
+        lost_record.save()
+        
+        # ✅ CREATE ACTIVITY LOG ENTRY
+        ActivityLog.objects.create(
+            allocation=None,
+            activity_type='activity_marked_restored',
+            performed_by=request.user,
+            description=f"Activity '{job_activity.activity_name}' marked as Restored. Reason: {reason}",
+            job_id=job_id,  # ✅ ADD
+            mukkadam_id=0,  # ✅ ADD (0 or -1 means no mukkadam)
+            mukkadam_name='N/A (Job-level)',  # ✅ ADD
+            transport_provider_id=None,  # ✅ ADD
+            transport_name=None,  # ✅ ADD
+            metadata={
+                'job_id': job_id,
+                'activity_id': activity_id,
+                'activity_name': job_activity.activity_name,
+                'reason': reason
+            }
+        )
+        
+        print(f"\n✅ Activity UNMARKED as Lost (Restored)")
+        print(f"   Job ID: {job_id}")
+        print(f"   Activity: {job_activity.activity_name}")
+        print(f"   Reason: {reason}")
+        
+        return Response({
+            'success': True,
+            'message': 'Activity restored successfully',
+            'lost_record': ActivityLostRecordSerializer(lost_record).data
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        print(f"❌ Error unmarking activity: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        return Response({
+            'success': False,
+            'error': f'Unexpected error: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -299,3 +299,65 @@ class AllocationStatsSerializer(serializers.ModelSerializer):
 
 
 from rest_framework import serializers
+
+# allocation_app/serializers.py
+from .models import ActivityEditHistory,ActivityLostRecord
+class ActivityEditHistorySerializer(serializers.ModelSerializer):
+    edited_by_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ActivityEditHistory
+        fields = '__all__'
+    
+    def get_edited_by_name(self, obj):
+        return obj.edited_by.username if obj.edited_by else 'System'
+
+
+class ActivityLostRecordSerializer(serializers.ModelSerializer):
+    marked_by_name = serializers.SerializerMethodField()
+    unmarked_by_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = ActivityLostRecord
+        fields = '__all__'
+    
+    def get_marked_by_name(self, obj):
+        return obj.marked_by.username if obj.marked_by else 'System'
+    
+    def get_unmarked_by_name(self, obj):
+        return obj.unmarked_by.username if obj.unmarked_by else None
+
+
+# Update JobActivitySerializer to include lost status
+class JobActivitySerializer(serializers.ModelSerializer):
+    remaining_area = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        read_only=True
+    )
+    is_fully_allocated = serializers.BooleanField(read_only=True)
+    allocations = AllocationSerializer(many=True, read_only=True)
+    
+    # ✅ NEW FIELDS
+    is_lost = serializers.SerializerMethodField()
+    lost_reason = serializers.SerializerMethodField()
+    edit_history_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = JobActivity
+        fields = '__all__'
+    
+    def get_is_lost(self, obj):
+        try:
+            return obj.lost_record.is_active if hasattr(obj, 'lost_record') else False
+        except ActivityLostRecord.DoesNotExist:
+            return False
+    
+    def get_lost_reason(self, obj):
+        try:
+            return obj.lost_record.reason if hasattr(obj, 'lost_record') and obj.lost_record.is_active else None
+        except ActivityLostRecord.DoesNotExist:
+            return None
+    
+    def get_edit_history_count(self, obj):
+        return obj.edit_history.count() if hasattr(obj, 'edit_history') else 0

@@ -148,6 +148,10 @@ class JobActivity(models.Model):
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    is_manually_edited = models.BooleanField(
+        default=False,
+        help_text="True if this activity has been manually edited by admin"
+    )
     
     class Meta:
         ordering = ['scheduled_datetime']
@@ -482,6 +486,38 @@ class TransportPaymentRequest(models.Model):
     
     def __str__(self):
         return f"Transport Payment #{self.id} - Provider #{self.transport_provider_id} - ₹{self.requested_amount} ({self.status})"
+
+class AllocationChangeLog(models.Model):
+    """Track all changes made to allocations"""
+    allocation = models.ForeignKey(
+        Allocation,
+        on_delete=models.CASCADE,
+        related_name='change_logs'
+    )
+    changed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+    change_reason = models.TextField(
+        help_text="Reason for making this change"
+    )
+    
+    # Store what changed
+    field_name = models.CharField(max_length=100)
+    old_value = models.TextField(blank=True, null=True)
+    new_value = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        ordering = ['-changed_at']
+        indexes = [
+            models.Index(fields=['allocation', '-changed_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.allocation.id} - {self.field_name} changed on {self.changed_at}"
 class ActivityLog(models.Model):
     """Unified activity log with detailed change tracking"""
     
@@ -672,7 +708,73 @@ class FarmerCall(models.Model):
             return self.recording_urls[0]
         return None
 
+# allocation_app/models.py
 
+class ActivityEditHistory(models.Model):
+    """Track all edits made to activities"""
+    job_activity = models.ForeignKey(
+        JobActivity,
+        on_delete=models.CASCADE,
+        related_name='edit_history'
+    )
+    edited_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True
+    )
+    edited_at = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField(help_text="Reason for editing")
+    
+    # Store old and new values as JSON
+    changes = models.JSONField(
+        help_text="Dictionary of field: {old_value, new_value}"
+    )
+    
+    class Meta:
+        ordering = ['-edited_at']
+        verbose_name_plural = "Activity Edit Histories"
+    
+    def __str__(self):
+        return f"Edit on {self.job_activity} by {self.edited_by} at {self.edited_at}"
+
+
+class ActivityLostRecord(models.Model):
+    """Track activities marked as lost"""
+    job_activity = models.OneToOneField(
+        JobActivity,
+        on_delete=models.CASCADE,
+        related_name='lost_record'
+    )
+    marked_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='marked_lost_activities'
+    )
+    marked_at = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField(help_text="Reason for marking as lost")
+    
+    is_active = models.BooleanField(
+        default=True,
+        help_text="False if unmarked later"
+    )
+    
+    unmarked_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='unmarked_lost_activities'
+    )
+    unmarked_at = models.DateTimeField(null=True, blank=True)
+    unmark_reason = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        ordering = ['-marked_at']
+    
+    def __str__(self):
+        status = "ACTIVE" if self.is_active else "UNMARKED"
+        return f"Lost: {self.job_activity} - {status}"
 # core/models.py
 
 from django.db import models
