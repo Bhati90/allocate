@@ -91,7 +91,14 @@ const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
 
 // Import the logic
 
+const [changeReason, setChangeReason] = useState('');
 
+// ✅ Reset reason when modal opens/closes or edit mode changes
+useEffect(() => {
+  if (!editMode) {
+    setChangeReason('');
+  }
+}, [editMode]);
   // Calculate auto-price when area changes
   useEffect(() => {
   // Only auto-calculate if NOT in TBD mode
@@ -238,6 +245,17 @@ useEffect(() => {
       alert('Please select a mukkadam');
       return;
     }
+
+    if (editMode) {
+    if (!changeReason.trim()) {
+      alert('⚠️ Please provide a reason for this change.');
+      return;
+    }
+    if (changeReason.length < 10) {
+      alert('⚠️ Change reason must be at least 10 characters long.');
+      return;
+    }
+  }
     // Find the actual Mukkadam object to get their full crew size
     const mukkadamObj = mukkadams.find(m => m.id === parseInt(allocationForm.mukkadam_id));
 
@@ -265,6 +283,32 @@ const maxAllowedArea = editMode && existingAllocation
       alert('Please select transport provider');
       return;
     }
+
+    // Inside handleSubmit function...
+
+    // if (allocationForm.transport_type === 'provider' && !allocationForm.transport_price) {
+    //   alert('Please enter transport price');
+    //   return;
+    // }
+
+    // --- 🟢 ADD THIS BLOCK ---
+    if (!isPriceTbd && selectedActivity.total_price) {
+      const enteredPrice = parseFloat(allocationForm.mukkadam_price);
+      const maxAllowedPrice = selectedActivity.total_price * 1.15; // 90% limit
+
+      if (enteredPrice > maxAllowedPrice) {
+        alert(
+          `⛔ Price Too High!\n\n` +
+          `You entered: ₹${enteredPrice.toLocaleString()}\n` +
+          `Limit (115%): ₹${maxAllowedPrice.toLocaleString()}\n\n` +
+          `Not allowed. Please find someone better.`
+        );
+        return; 
+      }
+    }
+    // --- 🟢 END OF NEW BLOCK ---
+
+
     if (allocationForm.transport_type === 'own' && !allocationForm.own_transport_price) {
       alert('Please enter own transport price');
       return;
@@ -274,100 +318,108 @@ const maxAllowedArea = editMode && existingAllocation
       return;
     }
 
+// Inside handleSubmit function...
+
+    // ... (Existing Mukkadam check is here) ...
+
+    // --- 🟢 ADD THIS NEW BLOCK: Overall Cost Validation ---
+    if (!isPriceTbd && selectedActivity.total_price) {
+      // 1. Calculate actual transport price based on type
+      const activeTransportPrice = allocationForm.transport_type === 'provider' 
+        ? (parseFloat(allocationForm.transport_price) || 0)
+        : allocationForm.transport_type === 'own'
+        ? (parseFloat(allocationForm.own_transport_price) || 0)
+        : 0;
+
+      // 2. Calculate total allocation cost
+      const currentMukkadamPrice = parseFloat(allocationForm.mukkadam_price) || 0;
+      const totalAllocationCost = currentMukkadamPrice + activeTransportPrice;
+      
+      // 3. Define the limit (90% of Revenue)
+      const maxOverallLimit = selectedActivity.total_price * 1.155;
+
+      if (totalAllocationCost > maxOverallLimit) {
+        alert(
+          `⛔ Total Cost Too High!\n\n` +
+          `Mukkadam: ₹${currentMukkadamPrice.toLocaleString()}\n` +
+          `Transport: ₹${activeTransportPrice.toLocaleString()}\n` +
+          `Total: ₹${totalAllocationCost.toLocaleString()}\n\n` +
+          `Limit (115% of Revenue): ₹${maxOverallLimit.toLocaleString()}\n` +
+          `You are exceeding by ₹${(totalAllocationCost - maxOverallLimit).toLocaleString()}\n\n` +
+          `Not allowed. Please find someone better to reduce costs.`
+        );
+        return;
+      }
+    }
+    // --- 🟢 END OF NEW BLOCK ---
+
     setAllocating(true);
 
     try {
-      // ✅ Use finalCrewSize in the notes
-      let notes = `Activity ID: ${selectedActivity.activity_id}`;
-    notes += `\nCrew Size: ${finalCrewSize} workers`;
-    if (isPriceTbd) {
-      notes += `\nPRICE STATUS: To Be Decided Later`;
-    }
-      const payload = {
-        activity_id: selectedActivity.activity_id,
-        job_id: job.work_id,
-        activity_name: selectedActivity.activity_name,
-        location: `${job.farmer?.village || ''}, ${job.farmer?.taluka || ''}, ${job.farmer?.district || ''}`.trim(),
-        job_latitude: job?.latitude,      // ✅ ADD
-        job_longitude: job?.longitude ,    // ✅ ADD
-        activity_type: selectedActivity.activity_type,
-        scheduled_datetime: selectedActivity.scheduled_date,
-        total_area: selectedActivity.total_area,
-        total_price: selectedActivity.total_price,
-        // location: selectedActivity.location,
-        estimated_workers: selectedActivity.estimated_workers,
-        rate_per_acre: selectedActivity.rate_per_acre,
-        mukkadam_id: parseInt(allocationForm.mukkadam_id),
-        allocated_area: parseFloat(allocationForm.allocated_area),
-        work_date: allocationForm.work_date,
-        crew_size: finalCrewSize,
-        mukkadam_price: isPriceTbd ? 0 : parseFloat(allocationForm.mukkadam_price),
-        transport_type: allocationForm.transport_type,
-        transport_provider_id: allocationForm.transport_type === 'provider' 
-          ? parseInt(allocationForm.transport_provider_id) 
-          : null,
-        own_transport_price: allocationForm.transport_type === 'own'
-          ? parseFloat(allocationForm.own_transport_price || '0')
-          : null,
-        transport_price: (() => {
-          if (allocationForm.transport_type === 'provider') {
-            return parseFloat(allocationForm.transport_price || '0');
-          } else if (allocationForm.transport_type === 'own') {
-            return parseFloat(allocationForm.own_transport_price || '0');
-          }
-          return 0;
-        })(),
-        notes: notes
-      };
+    // Construct Notes
+    let notes = `Activity ID: ${selectedActivity.activity_id}`;
+    notes += `\nCrew Size: ${allocationForm.crew_size || 'Default'} workers`;
+    if (isPriceTbd) notes += `\nPRICE STATUS: To Be Decided Later`;
 
-      const config = getAuthConfig();
-      let response;
-
-      // ✅ NEW: Use PATCH for edit, POST for create
-      if (editMode && existingAllocation) {
-        response = await axios.patch(
-          `${API_BASE_URL_A}/ap/allocations/${existingAllocation.id}/`,
-          payload,
-          config
-        );
-        alert(`✅ Allocation updated successfully!\n${response.data.message || ''}`);
-      } else {
-        response = await axios.post(
-          `${API_BASE_URL_A}/ap/allocations/`,
-          payload,
-          config
-        );
-        alert(`✅ Allocated ${allocationForm.allocated_area} acres successfully!\n${response.data.message || ''}`);
-      }
-
-      onSuccess();
+    const payload = {
+      // ... (Keep existing payload fields: activity_id, job_id, etc.) ...
+      activity_id: selectedActivity.activity_id,
+      job_id: job.work_id,
+      activity_name: selectedActivity.activity_name,
+      // ... include all other standard fields ...
+      mukkadam_id: parseInt(allocationForm.mukkadam_id),
+      allocated_area: parseFloat(allocationForm.allocated_area),
+      work_date: allocationForm.work_date,
+      crew_size: parseInt(allocationForm.crew_size || '0'),
+      mukkadam_price: isPriceTbd ? 0 : parseFloat(allocationForm.mukkadam_price),
+      transport_type: allocationForm.transport_type,
+      transport_provider_id: allocationForm.transport_type === 'provider' ? parseInt(allocationForm.transport_provider_id) : null,
+      own_transport_price: allocationForm.transport_type === 'own' ? parseFloat(allocationForm.own_transport_price || '0') : null,
+      transport_price: allocationForm.transport_type === 'provider' ? parseFloat(allocationForm.transport_price || '0') : 0,
+      notes: notes,
       
-      // ✅ CHANGE: Close modal if editing, otherwise reset form
-      if (editMode) {
-        onClose();
-      } else {
-        // Reset form but keep activity selected
-        setAllocationForm({
-          mukkadam_id: '',
-          allocated_area: '',
-          work_date: selectedActivity.scheduled_date,
-          mukkadam_price: '',
-          crew_size: '',
-          transport_type: 'provider',
-          transport_provider_id: '',
-          own_transport_price: '',
-          transport_price: ''
-        });
-        setCrewCapacity(null);
-      }
+      // ✅ NEW: Add change_reason to payload if editing
+      change_reason: editMode ? changeReason : undefined 
+    };
 
-    } catch (error: any) {
-      console.error('Allocation error:', error);
-      alert(`Failed to ${editMode ? 'update' : 'allocate'}: ` + (error.response?.data?.error || error.message));
-    } finally {
-      setAllocating(false);
+    const config = getAuthConfig();
+    let response;
+
+    if (editMode && existingAllocation) {
+      // ✅ Update Request
+      response = await axios.patch(
+        `${API_BASE_URL_A}/ap/allocations/${existingAllocation.id}/`,
+        payload,
+        config
+      );
+      alert(`✅ Updated successfully!\nReason: ${changeReason}`);
+    } else {
+      // Create Request
+      response = await axios.post(
+        `${API_BASE_URL_A}/ap/allocations/`,
+        payload,
+        config
+      );
+      alert(`✅ Allocated successfully!`);
     }
-  };
+
+    onSuccess();
+    if (editMode) onClose();
+    else {
+      // Reset form logic
+      setAllocationForm({ ...allocationForm, mukkadam_id: '', allocated_area: '', mukkadam_price: '' }); // etc
+      setChangeReason(''); // Reset reason
+    }
+
+  } catch (error: any) {
+    console.error('Allocation error:', error);
+    // Display specific backend error for change reason if it occurs
+    const errorMsg = error.response?.data?.error || error.message;
+    alert(`Failed to ${editMode ? 'update' : 'allocate'}: ${errorMsg}`);
+  } finally {
+    setAllocating(false);
+  }
+};
 
   const [mukkadamSearch, setMukkadamSearch] = useState('');
 const [transportSearch, setTransportSearch] = useState('');
@@ -498,16 +550,16 @@ const filteredProviders = useMemo(() => {
               
               <div className="space-y-3">
                 {job.activities?.map((activity) => (
-                  <button
-                    key={activity.id}
-                    onClick={() => handleActivitySelect(activity)}
-                    className={`w-full text-left p-4 rounded-lg border-2 transition ${
-                      selectedActivity?.id === activity.id
-                        ? 'border-blue-500 bg-blue-50'
-                        : activity.is_fully_allocated
-                        ? 'border-green-300 bg-green-50'
-                        : 'border-gray-200 bg-white hover:border-blue-300'
-                    }`}
+                    <button
+                      key={activity.activity_id || activity.id} // ✅ Use activity_id for key
+                      onClick={() => handleActivitySelect(activity)}
+                      className={`w-full text-left p-4 rounded-lg border-2 transition ${
+                        selectedActivity?.activity_id === activity.activity_id  // ✅ CHANGE THIS LINE
+                          ? 'border-blue-500 bg-blue-50'
+                          : activity.is_fully_allocated
+                          ? 'border-green-300 bg-green-50'
+                          : 'border-gray-200 bg-white hover:border-blue-300'
+                      }`}
                     disabled={
                       activity.is_fully_allocated || 
                       (editMode && selectedActivity?.id !== activity.id)  // ✅ NEW: Disable other activities in edit mode
@@ -1036,6 +1088,9 @@ const filteredProviders = useMemo(() => {
                     </div>
 
                     <div>
+{/* ... inside the render, locate the Mukkadam Price section ... */}
+
+<div>
   <div className="flex justify-between items-center mb-2">
     <label className="block text-sm font-medium text-gray-700">
       Mukkadam Price (₹) <span className="text-red-500">*</span>
@@ -1066,12 +1121,28 @@ const filteredProviders = useMemo(() => {
       min="0"
       value={isPriceTbd ? "" : allocationForm.mukkadam_price}
       onChange={(e) => setAllocationForm({...allocationForm, mukkadam_price: e.target.value})}
+      // 🟢 CHANGED: Add conditional styling for error state
       className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 ${
-        isPriceTbd ? 'bg-gray-100 text-gray-400 italic' : 'bg-white'
+        isPriceTbd 
+          ? 'bg-gray-100 text-gray-400 italic' 
+          : (!isPriceTbd && selectedActivity && parseFloat(allocationForm.mukkadam_price) > (selectedActivity.total_price || 0) * 1.15)
+            ? 'border-red-500 text-red-600 focus:ring-red-500 bg-red-50' // Error style
+            : 'bg-white border-gray-300'
       }`}
       placeholder={isPriceTbd ? "Price will be decided later" : "Auto-calculated"}
     />
   </div>
+
+  {/* 🟢 ADD THIS: Error Message Display */}
+  {!isPriceTbd && selectedActivity && parseFloat(allocationForm.mukkadam_price) > (selectedActivity.total_price || 0) * 1.15 && (
+    <div className="mt-2 text-xs font-bold text-red-600 flex items-center animate-pulse">
+      <AlertTriangle size={14} className="mr-1" />
+      <span>
+        Not allowed. Limit is ₹{((selectedActivity.total_price || 0) * 1.15).toLocaleString()}. Please find someone better.
+      </span>
+    </div>
+  )}
+</div>
 </div>
                   
 
@@ -1248,64 +1319,153 @@ const filteredProviders = useMemo(() => {
                   </div>
 
                   {/* Summary */}
-                  {allocationForm.mukkadam_price && (
-                    <div className="bg-green-50 p-6 rounded-lg border-2 border-green-200">
-                      <h3 className="font-bold text-gray-800 mb-3">Allocation Summary</h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <p className="text-sm text-gray-600">Area</p>
-                          <p className="text-2xl font-bold text-blue-600">{allocationForm.allocated_area} acres</p>
-                        </div>
-                        <div>
-  <p className="text-sm text-gray-600">Mukkadam Price</p>
-  <p className={`text-2xl font-bold ${isPriceTbd ? 'text-orange-500' : 'text-indigo-600'}`}>
-    {isPriceTbd ? 'To Be Decided' : `₹${parseFloat(allocationForm.mukkadam_price || '0').toLocaleString()}`}
-  </p>
-</div>
-                        <div>
-                          <p className="text-sm text-gray-600">Transport Cost</p>
-                          <p className="text-2xl font-bold text-orange-600">
-                            ₹{(allocationForm.transport_type === 'provider' 
-                              ? parseFloat(allocationForm.transport_price || '0')
-                              : allocationForm.transport_type === 'own'
-                              ? parseFloat(allocationForm.own_transport_price || '0')
-                              : 0).toLocaleString()}
-                          </p>
-                        </div>
-                        <div className="col-span-2 pt-3 border-t-2 border-green-300">
-                          <p className="text-sm text-gray-600">Total Cost</p>
-                          <p className="text-3xl font-bold text-green-600">
-                            ₹{totalCost.toLocaleString()}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  {/* ... inside the render ... */}
 
-                  {/* ✅ UPDATED: Action Buttons with dynamic text */}
-                  <div className="flex space-x-3 pt-4">
-                    <button
-                      type="button"
-                      onClick={onClose}
-                      className="flex-1 px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={allocating}
-                      className={`flex-1 px-6 py-3 rounded-lg font-semibold text-white transition shadow-lg ${
-                        allocating
-                          ? 'bg-gray-400 cursor-not-allowed'
-                          : 'bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700'
-                      }`}
-                    >
-                      {allocating 
-                        ? (editMode ? 'Updating...' : 'Allocating...') 
-                        : (editMode ? 'Update Allocation' : 'Confirm Allocation')
-                      }
-                    </button>
-                  </div>
+{allocationForm.mukkadam_price && (
+  // 🟢 CHANGED: Dynamic background color based on total cost
+  <div className={`p-6 rounded-lg border-2 transition-colors ${
+    (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+      ? 'bg-red-50 border-red-300' // Error State
+      : 'bg-green-50 border-green-200' // Normal State
+  }`}>
+    <div className="flex justify-between items-start mb-3">
+      <h3 className={`font-bold ${
+        (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+        ? 'text-red-800'
+        : 'text-gray-800'
+      }`}>
+        Allocation Summary
+      </h3>
+      
+      {/* 🟢 ADD THIS: Visual Warning Badge */}
+      {!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15 && (
+        <span className="px-2 py-1 bg-red-100 text-red-700 text-xs font-bold rounded flex items-center border border-red-200">
+          <AlertTriangle size={12} className="mr-1" />
+          Exceeds 115% Limit
+        </span>
+      )}
+    </div>
+
+    <div className="grid grid-cols-2 gap-4">
+      <div>
+        <p className="text-sm text-gray-600">Area</p>
+        <p className="text-2xl font-bold text-blue-600">{allocationForm.allocated_area} acres</p>
+      </div>
+      <div>
+        <p className="text-sm text-gray-600">Mukkadam Price</p>
+        <p className={`text-2xl font-bold ${isPriceTbd ? 'text-orange-500' : 'text-indigo-600'}`}>
+          {isPriceTbd ? 'To Be Decided' : `₹${parseFloat(allocationForm.mukkadam_price || '0').toLocaleString()}`}
+        </p>
+      </div>
+      <div>
+        <p className="text-sm text-gray-600">Transport Cost</p>
+        <p className="text-2xl font-bold text-orange-600">
+          ₹{(allocationForm.transport_type === 'provider' 
+            ? parseFloat(allocationForm.transport_price || '0')
+            : allocationForm.transport_type === 'own'
+            ? parseFloat(allocationForm.own_transport_price || '0')
+            : 0).toLocaleString()}
+        </p>
+      </div>
+      
+      {/* Total Cost Section */}
+      <div className={`col-span-2 pt-3 border-t-2 ${
+        (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+        ? 'border-red-200'
+        : 'border-green-300'
+      }`}>
+        <div className="flex justify-between items-end">
+          <div>
+            <p className="text-sm text-gray-600">Total Cost</p>
+            <p className={`text-3xl font-bold ${
+              (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+              ? 'text-red-600'
+              : 'text-green-600'
+            }`}>
+              ₹{totalCost.toLocaleString()}
+            </p>
+          </div>
+          
+          {/* 🟢 ADD THIS: Comparison to Limit */}
+          {!isPriceTbd && selectedActivity && (
+            <div className="text-right">
+              <p className="text-xs text-gray-500">Max Allowed (115%)</p>
+              <p className="text-sm font-semibold text-gray-700">
+                ₹{((selectedActivity.total_price || 0) * 1.15).toLocaleString()}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* 🟢 ADD THIS: Error Message */}
+        {!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15 && (
+          <p className="text-xs font-bold text-red-600 mt-2 flex items-center">
+            <AlertTriangle size={14} className="mr-1" />
+            Not allowed. Please find someone better.
+          </p>
+        )}
+      </div>
+    </div>
+  </div>
+)}
+{editMode && (
+  <div className="mt-6 bg-yellow-50 border-2 border-yellow-200 rounded-lg p-4">
+    <label className="block text-sm font-bold text-yellow-800 mb-2 flex items-center">
+      <Edit size={16} className="mr-2" />
+      Reason for Change <span className="text-red-600 ml-1">*</span>
+    </label>
+    
+    <textarea
+      required={editMode}
+      value={changeReason}
+      onChange={(e) => setChangeReason(e.target.value)}
+      className={`w-full p-3 border rounded-lg focus:ring-2 focus:ring-yellow-500 text-sm ${
+        changeReason.length > 0 && changeReason.length < 10 
+          ? 'border-red-400 focus:border-red-500 bg-white' 
+          : 'border-yellow-300 bg-white'
+      }`}
+      placeholder="e.g., Increasing area due to faster work, Changed mukkadam due to availability..."
+      rows={3}
+    />
+    
+    <div className="flex justify-between mt-1">
+      <p className={`text-xs font-medium ${
+        changeReason.length < 10 ? 'text-red-600' : 'text-green-600'
+      }`}>
+        {changeReason.length < 10 
+          ? `Minimum 10 characters required (${changeReason.length}/10)` 
+          : "✅ Reason looks good"
+        }
+      </p>
+    </div>
+  </div>
+)}
+
+{/* ✅ UPDATED: Action Buttons with dynamic text */}
+<div className="flex space-x-3 pt-4">
+  <button
+    type="button"
+    onClick={onClose}
+    className="flex-1 px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition"
+  >
+    Cancel
+  </button>
+  <button
+    type="submit"
+    // Disable submit if editing and reason is too short
+    disabled={allocating || (editMode && changeReason.length < 10)} 
+    className={`flex-1 px-6 py-3 rounded-lg font-semibold text-white transition shadow-lg ${
+      allocating || (editMode && changeReason.length < 10)
+        ? 'bg-gray-400 cursor-not-allowed'
+        : 'bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700'
+    }`}
+  >
+    {allocating 
+      ? (editMode ? 'Updating...' : 'Allocating...') 
+      : (editMode ? 'Update Allocation' : 'Confirm Allocation')
+    }
+  </button>
+</div>
                 </form>
               )}
             </div>
@@ -1333,5 +1493,3 @@ const filteredProviders = useMemo(() => {
 };
 
 export default ComplexAllocationModal;
-
-
