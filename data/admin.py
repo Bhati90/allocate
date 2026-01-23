@@ -421,22 +421,29 @@ class CallLogAdmin(admin.ModelAdmin):
 from django.contrib import admin
 from .models import ActivityLog
 
+from django.contrib import admin
+from django.utils.html import format_html
+from .models import ActivityLog
+
 
 @admin.register(ActivityLog)
 class ActivityLogAdmin(admin.ModelAdmin):
     """
     Admin configuration for ActivityLog
+    Immutable, optimized, audit-friendly
     """
 
     # 📌 Columns shown in admin list view
     list_display = (
-        'activity_type',
+        'colored_activity',
         'job_id',
         'mukkadam_id',
         'amount',
         'performed_by',
         'performed_at',
     )
+
+    list_display_links = ('colored_activity', 'job_id')
 
     # 🔍 Filters on right sidebar
     list_filter = (
@@ -445,16 +452,19 @@ class ActivityLogAdmin(admin.ModelAdmin):
         'performed_by',
     )
 
-    # 🔎 Search box
+    # 🔎 Search box (optimized)
     search_fields = (
         'job_id',
         'description',
-        'mukkadam_id',
-        'transport_provider_id',
+        'mukkadam_id__exact',
+        'transport_provider_id__exact',
     )
 
     # ⏱ Default ordering
     ordering = ('-performed_at',)
+
+    # 📆 Date hierarchy (huge UX win)
+    date_hierarchy = 'performed_at'
 
     # 🚀 Performance optimization
     list_select_related = (
@@ -464,7 +474,14 @@ class ActivityLogAdmin(admin.ModelAdmin):
         'performed_by',
     )
 
-    # 🔒 Make logs immutable (recommended)
+    raw_id_fields = (
+        'allocation',
+        'payment_request',
+        'transport_payment_request',
+        'performed_by',
+    )
+
+    # 🔒 Make logs immutable
     readonly_fields = (
         'activity_type',
         'description',
@@ -473,26 +490,48 @@ class ActivityLogAdmin(admin.ModelAdmin):
         'transport_payment_request',
         'job_id',
         'mukkadam_id',
+        'mukkadam_name',
         'transport_provider_id',
+        'transport_name',
         'amount',
         'performed_by',
         'performed_at',
+        'changes',
         'metadata',
     )
 
     # 🧾 Better form layout
     fieldsets = (
         ('Activity Info', {
-            'fields': ('activity_type', 'description', 'performed_at', 'performed_by')
+            'fields': (
+                'activity_type',
+                'description',
+                'performed_at',
+                'performed_by',
+            )
         }),
         ('Related Objects', {
-            'fields': ('allocation', 'payment_request', 'transport_payment_request')
+            'fields': (
+                'allocation',
+                'payment_request',
+                'transport_payment_request',
+            )
         }),
         ('Reference IDs', {
-            'fields': ('job_id', 'mukkadam_id', 'transport_provider_id')
+            'fields': (
+                'job_id',
+                'mukkadam_id',
+                'mukkadam_name',
+                'transport_provider_id',
+                'transport_name',
+            )
         }),
         ('Financial', {
             'fields': ('amount',)
+        }),
+        ('Change Tracking', {
+            'fields': ('changes',),
+            'classes': ('collapse',),
         }),
         ('Metadata', {
             'fields': ('metadata',),
@@ -500,7 +539,206 @@ class ActivityLogAdmin(admin.ModelAdmin):
         }),
     )
 
-    # ❌ Disable add/delete (logs should only be system-generated)
+    # 🎨 Color-coded activity type
+    def colored_activity(self, obj):
+        colors = {
+            'allocation_created': '#2563eb',   # blue
+            'allocation_updated': '#9333ea',   # purple
+            'allocation_deleted': '#f59e0b',   # amber
+            'payment_requested': '#0ea5e9',    # sky
+            'payment_paid': '#16a34a',         # green
+            'payment_rejected': '#dc2626',     # red
+            'transport_payment_requested': '#0ea5e9',
+            'transport_payment_paid': '#16a34a',
+            'transport_payment_rejected': '#dc2626',
+        }
+        color = colors.get(obj.activity_type, "#C9CCD2")
+        return format_html(
+            '<strong style="color:{}">{}</strong>',
+            color,
+            obj.get_activity_type_display()
+        )
+
+    colored_activity.short_description = 'Activity'
+
+    # ❌ Disable add/delete (system-generated logs only)
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+from django.contrib import admin
+from django.utils.html import format_html
+from .models import ActivityEditHistory, ActivityLostRecord
+
+
+# ============================
+# Activity Edit History Admin
+# ============================
+
+@admin.register(ActivityEditHistory)
+class ActivityEditHistoryAdmin(admin.ModelAdmin):
+    """
+    Admin for tracking all edits made to JobActivity
+    """
+
+    list_display = (
+        'job_activity',
+        'edited_by',
+        'edited_at',
+        'short_reason',
+    )
+
+    list_display_links = ('job_activity',)
+
+    list_filter = (
+        'edited_at',
+        'edited_by',
+    )
+
+    search_fields = (
+        'job_activity__id',
+        'reason',
+        'edited_by__username',
+    )
+
+    ordering = ('-edited_at',)
+    date_hierarchy = 'edited_at'
+
+    raw_id_fields = (
+        'job_activity',
+        'edited_by',
+    )
+
+    readonly_fields = (
+        'job_activity',
+        'edited_by',
+        'edited_at',
+        'reason',
+        'changes',
+    )
+
+    fieldsets = (
+        ('Edit Info', {
+            'fields': (
+                'job_activity',
+                'edited_by',
+                'edited_at',
+            )
+        }),
+        ('Reason', {
+            'fields': ('reason',),
+        }),
+        ('Changes', {
+            'fields': ('changes',),
+            'classes': ('collapse',),
+        }),
+    )
+
+    def short_reason(self, obj):
+        return obj.reason[:60] + '...' if len(obj.reason) > 60 else obj.reason
+
+    short_reason.short_description = 'Edit Reason'
+
+    # 🔒 Immutable logs
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+# ============================
+# Activity Lost Record Admin
+# ============================
+
+@admin.register(ActivityLostRecord)
+class ActivityLostRecordAdmin(admin.ModelAdmin):
+    """
+    Admin for activities marked as lost
+    """
+
+    list_display = (
+        'job_activity',
+        'status_badge',
+        'marked_by',
+        'marked_at',
+        'unmarked_by',
+    )
+
+    list_display_links = ('job_activity',)
+
+    list_filter = (
+        'is_active',
+        'marked_at',
+        'marked_by',
+    )
+
+    search_fields = (
+        'job_activity__id',
+        'reason',
+        'marked_by__username',
+        'unmarked_by__username',
+    )
+
+    ordering = ('-marked_at',)
+    date_hierarchy = 'marked_at'
+
+    raw_id_fields = (
+        'job_activity',
+        'marked_by',
+        'unmarked_by',
+    )
+
+    readonly_fields = (
+        'job_activity',
+        'marked_by',
+        'marked_at',
+        'reason',
+        'is_active',
+        'unmarked_by',
+        'unmarked_at',
+        'unmark_reason',
+    )
+
+    fieldsets = (
+        ('Lost Activity Info', {
+            'fields': (
+                'job_activity',
+                'is_active',
+            )
+        }),
+        ('Marked As Lost', {
+            'fields': (
+                'marked_by',
+                'marked_at',
+                'reason',
+            )
+        }),
+        ('Unmark Info', {
+            'fields': (
+                'unmarked_by',
+                'unmarked_at',
+                'unmark_reason',
+            ),
+            'classes': ('collapse',),
+        }),
+    )
+
+    def status_badge(self, obj):
+        if obj.is_active:
+            return format_html(
+                '<span style="color:#dc2626; font-weight:600;">ACTIVE</span>'
+            )
+        return format_html(
+            '<span style="color:#16a34a; font-weight:600;">UNMARKED</span>'
+        )
+
+    status_badge.short_description = 'Status'
+
+    # 🔒 Immutable records
     def has_add_permission(self, request):
         return False
 

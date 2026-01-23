@@ -90,7 +90,7 @@ const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
   const [isPriceTbd, setIsPriceTbd] = useState(false);
 
 // Import the logic
-
+const [isTransportPriceTbd, setIsTransportPriceTbd] = useState(false); // ✅ NEW
 const [changeReason, setChangeReason] = useState('');
 
 // ✅ Reset reason when modal opens/closes or edit mode changes
@@ -309,78 +309,81 @@ const maxAllowedArea = editMode && existingAllocation
     // --- 🟢 END OF NEW BLOCK ---
 
 
-    if (allocationForm.transport_type === 'own' && !allocationForm.own_transport_price) {
-      alert('Please enter own transport price');
-      return;
-    }
-    if (allocationForm.transport_type === 'provider' && !allocationForm.transport_price) {
-      alert('Please enter transport price');
-      return;
-    }
+// ✅ Replace with these:
+if (allocationForm.transport_type === 'own' && !isTransportPriceTbd && !allocationForm.own_transport_price) {
+  alert('Please enter own transport price or mark as "To Be Decided"');
+  return;
+}
+
+if (allocationForm.transport_type === 'provider' && !isTransportPriceTbd && !allocationForm.transport_price) {
+  alert('Please enter transport price or mark as "To Be Decided"');
+  return;
+}
 
 // Inside handleSubmit function...
 
     // ... (Existing Mukkadam check is here) ...
+// --- Overall Cost Validation ---
+if (!isPriceTbd && !isTransportPriceTbd && selectedActivity.total_price) {
+  const activeTransportPrice = allocationForm.transport_type === 'provider' 
+    ? (parseFloat(allocationForm.transport_price) || 0)
+    : allocationForm.transport_type === 'own'
+    ? (parseFloat(allocationForm.own_transport_price) || 0)
+    : 0;
 
-    // --- 🟢 ADD THIS NEW BLOCK: Overall Cost Validation ---
-    if (!isPriceTbd && selectedActivity.total_price) {
-      // 1. Calculate actual transport price based on type
-      const activeTransportPrice = allocationForm.transport_type === 'provider' 
-        ? (parseFloat(allocationForm.transport_price) || 0)
-        : allocationForm.transport_type === 'own'
-        ? (parseFloat(allocationForm.own_transport_price) || 0)
-        : 0;
+  const currentMukkadamPrice = parseFloat(allocationForm.mukkadam_price) || 0;
+  const totalAllocationCost = currentMukkadamPrice + activeTransportPrice;
+  
+  const maxOverallLimit = selectedActivity.total_price * 1.155;
 
-      // 2. Calculate total allocation cost
-      const currentMukkadamPrice = parseFloat(allocationForm.mukkadam_price) || 0;
-      const totalAllocationCost = currentMukkadamPrice + activeTransportPrice;
-      
-      // 3. Define the limit (90% of Revenue)
-      const maxOverallLimit = selectedActivity.total_price * 1.155;
-
-      if (totalAllocationCost > maxOverallLimit) {
-        alert(
-          `⛔ Total Cost Too High!\n\n` +
-          `Mukkadam: ₹${currentMukkadamPrice.toLocaleString()}\n` +
-          `Transport: ₹${activeTransportPrice.toLocaleString()}\n` +
-          `Total: ₹${totalAllocationCost.toLocaleString()}\n\n` +
-          `Limit (115% of Revenue): ₹${maxOverallLimit.toLocaleString()}\n` +
-          `You are exceeding by ₹${(totalAllocationCost - maxOverallLimit).toLocaleString()}\n\n` +
-          `Not allowed. Please find someone better to reduce costs.`
-        );
-        return;
-      }
-    }
+  if (totalAllocationCost > maxOverallLimit) {
+    alert(
+      `⛔ Total Cost Too High!\n\n` +
+      `Mukkadam: ₹${currentMukkadamPrice.toLocaleString()}\n` +
+      `Transport: ₹${activeTransportPrice.toLocaleString()}\n` +
+      `Total: ₹${totalAllocationCost.toLocaleString()}\n\n` +
+      `Limit (115% of Revenue): ₹${maxOverallLimit.toLocaleString()}\n` +
+      `You are exceeding by ₹${(totalAllocationCost - maxOverallLimit).toLocaleString()}\n\n` +
+      `Not allowed. Please find someone better to reduce costs.`
+    );
+    return;
+  }
+}
     // --- 🟢 END OF NEW BLOCK ---
 
     setAllocating(true);
 
     try {
-    // Construct Notes
-    let notes = `Activity ID: ${selectedActivity.activity_id}`;
-    notes += `\nCrew Size: ${allocationForm.crew_size || 'Default'} workers`;
-    if (isPriceTbd) notes += `\nPRICE STATUS: To Be Decided Later`;
+// Update notes
+let notes = `Activity ID: ${selectedActivity.activity_id}`;
+notes += `\nCrew Size: ${allocationForm.crew_size || 'Default'} workers`;
+if (isPriceTbd) notes += `\nMUKKADAM PRICE: To Be Decided Later`;
+if (isTransportPriceTbd) notes += `\nTRANSPORT PRICE: To Be Decided Later`; // ✅ NEW
 
-    const payload = {
-      // ... (Keep existing payload fields: activity_id, job_id, etc.) ...
-      activity_id: selectedActivity.activity_id,
-      job_id: job.work_id,
-      activity_name: selectedActivity.activity_name,
-      // ... include all other standard fields ...
-      mukkadam_id: parseInt(allocationForm.mukkadam_id),
-      allocated_area: parseFloat(allocationForm.allocated_area),
-      work_date: allocationForm.work_date,
-      crew_size: parseInt(allocationForm.crew_size || '0'),
-      mukkadam_price: isPriceTbd ? 0 : parseFloat(allocationForm.mukkadam_price),
-      transport_type: allocationForm.transport_type,
-      transport_provider_id: allocationForm.transport_type === 'provider' ? parseInt(allocationForm.transport_provider_id) : null,
-      own_transport_price: allocationForm.transport_type === 'own' ? parseFloat(allocationForm.own_transport_price || '0') : null,
-      transport_price: allocationForm.transport_type === 'provider' ? parseFloat(allocationForm.transport_price || '0') : 0,
-      notes: notes,
-      
-      // ✅ NEW: Add change_reason to payload if editing
-      change_reason: editMode ? changeReason : undefined 
-    };
+const payload = {
+  activity_id: selectedActivity.activity_id,
+  job_id: job.work_id,
+  activity_name: selectedActivity.activity_name,
+  mukkadam_id: parseInt(allocationForm.mukkadam_id),
+  allocated_area: parseFloat(allocationForm.allocated_area),
+  work_date: allocationForm.work_date,
+  crew_size: parseInt(allocationForm.crew_size || '0'),
+  mukkadam_price: isPriceTbd ? 0 : parseFloat(allocationForm.mukkadam_price),
+  transport_type: allocationForm.transport_type,
+  transport_provider_id: allocationForm.transport_type === 'provider' ? parseInt(allocationForm.transport_provider_id) : null,
+  
+  // ✅ UPDATED: Handle TBD for both transport types
+  own_transport_price: allocationForm.transport_type === 'own' 
+    ? (isTransportPriceTbd ? 0 : parseFloat(allocationForm.own_transport_price || '0'))
+    : null,
+  
+  transport_price: allocationForm.transport_type === 'provider' 
+    ? (isTransportPriceTbd ? 0 : parseFloat(allocationForm.transport_price || '0'))
+    : 0,
+  
+  notes: notes,
+  change_reason: editMode ? changeReason : undefined
+};
 
     const config = getAuthConfig();
     let response;
@@ -454,13 +457,18 @@ const filteredProviders = useMemo(() => {
   const selectedMukkadam = mukkadams.find(m => m.id === parseInt(allocationForm.mukkadam_id));
   const selectedProvider = transportProviders.find(p => p.id === parseInt(allocationForm.transport_provider_id));
 
-  const totalCost = (parseFloat(allocationForm.mukkadam_price) || 0) + 
-    (allocationForm.transport_type === 'provider' 
+const totalCost = (
+  (isPriceTbd ? 0 : parseFloat(allocationForm.mukkadam_price) || 0)
+  + 
+  (isTransportPriceTbd 
+    ? 0 
+    : allocationForm.transport_type === 'provider' 
       ? (parseFloat(allocationForm.transport_price) || 0)
       : allocationForm.transport_type === 'own'
       ? (parseFloat(allocationForm.own_transport_price) || 0)
-      : 0);
-
+      : 0
+  )
+);
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
@@ -1264,50 +1272,109 @@ const filteredProviders = useMemo(() => {
                           </div>
                         )}
 
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Transport Price (₹) <span className="text-red-500">*</span>
-                          </label>
-                          <div className="relative">
-                            <span className="absolute left-4 top-3 text-gray-500 font-semibold">₹</span>
-                            <input
-                              required
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              value={allocationForm.transport_price}
-                              onChange={(e) => setAllocationForm({...allocationForm, transport_price: e.target.value})}
-                              className="w-full pl-8 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
-                              placeholder="1500.00"
-                            />
-                          </div>
-                        </div>
+                       <div>
+      <div className="flex justify-between items-center mb-2">
+        <label className="block text-sm font-medium text-gray-700">
+          Transport Price (₹) <span className="text-red-500">*</span>
+        </label>
+        <label className="flex items-center text-xs font-semibold text-orange-600 cursor-pointer">
+          <input
+            type="checkbox"
+            className="mr-1 rounded border-gray-300"
+            checked={isTransportPriceTbd}
+            onChange={(e) => {
+              setIsTransportPriceTbd(e.target.checked);
+              if (e.target.checked) {
+                setAllocationForm(prev => ({ ...prev, transport_price: '0' }));
+              }
+            }}
+          />
+          To Be Decided Later
+        </label>
+      </div>
+
+      <div className="relative">
+        <span className="absolute left-4 top-3 text-gray-500 font-semibold">₹</span>
+        <input
+          required={!isTransportPriceTbd}
+          disabled={isTransportPriceTbd}
+          type="number"
+          step="0.01"
+          min="0"
+          value={isTransportPriceTbd ? "" : allocationForm.transport_price}
+          onChange={(e) => setAllocationForm({...allocationForm, transport_price: e.target.value})}
+          className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 ${
+            isTransportPriceTbd 
+              ? 'bg-gray-100 text-gray-400 italic focus:ring-orange-300' 
+              : 'bg-white border-gray-300 focus:ring-orange-500'
+          }`}
+          placeholder={isTransportPriceTbd ? "Price will be decided later" : "1500.00"}
+        />
+      </div>
+
+      {isTransportPriceTbd && (
+        <p className="text-xs text-orange-600 mt-1 font-medium">
+          ℹ️ Transport price will be finalized later with the provider
+        </p>
+      )}
+    </div>
                       </>
                     )}
 
                     {allocationForm.transport_type === 'own' && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Own Transport Price (₹) <span className="text-red-500">*</span>
-                        </label>
-                        <div className="relative">
-                          <span className="absolute left-4 top-3 text-gray-500 font-semibold">₹</span>
-                          <input
-                            required
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={allocationForm.own_transport_price}
-                            onChange={(e) => setAllocationForm({...allocationForm, own_transport_price: e.target.value})}
-                            className="w-full pl-8 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                            placeholder="1000.00"
-                          />
-                        </div>
-                        <p className="text-xs text-gray-500 mt-1">
-                          Price for using farmer's own transport
-                        </p>
-                      </div>
-                    )}
+  <div>
+    <div className="flex justify-between items-center mb-2">
+      <label className="block text-sm font-medium text-gray-700">
+        Own Transport Price (₹) <span className="text-red-500">*</span>
+      </label>
+      <label className="flex items-center text-xs font-semibold text-blue-600 cursor-pointer">
+        <input
+          type="checkbox"
+          className="mr-1 rounded border-gray-300"
+          checked={isTransportPriceTbd}
+          onChange={(e) => {
+            setIsTransportPriceTbd(e.target.checked);
+            if (e.target.checked) {
+              setAllocationForm(prev => ({ ...prev, own_transport_price: '0' }));
+            }
+          }}
+        />
+        To Be Decided Later
+      </label>
+    </div>
+
+    <div className="relative">
+      <span className="absolute left-4 top-3 text-gray-500 font-semibold">₹</span>
+      <input
+        required={!isTransportPriceTbd}
+        disabled={isTransportPriceTbd}
+        type="number"
+        step="0.01"
+        min="0"
+        value={isTransportPriceTbd ? "" : allocationForm.own_transport_price}
+        onChange={(e) => setAllocationForm({...allocationForm, own_transport_price: e.target.value})}
+        className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 ${
+          isTransportPriceTbd 
+            ? 'bg-gray-100 text-gray-400 italic focus:ring-blue-300' 
+            : 'bg-white border-gray-300 focus:ring-blue-500'
+        }`}
+        placeholder={isTransportPriceTbd ? "Price will be decided later" : "1000.00"}
+      />
+    </div>
+
+    {isTransportPriceTbd && (
+      <p className="text-xs text-blue-600 mt-1 font-medium">
+        ℹ️ Own transport cost will be finalized later
+      </p>
+    )}
+    
+    {!isTransportPriceTbd && (
+      <p className="text-xs text-gray-500 mt-1">
+        Price for using farmer's own transport
+      </p>
+    )}
+  </div>
+)}
 
                     {allocationForm.transport_type === 'none' && (
                       <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
@@ -1322,11 +1389,10 @@ const filteredProviders = useMemo(() => {
                   {/* ... inside the render ... */}
 
 {allocationForm.mukkadam_price && (
-  // 🟢 CHANGED: Dynamic background color based on total cost
   <div className={`p-6 rounded-lg border-2 transition-colors ${
     (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
-      ? 'bg-red-50 border-red-300' // Error State
-      : 'bg-green-50 border-green-200' // Normal State
+      ? 'bg-red-50 border-red-300'
+      : 'bg-green-50 border-green-200'
   }`}>
     <div className="flex justify-between items-start mb-3">
       <h3 className={`font-bold ${
@@ -1337,7 +1403,6 @@ const filteredProviders = useMemo(() => {
         Allocation Summary
       </h3>
       
-      {/* 🟢 ADD THIS: Visual Warning Badge */}
       {!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15 && (
         <span className="px-2 py-1 bg-red-100 text-red-700 text-xs font-bold rounded flex items-center border border-red-200">
           <AlertTriangle size={12} className="mr-1" />
@@ -1351,24 +1416,29 @@ const filteredProviders = useMemo(() => {
         <p className="text-sm text-gray-600">Area</p>
         <p className="text-2xl font-bold text-blue-600">{allocationForm.allocated_area} acres</p>
       </div>
+      
       <div>
         <p className="text-sm text-gray-600">Mukkadam Price</p>
         <p className={`text-2xl font-bold ${isPriceTbd ? 'text-orange-500' : 'text-indigo-600'}`}>
           {isPriceTbd ? 'To Be Decided' : `₹${parseFloat(allocationForm.mukkadam_price || '0').toLocaleString()}`}
         </p>
       </div>
+      
+      {/* ✅ UPDATED: Transport Cost Display */}
       <div>
         <p className="text-sm text-gray-600">Transport Cost</p>
-        <p className="text-2xl font-bold text-orange-600">
-          ₹{(allocationForm.transport_type === 'provider' 
-            ? parseFloat(allocationForm.transport_price || '0')
-            : allocationForm.transport_type === 'own'
-            ? parseFloat(allocationForm.own_transport_price || '0')
-            : 0).toLocaleString()}
+        <p className={`text-2xl font-bold ${isTransportPriceTbd ? 'text-orange-500' : 'text-orange-600'}`}>
+          {isTransportPriceTbd 
+            ? 'To Be Decided'
+            : `₹${(allocationForm.transport_type === 'provider' 
+                ? parseFloat(allocationForm.transport_price || '0')
+                : allocationForm.transport_type === 'own'
+                ? parseFloat(allocationForm.own_transport_price || '0')
+                : 0).toLocaleString()}`
+          }
         </p>
       </div>
       
-      {/* Total Cost Section */}
       <div className={`col-span-2 pt-3 border-t-2 ${
         (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
         ? 'border-red-200'
@@ -1382,12 +1452,15 @@ const filteredProviders = useMemo(() => {
               ? 'text-red-600'
               : 'text-green-600'
             }`}>
-              ₹{totalCost.toLocaleString()}
+              {/* ✅ Show "TBD" if either price is TBD */}
+              {isPriceTbd || isTransportPriceTbd 
+                ? 'To Be Decided'
+                : `₹${totalCost.toLocaleString()}`
+              }
             </p>
           </div>
           
-          {/* 🟢 ADD THIS: Comparison to Limit */}
-          {!isPriceTbd && selectedActivity && (
+          {!isPriceTbd && !isTransportPriceTbd && selectedActivity && (
             <div className="text-right">
               <p className="text-xs text-gray-500">Max Allowed (115%)</p>
               <p className="text-sm font-semibold text-gray-700">
@@ -1397,8 +1470,7 @@ const filteredProviders = useMemo(() => {
           )}
         </div>
 
-        {/* 🟢 ADD THIS: Error Message */}
-        {!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15 && (
+        {!isPriceTbd && !isTransportPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15 && (
           <p className="text-xs font-bold text-red-600 mt-2 flex items-center">
             <AlertTriangle size={14} className="mr-1" />
             Not allowed. Please find someone better.
