@@ -375,9 +375,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED
         )
-    
-    
-    
     def _send_whatsapp_notifications(self, allocation):
         """Helper to trigger notifications for Mukkadam and Transporter"""
         try:
@@ -1262,6 +1259,7 @@ from .models import ActivityLog
 
 # Ensure these are imported or defined in your file
 # from .utils import batch_fetch_farmers, batch_fetch_mukkadams, batch_fetch_transport_providers
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def activity_logs_list(request):
@@ -1292,7 +1290,7 @@ def activity_logs_list(request):
         queryset = queryset.filter(performed_at__gte=from_date)
 
     # Fetch 200 most recent logs
-    logs_queryset = list(queryset.select_related('performed_by').order_by('-performed_at'))
+    logs_queryset = list(queryset.select_related('performed_by').order_by('-performed_at')[:200])
 
     if not logs_queryset:
         return Response({'count': 0, 'logs': []})
@@ -1461,20 +1459,20 @@ def activity_logs_list(request):
         })
 
         # ✅ ADMIN-ONLY: Include reason field
-       
+        
 
     total_elapsed = time.time() - start_time
     
     return Response({
         'count': len(logs),
         'logs': logs,
-        
+        # 'is_admin': is_admin,  # ✅ Tell frontend if user is admin
         'performance': {
             'total_time': f'{total_elapsed:.2f}s',
             'batch_fetch_time': f'{batch_elapsed:.2f}s',
             'farmers_fetched': len(farmers_cache)
         }
-    })
+    })# @api_view(['GET'])
 # @permission_classes([AllowAny])
 # def activity_logs_list(request):
 #     start_time = time.time()
@@ -2100,10 +2098,7 @@ def jobs_list(request):
                 other_cost = Decimal(str(api_activity.get('other_cost', 0)))          # ✅ FROM API
     
                 scheduled_date = api_activity.get('date_time') or api_activity.get('scheduled_date')
-                rate_per_acre = round(
-                    float(total_price) / float(total_area),
-                    2
-                ) if float(total_area) > 0 else 0.00
+                rate_per_acre = float(total_price) / float(total_area) if float(total_area) > 0 else 0
                 location = api_activity.get('location', 'N/A')
 
             # Calculate allocations (same as before)

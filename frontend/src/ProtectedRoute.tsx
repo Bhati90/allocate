@@ -22,7 +22,7 @@ const ProtectedRoute = ({ children }: { children: JSX.Element }) => {
   // ✅ Redirect if no token
   if (!token) {
     console.log('⚠️ No token found, redirecting to login');
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/loginf" replace />;
   }
   
   console.log('✅ Token verified, allowing access');
