@@ -35,6 +35,8 @@ interface ComplexAllocationModalProps {
   onSuccess: () => void;
   mukkadams: Mukkadam[];
   transportProviders: TransportProvider[];
+  refreshAllocations: () => Promise<void>;
+  refreshFullData: () => Promise<void>;
 }
 interface RecommendationBuckets {
   all: any[];  // ✅ NEW
@@ -71,7 +73,9 @@ const ComplexAllocationModal: React.FC<ComplexAllocationModalProps> = ({
   mukkadams,
   transportProviders,
   editMode = false,
-  existingAllocation = null
+  existingAllocation = null,
+  refreshAllocations,
+  refreshFullData,
 }) => {
   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null);
   const [allocationForm, setAllocationForm] = useState({
@@ -361,6 +365,7 @@ if (!isPriceTbd && !isTransportPriceTbd && selectedActivity.total_price) {
   //   );
   //   return;
   // }
+
 }
     // --- 🟢 END OF NEW BLOCK ---
 
@@ -418,6 +423,10 @@ const payload = {
       );
       alert(`✅ Allocated successfully!`);
     }
+    await refreshFullData()
+
+    await refreshAllocations();
+
 
     onSuccess();
     if (editMode) onClose();
@@ -427,14 +436,38 @@ const payload = {
       setChangeReason(''); // Reset reason
     }
 
-  } catch (error: any) {
+  } // ComplexAllocationModal.tsx
+
+ catch (error: any) {
     console.error('Allocation error:', error);
-    // Display specific backend error for change reason if it occurs
     const errorMsg = error.response?.data?.error || error.message;
     alert(`Failed to ${editMode ? 'update' : 'allocate'}: ${errorMsg}`);
-  } finally {
+
+    // 2. Try to refresh full data (Jobs API) safely
+    // ✅ Now this will run even if the allocation refresh failed
+    if (refreshFullData) {
+        try {
+            console.log("Attempting to refresh full data..."); // Debug log
+            await refreshFullData();
+        } catch (e) {
+            console.warn("Failed to refresh full data after error:", e);
+        }
+    }
+        // 1. Try to refresh allocations safely
+    if (refreshAllocations) {
+        try {
+            await refreshAllocations();
+        } catch (e) {
+            console.warn("Failed to refresh allocations after error:", e);
+        }
+    }
+
+
+} finally {
+    // 3. Remove the duplicate refreshAllocations() call here if you already did it above
+    // Or keep it if you want to ensure it runs absolutely last, but catch errors here too.
     setAllocating(false);
-  }
+}
 };
 
   const [mukkadamSearch, setMukkadamSearch] = useState('');
