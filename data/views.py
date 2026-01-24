@@ -1461,14 +1461,14 @@ def activity_logs_list(request):
         })
 
         # ✅ ADMIN-ONLY: Include reason field
-       
+        
 
     total_elapsed = time.time() - start_time
     
     return Response({
         'count': len(logs),
         'logs': logs,
-        
+        # 'is_admin': is_admin,  # ✅ Tell frontend if user is admin
         'performance': {
             'total_time': f'{total_elapsed:.2f}s',
             'batch_fetch_time': f'{batch_elapsed:.2f}s',
