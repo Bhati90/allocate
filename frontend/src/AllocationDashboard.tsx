@@ -385,38 +385,38 @@ const handleMarkComplete = async (allocationId: number) => {
   }
 };
 
-  // ✅ 1. INITIAL FETCH (Runs Once)
+// ✅ DEFINED OUTSIDE (so it can be passed to children)
+  const fetchStaticData = async (showLoading = true) => {
+    if (showLoading) setLoading(true); // Only show spinner if requested
+    
+    const config = getAuthConfig();
+    try {
+      const [jobsRes, mukkadamRes, transportRes] = await Promise.all([
+        axios.get(`${API_BASE_URL_A}/ap/jobs/`, config),
+        axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`),
+        axios.get(`${API_BASE_URL}/api/transport-providers/dropdown_list/`)
+      ]);
+
+      setJobs(jobsRes.data);
+      setMukkadams(mukkadamRes.data);
+      setTransportProviders(transportRes.data);
+      setTotalMukkadamsRegistered(mukkadamRes.data.length);
+      setTotalTransportersRegistered(transportRes.data.length);
+
+      // Refresh allocations using the new data
+      await refreshAllocations(mukkadamRes.data, transportRes.data);
+
+    } catch (error) {
+      console.error('Error fetching static data:', error);
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  };
+
+  // ✅ USE EFFECT (Calls the function above)
   useEffect(() => {
-    const fetchStaticData = async () => {
-      setLoading(true);
-      const config = getAuthConfig();
-      try {
-        // Fetch SLOW static data (Jobs, Mukkadams, Providers)
-        const [jobsRes, mukkadamRes, transportRes] = await Promise.all([
-          axios.get(`${API_BASE_URL_A}/ap/jobs/`, config),
-          axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`),
-          axios.get(`${API_BASE_URL}/api/transport-providers/dropdown_list/`)
-        ]);
-
-        setJobs(jobsRes.data);
-        setMukkadams(mukkadamRes.data);
-        setTransportProviders(transportRes.data);
-        setTotalMukkadamsRegistered(mukkadamRes.data.length);
-        setTotalTransportersRegistered(transportRes.data.length);
-
-        // Immediately fetch dynamic data using the newly fetched static data
-        await refreshAllocations(mukkadamRes.data, transportRes.data);
-
-      } catch (error) {
-        console.error('Error fetching static data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchStaticData();
-  }, []); // Empty dependency array = runs once
-
+    fetchStaticData(true); // True = Show Spinner on first load
+  }, []);
   // ✅ COMPLETE SAFE VERSION
 
 // ✅ FIXED VERSION - Extract 'logs' from response
@@ -4898,6 +4898,8 @@ const handleSaveSuccess = async () => {
       transportProviders={transportProviders}
       editMode={true}
       existingAllocation={allocationToEdit}
+      refreshAllocations={() => refreshAllocations(mukkadams, transportProviders)}
+      refreshFullData={() => fetchStaticData(false)}
     />
   );
 })()}
@@ -5126,6 +5128,8 @@ const handleSaveSuccess = async () => {
           onSuccess={handleComplexAllocationSuccess}
           mukkadams={mukkadams}
           transportProviders={transportProviders}
+          refreshAllocations={() => refreshAllocations(mukkadams, transportProviders)}
+          refreshFullData={() => fetchStaticData(false)}
         />
       )}
     </div>

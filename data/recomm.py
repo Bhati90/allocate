@@ -247,21 +247,36 @@ def calculate_price_metrics(mukkadam, target_activity):
     # ========================================
     # 1. GET ASKING PRICE FROM RATE CARD
     # ========================================
+# ========================================
+# 1. GET ASKING PRICE FROM RATE CARD
+# ========================================
     rate_card = mukkadam.get('rate_card', {})
-    
+
     if rate_card:
         normalized_activity = normalize_activity_name(target_activity)
-        asking_price_str = rate_card.get(normalized_activity, '').strip()
-        
-        if asking_price_str and asking_price_str.replace('.', '').isdigit():
-            result['asking_price'] = float(asking_price_str)
+
+        raw_asking_price = rate_card.get(normalized_activity)
+        raw_base_price = rate_card.get('other')
+
+        def parse_price(value):
+            if value is None:
+                return None
+            try:
+                return float(str(value).strip())
+            except (ValueError, TypeError):
+                return None
+
+        asking_price = parse_price(raw_asking_price)
+
+        if asking_price is not None:
+            result['asking_price'] = asking_price
             result['is_base_price'] = False
         else:
-            base_price_str = rate_card.get('other', '').strip()
-            if base_price_str and base_price_str.replace('.', '').isdigit():
-                result['asking_price'] = float(base_price_str)
+            base_price = parse_price(raw_base_price)
+            if base_price is not None:
+                result['asking_price'] = base_price
                 result['is_base_price'] = True
-    
+
     # ========================================
     # 2. GET HISTORICAL PRICE FROM job_summary
     # ========================================
