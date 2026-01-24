@@ -24,9 +24,11 @@ from django.conf.urls.static import static
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('ap/', include('data.urls')),  # API must come FIRST
     path('', about, name='about'),
-
     
-    re_path(r'^.*$', about),
-    path('ap/', include('data.urls')), 
-]+ static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    # ONLY if you need SPA routing, and ONLY at the very end
+    re_path(r'^(?!ap/).*$', about),  # ← Negative lookahead: exclude 'ap/'
+]
+if settings.DEBUG:
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

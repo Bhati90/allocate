@@ -11,10 +11,6 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  server: {
-    port: 5174,       // ✅ Run on port 5174
-    strictPort: true, // ✅ Fail if port is already in use
-  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
