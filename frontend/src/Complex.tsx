@@ -305,20 +305,20 @@ const maxAllowedArea = editMode && existingAllocation
     // }
 
     // --- 🟢 ADD THIS BLOCK ---
-    if (!isPriceTbd && selectedActivity.total_price) {
-      const enteredPrice = parseFloat(allocationForm.mukkadam_price);
-      const maxAllowedPrice = selectedActivity.total_price * 1.15; // 90% limit
+    // if (!isPriceTbd && selectedActivity.total_price) {
+    //   const enteredPrice = parseFloat(allocationForm.mukkadam_price);
+    //   const maxAllowedPrice = selectedActivity.total_price ; // 90% limit
 
-      if (enteredPrice > maxAllowedPrice) {
-        alert(
-          `⛔ Price Too High!\n\n` +
-          `You entered: ₹${enteredPrice.toLocaleString()}\n` +
-          `Limit (115%): ₹${maxAllowedPrice.toLocaleString()}\n\n` +
-          `Not allowed. Please find someone better.`
-        );
-        return; 
-      }
-    }
+    //   if (enteredPrice > maxAllowedPrice) {
+    //     alert(
+    //       `⛔ Price Too High!\n\n` +
+    //       `You entered: ₹${enteredPrice.toLocaleString()}\n` +
+    //       `Limit (115%): ₹${maxAllowedPrice.toLocaleString()}\n\n` +
+    //       `Not allowed. Please find someone better.`
+    //     );
+    //     return; 
+    //   }
+    // }
     // --- 🟢 END OF NEW BLOCK ---
 
 
@@ -347,20 +347,20 @@ if (!isPriceTbd && !isTransportPriceTbd && selectedActivity.total_price) {
   const currentMukkadamPrice = parseFloat(allocationForm.mukkadam_price) || 0;
   const totalAllocationCost = currentMukkadamPrice + activeTransportPrice;
   
-  const maxOverallLimit = selectedActivity.total_price * 1.155;
+  const maxOverallLimit = selectedActivity.total_price ;
 
-  if (totalAllocationCost > maxOverallLimit) {
-    alert(
-      `⛔ Total Cost Too High!\n\n` +
-      `Mukkadam: ₹${currentMukkadamPrice.toLocaleString()}\n` +
-      `Transport: ₹${activeTransportPrice.toLocaleString()}\n` +
-      `Total: ₹${totalAllocationCost.toLocaleString()}\n\n` +
-      `Limit (115% of Revenue): ₹${maxOverallLimit.toLocaleString()}\n` +
-      `You are exceeding by ₹${(totalAllocationCost - maxOverallLimit).toLocaleString()}\n\n` +
-      `Not allowed. Please find someone better to reduce costs.`
-    );
-    return;
-  }
+  // if (totalAllocationCost > maxOverallLimit) {
+  //   alert(
+  //     `⛔ Total Cost Too High!\n\n` +
+  //     `Mukkadam: ₹${currentMukkadamPrice.toLocaleString()}\n` +
+  //     `Transport: ₹${activeTransportPrice.toLocaleString()}\n` +
+  //     `Total: ₹${totalAllocationCost.toLocaleString()}\n\n` +
+  //     `Limit (115% of Revenue): ₹${maxOverallLimit.toLocaleString()}\n` +
+  //     `You are exceeding by ₹${(totalAllocationCost - maxOverallLimit).toLocaleString()}\n\n` +
+  //     `Not allowed. Please find someone better to reduce costs.`
+  //   );
+  //   return;
+  // }
 }
     // --- 🟢 END OF NEW BLOCK ---
 
@@ -1072,19 +1072,43 @@ const totalCost = (
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           Area to Allocate (acres) <span className="text-red-500">*</span>
                         </label>
-                        <input
+<input
   required
   type="number"
   step="0.01"
   min="0.01"
-  max={editMode && existingAllocation 
-    ? selectedActivity.remaining_area + parseFloat(String(existingAllocation.allocated_area || 0))
-    : selectedActivity.remaining_area}
+  max={
+    editMode && existingAllocation
+      ? selectedActivity.remaining_area +
+        parseFloat(String(existingAllocation.allocated_area || 0))
+      : selectedActivity.remaining_area
+  }
   value={allocationForm.allocated_area}
-  onChange={(e) => setAllocationForm({...allocationForm, allocated_area: e.target.value})}
+  onChange={(e) => {
+    const value = e.target.value;
+
+    // allow only up to 2 decimals
+    if (/^\d*\.?\d{0,2}$/.test(value)) {
+      setAllocationForm({
+        ...allocationForm,
+        allocated_area: value,
+      });
+    }
+  }}
+  onWheel={(e) => e.currentTarget.blur()}   // ✅ stop scroll changing value
+  onBlur={(e) => {
+    const val = parseFloat(e.target.value);
+    if (!isNaN(val)) {
+      setAllocationForm({
+        ...allocationForm,
+        allocated_area: val.toFixed(2),      // ✅ force 2 decimals
+      });
+    }
+  }}
   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
   placeholder="5.00"
 />
+
                         <p className="text-xs text-gray-500 mt-1">
   Max: {(editMode && existingAllocation 
     ? selectedActivity.remaining_area + parseFloat(String(existingAllocation.allocated_area || 0))
@@ -1133,34 +1157,56 @@ const totalCost = (
   <div className="relative">
     <span className="absolute left-4 top-3 text-gray-500 font-semibold">₹</span>
     <input
-      required={!isPriceTbd}
-      disabled={isPriceTbd}
-      type="number"
-      step="0.01"
-      min="0"
-      value={isPriceTbd ? "" : allocationForm.mukkadam_price}
-      onChange={(e) => setAllocationForm({...allocationForm, mukkadam_price: e.target.value})}
-      // 🟢 CHANGED: Add conditional styling for error state
-      className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 ${
-        isPriceTbd 
-          ? 'bg-gray-100 text-gray-400 italic' 
-          : (!isPriceTbd && selectedActivity && parseFloat(allocationForm.mukkadam_price) > (selectedActivity.total_price || 0) * 1.15)
-            ? 'border-red-500 text-red-600 focus:ring-red-500 bg-red-50' // Error style
-            : 'bg-white border-gray-300'
-      }`}
-      placeholder={isPriceTbd ? "Price will be decided later" : "Auto-calculated"}
-    />
+  required={!isPriceTbd}
+  disabled={isPriceTbd}
+  type="number"
+  step="0.01"
+  min="0"
+  value={isPriceTbd ? "" : allocationForm.mukkadam_price}
+  onChange={(e) => {
+    const value = e.target.value;
+
+    // restrict to 2 decimals
+    if (/^\d*\.?\d{0,2}$/.test(value)) {
+      setAllocationForm({
+        ...allocationForm,
+        mukkadam_price: value,
+      });
+    }
+  }}
+  onWheel={(e) => e.currentTarget.blur()}   // ✅ prevents scroll changing value
+  onBlur={(e) => {
+    const val = parseFloat(e.target.value);
+    if (!isNaN(val)) {
+      setAllocationForm({
+        ...allocationForm,
+        mukkadam_price: val.toFixed(2),      // ✅ force 2 decimals
+      });
+    }
+  }}
+  className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 ${
+    isPriceTbd
+      ? 'bg-gray-100 text-gray-400 italic'
+      : selectedActivity &&
+        parseFloat(allocationForm.mukkadam_price || '0') >
+          (selectedActivity.total_price || 0)
+      ? 'border-red-500 text-red-600 focus:ring-red-500 bg-red-50'
+      : 'bg-white border-gray-300 focus:ring-indigo-500'
+  }`}
+  placeholder={isPriceTbd ? "Price will be decided later" : "Auto-calculated"}
+/>
+
   </div>
 
   {/* 🟢 ADD THIS: Error Message Display */}
-  {!isPriceTbd && selectedActivity && parseFloat(allocationForm.mukkadam_price) > (selectedActivity.total_price || 0) * 1.15 && (
+  {/* {!isPriceTbd && selectedActivity && parseFloat(allocationForm.mukkadam_price) > (selectedActivity.total_price || 0)  && (
     <div className="mt-2 text-xs font-bold text-red-600 flex items-center animate-pulse">
       <AlertTriangle size={14} className="mr-1" />
       <span>
-        Not allowed. Limit is ₹{((selectedActivity.total_price || 0) * 1.15).toLocaleString()}. Please find someone better.
+        Not allowed. Limit is ₹{((selectedActivity.total_price || 0) ).toLocaleString()}. Please find someone better.
       </span>
     </div>
-  )}
+  )} */}
 </div>
 </div>
                   
@@ -1307,20 +1353,38 @@ const totalCost = (
       <div className="relative">
         <span className="absolute left-4 top-3 text-gray-500 font-semibold">₹</span>
         <input
-          required={!isTransportPriceTbd}
-          disabled={isTransportPriceTbd}
-          type="number"
-          step="0.01"
-          min="0"
-          value={isTransportPriceTbd ? "" : allocationForm.transport_price}
-          onChange={(e) => setAllocationForm({...allocationForm, transport_price: e.target.value})}
-          className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 ${
-            isTransportPriceTbd 
-              ? 'bg-gray-100 text-gray-400 italic focus:ring-orange-300' 
-              : 'bg-white border-gray-300 focus:ring-orange-500'
-          }`}
-          placeholder={isTransportPriceTbd ? "Price will be decided later" : "1500.00"}
-        />
+  required={!isTransportPriceTbd}
+  disabled={isTransportPriceTbd}
+  type="number"
+  step="0.01"
+  min="0"
+  value={isTransportPriceTbd ? "" : allocationForm.transport_price}
+  onChange={(e) =>
+    setAllocationForm({
+      ...allocationForm,
+      transport_price: e.target.value,
+    })
+  }
+  onWheel={(e) => e.currentTarget.blur()}   // 🛑 stop scroll change
+  onBlur={(e) => {
+    if (!isTransportPriceTbd && e.target.value !== "") {
+      const val = parseFloat(e.target.value);
+      if (!isNaN(val)) {
+        setAllocationForm(prev => ({
+          ...prev,
+          transport_price: val.toFixed(2),
+        }));
+      }
+    }
+  }}
+  className={`w-full pl-8 pr-4 py-3 border rounded-lg focus:ring-2 ${
+    isTransportPriceTbd
+      ? 'bg-gray-100 text-gray-400 italic focus:ring-orange-300'
+      : 'bg-white border-gray-300 focus:ring-orange-500'
+  }`}
+  placeholder={isTransportPriceTbd ? "Price will be decided later" : "0.00"}
+/>
+
       </div>
 
       {isTransportPriceTbd && (
@@ -1401,20 +1465,20 @@ const totalCost = (
 
 {allocationForm.mukkadam_price && (
   <div className={`p-6 rounded-lg border-2 transition-colors ${
-    (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+    (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) )
       ? 'bg-red-50 border-red-300'
       : 'bg-green-50 border-green-200'
   }`}>
     <div className="flex justify-between items-start mb-3">
       <h3 className={`font-bold ${
-        (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+        (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) )
         ? 'text-red-800'
         : 'text-gray-800'
       }`}>
         Allocation Summary
       </h3>
       
-      {!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15 && (
+      {!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) && (
         <span className="px-2 py-1 bg-red-100 text-red-700 text-xs font-bold rounded flex items-center border border-red-200">
           <AlertTriangle size={12} className="mr-1" />
           Exceeds 115% Limit
@@ -1451,7 +1515,7 @@ const totalCost = (
       </div>
       
       <div className={`col-span-2 pt-3 border-t-2 ${
-        (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+        (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) )
         ? 'border-red-200'
         : 'border-green-300'
       }`}>
@@ -1459,7 +1523,7 @@ const totalCost = (
           <div>
             <p className="text-sm text-gray-600">Total Cost</p>
             <p className={`text-3xl font-bold ${
-              (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15)
+              (!isPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0))
               ? 'text-red-600'
               : 'text-green-600'
             }`}>
@@ -1475,18 +1539,18 @@ const totalCost = (
             <div className="text-right">
               <p className="text-xs text-gray-500">Max Allowed (115%)</p>
               <p className="text-sm font-semibold text-gray-700">
-                ₹{((selectedActivity.total_price || 0) * 1.15).toLocaleString()}
+                ₹{((selectedActivity.total_price || 0)).toLocaleString()}
               </p>
             </div>
           )}
         </div>
 
-        {!isPriceTbd && !isTransportPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0) * 1.15 && (
+        {/* {!isPriceTbd && !isTransportPriceTbd && selectedActivity && totalCost > (selectedActivity.total_price || 0)  && (
           <p className="text-xs font-bold text-red-600 mt-2 flex items-center">
             <AlertTriangle size={14} className="mr-1" />
             Not allowed. Please find someone better.
           </p>
-        )}
+        )} */}
       </div>
     </div>
   </div>
