@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { 
-  Users, Truck,Edit2, DollarSign,ChevronDown,ChevronUp, FileText, CheckCircle, CheckSquare,Ban,
-  XCircle, TrendingUp,TrendingDown, Calendar, Filter, Search,Activity,AlertCircle,ExternalLink,
+  Users, Truck,Edit2, DollarSign,ChevronDown,ChevronUp, FileText, CheckCircle, CheckSquare,Ban,User, Phone,
+  XCircle, TrendingUp,TrendingDown, Calendar, Filter, Search,Activity,AlertCircle,ExternalLink, Hash,RefreshCw,
   Eye, Edit, Plus, X, MapPin, BarChart3, Clock, Layers
 } from 'lucide-react';
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL_SUPPLY;
 const API_BASE_URL_A = import.meta.env.VITE_API_BASE_URL_ALLOCATION;
 
@@ -46,7 +47,9 @@ const AllocationDashboard: React.FC = () => {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
 
-  
+  const [searchTermLost, setSearchTermLost] = useState('');   // For Farmer Name
+const [searchJobId, setSearchJobId] = useState(''); // For Job ID
+const [filterDate, setFilterDate] = useState('');   // For Date
 // Add these state variables at the top of your component
 const [editingActivity, setEditingActivity] = useState(null);
 // Add these near line 25-30 where other state is defined
@@ -4058,6 +4061,63 @@ const handleSaveSuccess = async () => {
 )}
 {activeTab === 'lost' && (
   <div>
+    {/* --------------------------------------------------
+        ✅ 1. SEARCH & FILTER CONTROLS
+       -------------------------------------------------- */}
+    <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+      
+      {/* Search by Farmer Name */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">
+          Search Farmer
+        </label>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+          <input
+            type="text"
+            placeholder="Name or Phone..."
+            value={searchTerm} // Make sure you have this state: const [searchTerm, setSearchTerm] = useState('')
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
+          />
+        </div>
+      </div>
+
+      {/* Search by Job ID */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">
+          Job ID
+        </label>
+        <div className="relative">
+          <Hash className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+          <input
+            type="text"
+            placeholder="e.g. 1045"
+            value={searchJobId} // Make sure you have this state: const [searchJobId, setSearchJobId] = useState('')
+            onChange={(e) => setSearchJobId(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
+          />
+        </div>
+      </div>
+
+      {/* Filter by Date */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">
+          Filter by Date
+        </label>
+        <div className="relative">
+          <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+          <input
+            type="date"
+            value={filterDate} // Make sure you have this state: const [filterDate, setFilterDate] = useState('')
+            onChange={(e) => setFilterDate(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
+          />
+        </div>
+      </div>
+    </div>
+
+    {/* Info Banner */}
     <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
       <p className="text-sm text-red-800">
         <Ban className="inline mr-2" size={16} />
@@ -4066,23 +4126,69 @@ const handleSaveSuccess = async () => {
       </p>
     </div>
 
+    {/* --------------------------------------------------
+        ✅ 2. FILTERING LOGIC & RENDER
+       -------------------------------------------------- */}
     {(() => {
-      const lostJobs = jobs.filter(job => 
+      // A. Initial Filter: Get all jobs that have lost activities
+      let filteredLostJobs = jobs.filter(job => 
         job.activities?.some(a => a.is_lost)
       );
 
-      if (lostJobs.length === 0) {
+      // B. Apply Search Term (Farmer Name/Phone)
+      if (searchTerm) {
+        const lowerTerm = searchTerm.toLowerCase();
+        filteredLostJobs = filteredLostJobs.filter(job => 
+          job.farmer?.farmer_name?.toLowerCase().includes(lowerTerm) ||
+          job.farmer?.phone_number?.includes(searchTerm)
+        );
+      }
+
+      // C. Apply Job ID Filter
+      if (searchJobId) {
+        filteredLostJobs = filteredLostJobs.filter(job => 
+          String(job.work_id).includes(searchJobId)
+        );
+      }
+
+      // D. Apply Date Filter (Checks scheduled_date of the *lost* activity)
+      if (filterDate) {
+        filteredLostJobs = filteredLostJobs.filter(job => 
+          job.activities.some(a => 
+            a.is_lost && a.scheduled_date && a.scheduled_date.startsWith(filterDate)
+          )
+        );
+      }
+
+      // --------------------------------------------------
+      // ✅ 3. DISPLAY RESULTS
+      // --------------------------------------------------
+      
+      if (filteredLostJobs.length === 0) {
         return (
           <div className="text-center py-12 bg-white rounded-xl border border-dashed">
             <Ban size={48} className="mx-auto text-gray-300 mb-4" />
-            <p className="text-gray-600">No lost jobs</p>
+            <p className="text-gray-600">
+              {searchTerm || searchJobId || filterDate 
+                ? "No lost jobs match your filters" 
+                : "No lost jobs found"}
+            </p>
+            {(searchTerm || searchJobId || filterDate) && (
+              <button 
+                onClick={() => { setSearchTerm(''); setSearchJobId(''); setFilterDate(''); }}
+                className="mt-2 text-red-600 text-sm font-semibold hover:underline"
+              >
+                Clear Filters
+              </button>
+            )}
           </div>
         );
       }
 
       return (
         <div className="space-y-3">
-          {lostJobs.map(job => {
+          {filteredLostJobs.map(job => {
+            // Get only the lost activities for display
             const lostActivities = job.activities.filter(a => a.is_lost);
             
             return (
@@ -4090,46 +4196,62 @@ const handleSaveSuccess = async () => {
                 <div className="flex justify-between items-start mb-3">
                   <div>
                     <div className="flex items-center space-x-2 mb-2">
-                      <span className="font-mono font-bold text-blue-600">{job.work_id}</span>
-                      <span className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-bold">
+                      <span className="font-mono font-bold text-blue-600 text-lg">#{job.work_id}</span>
+                      <span className="px-2 py-1 bg-red-500 text-white rounded-full text-xs font-bold shadow-sm">
                         {lostActivities.length} LOST
                       </span>
                     </div>
                     {job.farmer && (
-                      <p className="text-sm text-gray-700">
-                        {job.farmer.farmer_name} • {job.farmer.phone_number}
-                      </p>
+                      <div className="flex items-center text-sm text-gray-700 font-medium">
+                        <User size={14} className="mr-1 text-gray-400"/>
+                        {job.farmer.farmer_name} 
+                        <span className="mx-2 text-gray-300">|</span>
+                        <Phone size={14} className="mr-1 text-gray-400"/>
+                        {job.farmer.phone_number}
+                      </div>
                     )}
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <h4 className="font-semibold text-gray-800 text-sm">Lost Activities:</h4>
+                  <h4 className="font-semibold text-gray-800 text-xs uppercase tracking-wider mb-2">
+                    Lost Activities:
+                  </h4>
                   {lostActivities.map(activity => (
-                    <div key={activity.activity_id} className="bg-white border-2 border-red-200 rounded-lg p-3">
+                    <div key={activity.activity_id} className="bg-white border border-red-200 rounded-lg p-3 shadow-sm hover:shadow-md transition-shadow">
                       <div className="flex justify-between items-start">
                         <div className="flex-1">
-                          <div className="flex items-center space-x-2 mb-1">
-                            <Ban size={14} className="text-red-600" />
-                            <span className="font-semibold text-gray-800 line-through">
-                              {activity.activity_name}
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center space-x-2">
+                                <Ban size={14} className="text-red-600" />
+                                <span className="font-semibold text-gray-800 line-through decoration-red-400">
+                                {activity.activity_name}
+                                </span>
+                            </div>
+                            <span className="text-xs text-gray-400 font-mono">
+                                {activity.scheduled_date}
                             </span>
                           </div>
-                          <p className="text-xs text-gray-600">
-                            Area: {activity.total_area} acres • Price: ₹{activity.total_price}
+                          
+                          <p className="text-xs text-gray-600 ml-6 mb-2">
+                            Area: <span className="font-medium">{activity.total_area} ac</span> • 
+                            Price: <span className="font-medium">₹{activity.total_price}</span>
                           </p>
-                          <div className="mt-2 bg-red-100 border border-red-300 rounded p-2">
-                            <p className="text-xs text-red-800">
-                              <strong>Reason:</strong> {activity.lost_reason}
+                          
+                          {/* <div className="ml-6 bg-red-50 border border-red-100 rounded p-2 flex items-start">
+                            <AlertCircle size={14} className="text-red-500 mt-0.5 mr-2 flex-shrink-0" />
+                            <p className="text-xs text-red-800 italic">
+                              "{activity.lost_reason}"
                             </p>
-                          </div>
+                          </div> */}
                         </div>
                         
                         {isAdmin && (
                           <button
                             onClick={() => handleUnmarkActivityLost(activity, job.work_id)}
-                            className="ml-3 px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-xs font-bold"
+                            className="ml-4 px-3 py-1.5 bg-white border border-green-500 text-green-600 rounded-lg hover:bg-green-50 text-xs font-bold transition-colors flex items-center shadow-sm"
                           >
+                            <RefreshCw size={12} className="mr-1" />
                             Restore
                           </button>
                         )}
@@ -4145,7 +4267,6 @@ const handleSaveSuccess = async () => {
     })()}
   </div>
 )}
-
 {/* ✅ ENHANCED EDIT ACTIVITY MODAL - WITH INDIVIDUAL COSTS */}
 {showEditActivityModal && selectedActivityForEdit && (
   <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
