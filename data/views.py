@@ -1259,7 +1259,6 @@ from .models import ActivityLog
 
 # Ensure these are imported or defined in your file
 # from .utils import batch_fetch_farmers, batch_fetch_mukkadams, batch_fetch_transport_providers
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def activity_logs_list(request):
@@ -1290,7 +1289,7 @@ def activity_logs_list(request):
         queryset = queryset.filter(performed_at__gte=from_date)
 
     # Fetch 200 most recent logs
-    logs_queryset = list(queryset.select_related('performed_by').order_by('-performed_at')[:200])
+    logs_queryset = list(queryset.select_related('performed_by').order_by('-performed_at'))
 
     if not logs_queryset:
         return Response({'count': 0, 'logs': []})
@@ -1462,7 +1461,7 @@ def activity_logs_list(request):
             'batch_fetch_time': f'{batch_elapsed:.2f}s',
             'farmers_fetched': len(farmers_cache)
         }
-    })# @api_view(['GET'])
+    })
 # @permission_classes([AllowAny])
 # def activity_logs_list(request):
 #     start_time = time.time()
@@ -1739,6 +1738,211 @@ def format_changes_for_display(changes):
     
     return formatted
 
+
+# ✅ HELPER FUNCTION: Format changes for display
+def format_changes_for_display(changes):
+    """Convert changes dict to user-friendly format"""
+    if not changes:
+        return []
+    
+    formatted = []
+    field_labels = {
+        'activity_name': 'Activity Name',
+        'total_area': 'Total Area',
+        'scheduled_datetime': 'Scheduled Date',
+        'total_price': 'Mukkadam Price',
+        'transport_cost': 'Transport Cost',
+        'other_cost': 'Other Cost',
+        'subtotal': 'Total Price',
+        'rate_per_acre': 'Rate/Acre',
+        'mukkadam_id': 'Mukkadam',
+        'transport_provider_id': 'Transport Provider',
+    }
+    
+    for field, change_data in changes.items():
+        if isinstance(change_data, dict):
+            old_val = change_data.get('old_value', change_data.get('old'))
+            new_val = change_data.get('new_value', change_data.get('new'))
+            
+            formatted.append({
+                'field': field,
+                'label': field_labels.get(field, field.replace('_', ' ').title()),
+                'old_value': old_val,
+                'new_value': new_val,
+            })
+    
+    return formatted
+
+# ✅ HELPER FUNCTION: Format changes for display
+def format_changes_for_display(changes):
+    """Convert changes dict to user-friendly format"""
+    if not changes:
+        return []
+    
+    formatted = []
+    field_labels = {
+        'activity_name': 'Activity Name',
+        'total_area': 'Total Area',
+        'scheduled_datetime': 'Scheduled Date',
+        'total_price': 'Mukkadam Price',
+        'transport_cost': 'Transport Cost',
+        'other_cost': 'Other Cost',
+        'subtotal': 'Total Price',
+        'rate_per_acre': 'Rate/Acre',
+        'mukkadam_id': 'Mukkadam',
+        'transport_provider_id': 'Transport Provider',
+    }
+    
+    for field, change_data in changes.items():
+        if isinstance(change_data, dict):
+            old_val = change_data.get('old_value', change_data.get('old'))
+            new_val = change_data.get('new_value', change_data.get('new'))
+            
+            formatted.append({
+                'field': field,
+                'label': field_labels.get(field, field.replace('_', ' ').title()),
+                'old_value': old_val,
+                'new_value': new_val,
+            })
+    
+    return formatted
+# @api_view(['GET'])
+# @permission_classes([AllowAny])
+# def activity_logs_list(request):
+#     """
+#     Get all activity logs with external data enriched
+#     OPTIMIZED with caching + async
+#     """
+#     import time
+#     start_time = time.time()
+
+#     # Get query parameters
+#     activity_type = request.query_params.get('activity_type')
+#     mukkadam_id = request.query_params.get('mukkadam_id')
+#     job_id = request.query_params.get('job_id')
+#     days = request.query_params.get('days', 30)  # Default last 30 days
+
+#     print(f"🔍 Filters: activity_type={activity_type}, mukkadam_id={mukkadam_id}, job_id={job_id}, days={days}")
+
+#     # Build queryset
+#     queryset = ActivityLog.objects.all()
+
+#     if activity_type:
+#         queryset = queryset.filter(activity_type=activity_type)
+#     if mukkadam_id:
+#         queryset = queryset.filter(mukkadam_id=mukkadam_id)
+#     if job_id:
+#         queryset = queryset.filter(job_id=job_id)
+
+#     # Filter by date range
+#     if days:
+#         from_date = timezone.now() - timedelta(days=int(days))
+#         queryset = queryset.filter(performed_at__gte=from_date)
+
+#     queryset = queryset.select_related('performed_by').order_by('-performed_at')[:200]  # Limit to last 200
+
+#     # Convert to list to iterate multiple times
+#     logs_queryset = list(queryset)
+
+#     print(f"📊 Found {len(logs_queryset)} activity logs")
+
+#     if not logs_queryset:
+#         return Response([])
+
+#     # ========================================
+#     # ✅ STEP 1: COLLECT ALL UNIQUE IDs
+#     # ========================================
+#     mukkadam_ids = set()
+#     transport_provider_ids = set()
+
+#     for log in logs_queryset:
+#         if log.mukkadam_id:
+#             mukkadam_ids.add(log.mukkadam_id)
+#         if log.transport_provider_id:
+#             transport_provider_ids.add(log.transport_provider_id)
+
+#     print(f"   Unique mukkadams: {len(mukkadam_ids)}")
+#     print(f"   Unique transport providers: {len(transport_provider_ids)}")
+
+#     # ========================================
+#     # ✅ STEP 2: BATCH FETCH ALL DATA IN PARALLEL
+#     # ========================================
+#     print("\n⚡ PARALLEL BATCH FETCHING...")
+#     batch_start = time.time()
+
+#     mukkadams_cache = {}
+#     transport_providers_cache = {}
+
+#     if mukkadam_ids:
+#         mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=15)
+
+#     if transport_provider_ids:
+#         transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=10)
+
+#     batch_elapsed = time.time() - batch_start
+#     print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
+
+#     # ========================================
+#     # STEP 3: BUILD LOGS WITH CACHED DATA
+#     # ========================================
+#     print("\n🔄 Building enriched logs...")
+
+#     logs = []
+#     for log in logs_queryset:
+#         # Get mukkadam name from cache
+#         mukkadam_name = 'Unknown'
+#         if log.mukkadam_id:
+#             mukkadam_data = mukkadams_cache.get(log.mukkadam_id)
+#             if mukkadam_data:
+#                 mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{log.mukkadam_id}')
+#             else:
+#                 mukkadam_name = f'Mukkadam #{log.mukkadam_id}'
+
+#         # Get transport provider name from cache
+#         transport_name = None
+#         transport_details = None
+#         if log.transport_provider_id:
+#             transport_data = transport_providers_cache.get(log.transport_provider_id)
+#             if transport_data:
+#                 transport_name = transport_data.get('name', f'Provider #{log.transport_provider_id}')
+#                 transport_details = transport_data
+#             else:
+#                 transport_name = f'Provider #{log.transport_provider_id}'
+
+#         logs.append({
+#             'id': log.id,
+#             'activity_type': log.activity_type,
+#             'activity_type_display': log.get_activity_type_display(),
+#             'description': log.description,
+#             'job_id': log.job_id,
+#             'mukkadam_id': log.mukkadam_id,
+#             'mukkadam_name': mukkadam_name,
+#             'transport_provider_id': log.transport_provider_id,
+#             'transport_name': transport_name,
+#             'transport_details': transport_details,  # ✅ Full transport provider details
+#             'amount': float(log.amount) if log.amount else None,
+#             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
+#             'performed_at': log.performed_at.isoformat(),
+#             'metadata': log.metadata,
+#         })
+
+#     total_elapsed = time.time() - start_time
+#     print(f"\n✅ Activity logs API completed in {total_elapsed:.2f}s")
+#     print(f"   Database query + build: {total_elapsed - batch_elapsed:.2f}s")
+#     print(f"   Batch fetching: {batch_elapsed:.2f}s")
+#     print("="*80)
+
+#     return Response({
+#         'count': len(logs),
+#         'logs': logs,
+#         'performance': {
+#             'total_time': f'{total_elapsed:.2f}s',
+#             'batch_fetch_time': f'{batch_elapsed:.2f}s',
+#             'mukkadams_fetched': len(mukkadams_cache),
+#             'providers_fetched': len(transport_providers_cache)
+#         }
+#     })
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -1883,7 +2087,10 @@ def jobs_list(request):
                 other_cost = Decimal(str(api_activity.get('other_cost', 0)))          # ✅ FROM API
     
                 scheduled_date = api_activity.get('date_time') or api_activity.get('scheduled_date')
-                rate_per_acre = float(total_price) / float(total_area) if float(total_area) > 0 else 0
+                rate_per_acre = round(
+                    float(total_price) / float(total_area),
+                    2
+                ) if float(total_area) > 0 else 0.00
                 location = api_activity.get('location', 'N/A')
 
             # Calculate allocations (same as before)
