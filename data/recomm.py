@@ -421,8 +421,8 @@ def fetch_enriched_mukkadam_data():
     mukkadam_ids = [m['id'] for m in all_mukkadams]
     
     # 2. Fetch Allocations
-    # ALLOCATION_API_BASE = getattr(settings, 'ALLOCATION_API_BASE', 'http://localhost:8001')
-    ALLOCATION_API_BASE = 'https://allocation.bharatintelligence.ai'
+    ALLOCATION_API_BASE = getattr(settings, 'ALLOCATION_API_BASE', 'http://localhost:8001')
+    # ALLOCATION_API_BASE = 'https://allocation.bharatintelligence.ai'
     
     try:
         allocations_response = requests.get(
