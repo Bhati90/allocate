@@ -1338,6 +1338,10 @@ def activity_logs_list(request):
 
         except Exception as e:
             print(f"❌ Error fetching jobs: {str(e)}")
+    print(f"📊 Found {len(logs_queryset)} activity logs (Admin: {is_admin})")
+
+    if not logs_queryset:
+        return Response({'count': 0, 'logs': []})
 
     # ========================================
     # STEP 3: COLLECT ALL UNIQUE IDs
@@ -1449,13 +1453,23 @@ def activity_logs_list(request):
             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
             'performed_at': log.performed_at.isoformat(),
             'metadata': log.metadata,
-        })
+            'changes': log.changes,  # ✅ Include changes for frontend
+            'formatted_changes': format_changes_for_display(log.changes),  # ✅ Helper
+        }
+
+        # ✅ ADMIN-ONLY: Include reason field
+        if is_admin:
+            reason = log.metadata.get('reason')
+            log_data['reason'] = reason  # ✅ Only admins see this
+
+        logs.append(log_data)
 
     total_elapsed = time.time() - start_time
     
     return Response({
         'count': len(logs),
         'logs': logs,
+        'is_admin': is_admin,  # ✅ Tell frontend if user is admin
         'performance': {
             'total_time': f'{total_elapsed:.2f}s',
             'batch_fetch_time': f'{batch_elapsed:.2f}s',
