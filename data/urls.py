@@ -13,7 +13,7 @@ from .views import (DetailedRecommendationView, MakeCallView, UserProfileView,
     activity_logs_list,allocations_list,mukkadam_work_history,
     allocations_by_mobile # ✅ Already imported
 )
-
+from django.views.decorators.csrf import csrf_exempt
 from .mobile_sync import(sync_messages,
      get_sync_checkpoint, sync_contacts,sync_call_logs,message_stats,
      )
@@ -42,7 +42,7 @@ urlpatterns = [
     # path('api/calls/status/<str:call_sid>/', CallStatusView.as_view(), name='call-status'),
     # path('api/calls/update/<str:call_sid>/', UpdateCallDetailsView.as_view(), name='update-call'),
 
-    path('login/', obtain_auth_token, name='api-token-auth'),
+    path('login/', csrf_exempt(obtain_auth_token), name='api-token-auth'),
     path('auth/check-mobile/', mobile_auth.check_mobile, name='check-mobile'),
     path('auth/mobile-login/', mobile_auth.mobile_login, name='mobile-login'),
     path('auth/logout/', mobile_auth.mobile_logout, name='logout'),

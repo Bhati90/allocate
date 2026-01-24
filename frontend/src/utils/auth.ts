@@ -66,7 +66,7 @@ export const createAuthAxios = () => {
     (error) => {
       if (error.response?.status === 401) {
         removeAuthToken();
-        window.location.href = '/react/login';
+        window.location.href = '/react/loginf';
       }
       return Promise.reject(error);
     }
