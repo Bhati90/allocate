@@ -61,6 +61,7 @@ export interface Activity {
 export interface Allocation {
   id: number;
   farmer_work_id: string;
+  activity_id:number;
   mukkadam_id: number;
   mukkadam_price: number ;
   transport_price: number ;
@@ -131,6 +132,16 @@ export interface TransportAllocation {
   job_count: number;
 }
 
+interface ActivityEditDetails {
+  edited_by: string;
+  edited_at: string;
+  reason: string;
+  changes: Record<string, {
+    old_value: any;
+    new_value: any;
+  }>;
+}
+
 export interface ActivityLog {
   id: number;
   allocation_id: number;
@@ -149,6 +160,9 @@ export interface ActivityLog {
   allocated_area?: number;
   crew_size?: number;
   activity_name?: string;
+   farmer_name?: string;  // ✅ NEW
+  farmer_work_id?: string;  // ✅ NEW
+  activity_edit_details?: ActivityEditDetails;  // ✅ NEW
 }
 
 export interface DailyStat {
