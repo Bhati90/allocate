@@ -417,7 +417,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         
-        # ✅ REQUIRE change_reason for any edit
+        # Require change_reason for any edit
         change_reason = request.data.get('change_reason', '').strip()
         if not change_reason:
             return Response(
@@ -430,6 +430,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 {'error': 'Change reason must be at least 10 characters long'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        # ✅ CRITICAL: Store old area value BEFORE any modifications
+        old_area_decimal = instance.allocated_area
         
         # Store old values for comparison
         old_values = {
@@ -447,11 +450,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
         # Validate area changes
         if 'allocated_area' in request.data:
             new_area = Decimal(str(request.data['allocated_area']))
-            old_area = instance.allocated_area
             job_activity = instance.job_activity
             
             # Calculate available area (including current allocation)
-            available_area = job_activity.remaining_area + old_area
+            available_area = job_activity.remaining_area + old_area_decimal  # ✅ Use saved value
             
             if new_area > available_area:
                 return Response(
@@ -497,12 +499,20 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         )
                         changes_made.append(field)
                 
-                # Update job activity allocated_area if area changed
+                # ✅ FIXED: Update job activity allocated_area using saved old value
                 if 'allocated_area' in request.data:
-                    area_diff = updated_instance.allocated_area - instance.allocated_area
+                    new_area_decimal = updated_instance.allocated_area
+                    area_diff = new_area_decimal - old_area_decimal  # ✅ Use saved old_area_decimal
+                    
                     job_activity = updated_instance.job_activity
                     job_activity.allocated_area = job_activity.allocated_area + area_diff
                     job_activity.save()
+                    
+                    print(f"✅ Allocation #{updated_instance.id} area updated")
+                    print(f"   Old: {old_area_decimal} → New: {new_area_decimal}")
+                    print(f"   Diff: {area_diff}")
+                    print(f"   JobActivity total allocated: {job_activity.allocated_area}")
+                    print(f"   Remaining: {job_activity.remaining_area}")
                 
                 print(f"✅ Allocation #{updated_instance.id} updated")
                 print(f"   Changed fields: {', '.join(changes_made)}")
@@ -520,7 +530,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to update allocation: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
     def partial_update(self, request, *args, **kwargs):
         """Handle PATCH requests"""
         kwargs['partial'] = True
