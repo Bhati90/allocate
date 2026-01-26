@@ -24,6 +24,11 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:8001",
+    "https://supply.bharatintelligence.ai",
+    "https://demand.bharatintelligence.ai",
+    "https://payment.bharatintelligence.ai",
+    "https://ops.bharatintelligence.ai",
+    "https://allocation.bharatintelligence.ai",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -82,12 +87,17 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.JSONRenderer',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
+        'rest_framework.permissions.AllowAny',  # ✅ Add this for development
     ],
 }
 
+# Presign API Configuration
+PRESIGN_API_URL = 'https://demand.bharatintelligence.ai/chat/presign_obj_api/'
+PRESIGN_API_TOKEN = 'Token c432208626a204d2d8de3d00b29f948eae61ebdb'  # ✅ Replace with real token
+
+
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # ✅ MUST BE FIRST
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -96,7 +106,6 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
-
 ROOT_URLCONF = 'allocate.urls'
 
 # Templates
@@ -195,6 +204,8 @@ MUKADAM_WEBHOOK_URLS = {'default': 'http://localhost:5000/api/webhooks/job-notif
 BASE_URL = 'https://workcrop.onrender.com'
 APPEND_SLASH = False
 
+
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -211,12 +222,35 @@ USE_TZ = True
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Logging
+
+
+# Logging configuration
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
-    'formatters': {'verbose': {'format': '{levelname} {asctime} {module} {message}', 'style': '{'}},
-    'handlers': {'console': {'class': 'logging.StreamHandler', 'formatter': 'verbose'}},
-    'root': {'handlers': ['console'], 'level': 'INFO'},
-    'loggers': {'django': {'handlers': ['console'], 'level': 'INFO', 'propagate': False}},
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
 }
+
+CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
