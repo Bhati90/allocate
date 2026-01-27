@@ -180,6 +180,7 @@ class TransportPaymentRequestSerializer(serializers.ModelSerializer):
             'rejected_at',
             'rejected_by',
         ]
+
 # allocation_app/serializers.py
 class ActivityLogSerializer(serializers.ModelSerializer):
     activity_type_display = serializers.CharField(source='get_activity_type_display', read_only=True)

@@ -4,6 +4,11 @@ Django settings for allocate project.
 
 from pathlib import Path
 import os
+# settings.py
+# ============================================
+# CORS & CSRF CONFIGURATION
+# ============================================
+
 from decouple import config, Csv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -127,7 +132,97 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'allocate.wsgi.application'
 
-# Database
+# ===== GEMINI API KEYS (Add 5 keys) =====
+# Get free keys from: https://aistudio.google.com/apikey
+
+GEMINI_API_KEY_1 = os.environ.get('GEMINI_API_KEY_1', 'AIzaSyCh0DeWCZr8m3kF4LDB2A_xoAlqbmKjvgs')
+GEMINI_API_KEY_2 = os.environ.get('GEMINI_API_KEY_2', 'AIzaSyDGCAaYBIoySFkgom_KHm6wtk2m12wVLBw')
+# Backward compatibility
+GEMINI_API_KEY = GEMINI_API_KEY_1
+
+# ==============================================
+# AWS S3 SETTINGS (PRESIGNED URL MODE)
+# ==============================================
+
+AWS_ACCESS_KEY_ID = config('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = config('AWS_SECRET_ACCESS_KEY')
+AWS_STORAGE_BUCKET_NAME = config('AWS_STORAGE_BUCKET_NAME')
+AWS_S3_REGION_NAME = config('AWS_S3_REGION_NAME', default='ap-south-1')
+
+
+# --- 2. ENABLE SIGNING ---
+AWS_QUERYSTRING_AUTH = True  # <--- This generates the '?Signature=...'
+AWS_QUERYSTRING_EXPIRE = 3600  # Link expires in 1 hour (adjust as needed)
+AWS_S3_SIGNATURE_VERSION = 's3v4'
+AWS_S3_URL_PROTOCOL = 'https:'
+
+# --- 3. SECURITY ---
+AWS_DEFAULT_ACL = None  # Use Bucket Owner Enforced (Private)
+AWS_S3_OBJECT_PARAMETERS = {
+    'CacheControl': 'max-age=86400',
+}
+
+# --- 4. STORAGE ENGINE ---
+DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+
+# STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+# STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/static/'
+
+#     # Media files
+# DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+# MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/media/'
+
+# # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',  # use this for normal Postgres
+#         'NAME': 'registration_db',
+#         'USER': 'postgres',
+#         'PASSWORD': 'new_password',
+#         'HOST': 'localhost',
+#         'PORT': '5432',
+#         'OPTIONS': {
+#             'client_encoding': 'UTF8',
+#         },
+#     }
+# }
+
+# allocate/settings.py
+# SUPPLY_API_URL = 'http://localhost:8000'
+# ALLOCATION_API_URL = 'http://localhost:8001'
+
+# allocate/settings.py
+SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'
+ALLOCATION_API_URL = 'https://allocation.bharatintelligence.ai'
+# Tell Celery to use Redis, not RabbitMQ
+CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
+CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TASK_SERIALIZER = 'json'
+
+
+# Redis Cache Configuration
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379/1',  # Use your Redis server
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        },
+        'KEY_PREFIX': 'allocation_app',
+        'TIMEOUT': 3600,  # 1 hour default
+    }
+}
+
+
+
+# Cache timeouts (in seconds)
+CACHE_MUKKADAM_TIMEOUT = 3600  # 1 hour
+CACHE_FARMER_TIMEOUT = 3600    # 1 hour
+CACHE_TRANSPORT_TIMEOUT = 21600  # 6 hours
+CACHE_JOB_TIMEOUT = 1800  # 30 minutes
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
