@@ -4,7 +4,6 @@ Django settings for allocate project.
 
 from pathlib import Path
 import os
-<<<<<<< HEAD
 # settings.py
 # ============================================
 # CORS & CSRF CONFIGURATION
@@ -33,33 +32,17 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
 ]
 
-# CSRF Settings
-CSRF_TRUSTED_ORIGINS = [
-    "https://supply.bharatintelligence.ai",
-    "https://demand.bharatintelligence.ai",
-    "https://payment.bharatintelligence.ai",
-    "https://ops.bharatintelligence.ai",
-    "https://allocation.bharatintelligence.ai",
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:8001",
-]
 
 CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_SECURE = False  # True only in production with HTTPS
 SESSION_COOKIE_SECURE = False  # True only in production with HTTPS
 CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF token
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:8001",
-]
+
 
 CORS_ALLOW_CREDENTIALS = True
 CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_SECURE = False  # Set to True only in production with HTTPS
 session_COOKIE_SECURE = False # Set to True only in production with HTTPS
-=======
->>>>>>> ca6f5e42247daa86792316b6b25ed9e2f4254ce6
 from decouple import config, Csv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -399,8 +382,4 @@ LOGGING = {
     },
 }
 
-<<<<<<< HEAD
 CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
-=======
-CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
->>>>>>> ca6f5e42247daa86792316b6b25ed9e2f4254ce6
