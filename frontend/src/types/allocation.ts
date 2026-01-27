@@ -1,3 +1,21 @@
+// ✅ Add these helper interfaces below
+export interface Visit {
+  visit_id: number;
+  status: string;
+  assigned_to: string;
+  media_locations: MediaLocation[];
+}
+
+export interface MediaLocation {
+  media_id: number;
+  media_type: 'image' | 'video';
+  location: {
+    latitude: number;
+    longitude: number;
+    address: string;
+    is_field_location: boolean;
+  };
+}
 export interface Job {
   id: number;
   work_id: string;
@@ -5,6 +23,12 @@ export interface Job {
 latitude: number;  // ✅ Change Number to number (primitive)
   longitude: number;
   
+
+  // ✅ NEW: Point of Contact (assigned_to from the first visit)
+  point_of_contact?: string | null;
+
+  // ✅ NEW: Detailed Visits information
+  visits?: Visit[];
   // ✅ FARMER DETAILS (enriched by backend)
   farmer?: {
     farmer_name: string;
