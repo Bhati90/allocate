@@ -9,40 +9,6 @@ import os
 # CORS & CSRF CONFIGURATION
 # ============================================
 
-# CORS Settings (at the top, after imports)
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",      # React dev server
-    "http://localhost:5173",      # Vite dev server  
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:8001",
-]
-
-CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
-CORS_ALLOW_HEADERS = [
-    'accept',
-    'accept-encoding',
-    'authorization',
-    'content-type',
-    'dnt',
-    'origin',
-    'user-agent',
-    'x-csrftoken',
-    'x-requested-with',
-]
-
-
-CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_SECURE = False  # True only in production with HTTPS
-SESSION_COOKIE_SECURE = False  # True only in production with HTTPS
-CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF token
-
-
-CORS_ALLOW_CREDENTIALS = True
-CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_SECURE = False  # Set to True only in production with HTTPS
-session_COOKIE_SECURE = False # Set to True only in production with HTTPS
 from decouple import config, Csv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
