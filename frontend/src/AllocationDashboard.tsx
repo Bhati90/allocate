@@ -3,7 +3,7 @@ import axios from 'axios';
 import { 
   Users, Truck,Edit2, DollarSign,ChevronDown,ChevronUp, FileText, CheckCircle, CheckSquare,Ban,User, Phone,
   XCircle, TrendingUp,TrendingDown, Calendar, Filter, Search,Activity,AlertCircle,ExternalLink, Hash,RefreshCw,
-  Eye, Edit, Plus, X, MapPin, BarChart3, Clock, Layers
+  Eye, Edit, Plus, X, MapPin, BarChart3, Clock, Layers,UserRound
 } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL_SUPPLY;
@@ -41,6 +41,7 @@ interface Activity {
   rate_per_acre: number;
   is_fully_allocated: boolean;
   allocations?: any[];
+  crop_bundles?:number;
 }
 
 const AllocationDashboard: React.FC = () => {
@@ -67,9 +68,10 @@ const [editFormData, setEditFormData] = useState({
   total_area: 0,
   scheduled_date: '',
   total_price: 0,
-   transport_cost: 0,     // ✅ NEW
-  other_cost: 0,    
-  rate_per_acre: 0
+  transport_cost: 0,     // ✅ NEW
+  other_cost: 0,
+  rate_per_acre: 0,
+  crop_bundles: 0 // ✅ Added property
 });
 // Expandable card states
 const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set());
@@ -174,18 +176,36 @@ const getCompletedList = () => {
     return false;
   });
 };
-// ✅ FIXED: Calculate Counts based on Unique Job IDs
+// ✅ REPLACE THIS FUNCTION (around line 140)
 const getAllocatedUniqueJobCount = () => {
-  const list = getAllocatedList();
-  const uniqueIds = new Set(list.map(a => a.farmer_work_id)); // Counts Job 600 only once
-  return uniqueIds.size;
+  // Get the SAME allocations that the display uses
+  const allocatedAllocations = getAllocatedAllocations();
+  
+  // Count unique job IDs from these allocations
+  const uniqueJobIds = new Set(allocatedAllocations.map(a => a.farmer_work_id));
+  
+  return uniqueJobIds.size;
 };
 
 const getCompletedUniqueJobCount = () => {
   const list = getCompletedList();
   const uniqueIds = new Set(list.map(a => a.farmer_work_id));
-  return uniqueIds.size;
+  
+  // ✅ FILTER: Only count if job is not fully lost
+  const activeJobIds = Array.from(uniqueIds).filter(jobId => {
+    const job = jobs.find(j => j.work_id === jobId);
+    if (!job) return false;
+    const status = calculateJobStatus(job);
+    return status !== 'fully_lost';
+  });
+  
+  return activeJobIds.length;
 };
+// const getCompletedUniqueJobCount = () => {
+//   const list = getCompletedList();
+//   const uniqueIds = new Set(list.map(a => a.farmer_work_id));
+//   return uniqueIds.size;
+// };
 
 const toggleMukkadam = (mukkadamId: number) => {
   setExpandedMukkadams(prev => {
@@ -759,12 +779,253 @@ const getActivityStats = (jobId: string, activity: any, totalArea: number) => {
 };
 // ✅ IMPROVED: Calculate job status dynamically
 // REPLACE WITH:
-const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' => {
-  // ✅ FILTER OUT LOST ACTIVITIES
+// const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' | 'fully_lost' => {
+//   // ✅ CRITICAL: Filter out lost activities first
+//   const activeActivities = job.activities?.filter(a => !a.is_lost) || [];
+  
+//   // ✅ NEW: If no active activities, mark as fully lost
+//   if (activeActivities.length === 0) {
+//     return 'fully_lost';
+//   }
+
+//   const totalActivities = activeActivities.length;
+//   let fullyAllocatedCount = 0;
+//   let hasAnyAllocation = false;
+
+//   activeActivities.forEach(activity => {
+//     const { isFullyAllocated, allocated } = getActivityStats(
+//       job.work_id, 
+//       activity,
+//       activity.total_area
+//     );
+    
+//     if (isFullyAllocated) fullyAllocatedCount++;
+//     if (allocated > 0) hasAnyAllocation = true;
+//   });
+
+//   if (fullyAllocatedCount === totalActivities) return 'fully_allocated';
+//   if (hasAnyAllocation) return 'partially_allocated';
+//   return 'pending';
+// };
+// // ✅ UPDATE: Use calculated status instead of job.status
+// // ✅ FIXED: Only count active jobs (exclude fully lost)
+// const activeJobs = getActiveJobs();
+
+// const allocatedJobs = activeJobs.filter(j => calculateJobStatus(j) === 'fully_allocated');
+// const partiallyAllocatedJobs = activeJobs.filter(j => calculateJobStatus(j) === 'partially_allocated');
+// const pendingJobs = activeJobs.filter(j => calculateJobStatus(j) === 'pending');
+// // ✅ ADD: Enhanced Revenue & Payment Stats
+// const calculateRevenueStats = () => {
+//   let totalRevenue = 0;
+//   let profitableCount = 0;
+//   let lossCount = 0;
+//   let lowMarginCount = 0;
+
+//   // New variables for actual payments
+//   let paidMukkadamAmount = 0;
+//   let paidTransportAmount = 0;
+
+// allocations.forEach(allocation => {
+//   // 1. Calculate Revenue & Profitability
+//   const job = jobs.find((j: any) => j.work_id === allocation.farmer_work_id);
+//   if (job) {
+//     const activity = job.activities?.find((a: any) => 
+//       a.activity_name === allocation.activity_name
+//     );
+    
+//     if (activity) {
+//       // ✅ SKIP IF ACTIVITY IS LOST
+//       if (activity.is_lost) {
+//         return; // Don't include in revenue calculations
+//       }
+      
+//       const revenue = activity.total_price || 0;
+//       totalRevenue += revenue;
+
+//       const cost = parseFloat(String(allocation.mukkadam_price || '0')) + 
+//                    parseFloat(String(allocation.transport_price || '0'));
+//       const profit = revenue - cost;
+//       const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
+
+//       if (profit > 0) profitableCount++;
+//       if (profit < 0) lossCount++;
+//       if (profit >= 0 && margin < 20) lowMarginCount++;
+//     }
+//   }
+
+//   // 2. Calculate Actual Paid Amounts (existing logic - keep as is)
+//   const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+//   if (mukkadamPayment && mukkadamPayment.status === 'paid') {
+//     paidMukkadamAmount += parseFloat(String(allocation.mukkadam_price || '0'));
+//   }
+
+//   const transportPayment = getTransportPaymentRequest(allocation.id);
+//   if (transportPayment && transportPayment.status === 'paid') {
+//     paidTransportAmount += parseFloat(String(allocation.transport_price || '0'));
+//   }
+// });
+
+//   const totalAllocatedMukkadam = allocations.reduce((sum, a) => sum + parseFloat(String(a.mukkadam_price || '0')), 0);
+//   const totalAllocatedTransport = allocations.reduce((sum, a) => sum + parseFloat(String(a.transport_price || '0')), 0);
+//   const totalCosts = totalAllocatedMukkadam + totalAllocatedTransport;
+  
+//   const netProfit = totalRevenue - totalCosts;
+//   const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+
+//   return {
+//     totalRevenue,
+//     netProfit,
+//     profitMargin,
+//     profitableAllocations: profitableCount,
+//     lossAllocations: lossCount,
+//     lowMarginAllocations: lowMarginCount,
+//     // New stats
+//     paidMukkadamAmount,
+//     paidTransportAmount
+//   };
+// };
+
+// // ✅ Calculate all stats
+// const revenueStats = calculateRevenueStats();
+// const stats = {
+//   totalJobs: jobs.length,
+//   allocatedJobs: getAllocatedUniqueJobCount(),  // ✅ Count unique jobs
+//   completedJobs: getCompletedUniqueJobCount(),  // ✅ Count unique jobs
+//   partiallyAllocatedJobs: partiallyAllocatedJobs.length,
+//   pendingJobs: pendingJobs.filter(job => {
+//     const nonLostActivities = job.activities?.filter(a => !a.is_lost) || [];
+//     return nonLostActivities.length > 0;
+//   }).length,
+//   totalMukkadamPayout: allocations.reduce((sum, a) => 
+//     sum + parseFloat(String(a.mukkadam_price || '0')), 0
+//   ),
+//   totalTransportPayout: allocations.reduce((sum, a) => 
+//     sum + parseFloat(String(a.transport_price || '0')), 0
+//   ),
+//   totalPayout: allocations.reduce((sum, a) => 
+//     sum + parseFloat(String(a.mukkadam_price || '0')) + parseFloat(String(a.transport_price || '0')), 0
+//   ),
+//   // ✅ Add revenue stats
+//   totalRevenue: revenueStats.totalRevenue,
+//   netProfit: revenueStats.netProfit,
+//   profitMargin: revenueStats.profitMargin,
+//   profitableAllocations: revenueStats.profitableAllocations,
+//   lossAllocations: revenueStats.lossAllocations,
+//   lowMarginAllocations: revenueStats.lowMarginAllocations,
+//   // ✅ NEW: Actual Paid Amounts
+//   paidMukkadamAmount: revenueStats.paidMukkadamAmount,
+//   paidTransportAmount: revenueStats.paidTransportAmount,
+// };
+// ✅ 1. FILTER: Get only jobs with at least one non-lost activity
+// ✅ HELPER: Get only jobs that have at least one non-lost activity
+// ✅ HELPER: Get only jobs that have at least one non-lost activity
+const getActiveJobs = () => {
+  return jobs.filter(job => {
+    const nonLostActivities = job.activities?.filter(a => !a.is_lost) || [];
+    return nonLostActivities.length > 0;
+  });
+};
+
+// ✅ NEW: Check if a job is FULLY COMPLETED (all allocations have payment requests)
+const isJobFullyCompleted = (jobId: string): boolean => {
+  const job = jobs.find(j => j.work_id === jobId);
+  if (!job) return false;
+  
+  // Get non-lost activities
+  const activeActivities = job.activities?.filter(a => !a.is_lost) || [];
+  if (activeActivities.length === 0) return false;
+  
+  // Get all allocations for this job's active activities
+  const jobAllocations = allocations.filter(alloc => {
+    if (alloc.farmer_work_id !== jobId) return false;
+    
+    const activity = activeActivities.find(a => 
+      a.id === alloc.job_activity || 
+      a.activity_id === alloc.activity_id ||
+      a.activity_name === alloc.activity_name
+    );
+    return !!activity;
+  });
+  
+  if (jobAllocations.length === 0) return false;
+  
+  // Check if ALL allocations have payment requests (pending or paid)
+  const allHavePayments = jobAllocations.every(alloc => {
+    const payment = getMukkadamPaymentRequest(alloc.id);
+    return payment && (payment.status === 'pending' || payment.status === 'paid');
+  });
+  
+  return allHavePayments;
+};
+
+// ✅ NEW: Get completed job IDs
+const getCompletedJobIds = (): Set<string> => {
+  const activeJobs = getActiveJobs();
+  const completedIds = activeJobs
+    .filter(job => isJobFullyCompleted(job.work_id))
+    .map(job => job.work_id);
+  return new Set(completedIds);
+};
+
+// ✅ NEW: Get allocated (but not completed) job IDs
+const getAllocatedNotCompletedJobIds = (): Set<string> => {
+  const activeJobs = getActiveJobs();
+  const completedIds = getCompletedJobIds();
+  
+  const allocatedIds = activeJobs
+    .filter(job => {
+      const status = calculateJobStatus(job);
+      return status === 'fully_allocated' && !completedIds.has(job.work_id);
+    })
+    .map(job => job.work_id);
+  
+  return new Set(allocatedIds);
+};
+
+// ✅ NEW: Get active mukkadams count (those with jobs today or in future)
+const getActiveMukkadamsCount = (): number => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const activeMukkadamIds = new Set(
+    allocations
+      .filter(a => {
+        if (!a.work_date) return false;
+        const workDate = new Date(a.work_date);
+        workDate.setHours(0, 0, 0, 0);
+        return workDate >= today;
+      })
+      .map(a => a.mukkadam_id)
+  );
+  
+  return activeMukkadamIds.size;
+};
+
+// ✅ NEW: Get active transporters count (those with jobs today or in future)
+const getActiveTransportersCount = (): number => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const activeTransporterIds = new Set(
+    allocations
+      .filter(a => {
+        if (!a.work_date || !a.transport_provider_id) return false;
+        const workDate = new Date(a.work_date);
+        workDate.setHours(0, 0, 0, 0);
+        return workDate >= today;
+      })
+      .map(a => a.transport_provider_id)
+  );
+  
+  return activeTransporterIds.size;
+};
+const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' | 'fully_lost' => {
+  // ✅ Filter out lost activities
   const activeActivities = job.activities?.filter(a => !a.is_lost) || [];
   
+  // ✅ If no active activities, it's fully lost
   if (activeActivities.length === 0) {
-    return 'pending';
+    return 'fully_lost';
   }
 
   const totalActivities = activeActivities.length;
@@ -772,10 +1033,9 @@ const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated'
   let hasAnyAllocation = false;
 
   activeActivities.forEach(activity => {
-    // ✅ PASS FULL ACTIVITY OBJECT
     const { isFullyAllocated, allocated } = getActivityStats(
       job.work_id, 
-      activity,  // ✅ Changed from activity.activity_name
+      activity,
       activity.total_area
     );
     
@@ -783,70 +1043,162 @@ const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated'
     if (allocated > 0) hasAnyAllocation = true;
   });
 
-  if (fullyAllocatedCount === totalActivities) return 'fully_allocated';
+  // ✅ STRICT CLASSIFICATION
+  if (fullyAllocatedCount === totalActivities) {
+    // Check if it's completed
+    const allocationsForJob = allocations.filter(a => a.farmer_work_id === job.work_id);
+    const allHavePayments = allocationsForJob.every(alloc => {
+      const payment = getMukkadamPaymentRequest(alloc.id);
+      return payment && (payment.status === 'pending' || payment.status === 'paid');
+    });
+    
+    // If fully allocated AND has payments, it's completed (don't count in allocated)
+    if (allHavePayments && allocationsForJob.length > 0) {
+      return 'fully_allocated'; // Mark as allocated so it gets filtered to completed
+    }
+    
+    return 'fully_allocated';
+  }
+  
   if (hasAnyAllocation) return 'partially_allocated';
   return 'pending';
 };
-// ✅ UPDATE: Use calculated status instead of job.status
-const allocatedJobs = jobs.filter(j => calculateJobStatus(j) === 'fully_allocated');
-const partiallyAllocatedJobs = jobs.filter(j => calculateJobStatus(j) === 'partially_allocated');
-const pendingJobs = jobs.filter(j => calculateJobStatus(j) === 'pending');
 
-// ✅ ADD: Enhanced Revenue & Payment Stats
+// ✅ UPDATE: Use calculated status instead of job.status
+// ✅ FIXED: Only count active jobs (exclude fully lost)
+const activeJobs = getActiveJobs();
+
+const allocatedJobs = activeJobs.filter(j => calculateJobStatus(j) === 'fully_allocated');
+const partiallyAllocatedJobs = activeJobs.filter(j => calculateJobStatus(j) === 'partially_allocated');
+const pendingJobs = activeJobs.filter(j => calculateJobStatus(j) === 'pending');
+
+// ✅ 2. CORRECT JOB STATUS COUNTS (Job-based, not allocation-based)
+const getJobStatusCounts = () => {
+  const activeJobs = getActiveJobs();
+  
+  let allocated = 0;
+  let completed = 0;
+  let partially = 0;
+  let pending = 0;
+  
+  activeJobs.forEach(job => {
+    const nonLostActivities = job.activities?.filter(a => !a.is_lost) || [];
+    
+    if (nonLostActivities.length === 0) {
+      return; // Skip if no active activities
+    }
+    
+    // Get allocations for this job's non-lost activities
+    const jobAllocations = allocations.filter(alloc => {
+      if (alloc.farmer_work_id !== job.work_id) return false;
+      
+      // Check if this allocation is for a non-lost activity
+      const activity = nonLostActivities.find(a => 
+        a.id === alloc.job_activity || 
+        a.activity_id === alloc.activity_id ||
+        a.activity_name === alloc.activity_name
+      );
+      return !!activity;
+    });
+    
+    if (jobAllocations.length === 0) {
+      // No allocations = PENDING
+      pending++;
+    } else if (jobAllocations.length < nonLostActivities.length) {
+      // Some but not all allocated = PARTIALLY ALLOCATED
+      partially++;
+    } else {
+      // All activities allocated - check if completed or allocated
+      const allCompleted = jobAllocations.every(alloc => {
+        const payment = getMukkadamPaymentRequest(alloc.id);
+        return (payment && (payment.status === 'pending' || payment.status === 'paid'));
+      });
+      
+      if (allCompleted) {
+        completed++;
+      } else {
+        allocated++;
+      }
+    }
+  });
+  
+  return { allocated, completed, partially, pending };
+};
+
 const calculateRevenueStats = () => {
   let totalRevenue = 0;
   let profitableCount = 0;
   let lossCount = 0;
   let lowMarginCount = 0;
-
-  // New variables for actual payments
   let paidMukkadamAmount = 0;
   let paidTransportAmount = 0;
 
-allocations.forEach(allocation => {
-  // 1. Calculate Revenue & Profitability
-  const job = jobs.find((j: any) => j.work_id === allocation.farmer_work_id);
-  if (job) {
-    const activity = job.activities?.find((a: any) => 
-      a.activity_name === allocation.activity_name
-    );
-    
-    if (activity) {
-      // ✅ SKIP IF ACTIVITY IS LOST
-      if (activity.is_lost) {
-        return; // Don't include in revenue calculations
-      }
-      
-      const revenue = activity.total_price || 0;
-      totalRevenue += revenue;
+  // ✅ FILTER: Only process allocations for active jobs
+  const activeJobs = getActiveJobs();
+  const activeJobIds = new Set(activeJobs.map(j => j.work_id));
 
-      const cost = parseFloat(String(allocation.mukkadam_price || '0')) + 
-                   parseFloat(String(allocation.transport_price || '0'));
-      const profit = revenue - cost;
-      const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
-
-      if (profit > 0) profitableCount++;
-      if (profit < 0) lossCount++;
-      if (profit >= 0 && margin < 20) lowMarginCount++;
+  allocations.forEach(allocation => {
+    // ✅ Skip if job is fully lost
+    if (!activeJobIds.has(allocation.farmer_work_id)) {
+      return;
     }
-  }
 
-  // 2. Calculate Actual Paid Amounts (existing logic - keep as is)
-  const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-  if (mukkadamPayment && mukkadamPayment.status === 'paid') {
-    paidMukkadamAmount += parseFloat(String(allocation.mukkadam_price || '0'));
-  }
+    const job = jobs.find((j: any) => j.work_id === allocation.farmer_work_id);
+    if (job) {
+      const activity = job.activities?.find((a: any) => 
+        a.activity_name === allocation.activity_name
+      );
+      
+      if (activity) {
+        // ✅ SKIP IF THIS SPECIFIC ACTIVITY IS LOST
+        if (activity.is_lost) {
+          return;
+        }
+        
+        const revenue = activity.total_price || 0;
+        totalRevenue += revenue;
 
-  const transportPayment = getTransportPaymentRequest(allocation.id);
-  if (transportPayment && transportPayment.status === 'paid') {
-    paidTransportAmount += parseFloat(String(allocation.transport_price || '0'));
-  }
-});
+        const cost = parseFloat(String(allocation.mukkadam_price || '0')) + 
+                     parseFloat(String(allocation.transport_price || '0'));
+        const profit = revenue - cost;
+        const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
 
-  const totalAllocatedMukkadam = allocations.reduce((sum, a) => sum + parseFloat(String(a.mukkadam_price || '0')), 0);
-  const totalAllocatedTransport = allocations.reduce((sum, a) => sum + parseFloat(String(a.transport_price || '0')), 0);
-  const totalCosts = totalAllocatedMukkadam + totalAllocatedTransport;
+        if (profit > 0) profitableCount++;
+        if (profit < 0) lossCount++;
+        if (profit >= 0 && margin < 20) lowMarginCount++;
+      }
+    }
+
+    // ✅ Payment tracking
+    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+    if (mukkadamPayment && mukkadamPayment.status === 'paid') {
+      paidMukkadamAmount += parseFloat(String(allocation.mukkadam_price || '0'));
+    }
+
+    const transportPayment = getTransportPaymentRequest(allocation.id);
+    if (transportPayment && transportPayment.status === 'paid') {
+      paidTransportAmount += parseFloat(String(allocation.transport_price || '0'));
+    }
+  });
+
+  // ✅ Calculate costs only for non-lost activities
+  const totalAllocatedMukkadam = allocations.reduce((sum, a) => {
+    if (!activeJobIds.has(a.farmer_work_id)) return sum;
+    const job = jobs.find(j => j.work_id === a.farmer_work_id);
+    const activity = job?.activities?.find(act => act.activity_name === a.activity_name);
+    if (activity?.is_lost) return sum;
+    return sum + parseFloat(String(a.mukkadam_price || '0'));
+  }, 0);
   
+  const totalAllocatedTransport = allocations.reduce((sum, a) => {
+    if (!activeJobIds.has(a.farmer_work_id)) return sum;
+    const job = jobs.find(j => j.work_id === a.farmer_work_id);
+    const activity = job?.activities?.find(act => act.activity_name === a.activity_name);
+    if (activity?.is_lost) return sum;
+    return sum + parseFloat(String(a.transport_price || '0'));
+  }, 0);
+  
+  const totalCosts = totalAllocatedMukkadam + totalAllocatedTransport;
   const netProfit = totalRevenue - totalCosts;
   const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
 
@@ -857,49 +1209,79 @@ allocations.forEach(allocation => {
     profitableAllocations: profitableCount,
     lossAllocations: lossCount,
     lowMarginAllocations: lowMarginCount,
-    // New stats
     paidMukkadamAmount,
-    paidTransportAmount
+    paidTransportAmount,
+    totalAllocatedMukkadam,
+    totalAllocatedTransport
   };
 };
 
-// ✅ Calculate all stats
+// ✅ 4. REPLACE THE STATS CALCULATION (around line 750)
+// const revenueStats = calculateRevenueStats();
+const jobStatusCounts = getJobStatusCounts(); // ✅ NEW
+const getActivePendingJobsCount = () => {
+  const activeJobs = getActiveJobs();
+  return activeJobs.filter(j => calculateJobStatus(j) === 'pending').length;
+};
+// const revenueStats = calculateRevenueStats();
 const revenueStats = calculateRevenueStats();
+// ✅ ADD THIS AFTER LINE 750 (after stats calculation)
+const debugJobCounts = () => {
+  const activeJobs = getActiveJobs();
+  const allocatedIds = getAllocatedNotCompletedJobIds();
+  const completedIds = getCompletedJobIds();
+  const partialIds = new Set(partiallyAllocatedJobs.map(j => j.work_id));
+  const pendingIds = new Set(pendingJobs.map(j => j.work_id));
+  
+  // Find jobs not in any category
+  const uncategorizedJobs = activeJobs.filter(job => {
+    const id = job.work_id;
+    return !allocatedIds.has(id) && 
+           !completedIds.has(id) && 
+           !partialIds.has(id) && 
+           !pendingIds.has(id);
+  });
+  
+  console.log('🔍 DEBUG: Uncategorized Jobs:', uncategorizedJobs.length);
+  uncategorizedJobs.forEach(job => {
+    console.log(`  - Job ${job.work_id}:`, {
+      status: calculateJobStatus(job),
+      activities: job.activities?.map(a => ({
+        name: a.activity_name,
+        is_lost: a.is_lost,
+        is_fully_allocated: a.is_fully_allocated
+      }))
+    });
+  });
+};
+
+debugJobCounts(); // ✅ Call it
 const stats = {
-  totalJobs: jobs.length,
-  allocatedJobs: getAllocatedUniqueJobCount(),  // ✅ Count unique jobs
-  completedJobs: getCompletedUniqueJobCount(),  // ✅ Count unique jobs
+  totalJobs: getActiveJobs().length, // ✅ Only active jobs
+  allocatedJobs: getAllocatedUniqueJobCount(), // ✅ NEW: Allocated but not completed
+  completedJobs: getCompletedJobIds().size, // ✅ NEW: Fully completed jobs
   partiallyAllocatedJobs: partiallyAllocatedJobs.length,
-  pendingJobs: pendingJobs.filter(job => {
-    const nonLostActivities = job.activities?.filter(a => !a.is_lost) || [];
-    return nonLostActivities.length > 0;
-  }).length,
-  totalMukkadamPayout: allocations.reduce((sum, a) => 
-    sum + parseFloat(String(a.mukkadam_price || '0')), 0
-  ),
-  totalTransportPayout: allocations.reduce((sum, a) => 
-    sum + parseFloat(String(a.transport_price || '0')), 0
-  ),
-  totalPayout: allocations.reduce((sum, a) => 
-    sum + parseFloat(String(a.mukkadam_price || '0')) + parseFloat(String(a.transport_price || '0')), 0
-  ),
-  // ✅ Add revenue stats
+  pendingJobs: getActivePendingJobsCount(),
+  
+  // ✅ NEW: Mukkadam counts
+  totalMukkadamsRegistered: mukkadams.filter(m => m.is_permanent).length, // Match tab count
+  activeMukkadamsCount: getActiveMukkadamsCount(),
+  
+  // ✅ NEW: Transporter counts
+  totalTransportersRegistered: transportProviders.length,
+  activeTransportersCount: getActiveTransportersCount(),
+  
+  totalMukkadamPayout: revenueStats.totalAllocatedMukkadam,
+  totalTransportPayout: revenueStats.totalAllocatedTransport,
+  totalPayout: revenueStats.totalAllocatedMukkadam + revenueStats.totalAllocatedTransport,
   totalRevenue: revenueStats.totalRevenue,
   netProfit: revenueStats.netProfit,
   profitMargin: revenueStats.profitMargin,
   profitableAllocations: revenueStats.profitableAllocations,
   lossAllocations: revenueStats.lossAllocations,
   lowMarginAllocations: revenueStats.lowMarginAllocations,
-  // ✅ NEW: Actual Paid Amounts
   paidMukkadamAmount: revenueStats.paidMukkadamAmount,
   paidTransportAmount: revenueStats.paidTransportAmount,
-};
-
-const getActivePendingJobsCount = () => {
-  return pendingJobs.filter(job => {
-    const nonLostActivities = job.activities?.filter(a => !a.is_lost) || [];
-    return nonLostActivities.length > 0;
-  }).length;
 };
 // const filteredActivityLogs = activityLogs.filter(log => {
 //   const searchLower = searchTerm.toLowerCase();
@@ -1008,7 +1390,157 @@ const workersByMukkadam = activeAllocations.reduce((acc, allocation) => {
 }, {} as Record<number, {mukkadam: Mukkadam | undefined, allocations: Allocation[], totalWorkers: number}>);
 
 const workerDetails = Object.values(workersByMukkadam).sort((a, b) => b.totalWorkers - a.totalWorkers);
+// ✅ COMPREHENSIVE DEBUG - Find Missing Jobs
+const debugMissingJobs = () => {
+  console.log('='.repeat(80));
+  console.log('🔍 COMPREHENSIVE JOB COUNT DEBUG');
+  console.log('='.repeat(80));
+  
+  // 1. Get all jobs
+  const allJobs = jobs;
+  console.log(`\n📊 Total Jobs in API: ${allJobs.length}`);
+  
+  // 2. Get active jobs (non-fully-lost)
+  const activeJobs = getActiveJobs();
+  console.log(`✅ Active Jobs (at least 1 non-lost activity): ${activeJobs.length}`);
+  
+  // 3. Get fully lost jobs
+  const fullyLostJobs = jobs.filter(j => {
+    const nonLostActivities = j.activities?.filter(a => !a.is_lost) || [];
+    return j.activities?.length > 0 && nonLostActivities.length === 0;
+  });
+  console.log(`❌ Fully Lost Jobs (ALL activities lost): ${fullyLostJobs.length}`);
+  console.log('   Lost Job IDs:', fullyLostJobs.map(j => j.work_id));
+  
+  // 4. Categorize each active job
+  const categorized = {
+    pending: [],
+    partial: [],
+    allocated: [],
+    completed: [],
+    uncategorized: []
+  };
+  
+  activeJobs.forEach(job => {
+    const status = calculateJobStatus(job);
+    const isCompleted = isJobFullyCompleted(job.work_id);
+    
+    if (isCompleted) {
+      categorized.completed.push(job.work_id);
+    } else if (status === 'fully_allocated') {
+      categorized.allocated.push(job.work_id);
+    } else if (status === 'partially_allocated') {
+      categorized.partial.push(job.work_id);
+    } else if (status === 'pending') {
+      categorized.pending.push(job.work_id);
+    } else {
+      categorized.uncategorized.push(job.work_id);
+    }
+  });
+  
+  console.log('\n📋 CATEGORIZED JOBS:');
+  console.log(`   Pending: ${categorized.pending.length}`);
+  console.log(`   Partial: ${categorized.partial.length}`);
+  console.log(`   Allocated: ${categorized.allocated.length}`);
+  console.log(`   Completed: ${categorized.completed.length}`);
+  console.log(`   ⚠️  UNCATEGORIZED: ${categorized.uncategorized.length}`);
+  
+  if (categorized.uncategorized.length > 0) {
+    console.log('\n🚨 UNCATEGORIZED JOB IDs:', categorized.uncategorized);
+  }
+  
+  // 5. Check for overlap (jobs in multiple categories)
+  const allCategorizedIds = [
+    ...categorized.pending,
+    ...categorized.partial,
+    ...categorized.allocated,
+    ...categorized.completed
+  ];
+  
+  const uniqueIds = new Set(allCategorizedIds);
+  if (allCategorizedIds.length !== uniqueIds.size) {
+    console.log('\n⚠️  WARNING: DUPLICATE JOBS FOUND (job in multiple categories)');
+    const duplicates = allCategorizedIds.filter((id, index) => 
+      allCategorizedIds.indexOf(id) !== index
+    );
+    console.log('   Duplicate Job IDs:', [...new Set(duplicates)]);
+  }
+  
+  // 6. Verify math
+  const totalCategorized = categorized.pending.length + 
+                          categorized.partial.length + 
+                          categorized.allocated.length + 
+                          categorized.completed.length;
+  
+  console.log('\n🧮 MATH CHECK:');
+  console.log(`   Pending + Partial + Allocated + Completed = ${totalCategorized}`);
+  console.log(`   Active Jobs (expected) = ${activeJobs.length}`);
+  console.log(`   Difference = ${activeJobs.length - totalCategorized}`);
+  
+  if (totalCategorized !== activeJobs.length) {
+    console.log('\n❌ MISMATCH DETECTED!');
+    console.log(`   Missing: ${activeJobs.length - totalCategorized} jobs`);
+  } else {
+    console.log('\n✅ ALL ACTIVE JOBS ACCOUNTED FOR!');
+  }
+  
+  // 7. Check allocated tab display vs count
+  const allocatedAllocations = getAllocatedAllocations();
+  const allocatedJobIdsFromDisplay = new Set(allocatedAllocations.map(a => a.farmer_work_id));
+  const allocatedJobIdsFromCount = getAllocatedNotCompletedJobIds();
+  
+  console.log('\n🔍 ALLOCATED TAB ANALYSIS:');
+  console.log(`   getAllocatedUniqueJobCount() = ${getAllocatedUniqueJobCount()}`);
+  console.log(`   getAllocatedNotCompletedJobIds().size = ${allocatedJobIdsFromCount.size}`);
+  console.log(`   Jobs from display = ${allocatedJobIdsFromDisplay.size}`);
+  console.log(`   Stats showing = ${stats.allocatedJobs}`);
+  
+  if (getAllocatedUniqueJobCount() !== allocatedJobIdsFromCount.size) {
+    console.log('\n⚠️  ALLOCATED COUNT MISMATCH!');
+    console.log('   Display jobs:', Array.from(allocatedJobIdsFromDisplay));
+    console.log('   Count jobs:', Array.from(allocatedJobIdsFromCount));
+    
+    // Find difference
+    const inDisplayNotCount = Array.from(allocatedJobIdsFromDisplay).filter(
+      id => !allocatedJobIdsFromCount.has(id)
+    );
+    const inCountNotDisplay = Array.from(allocatedJobIdsFromCount).filter(
+      id => !allocatedJobIdsFromDisplay.has(id)
+    );
+    
+    if (inDisplayNotCount.length > 0) {
+      console.log('   ❌ In DISPLAY but NOT in COUNT:', inDisplayNotCount);
+    }
+    if (inCountNotDisplay.length > 0) {
+      console.log('   ❌ In COUNT but NOT in DISPLAY:', inCountNotDisplay);
+    }
+  }
+  
+  // 8. Find jobs with mixed lost/non-lost activities
+  const mixedJobs = jobs.filter(j => {
+    const lostCount = j.activities?.filter(a => a.is_lost).length || 0;
+    const totalCount = j.activities?.length || 0;
+    return lostCount > 0 && lostCount < totalCount;
+  });
+  
+  if (mixedJobs.length > 0) {
+    console.log('\n🔀 JOBS WITH MIXED LOST/NON-LOST ACTIVITIES:');
+    console.log(`   Count: ${mixedJobs.length}`);
+    console.log('   Job IDs:', mixedJobs.map(j => j.work_id));
+    
+    mixedJobs.forEach(job => {
+      const lostCount = job.activities?.filter(a => a.is_lost).length || 0;
+      const totalCount = job.activities?.length || 0;
+      const status = calculateJobStatus(job);
+      console.log(`   - ${job.work_id}: ${lostCount}/${totalCount} lost, status: ${status}`);
+    });
+  }
+  
+  console.log('\n' + '='.repeat(80));
+};
 
+// ✅ RUN DEBUG
+debugMissingJobs();
 
 // Filter partially allocated jobs
 const filteredPartiallyAllocatedJobs = partiallyAllocatedJobs.filter(job => {
@@ -1213,31 +1745,29 @@ const handleSaveSuccess = async () => {
                 <FileText className="inline-block mr-2" size={18} />
                 Overview
               </button>
-      <button
-    onClick={() => setActiveTab('allocated')}
-    className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
-      activeTab === 'allocated'
-        ? 'border-green-500 text-green-600'
-        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-    }`}
-  >
-    <CheckCircle className="inline-block mr-2" size={18} />
-    {/* ✅ Shows Unique Jobs Count (2) */}
-    Allocated ({getAllocatedUniqueJobCount()}) 
-  </button>
+<button
+  onClick={() => setActiveTab('allocated')}
+  className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
+    activeTab === 'allocated'
+      ? 'border-green-500 text-green-600'
+      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+  }`}
+>
+  <CheckCircle className="inline-block mr-2" size={18} />
+  Allocated ({stats.allocatedJobs}) {/* ✅ Shows only allocated, not completed */}
+</button>
 
-  <button
-    onClick={() => setActiveTab('completed')}
-    className={`px-6 py-4 font-medium transition flex items-center ${
-      activeTab === 'completed'
-        ? 'border-b-2 border-purple-600 text-purple-600'
-        : 'text-gray-600 hover:text-gray-900'
-    }`}
-  >
-    <CheckSquare size={18} className="mr-2" />
-    {/* ✅ Shows Unique Jobs Count (1) */}
-    Completed ({getCompletedUniqueJobCount()}) 
-  </button>
+<button
+  onClick={() => setActiveTab('completed')}
+  className={`px-6 py-4 font-medium transition flex items-center ${
+    activeTab === 'completed'
+      ? 'border-b-2 border-purple-600 text-purple-600'
+      : 'text-gray-600 hover:text-gray-900'
+  }`}
+>
+  <CheckSquare size={18} className="mr-2" />
+  Completed ({stats.completedJobs}) {/* ✅ Shows only fully completed */}
+</button>
 <button
   onClick={() => setActiveTab('partially')}
   className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
@@ -1261,7 +1791,7 @@ const handleSaveSuccess = async () => {
   Pending ({getActivePendingJobsCount()})
 </button>
 
-              <button
+<button
   onClick={() => setActiveTab('lost')}
   className={`px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap ${
     activeTab === 'lost'
@@ -1270,7 +1800,11 @@ const handleSaveSuccess = async () => {
   }`}
 >
   <Ban className="inline-block mr-2" size={18} />
-  Lost Jobs ({jobs.filter(j => j.activities?.some(a => a.is_lost)).length})
+  {/* ✅ FIXED: Only count jobs where ALL activities are lost */}
+  Lost Jobs ({jobs.filter(j => {
+    const nonLostActivities = j.activities?.filter(a => !a.is_lost) || [];
+    return j.activities?.length > 0 && nonLostActivities.length === 0;
+  }).length})
 </button>
               <button
                 onClick={() => setActiveTab('mukkadams')}
@@ -1375,233 +1909,100 @@ const handleSaveSuccess = async () => {
                     </div>
                     )}
 
-                    {/* Quick Stats Grid - 6 Cards */}
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                   {/* Quick Stats Grid - 6 Cards */}
+<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
 
-                        {/* Total Mukkadams */}
-                <div 
-                    className="bg-gradient-to-br from-indigo-500 to-purple-600 text-white p-4 rounded-xl shadow-lg hover:shadow-2xl transition cursor-pointer"
-                    onClick={() => setActiveTab('mukkadams')}
-                >
-                    <div className="flex items-center justify-between mb-2">
-                    <Users size={24} className="opacity-90" />
-                    <span className="text-2xl font-bold">{totalMukkadamsRegistered}</span>
-                    </div>
-                    <p className="text-xs font-medium opacity-90">Total Mukkadams</p>
-                    <p className="text-xs opacity-75 mt-1">
-                    {workerDetails.length} active
-                    </p>
-                </div>
+  {/* Total Mukkadams */}
+  <div 
+    className="bg-gradient-to-br from-indigo-500 to-purple-600 text-white p-4 rounded-xl shadow-lg hover:shadow-2xl transition cursor-pointer"
+    onClick={() => setActiveTab('mukkadams')}
+  >
+    <div className="flex items-center justify-between mb-2">
+      <Users size={24} className="opacity-90" />
+      <span className="text-2xl font-bold">{stats.totalMukkadamsRegistered}</span>
+    </div>
+    <p className="text-xs font-medium opacity-90">Total Mukkadams</p>
+    <p className="text-xs opacity-75 mt-1">
+      {stats.activeMukkadamsCount} active today+
+    </p>
+  </div>
 
-                {/* Job Status Modal */}
-                {showJobStatusModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-                    {/* Modal Header */}
-                    <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4 flex justify-between items-center sticky top-0 z-10">
-                        <div>
-                        <h2 className="text-2xl font-bold text-white">All Jobs Status</h2>
-                        <p className="text-white text-sm opacity-90">{jobs.length} total jobs</p>
-                        </div>
-                        <button
-                        onClick={() => setShowJobStatusModal(false)}
-                        className="text-white hover:bg-white hover:bg-opacity-20 p-2 rounded-full transition"
-                        >
-                        <X size={24} />
-                        </button>
-                    </div>
+  {/* Total Transporters */}
+  <div 
+    className="bg-gradient-to-br from-orange-500 to-red-600 text-white p-4 rounded-xl shadow-lg hover:shadow-2xl transition cursor-pointer"
+    onClick={() => setActiveTab('transport')}
+  >
+    <div className="flex items-center justify-between mb-2">
+      <Truck size={24} className="opacity-90" />
+      <span className="text-2xl font-bold">{stats.totalTransportersRegistered}</span>
+    </div>
+    <p className="text-xs font-medium opacity-90">Total Transporters</p>
+    <p className="text-xs opacity-75 mt-1">
+      {stats.activeTransportersCount} active today+
+    </p>
+  </div>
 
-                    {/* Modal Content */}
-                    <div className="p-6">
-                        {/* Summary Cards */}
-                        <div className="grid grid-cols-4 gap-4 mb-6">
-                        <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                            <p className="text-sm text-gray-600">Allocated</p>
-                            <p className="text-3xl font-bold text-green-600">{allocatedJobs.length}</p>
-                        </div>
-                        <div className="bg-orange-50 p-4 rounded-lg border border-orange-200">
-                            <p className="text-sm text-gray-600">Partial</p>
-                            <p className="text-3xl font-bold text-orange-600">{partiallyAllocatedJobs.length}</p>
-                        </div>
-                        <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
-                            <p className="text-sm text-gray-600">Pending</p>
-                            <p className="text-3xl font-bold text-yellow-600">{pendingJobs.length}</p>
-                        </div>
-                        <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                            <p className="text-sm text-gray-600">Complex</p>
-                            <p className="text-3xl font-bold text-blue-600">{jobs.filter(j => j.is_complex).length}</p>
-                        </div>
-                        </div>
+  {/* Total Jobs */}
+  <div 
+    className="bg-white p-4 rounded-xl shadow-md border-l-4 border-blue-500 hover:shadow-lg transition cursor-pointer" 
+    onClick={() => setShowJobStatusModal(true)}
+  >
+    <div className="flex items-center justify-between mb-2">
+      <FileText className="text-blue-600" size={24} />
+      <span className="text-2xl font-bold text-gray-900">{stats.totalJobs}</span>
+    </div>
+    <p className="text-xs text-gray-600 font-medium">Total Jobs</p>
+    <p className="text-xs text-blue-600 mt-1">
+      {jobs.filter(j => j.is_complex).length} complex
+    </p>
+  </div>
 
-                        {/* Jobs List */}
-                        <div className="space-y-3">
-                        {jobs.map(job => {
-                            const statusColor = 
-                            job.status === 'fully_allocated' || allocations.some(a => a.farmer_work_id === job.work_id)
-                                ? 'green' :
-                            job.status === 'partially_allocated' 
-                                ? 'orange' : 
-                                'yellow';
-                            
-                            const statusText = 
-                            job.status === 'fully_allocated' || (!job.is_complex && allocations.some(a => a.farmer_work_id === job.work_id))
-                                ? 'Allocated' :
-                            job.status === 'partially_allocated' 
-                                ? 'Partially Allocated' : 
-                                'Pending';
+  {/* ✅ NEW: Completed Jobs Card */}
+  <div 
+    className="bg-white p-4 rounded-xl shadow-md border-l-4 border-purple-500 hover:shadow-lg transition cursor-pointer" 
+    onClick={() => setActiveTab('completed')}
+  >
+    <div className="flex items-center justify-between mb-2">
+      <CheckSquare className="text-purple-600" size={24} />
+      <span className="text-2xl font-bold text-gray-900">{stats.completedJobs}</span>
+    </div>
+    <p className="text-xs text-gray-600 font-medium">Completed</p>
+    <p className="text-xs text-purple-600 mt-1">
+      {stats.totalJobs > 0 ? ((stats.completedJobs / stats.totalJobs) * 100).toFixed(0) : 0}% done
+    </p>
+  </div>
 
-                            return (
-                            <div key={job.id} className={`p-4 rounded-lg border-2 border-${statusColor}-200 bg-${statusColor}-50`}>
-                                <div className="flex justify-between items-start">
-                                <div className="flex-1">
-                                    <div className="flex items-center space-x-2 mb-2">
-                                    <span className="font-mono text-sm font-bold text-blue-600">{job.work_id}</span>
-                                    <span className={`px-2 py-1 bg-${statusColor}-500 text-white rounded-full text-xs font-bold`}>
-                                        {statusText}
-                                    </span>
-                                    {job.is_complex && (
-                                        <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold">
-                                        Complex
-                                        </span>
-                                    )}
-                                    </div>
-                                    <p className="text-sm font-semibold text-gray-900">{job.title}</p>
-                                    {job.is_complex && job.activities && (
-                                    <p className="text-xs text-gray-600 mt-1">
-                                        {job.activities.filter(a => a.is_fully_allocated).length} of {job.activities.length} activities allocated
-                                    </p>
-                                    )}
-                                </div>
-                                <button
-                                    onClick={() => {
-                                    setShowJobStatusModal(false);
-                                    if (statusText === 'Pending') setActiveTab('pending');
-                                    else if (statusText === 'Partially Allocated') setActiveTab('partially');
-                                    else setActiveTab('allocated');
-                                    }}
-                                    className="ml-4 px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-xs font-medium"
-                                >
-                                    View Details
-                                </button>
-                                </div>
-                            </div>
-                            );
-                        })}
-                        </div>
-                    </div>
+  {/* Allocated (but not completed) */}
+  <div 
+    className="bg-white p-4 rounded-xl shadow-md border-l-4 border-green-500 hover:shadow-lg transition cursor-pointer" 
+    onClick={() => setActiveTab('allocated')}
+  >
+    <div className="flex items-center justify-between mb-2">
+      <CheckCircle className="text-green-600" size={24} />
+      <span className="text-2xl font-bold text-gray-900">{stats.allocatedJobs}</span>
+    </div>
+    <p className="text-xs text-gray-600 font-medium">Allocated</p>
+    <p className="text-xs text-green-600 mt-1">
+      Ready for work
+    </p>
+  </div>
 
-                    {/* Modal Footer */}
-                    <div className="bg-gray-50 px-6 py-4 border-t sticky bottom-0">
-                        <button
-                        onClick={() => setShowJobStatusModal(false)}
-                        className="w-full px-6 py-3 bg-gray-600 text-white rounded-lg font-semibold hover:bg-gray-700 transition"
-                        >
-                        Close
-                        </button>
-                    </div>
-                    </div>
-                </div>
-                )}
+  {/* Pending */}
+  <div 
+    className="bg-white p-4 rounded-xl shadow-md border-l-4 border-yellow-500 hover:shadow-lg transition cursor-pointer" 
+    onClick={() => setActiveTab('pending')}
+  >
+    <div className="flex items-center justify-between mb-2">
+      <Clock className="text-yellow-600" size={24} />
+      <span className="text-2xl font-bold text-gray-900">{stats.pendingJobs}</span>
+    </div>
+    <p className="text-xs text-gray-600 font-medium">Pending</p>
+    <p className="text-xs text-yellow-600 mt-1">
+      {stats.totalJobs > 0 ? ((stats.pendingJobs / stats.totalJobs) * 100).toFixed(0) : 0}% remaining
+    </p>
+  </div>
 
-                {/* Total Transporters */}
-                <div 
-                    className="bg-gradient-to-br from-orange-500 to-red-600 text-white p-4 rounded-xl shadow-lg hover:shadow-2xl transition cursor-pointer"
-                    onClick={() => setActiveTab('transport')}
-                >
-                    <div className="flex items-center justify-between mb-2">
-                    <Truck size={24} className="opacity-90" />
-                    <span className="text-2xl font-bold">{totalTransportersRegistered}</span>
-                    </div>
-                    <p className="text-xs font-medium opacity-90">Total Transporters</p>
-                    <p className="text-xs opacity-75 mt-1">
-                    {transportAllocations.filter(t => t.job_count > 0).length} active
-                    </p>
-                </div>
-
-                {/* Total Jobs - with modal */}
-                <div 
-                    className="bg-white p-4 rounded-xl shadow-md border-l-4 border-blue-500 hover:shadow-lg transition cursor-pointer" 
-                    onClick={() => setShowJobStatusModal(true)}
-                >
-                    <div className="flex items-center justify-between mb-2">
-                    <FileText className="text-blue-600" size={24} />
-                    <span className="text-2xl font-bold text-gray-900">{jobs.length}</span>
-                    </div>
-                    <p className="text-xs text-gray-600 font-medium">Total Jobs</p>
-                    <p className="text-xs text-blue-600 mt-1">
-                    {jobs.filter(j => j.is_complex).length} complex
-                    </p>
-                </div>
-                    {/* Total Jobs
-                    <div className="bg-white p-4 rounded-xl shadow-md border-l-4 border-blue-500 hover:shadow-lg transition cursor-pointer" onClick={() => setActiveTab('pending')}>
-                        <div className="flex items-center justify-between mb-2">
-                        <FileText className="text-blue-600" size={24} />
-                        <span className="text-2xl font-bold text-gray-900">{jobs.length}</span>
-                        </div>
-                        <p className="text-xs text-gray-600 font-medium">Total Jobs</p>
-                        <p className="text-xs text-blue-600 mt-1">
-                        {jobs.filter(j => j.is_complex).length} complex
-                        </p>
-                    </div> */}
-
-                    {/* Allocated */}
-                    <div className="bg-white p-4 rounded-xl shadow-md border-l-4 border-green-500 hover:shadow-lg transition cursor-pointer" onClick={() => setActiveTab('allocated')}>
-                        <div className="flex items-center justify-between mb-2">
-                        <CheckCircle className="text-green-600" size={24} />
-                        <span className="text-2xl font-bold text-gray-900">{allocatedJobs.length}</span>
-                        </div>
-                        <p className="text-xs text-gray-600 font-medium">Allocated</p>
-                        <p className="text-xs text-green-600 mt-1">
-                        {jobs.length > 0 ? ((allocatedJobs.length / jobs.length) * 100).toFixed(0) : 0}% complete
-                        </p>
-                    </div>
-
-                    {/* Partially Allocated */}
-                    <div className="bg-white p-4 rounded-xl shadow-md border-l-4 border-orange-500 hover:shadow-lg transition cursor-pointer" onClick={() => setActiveTab('partially')}>
-                        <div className="flex items-center justify-between mb-2">
-                        <TrendingUp className="text-orange-600" size={24} />
-                        <span className="text-2xl font-bold text-gray-900">{partiallyAllocatedJobs.length}</span>
-                        </div>
-                        <p className="text-xs text-gray-600 font-medium">Partially allocated</p>
-                        <p className="text-xs text-orange-600 mt-1">Need attention</p>
-                    </div>
-
-                    {/* Pending */}
-                    <div className="bg-white p-4 rounded-xl shadow-md border-l-4 border-yellow-500 hover:shadow-lg transition cursor-pointer" onClick={() => setActiveTab('pending')}>
-                        <div className="flex items-center justify-between mb-2">
-                        <Clock className="text-yellow-600" size={24} />
-                        <span className="text-2xl font-bold text-gray-900">{pendingJobs.length}</span>
-                        </div>
-                        <p className="text-xs text-gray-600 font-medium">Pending</p>
-                        <p className="text-xs text-yellow-600 mt-1">
-                        {jobs.length > 0 ? ((pendingJobs.length / jobs.length) * 100).toFixed(0) : 0}% remaining
-                        </p>
-                    </div>
-
-                    {/* Active Workers */}
-                    {/* <div className="bg-white p-4 rounded-xl shadow-md border-l-4 border-teal-500 hover:shadow-lg transition cursor-pointer" onClick={() => setShowActiveWorkersModal(true)}>
-                        <div className="flex items-center justify-between mb-2">
-                        <Users className="text-teal-600" size={24} />
-                        <span className="text-2xl font-bold text-gray-900">{totalActiveWorkers}</span>
-                        </div>
-                        <p className="text-xs text-gray-600 font-medium">Active Workers</p>
-                        <p className="text-xs text-teal-600 mt-1">
-                        {activeAllocations.length} jobs
-                        </p>
-                    </div>
-
-                   
-                    <div className="bg-white p-4 rounded-xl shadow-md border-l-4 border-purple-500 hover:shadow-lg transition">
-                        <div className="flex items-center justify-between mb-2">
-                        <DollarSign className="text-purple-600" size={24} />
-                        <span className="text-2xl font-bold text-gray-900">₹{(stats.totalPayout / 1000).toFixed(0)}K</span>
-                        </div>
-                        <p className="text-xs text-gray-600 font-medium">Total Payout</p>
-                        <p className="text-xs text-purple-600 mt-1">
-                        {allocations.length} allocations
-                        </p>
-                    </div> */}
-                    </div>
+</div>
 
                     {/* Main Content Grid */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1610,69 +2011,93 @@ const handleSaveSuccess = async () => {
                     <div className="lg:col-span-2 space-y-6">
                         
                         {/* Allocation Progress Chart */}
-                        <div className="bg-white rounded-xl shadow-lg p-6">
-                        <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
-                            <BarChart3 className="mr-2 text-blue-600" />
-                            Allocation Progress
-                        </h3>
-                        
-                        {/* Progress Bar */}
-                        <div className="mb-6">
-                            <div className="flex justify-between text-sm mb-2">
-                            <span className="text-gray-600">Overall Completion</span>
-                            <span className="font-bold text-blue-600">
-                                {jobs.length > 0 ? ((allocatedJobs.length / jobs.length) * 100).toFixed(1) : 0}%
-                            </span>
-                            </div>
-                            <div className="bg-gray-200 rounded-full h-6 overflow-hidden">
-                            <div className="h-full flex">
-                                <div 
-                                className="bg-green-500 flex items-center justify-center text-xs text-white font-semibold transition-all"
-                                style={{ width: `${jobs.length > 0 ? (allocatedJobs.length / jobs.length) * 100 : 0}%` }}
-                                >
-                                {allocatedJobs.length > 0 && `${allocatedJobs.length} Allocated`}
-                                </div>
-                                <div 
-                                className="bg-orange-500 flex items-center justify-center text-xs text-white font-semibold transition-all"
-                                style={{ width: `${jobs.length > 0 ? (partiallyAllocatedJobs.length / jobs.length) * 100 : 0}%` }}
-                                >
-                                {partiallyAllocatedJobs.length > 0 && `${partiallyAllocatedJobs.length} Partial`}
-                                </div>
-                                <div 
-                                className="bg-yellow-400 flex items-center justify-center text-xs text-white font-semibold transition-all"
-                                style={{ width: `${jobs.length > 0 ? (pendingJobs.length / jobs.length) * 100 : 0}%` }}
-                                >
-                                {pendingJobs.length > 0 && `${pendingJobs.length} Pending`}
-                                </div>
-                            </div>
-                            </div>
-                        </div>
+                        {/* Allocation Progress Chart */}
+<div className="bg-white rounded-xl shadow-lg p-6">
+  <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+    <BarChart3 className="mr-2 text-blue-600" />
+    Allocation Progress
+  </h3>
+  
+  {/* Progress Bar */}
+  <div className="mb-6">
+    <div className="flex justify-between text-sm mb-2">
+      <span className="text-gray-600">Overall Completion</span>
+      <span className="font-bold text-blue-600">
+        {stats.totalJobs > 0 ? (((stats.completedJobs + stats.allocatedJobs) / stats.totalJobs) * 100).toFixed(1) : 0}%
+      </span>
+    </div>
+    <div className="bg-gray-200 rounded-full h-6 overflow-hidden">
+      <div className="h-full flex">
+        {/* ✅ COMPLETED - Purple */}
+        <div 
+          className="bg-purple-500 flex items-center justify-center text-xs text-white font-semibold transition-all"
+          style={{ width: `${stats.totalJobs > 0 ? (stats.completedJobs / stats.totalJobs) * 100 : 0}%` }}
+        >
+          {stats.completedJobs > 0 && `${stats.completedJobs} Done`}
+        </div>
+        
+        {/* ✅ ALLOCATED - Green */}
+        <div 
+          className="bg-green-500 flex items-center justify-center text-xs text-white font-semibold transition-all"
+          style={{ width: `${stats.totalJobs > 0 ? (stats.allocatedJobs / stats.totalJobs) * 100 : 0}%` }}
+        >
+          {stats.allocatedJobs > 0 && `${stats.allocatedJobs} Ready`}
+        </div>
+        
+        {/* PARTIAL - Orange */}
+        <div 
+          className="bg-orange-500 flex items-center justify-center text-xs text-white font-semibold transition-all"
+          style={{ width: `${stats.totalJobs > 0 ? (stats.partiallyAllocatedJobs / stats.totalJobs) * 100 : 0}%` }}
+        >
+          {stats.partiallyAllocatedJobs > 0 && `${stats.partiallyAllocatedJobs} Partial`}
+        </div>
+        
+        {/* PENDING - Yellow */}
+        <div 
+          className="bg-yellow-400 flex items-center justify-center text-xs text-white font-semibold transition-all"
+          style={{ width: `${stats.totalJobs > 0 ? (stats.pendingJobs / stats.totalJobs) * 100 : 0}%` }}
+        >
+          {stats.pendingJobs > 0 && `${stats.pendingJobs} Pending`}
+        </div>
+      </div>
+    </div>
+  </div>
 
-                        {/* Stats Grid */}
-                        <div className="grid grid-cols-3 gap-4">
-                            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                            <p className="text-xs text-gray-600 mb-1">Completed</p>
-                            <p className="text-2xl font-bold text-green-600">{allocatedJobs.length}</p>
-                            <p className="text-xs text-green-600 mt-1">
-                                {jobs.length > 0 ? ((allocatedJobs.length / jobs.length) * 100).toFixed(0) : 0}%
-                            </p>
-                            </div>
-                            <div className="bg-orange-50 p-4 rounded-lg border border-orange-200">
-                            <p className="text-xs text-gray-600 mb-1">In Progress</p>
-                            <p className="text-2xl font-bold text-orange-600">{partiallyAllocatedJobs.length}</p>
-                            <p className="text-xs text-orange-600 mt-1">
-                                {jobs.length > 0 ? ((partiallyAllocatedJobs.length / jobs.length) * 100).toFixed(0) : 0}%
-                            </p>
-                            </div>
-                            <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
-                            <p className="text-xs text-gray-600 mb-1">Pending</p>
-                            <p className="text-2xl font-bold text-yellow-600">{pendingJobs.length}</p>
-                            <p className="text-xs text-yellow-600 mt-1">
-                                {jobs.length > 0 ? ((pendingJobs.length / jobs.length) * 100).toFixed(0) : 0}%
-                            </p>
-                            </div>
-                        </div>
-                        </div>
+  {/* Stats Grid - Now with 4 sections */}
+  <div className="grid grid-cols-4 gap-4">
+    <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+      <p className="text-xs text-gray-600 mb-1">Completed</p>
+      <p className="text-2xl font-bold text-purple-600">{stats.completedJobs}</p>
+      <p className="text-xs text-purple-600 mt-1">
+        {stats.totalJobs > 0 ? ((stats.completedJobs / stats.totalJobs) * 100).toFixed(0) : 0}%
+      </p>
+    </div>
+    
+    <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+      <p className="text-xs text-gray-600 mb-1">Allocated</p>
+      <p className="text-2xl font-bold text-green-600">{stats.allocatedJobs}</p>
+      <p className="text-xs text-green-600 mt-1">
+        {stats.totalJobs > 0 ? ((stats.allocatedJobs / stats.totalJobs) * 100).toFixed(0) : 0}%
+      </p>
+    </div>
+    
+    <div className="bg-orange-50 p-4 rounded-lg border border-orange-200">
+      <p className="text-xs text-gray-600 mb-1">In Progress</p>
+      <p className="text-2xl font-bold text-orange-600">{stats.partiallyAllocatedJobs}</p>
+      <p className="text-xs text-orange-600 mt-1">
+        {stats.totalJobs > 0 ? ((stats.partiallyAllocatedJobs / stats.totalJobs) * 100).toFixed(0) : 0}%
+      </p>
+    </div>
+    
+    <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
+      <p className="text-xs text-gray-600 mb-1">Pending</p>
+      <p className="text-2xl font-bold text-yellow-600">{stats.pendingJobs}</p>
+      <p className="text-xs text-yellow-600 mt-1">
+        {stats.totalJobs > 0 ? ((stats.pendingJobs / stats.totalJobs) * 100).toFixed(0) : 0}%
+      </p>
+    </div>
+  </div>
+</div>
 
 {/* Recent Activity Feed - FIXED */}
 <div className="bg-white rounded-xl shadow-lg p-6">
@@ -2267,6 +2692,7 @@ const handleSaveSuccess = async () => {
           return (
             String(jobId).toLowerCase().includes(searchLower) ||
             String(job?.title || '').toLowerCase().includes(searchLower) ||
+            String(job?.point_of_contact || '').toLowerCase().includes(searchLower) || // ✅ Add this line
             String(job?.farmer?.farmer_name || '').toLowerCase().includes(searchLower) ||
             jobAllocations.some(a => {
               const mukkadam = mukkadams.find(m => m.id === a.mukkadam_id);
@@ -2320,6 +2746,16 @@ const handleSaveSuccess = async () => {
                           <span className="text-gray-500">• {farmer.village}</span>
                           <span className="text-gray-500">• {farmer.district}</span>
                           <span className="text-gray-500">• {farmer.taluka}</span>
+
+                          {job.point_of_contact && (
+                            <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                              <UserRound size={14} className="text-blue-600" />
+                              <span className="text-xs font-bold text-blue-700 uppercase">POC:</span>
+                              <span className="text-sm font-medium text-blue-800">
+                                {job.point_of_contact}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -2370,6 +2806,7 @@ const handleSaveSuccess = async () => {
                               <td className="px-4 py-3">{mukkadams.find(m => m.id === allocation.mukkadam_id)?.mukkadam_name}</td>
                               <td className="px-4 py-3">{allocation.allocated_area} ac</td>
                                 <td className="px-4 py-3 font-bold text-teal-600">{allocation.crew_size}</td>
+                                
                                 <td className="px-4 py-3 text-orange-600 font-medium">₹{parseFloat(allocation.transport_price).toLocaleString()}</td>
                                 <td className="px-4 py-3 text-orange-600 font-medium">₹{parseFloat(allocation.mukkadam_price).toLocaleString()}</td>
                                 <td className="px-4 py-3 font-bold text-purple-600">₹{(parseFloat(allocation.mukkadam_price) + parseFloat(allocation.transport_price)).toLocaleString()}</td>
@@ -2854,7 +3291,19 @@ const handleSaveSuccess = async () => {
                             <span className="font-semibold text-gray-900">{farmer.farmer_name}</span>
                             <span className="text-sm text-gray-600">• {farmer.phone_number}</span>
                             <span className="text-gray-500">• {farmer.village}</span>
+                            {job.point_of_contact && (
+                            <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                              <UserRound size={14} className="text-blue-600" />
+                              <span className="text-xs font-bold text-blue-700 uppercase">POC:</span>
+                              <span className="text-sm font-medium text-blue-800">
+                                {job.point_of_contact}
+                              </span>
+                            </div>
+                          )}
                           </div>
+
+                          {/* ✅ NEW: Point of Contact (POC) Section */}
+                          
                         </div>
                       )}
                     </div>
@@ -2937,6 +3386,19 @@ const handleSaveSuccess = async () => {
       <span className="font-medium text-gray-900">{activity.scheduled_date || 'Not set'}</span>
     </div>
 
+        {activity.activity_name === "Paper Wrapping" && (
+    <div className="flex items-center justify-between bg-orange-100 px-2 py-1 rounded mt-1 border border-orange-200">
+      <span className="text-orange-700 font-bold uppercase" style={{ fontSize: '10px' }}>
+        📦 Bundles:
+      </span>
+      <span className="font-bold text-orange-900">
+        {activity.crop_bundles || 0}
+      </span>
+    </div>
+  )}
+
+
+
 
 
   </div>
@@ -2955,7 +3417,8 @@ const handleSaveSuccess = async () => {
       scheduled_date: activity.scheduled_date || '',
       total_price: activity.total_price,
       transport_cost: activity.transport_cost || 0,  // ✅ NEW
-      other_cost: activity.other_cost || 0,          // ✅ NEW
+      other_cost: activity.other_cost || 0,  
+      crop_bundles: activity.crop_bundles || 0 ,// ✅ ADD THIS        // ✅ NEW
       rate_per_acre: activity.rate_per_acre
     });
     setShowEditActivityModal(true);
@@ -3165,7 +3628,18 @@ const handleSaveSuccess = async () => {
                             <span className="font-bold text-gray-900">{farmer.farmer_name}</span>
                             <span className="text-gray-500">• {farmer.phone_number}</span>
                             <span className="text-gray-500">• {farmer.location}</span>
+                            {job.point_of_contact && (
+                            <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                              <UserRound size={14} className="text-blue-600" />
+                              <span className="text-xs font-bold text-blue-700 uppercase">POC:</span>
+                              <span className="text-sm font-medium text-blue-800">
+                                {job.point_of_contact}
+                              </span>
+                            </div>
+                          )}
                           </div>
+
+                          
                         </div>
                       )}
                     </div>
@@ -3280,6 +3754,17 @@ const handleSaveSuccess = async () => {
                                               <span className="text-indigo-600 font-semibold">👥 {alloc.crew_size}</span>
                                             )}
                                           </div>
+
+                                          {activity.activity_name === "Paper Wrapping" && (
+    <div className="flex items-center justify-between bg-orange-100 px-2 py-1 rounded mt-1 border border-orange-200">
+      <span className="text-orange-700 font-bold uppercase" style={{ fontSize: '10px' }}>
+        📦 Bundles:
+      </span>
+      <span className="font-bold text-orange-900">
+        {activity.crop_bundles || 0}
+      </span>
+    </div>
+  )}
                                         </div>
                                         <button
                                           onClick={() => {
@@ -4208,8 +4693,19 @@ const handleSaveSuccess = async () => {
                         <span className="mx-2 text-gray-300">|</span>
                         <Phone size={14} className="mr-1 text-gray-400"/>
                         {job.farmer.phone_number}
+
+                        {job.point_of_contact && (
+                            <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                              <UserRound size={14} className="text-blue-600" />
+                              <span className="text-xs font-bold text-blue-700 uppercase">POC:</span>
+                              <span className="text-sm font-medium text-blue-800">
+                                {job.point_of_contact}
+                              </span>
+                            </div>
+                          )}
                       </div>
                     )}
+                    
                   </div>
                 </div>
 
@@ -4434,6 +4930,19 @@ const handleSaveSuccess = async () => {
               />
             </div>
           </div>
+
+          {editFormData.activity_name === "Paper Wrapping" && (
+  <div className="mb-4">
+    <label className="block text-sm font-bold text-gray-700 mb-1">Crop Bundles</label>
+    <input
+      type="number"
+      value={editFormData.crop_bundles}
+      onChange={(e) => setEditFormData({ ...editFormData, crop_bundles: e.target.value })}
+      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+      placeholder="Enter number of bundles"
+    />
+  </div>
+)}
 
           {/* Subtotal Display */}
           <div className="mt-4 bg-purple-50 border-2 border-purple-300 rounded-lg p-3">
