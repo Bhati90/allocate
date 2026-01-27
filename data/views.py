@@ -19,7 +19,7 @@ from .serializers import (
     AllocationStatsSerializer,
     UserDetailSerializer
 )
-
+from django.conf import settings
 # allocation_app/views.py
 
 from rest_framework import viewsets, status
@@ -39,11 +39,11 @@ from .serializers import (
     AllocationSerializer,
     AllocationStatsSerializer
 )
-
+ALLOCATION_API_URL = getattr(settings, 'ALLOCATION_API_URL')
 # External API base URL
 EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
-
-SUPPLY_API_URL = 'https://supply.bharatintelligence.ai' # Change to your actual Supply App URL
+SUPPLY_API_URL = getattr(settings, 'SUPPLY_API_URL')
+# SUPPLY_API_URL = 'https://supply.bharatintelligence.ai' # Change to your actual Supply App URL
 # SUPPLY_API_URL = 'http://localhost:8000'
 def about(request):
     return render(request,'data/index.html')
@@ -1828,142 +1828,6 @@ def format_changes_for_display(changes):
             })
     
     return formatted
-# @api_view(['GET'])
-# @permission_classes([AllowAny])
-# def activity_logs_list(request):
-#     """
-#     Get all activity logs with external data enriched
-#     OPTIMIZED with caching + async
-#     """
-#     import time
-#     start_time = time.time()
-
-#     # Get query parameters
-#     activity_type = request.query_params.get('activity_type')
-#     mukkadam_id = request.query_params.get('mukkadam_id')
-#     job_id = request.query_params.get('job_id')
-#     days = request.query_params.get('days', 30)  # Default last 30 days
-
-#     print(f"🔍 Filters: activity_type={activity_type}, mukkadam_id={mukkadam_id}, job_id={job_id}, days={days}")
-
-#     # Build queryset
-#     queryset = ActivityLog.objects.all()
-
-#     if activity_type:
-#         queryset = queryset.filter(activity_type=activity_type)
-#     if mukkadam_id:
-#         queryset = queryset.filter(mukkadam_id=mukkadam_id)
-#     if job_id:
-#         queryset = queryset.filter(job_id=job_id)
-
-#     # Filter by date range
-#     if days:
-#         from_date = timezone.now() - timedelta(days=int(days))
-#         queryset = queryset.filter(performed_at__gte=from_date)
-
-#     queryset = queryset.select_related('performed_by').order_by('-performed_at')[:200]  # Limit to last 200
-
-#     # Convert to list to iterate multiple times
-#     logs_queryset = list(queryset)
-
-#     print(f"📊 Found {len(logs_queryset)} activity logs")
-
-#     if not logs_queryset:
-#         return Response([])
-
-#     # ========================================
-#     # ✅ STEP 1: COLLECT ALL UNIQUE IDs
-#     # ========================================
-#     mukkadam_ids = set()
-#     transport_provider_ids = set()
-
-#     for log in logs_queryset:
-#         if log.mukkadam_id:
-#             mukkadam_ids.add(log.mukkadam_id)
-#         if log.transport_provider_id:
-#             transport_provider_ids.add(log.transport_provider_id)
-
-#     print(f"   Unique mukkadams: {len(mukkadam_ids)}")
-#     print(f"   Unique transport providers: {len(transport_provider_ids)}")
-
-#     # ========================================
-#     # ✅ STEP 2: BATCH FETCH ALL DATA IN PARALLEL
-#     # ========================================
-#     print("\n⚡ PARALLEL BATCH FETCHING...")
-#     batch_start = time.time()
-
-#     mukkadams_cache = {}
-#     transport_providers_cache = {}
-
-#     if mukkadam_ids:
-#         mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=15)
-
-#     if transport_provider_ids:
-#         transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=10)
-
-#     batch_elapsed = time.time() - batch_start
-#     print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
-
-#     # ========================================
-#     # STEP 3: BUILD LOGS WITH CACHED DATA
-#     # ========================================
-#     print("\n🔄 Building enriched logs...")
-
-#     logs = []
-#     for log in logs_queryset:
-#         # Get mukkadam name from cache
-#         mukkadam_name = 'Unknown'
-#         if log.mukkadam_id:
-#             mukkadam_data = mukkadams_cache.get(log.mukkadam_id)
-#             if mukkadam_data:
-#                 mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{log.mukkadam_id}')
-#             else:
-#                 mukkadam_name = f'Mukkadam #{log.mukkadam_id}'
-
-#         # Get transport provider name from cache
-#         transport_name = None
-#         transport_details = None
-#         if log.transport_provider_id:
-#             transport_data = transport_providers_cache.get(log.transport_provider_id)
-#             if transport_data:
-#                 transport_name = transport_data.get('name', f'Provider #{log.transport_provider_id}')
-#                 transport_details = transport_data
-#             else:
-#                 transport_name = f'Provider #{log.transport_provider_id}'
-
-#         logs.append({
-#             'id': log.id,
-#             'activity_type': log.activity_type,
-#             'activity_type_display': log.get_activity_type_display(),
-#             'description': log.description,
-#             'job_id': log.job_id,
-#             'mukkadam_id': log.mukkadam_id,
-#             'mukkadam_name': mukkadam_name,
-#             'transport_provider_id': log.transport_provider_id,
-#             'transport_name': transport_name,
-#             'transport_details': transport_details,  # ✅ Full transport provider details
-#             'amount': float(log.amount) if log.amount else None,
-#             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
-#             'performed_at': log.performed_at.isoformat(),
-#             'metadata': log.metadata,
-#         })
-
-#     total_elapsed = time.time() - start_time
-#     print(f"\n✅ Activity logs API completed in {total_elapsed:.2f}s")
-#     print(f"   Database query + build: {total_elapsed - batch_elapsed:.2f}s")
-#     print(f"   Batch fetching: {batch_elapsed:.2f}s")
-#     print("="*80)
-
-#     return Response({
-#         'count': len(logs),
-#         'logs': logs,
-#         'performance': {
-#             'total_time': f'{total_elapsed:.2f}s',
-#             'batch_fetch_time': f'{batch_elapsed:.2f}s',
-#             'mukkadams_fetched': len(mukkadams_cache),
-#             'providers_fetched': len(transport_providers_cache)
-#         }
-#     })
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
@@ -2097,6 +1961,7 @@ def jobs_list(request):
                 total_price = db_activity.total_price
                 transport_cost = db_activity.transport_cost
                 other_cost = db_activity.other_cost
+                crop_bundles = getattr(db_activity, 'crop_bundles', api_activity.get('crop_bundles', 0))
                 scheduled_date = db_activity.scheduled_datetime.date() if db_activity.scheduled_datetime else None
                 rate_per_acre = db_activity.rate_per_acre
                 location = db_activity.location or api_activity.get('location', 'N/A')
@@ -2105,7 +1970,8 @@ def jobs_list(request):
                 activity_name = api_activity.get('activity_name', 'Unknown')
                 total_area = Decimal(str(api_activity.get('acres', 0)))
                 total_price = Decimal(str(api_activity.get('total_price', 0)))
-                transport_cost = Decimal(str(api_activity.get('transport_cost', 0)))  # ✅ FROM API
+                transport_cost = Decimal(str(api_activity.get('transport_cost', 0))) 
+                crop_bundles = api_activity.get('crop_bundles', 0) # ✅ FROM API
                 other_cost = Decimal(str(api_activity.get('other_cost', 0)))          # ✅ FROM API
     
                 scheduled_date = api_activity.get('date_time') or api_activity.get('scheduled_date')
@@ -2157,6 +2023,7 @@ def jobs_list(request):
                 'activity_type': api_activity.get('activity_type', ''),
                 'location': location,
                 'total_area': float(total_area),
+                'crop_bundles': crop_bundles,  # ✅ ADDED TO RESPONSE
                 'allocated_area': float(allocated_area),
                 'remaining_area': float(remaining_area),
                 'scheduled_date': safe_date(scheduled_date),
@@ -2190,7 +2057,16 @@ def jobs_list(request):
                 return 'pending'
 
         job_status = calculate_status(activities_data)
+        
 
+        # 1. EXTRACT VISITS
+        visits_data = job.get('visits', [])
+        
+        # 2. EXTRACT POINT OF CONTACT (from the first visit's assigned_to)
+        point_of_contact = None
+        if visits_data and isinstance(visits_data, list):
+            # Taking the assigned_to from the first visit as the primary contact
+            point_of_contact = visits_data[0].get('assigned_to')
         # -------------------------------------------------------------
         # ✅ GENERATE UNIQUE COORDINATES FOR MAHARASHTRA
         # -------------------------------------------------------------
@@ -2215,6 +2091,10 @@ def jobs_list(request):
             'total_activities': len(activities_data),
             'is_complex': len(activities_data) > 1,
             'booking': job.get('booking', {}),
+
+            # New Fields
+            'visits': visits_data,
+            'point_of_contact': point_of_contact,
             
             # ✅ ADDED FIELDS
             'latitude': latitude,
@@ -2861,7 +2741,8 @@ from .models import Allocation, JobActivity, PaymentRequest
 
 
 # ALLOCATION_API_BASE = 'http://localhost:8001'  # ← Change to your actual allocation API URL
-ALLOCATION_API_BASE = 'https://allocation.bharatintelligence.ai'
+# ALLOCATION_API_BASE = 'https://allocation.bharatintelligence.ai'
+# SUPPLY_API_URL = getattr(settings, 'ALLOCATION_API_URL')
 
 def get_supply_users_mapping():
     """Fetch all users from Supply API for created_by mapping"""
@@ -2887,7 +2768,7 @@ def get_allocation_users_mapping():
     """Fetch all users from Allocation API for allocated_by mapping"""
     try:
         response = requests.get(
-            f'{ALLOCATION_API_BASE}/ap/users/all/',
+            f'{ALLOCATION_API_URL}/ap/users/all/',
             timeout=50
         )
         if response.status_code == 200:
@@ -3068,7 +2949,7 @@ def mukkadam_scorecard_summary(request):
     
     try:
         allocations_response = requests.get(
-            f'{ALLOCATION_API_BASE}/ap/allocations/by-mobile/main/',
+            f'{ALLOCATION_API_URL}/ap/allocations/by-mobile/main/',
             timeout=60
         )
         

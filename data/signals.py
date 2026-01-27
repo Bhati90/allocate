@@ -5,7 +5,9 @@ from django.dispatch import receiver
 from .models import Allocation, PaymentRequest, TransportPaymentRequest, ActivityLog
 from decimal import Decimal
 import requests
-SUPPLY_API_URL = 'https://supply.bharatintelligence.ai' # Change to your actual Supply App URL
+from django.conf import settings
+SUPPLY_API_URL = getattr(settings, 'SUPPLY_API_URL')
+# SUPPLY_API_URL = 'https://supply.bharatintelligence.ai' # Change to your actual Supply App URL
 # SUPPLY_API_URL = 'http://localhost:8000'
 # ✅ Thread-local storage to track old values
 import threading
