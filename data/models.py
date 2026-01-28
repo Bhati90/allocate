@@ -626,7 +626,6 @@ from django.db import models
 from django.utils import timezone
 from django.db import models
 from django.utils import timezone
-
 class FarmerCall(models.Model):
     """Track calls made to farmers/mukadams"""
     CALL_STATUS_CHOICES = [
@@ -661,34 +660,35 @@ class FarmerCall(models.Model):
     # Call metadata
     purpose = models.CharField(max_length=20, choices=CALL_PURPOSE_CHOICES, default='general')
     status = models.CharField(max_length=20, choices=CALL_STATUS_CHOICES, default='pending')
-    direction = models.CharField(max_length=20, default='outbound')  # ✅ NEW
-    state = models.CharField(max_length=20, blank=True)  # ✅ NEW (terminal, active, etc)
+    direction = models.CharField(max_length=20, default='outbound')
+    state = models.CharField(max_length=20, blank=True)
     
     # Call metrics
     duration = models.IntegerField(null=True, blank=True, help_text="Total duration in seconds")
-    talk_time = models.IntegerField(null=True, blank=True, help_text="Actual talk time in seconds")  # ✅ NEW
+    talk_time = models.IntegerField(null=True, blank=True, help_text="Actual talk time in seconds")
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     
     # Recording
     recording_url = models.URLField(blank=True, null=True)
-    recording_urls = models.JSONField(default=list, blank=True, help_text="Array of recording URLs")  # ✅ NEW
+    recording_urls = models.JSONField(default=list, blank=True, help_text="Array of recording URLs")
+    s3_key = models.CharField(max_length=500, blank=True, null=True, help_text="S3 key for recording")  # ✅ NEW
     
     # Timestamps
     initiated_at = models.DateTimeField(auto_now_add=True)
     answered_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-    created_time = models.DateTimeField(null=True, blank=True)  # ✅ NEW (from Exotel)
-    updated_time = models.DateTimeField(null=True, blank=True)  # ✅ NEW (from Exotel)
+    created_time = models.DateTimeField(null=True, blank=True)
+    updated_time = models.DateTimeField(null=True, blank=True)
     
     # Exotel specific
-    virtual_number = models.CharField(max_length=20, blank=True)  # ✅ NEW
-    custom_field = models.CharField(max_length=255, blank=True)  # ✅ NEW
-    legs_url = models.CharField(max_length=500, blank=True)  # ✅ NEW
+    virtual_number = models.CharField(max_length=20, blank=True)
+    custom_field = models.CharField(max_length=255, blank=True)
+    legs_url = models.CharField(max_length=500, blank=True)
     
     # Extra context
     job_id = models.CharField(max_length=100, blank=True)
     notes = models.TextField(blank=True)
-    webhook_data = models.JSONField(default=dict, blank=True, help_text="Full webhook response")  # ✅ NEW
+    webhook_data = models.JSONField(default=dict, blank=True, help_text="Full webhook response")
     
     # User relationship
     created_by = models.ForeignKey(
@@ -714,7 +714,7 @@ class FarmerCall(models.Model):
     @property
     def has_recording(self):
         """Check if call has any recordings"""
-        return bool(self.recording_url or self.recording_urls)
+        return bool(self.recording_url or self.recording_urls or self.s3_key)  # ✅ UPDATED
     
     @property
     def primary_recording_url(self):
@@ -724,7 +724,6 @@ class FarmerCall(models.Model):
         if self.recording_urls and len(self.recording_urls) > 0:
             return self.recording_urls[0]
         return None
-
 # allocation_app/models.py
 
 class ActivityEditHistory(models.Model):

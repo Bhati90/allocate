@@ -27,7 +27,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:5173",
     "http://127.0.0.1:3000",
-    "http://127.0.0.1:5173",
+    "http://localhost:5174",
     "http://127.0.0.1:8001",
     "https://supply.bharatintelligence.ai",
     "https://demand.bharatintelligence.ai",
@@ -58,7 +58,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://ops.bharatintelligence.ai",
     "https://allocation.bharatintelligence.ai",
     "http://localhost:3000",
-    "http://localhost:5173",
+    "http://localhost:5174",
     "http://127.0.0.1:8001",
 ]
 
@@ -174,19 +174,19 @@ DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
 # # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',  # use this for normal Postgres
-#         'NAME': 'registration_db',
-#         'USER': 'postgres',
-#         'PASSWORD': 'new_password',
-#         'HOST': 'localhost',
-#         'PORT': '5432',
-#         'OPTIONS': {
-#             'client_encoding': 'UTF8',
-#         },
-#     }
-# }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',  # use this for normal Postgres
+        'NAME': 'registration_db',
+        'USER': 'postgres',
+        'PASSWORD': 'new_password',
+        'HOST': 'localhost',
+        'PORT': '5432',
+        'OPTIONS': {
+            'client_encoding': 'UTF8',
+        },
+    }
+}
 
 # allocate/settings.py
 # SUPPLY_API_URL = 'http://localhost:8000'
@@ -223,19 +223,19 @@ CACHE_MUKKADAM_TIMEOUT = 3600  # 1 hour
 CACHE_FARMER_TIMEOUT = 3600    # 1 hour
 CACHE_TRANSPORT_TIMEOUT = 21600  # 6 hours
 CACHE_JOB_TIMEOUT = 1800  # 30 minutes
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'registration_db',
-        'USER': 'postgres',
-        'PASSWORD': 'new_password',
-        'HOST': 'localhost',
-        'PORT': '5432',
-        'OPTIONS': {
-            'client_encoding': 'UTF8',
-        },
-    }
-}
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'registration_db',
+#         'USER': 'postgres',
+#         'PASSWORD': 'new_password',
+#         'HOST': 'localhost',
+#         'PORT': '5432',
+#         'OPTIONS': {
+#             'client_encoding': 'UTF8',
+#         },
+#     }
+# }
 
 # Static files
 STATIC_URL = '/static/'

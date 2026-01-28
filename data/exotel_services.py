@@ -3,13 +3,14 @@ import requests
 import logging
 from django.conf import settings
 from django.core.cache import cache
+
 logger = logging.getLogger(__name__)
 
 class ExotelService:
     BASE_URL = getattr(settings, 'EXOTEL_SERVICE_BASE_URL')
+    WEBHOOK_URL = "https://call.bharatintelligence.ai/api/calls/recordings/process/"
     
     def __init__(self):
-        # We no longer set self.headers here because the token changes
         pass
 
     def _get_access_token(self):
@@ -37,7 +38,6 @@ class ExotelService:
                 data = response.json()
                 
                 token = data.get("access_token")
-                # Cache the token. Subtract 30 seconds from 'expires_in' for safety.
                 expires_in = data.get("expires_in", 300) - 30 
                 cache.set(cache_key, token, timeout=expires_in)
                 
@@ -53,8 +53,58 @@ class ExotelService:
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
-            "X-Client-Id": settings.EXOTEL_CLIENT_ID  # Required as per your doc
+            "X-Client-Id": settings.EXOTEL_CLIENT_ID
         }
+
+# core/services/exotel_service.py
+
+    def post_to_recording_webhook(self, call_sid):  # ✅ Renamed: removed underscore to make it public
+        """
+        ✅ POST call_sid to webhook for recording processing
+        Called AFTER call ends (from ExotelWebhookView)
+        Returns s3_key from response
+        """
+        try:
+            webhook_payload = {
+                "tech_side_name": "ALLOCATION",
+                "call_sid": call_sid
+            }
+            
+            logger.info(f"📤 Posting to recording webhook: {self.WEBHOOK_URL}")
+            logger.info(f"   Payload: {webhook_payload}")
+            
+            webhook_response = requests.post(
+                self.WEBHOOK_URL,
+                json=webhook_payload,
+                headers={"Content-Type": "application/json"},
+                timeout=10
+            )
+            
+            if webhook_response.status_code in [200, 201, 202]: 
+                response_data = webhook_response.json()
+                s3_key = response_data.get('s3_key')
+                
+                logger.info(f"✅ Recording webhook posted successfully for call_sid: {call_sid}")
+                logger.info(f"   S3 Key received: {s3_key}")
+                
+                return {
+                    'success': True,
+                    's3_key': s3_key,
+                    'data': response_data
+                }
+            else:
+                logger.warning(f"⚠️ Recording webhook returned status {webhook_response.status_code}: {webhook_response.text}")
+                return {
+                    'success': False,
+                    's3_key': None
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to post to recording webhook: {str(e)}", exc_info=True)
+            return {
+                'success': False,
+                's3_key': None
+            }
 
     def make_call(self, from_number, to_number):
         """Connect two phone numbers using Bearer Token"""
@@ -62,14 +112,15 @@ class ExotelService:
             payload = {
                 "from_number": from_number,
                 "to_number": to_number,
-                "side":"ALLOCATION"
+                "side": "ALLOCATION"
             }
             
-            # Dynamically get headers with valid token
             headers = self.get_headers()
             if not headers.get("Authorization"):
                 return {'success': False, 'error': 'Auth failed'}
 
+            logger.info(f"📞 Making call: {from_number} -> {to_number}")
+            
             response = requests.post(
                 f"{self.BASE_URL}/api/calls/make/",
                 headers=headers,
@@ -77,19 +128,34 @@ class ExotelService:
                 timeout=30
             )
             
-            # If 401, clear cache and try once more (Optional retry logic)
             if response.status_code == 401:
+                logger.warning("🔄 Got 401, clearing token cache and retrying...")
                 cache.delete("exotel_oauth_token")
-                # ... optionally retry the call once ...
+                headers = self.get_headers()
+                
+                response = requests.post(
+                    f"{self.BASE_URL}/api/calls/make/",
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                )
 
             if response.status_code == 200:
                 data = response.json()
+                call_sid = data.get('call_sid') or data.get('response', {}).get('Sid')
+                
+                logger.info(f"✅ Call initiated successfully. SID: {call_sid}")
+                
+                # ✅ REMOVED: No longer post to webhook here
+                # Webhook will be called when call ends via ExotelWebhookView
+                
                 return {
                     'success': True,
-                    'call_sid': data.get('call_sid') or data.get('response', {}).get('Sid'),
-                    'status': data.get('status', 'queued')
+                    'call_sid': call_sid,
+                    'status': data.get('status', 'queued'),
                 }
             
+            logger.error(f"❌ Call failed with status {response.status_code}: {response.text}")
             return {'success': False, 'error': response.text}
             
         except Exception as e:
