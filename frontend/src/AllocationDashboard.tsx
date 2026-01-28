@@ -27,6 +27,7 @@ import type {
   ActivityLog,
   DailyStat
 } from './types/allocation';
+import Dialpad from './call';
 interface Activity {
   id: string;
   is_lost:boolean;
@@ -41,7 +42,8 @@ interface Activity {
   rate_per_acre: number;
   is_fully_allocated: boolean;
   allocations?: any[];
-  crop_bundles?:number;
+  crop_bundles?:string;
+  is_manually_edited?:boolean;
 }
 
 const AllocationDashboard: React.FC = () => {
@@ -1633,7 +1635,8 @@ const handleEditActivity = async (activity: any, jobId: string) => {
       total_price: 0,
       transport_cost:0,
       other_cost:0,
-      rate_per_acre: 0
+      rate_per_acre: 0,
+      crop_bundles:0
     });
     await refreshAllocations();
   } catch (error: any) {
@@ -2746,6 +2749,13 @@ const handleSaveSuccess = async () => {
                           <span className="text-gray-500">• {farmer.village}</span>
                           <span className="text-gray-500">• {farmer.district}</span>
                           <span className="text-gray-500">• {farmer.taluka}</span>
+                          {job.activities?.some(a => a.is_manually_edited) && (
+    <span className="px-2 py-1 bg-blue-500 text-white rounded-full text-xs font-bold flex items-center">
+      <Edit2 size={12} className="mr-1" />
+      EDITED
+    </span>
+  )}
+  
 
                           {job.point_of_contact && (
                             <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
@@ -2917,8 +2927,8 @@ const handleSaveSuccess = async () => {
             })
             .sort((a, b) => {
                 // Sort by work_date descending (newest first)
-                const dateA = new Date(a.work_date);
-                const dateB = new Date(b.work_date);
+                const dateA = a.work_date ? new Date(a.work_date).getTime() : 0;
+                const dateB = b.work_date ? new Date(b.work_date).getTime() : 0;
                 return dateB - dateA;
             });
 
@@ -3300,6 +3310,12 @@ const handleSaveSuccess = async () => {
                               </span>
                             </div>
                           )}
+                          {job.activities?.some(a => a.is_manually_edited) && (
+    <span className="px-2 py-1 bg-blue-500 text-white rounded-full text-xs font-bold flex items-center">
+      <Edit2 size={12} className="mr-1" />
+      EDITED
+    </span>
+  )}
                           </div>
 
                           {/* ✅ NEW: Point of Contact (POC) Section */}
@@ -3417,8 +3433,8 @@ const handleSaveSuccess = async () => {
       scheduled_date: activity.scheduled_date || '',
       total_price: activity.total_price,
       transport_cost: activity.transport_cost || 0,  // ✅ NEW
-      other_cost: activity.other_cost || 0,  
-      crop_bundles: activity.crop_bundles || 0 ,// ✅ ADD THIS        // ✅ NEW
+      other_cost: activity.other_cost || 0,
+      crop_bundles: typeof activity.crop_bundles === 'number' ? activity.crop_bundles : parseFloat(activity.crop_bundles || '0'), // Ensure number
       rate_per_acre: activity.rate_per_acre
     });
     setShowEditActivityModal(true);
@@ -3487,7 +3503,7 @@ const handleSaveSuccess = async () => {
   }}
   onSaveSuccess={handleSaveSuccess}
 />
-            {/* Partially Allocated Jobs Tab */}
+{/* Partially Allocated Jobs Tab */}
 {activeTab === 'partially' && (
   <div>
     {/* --- Filter Bar Section --- */}
@@ -3534,7 +3550,7 @@ const handleSaveSuccess = async () => {
         let dStr = job.scheduled_date;
         if (!dStr && job.activities?.length > 0) {
           const sortedDates = job.activities
-            .filter(a => !a.is_lost)  // ✅ FILTER LOST ACTIVITIES
+            .filter(a => !a.is_lost)
             .map(a => a.scheduled_date)
             .filter(Boolean)
             .sort();
@@ -3560,7 +3576,7 @@ const handleSaveSuccess = async () => {
             job.title?.toLowerCase().includes(searchLower) ||
             job.farmer?.farmer_name?.toLowerCase().includes(searchLower) ||
             job.farmer?.location?.toLowerCase().includes(searchLower) ||
-            job.activities?.some(a => !a.is_lost && a.activity_name?.toLowerCase().includes(searchLower))  // ✅ FILTER LOST
+            job.activities?.some(a => !a.is_lost && a.activity_name?.toLowerCase().includes(searchLower))
           );
         })
         .sort((a, b) => {
@@ -3613,7 +3629,6 @@ const handleSaveSuccess = async () => {
                     <div className="flex-1">
                       <div className="flex items-center space-x-3 mb-2">
                         <span className="text-lg font-mono font-bold text-blue-600">{job.work_id}</span>
-                        {/* ✅ FIX: Show correct count excluding lost activities */}
                         <span className="px-2 py-1 bg-orange-500 text-white rounded-full text-xs font-bold flex items-center">
                           <TrendingUp size={14} className="mr-1" />
                           {completedActivities}/{totalActiveActivities} DONE
@@ -3637,9 +3652,13 @@ const handleSaveSuccess = async () => {
                               </span>
                             </div>
                           )}
+                          {job.activities?.some(a => a.is_manually_edited) && (
+    <span className="px-2 py-1 bg-blue-500 text-white rounded-full text-xs font-bold flex items-center">
+      <Edit2 size={12} className="mr-1" />
+      EDITED
+    </span>
+  )}
                           </div>
-
-                          
                         </div>
                       )}
                     </div>
@@ -3677,7 +3696,6 @@ const handleSaveSuccess = async () => {
                       </h4>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {/* ✅ FIX: Filter out lost activities when rendering */}
                         {activeActivities.map((activity) => {
                           const { allocated, remaining, isFullyAllocated } = getActivityStats(
                             job.work_id,
@@ -3720,10 +3738,29 @@ const handleSaveSuccess = async () => {
                                     {allocated.toFixed(2)}/{activity.total_area} acres
                                   </span>
                                 </div>
+                                <div className="flex items-center justify-between">
+                                  <span>Rate:</span>
+                                  <span className="font-semibold">₹{activity.rate_per_acre}/acre</span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span>Total Price:</span>
+                                  <span className="font-semibold">₹{activity.total_price}</span>
+                                </div>
                               </div>
 
+                              {activity.activity_name === "Paper Wrapping" && (
+                                <div className="flex items-center justify-between bg-orange-100 px-2 py-1 rounded mt-1 border border-orange-200">
+                                  <span className="text-orange-700 font-bold uppercase" style={{ fontSize: '10px' }}>
+                                    📦 Bundles:
+                                  </span>
+                                  <span className="font-bold text-orange-900">
+                                    {activity.crop_bundles || 0}
+                                  </span>
+                                </div>
+                              )}
+
                               {!isFullyAllocated && (
-                                <div>
+                                <div className="mt-2">
                                   <div className="bg-gray-200 rounded-full h-2 mb-1">
                                     <div
                                       className={`h-2 rounded-full transition-all ${
@@ -3740,11 +3777,73 @@ const handleSaveSuccess = async () => {
                                 </div>
                               )}
 
+                              {/* ✨ NEW: Edit and Mark Lost Buttons (Admin Only) */}
+                              {isAdmin && !activity.is_lost && (
+                                <div className="mt-3 pt-3 border-t border-gray-200 flex gap-2">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedActivityForEdit(activity);
+                                      setSelectedJobForEdit(job);
+                                      setEditFormData({
+                                        activity_name: activity.activity_name,
+                                        total_area: activity.total_area,
+                                        scheduled_date: activity.scheduled_date || '',
+                                        total_price: activity.total_price,
+                                        transport_cost: activity.transport_cost || 0,
+                                        other_cost: activity.other_cost || 0,
+                                        crop_bundles: typeof activity.crop_bundles === 'number' ? activity.crop_bundles : parseFloat(activity.crop_bundles || '0'), // Ensure number
+                                        rate_per_acre: activity.rate_per_acre
+                                      });
+                                      setShowEditActivityModal(true);
+                                    }}
+                                    className="flex-1 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition flex items-center justify-center gap-1 text-sm font-medium"
+                                  >
+                                    <Edit2 size={14} />
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedActivityForEdit(activity);
+                                      setSelectedJobForEdit(job);
+                                      setShowMarkLostModal(true);
+                                    }}
+                                    className="flex-1 px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition flex items-center justify-center gap-1 text-sm font-medium"
+                                  >
+                                    <Ban size={14} />
+                                    Mark Lost
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* ✨ Lost Activity State with Restore Button */}
+                              {activity.is_lost && (
+                                <div className="mt-3 pt-3 border-t border-red-200">
+                                  <div className="px-3 py-2 bg-red-100 border border-red-300 rounded text-xs text-red-800">
+                                    <Ban size={12} className="inline mr-1" />
+                                    <strong>LOST:</strong> {activity.lost_reason}
+                                  </div>
+                                  {isAdmin && (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleUnmarkActivityLost(activity, job.work_id);
+                                      }}
+                                      className="mt-2 w-full px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-xs font-bold"
+                                    >
+                                      Restore Activity
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Allocation Details */}
                               {activity.allocations && activity.allocations.length > 0 && (
-                                <div className="mt-2 pt-2 border-t border-gray-300">
-                                  <p className="text-xs text-gray-600 mb-1">Allocated to:</p>
+                                <div className="mt-3 pt-3 border-t border-gray-300">
+                                  <p className="text-xs text-gray-600 mb-1 font-semibold">Allocated to:</p>
                                   {activity.allocations.map((alloc, idx) => (
-                                    <div key={idx} className="text-xs bg-white p-2 rounded mb-1">
+                                    <div key={idx} className="text-xs bg-white p-2 rounded mb-1 border border-gray-200">
                                       <div className="flex justify-between items-start">
                                         <div className="flex-1">
                                           <div className="font-semibold text-gray-800">{alloc.mukkadam_name}</div>
@@ -3754,17 +3853,6 @@ const handleSaveSuccess = async () => {
                                               <span className="text-indigo-600 font-semibold">👥 {alloc.crew_size}</span>
                                             )}
                                           </div>
-
-                                          {activity.activity_name === "Paper Wrapping" && (
-    <div className="flex items-center justify-between bg-orange-100 px-2 py-1 rounded mt-1 border border-orange-200">
-      <span className="text-orange-700 font-bold uppercase" style={{ fontSize: '10px' }}>
-        📦 Bundles:
-      </span>
-      <span className="font-bold text-orange-900">
-        {activity.crop_bundles || 0}
-      </span>
-    </div>
-  )}
                                         </div>
                                         <button
                                           onClick={() => {
@@ -3801,7 +3889,6 @@ const handleSaveSuccess = async () => {
     })()}
   </div>
 )}
-
 {/* Mukkadams Tab */}
 {activeTab === 'mukkadams' && (
   <div>
@@ -4779,7 +4866,8 @@ const handleSaveSuccess = async () => {
             total_price: 0,
             transport_cost: 0,
             other_cost: 0,
-            rate_per_acre: 0
+            rate_per_acre: 0,
+            crop_bundles:0,
           });
         }} className="text-gray-400 hover:text-gray-600">
           <X size={20} />
@@ -4937,7 +5025,7 @@ const handleSaveSuccess = async () => {
     <input
       type="number"
       value={editFormData.crop_bundles}
-      onChange={(e) => setEditFormData({ ...editFormData, crop_bundles: e.target.value })}
+      onChange={(e) => setEditFormData({ ...editFormData, crop_bundles: Number(e.target.value) })}
       className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
       placeholder="Enter number of bundles"
     />
@@ -5027,7 +5115,8 @@ const handleSaveSuccess = async () => {
               total_price: 0,
               transport_cost: 0,
               other_cost: 0,
-              rate_per_acre: 0
+              rate_per_acre: 0,
+              crop_bundles:0,
             });
           }}
           className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 font-medium"
@@ -5263,7 +5352,7 @@ const handleSaveSuccess = async () => {
                                   <div>
                                     <p className="text-gray-500 text-xs">Total Cost</p>
                                     <p className="font-bold text-purple-600">
-                                      ₹{((allocation.mukkadam_price || 0) + (allocation.transport_price || 0)).toLocaleString()}
+                                      ₹{((parseFloat(allocation.mukkadam_price?.toString() || '0')) + (parseFloat(allocation.transport_price?.toString() || '0'))).toLocaleString()}
                                     </p>
                                   </div>
                                 </div>
@@ -5414,6 +5503,8 @@ const handleSaveSuccess = async () => {
 })()}
         
       </div>
+
+      <Dialpad/>
 
     
       {/* Allocation Modal */}

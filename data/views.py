@@ -33,7 +33,7 @@ from decimal import Decimal
 import requests
 import json
 
-from .models import JobActivity, Allocation, AllocationStats
+from .models import JobActivity, Allocation, AllocationStats,FarmerCall
 from .serializers import (
     JobActivitySerializer,
     AllocationSerializer,
@@ -62,6 +62,79 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from .models import UserProfile  # ✅ Import UserProfile model
+# views.py
+class MakeCallViews(APIView):
+    """
+    Web dialpad - Call any number using central Exotel number
+    """
+    permission_classes = [AllowAny]
+    
+    CENTRAL_PHONE = '+91-804-7361465'
+    
+    def post(self, request):
+        to_number = request.data.get('to_number')
+        user_id = request.data.get('user_id')
+        username = request.data.get('username', 'web_dialpad')
+        purpose = request.data.get('purpose', 'web_dialpad')
+        notes = request.data.get('notes', '')
+        
+        if not to_number:
+            return Response({
+                'success': False,
+                'message': 'Phone number is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        to_number = to_number.replace(' ', '').replace('-', '')
+        
+        try:
+            # 1️⃣ Make the call via Exotel
+            exotel = ExotelService()
+            call_result = exotel.make_call(
+                from_number=self.CENTRAL_PHONE,
+                to_number=to_number,
+            )
+            
+            if not call_result['success']:
+                return Response({
+                    'success': False,
+                    'message': 'Failed to initiate call',
+                    'error': call_result.get('error')
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # 2️⃣ Save call record
+            call_data = {
+                'call_sid': call_result['call_sid'],
+                'mobile_number': to_number,
+                'from_number': self.CENTRAL_PHONE,
+                'purpose': purpose,
+                'status': call_result.get('status', 'pending'),
+                'notes': notes,
+                'direction': 'outbound',
+                'user_id': user_id or 'anonymous',
+                'created_by': request.user if request.user.is_authenticated else None,
+                
+            }
+            
+            call = FarmerCall.objects.create(**call_data)
+            
+            logger.info(f"✅ Web dialpad call by user {user_id}: {call.call_sid} → {to_number}")
+            logger.info(f"   S3 Key stored: {call.s3_key}")
+            
+            return Response({
+                'success': True,
+                'message': 'Calling...',
+                'call_sid': call_result['call_sid'],
+                'call_id': call.id,
+                'to': to_number,
+               
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"❌ Error making call: {str(e)}", exc_info=True)
+            return Response({
+                'success': False,
+                'message': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class UserProfileView(APIView):
     permission_classes = [AllowAny]
@@ -290,7 +363,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
                             subtotal=subtotal,  # ✅ CALCULATED
                             location=target_activity.get('location', ''),
                             estimated_workers=int(target_activity.get('estimated_workers', 10)),
-                            rate_per_acre=rate_per_acre  # ✅ CALCULATED
+                            rate_per_acre=rate_per_acre , # ✅ CALCULATED
+                            is_manually_edited=target_activity.get('is_manually_edited')
                         )
                         
                         print(f"✅ Created JobActivity #{job_activity.id} from API data")
@@ -2035,6 +2109,7 @@ def jobs_list(request):
                 'other_cost': float(other_cost),
                 'subtotal': float(api_activity.get('subtotal', 0)),
                 'is_fully_allocated': is_fully_allocated,
+                'is_manually_edited': db_activity.is_manually_edited if db_activity else False,
                 'allocations': allocations_data,
                 # ✅ ADD LOST STATUS
                 'is_lost': db_activity.lost_record.is_active if (db_activity and hasattr(db_activity, 'lost_record')) else False,
@@ -4308,7 +4383,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 class ExotelWebhookView(APIView):
     """
     Receive call status updates from Exotel
@@ -4328,6 +4402,7 @@ class ExotelWebhookView(APIView):
     }
     """
     permission_classes = [AllowAny]
+    
     def post(self, request):
         try:
             data = request.data
@@ -4358,9 +4433,11 @@ class ExotelWebhookView(APIView):
                 )
 
             # Update call status
-            call_record.status = call_details.get('status', 'unknown').lower()
+            call_status = call_details.get('status', 'unknown').lower()
+            call_record.status = call_status
             call_record.state = call_details.get('state', '')
             call_record.direction = call_details.get('direction', 'outbound')
+            
             # Update duration and talk time
             if call_details.get('total_talk_time'):
                 call_record.talk_time = int(call_details['total_talk_time'])
@@ -4371,8 +4448,8 @@ class ExotelWebhookView(APIView):
 
             # Update virtual number and custom field
             call_record.virtual_number = call_details.get('virtual_number', '')
-            # call_record.custom_field = call_details.get('custom_field', '')
             call_record.legs_url = call_details.get('legs', '')
+            
             # Parse and update timestamps
             def parse_datetime(dt_string):
                 """Parse datetime string from Exotel format"""
@@ -4410,10 +4487,38 @@ class ExotelWebhookView(APIView):
             # Store full webhook data for debugging
             call_record.webhook_data = data
 
+            # ✅ NEW: POST TO RECORDING WEBHOOK WHEN CALL ENDS
+            event_type = event_details.get('event_type', '').lower()
+            
+            logger.info(f"📊 Event type: {event_type}, Call status: {call_status}")
+            
+            # Check if call ended (terminal event OR completed status)
+            if event_type == 'terminal' or call_status in ['completed', 'terminal', 'failed', 'busy', 'no-answer']:
+                logger.info(f"📞 Call ended - Status: {call_status}, Event: {event_type}")
+                
+                # Only fetch s3_key for COMPLETED calls with talk time
+                if call_status == 'completed' and call_record.talk_time and call_record.talk_time > 0:
+                    logger.info(f"🎙️ Call has recording (talk_time: {call_record.talk_time}s) - Fetching s3_key...")
+                    
+                    # Import ExotelService
+                    from .exotel_services import ExotelService
+                    
+                    # Create instance and call recording webhook
+                    exotel = ExotelService()
+                    webhook_result = exotel.post_to_recording_webhook(call_sid)
+                    
+                    if webhook_result.get('success') and webhook_result.get('s3_key'):
+                        call_record.s3_key = webhook_result['s3_key']
+                        logger.info(f"✅ S3 Key stored: {call_record.s3_key}")
+                    else:
+                        logger.warning(f"⚠️ Failed to get s3_key from recording webhook")
+                else:
+                    logger.info(f"⚠️ Skipping s3_key fetch - Status: {call_status}, Talk time: {call_record.talk_time}s")
+
             # Save the updated record
             call_record.save()
 
-            logger.info(f"✅ Updated call {call_sid} - Status: {call_record.status}, Talk Time: {call_record.talk_time}s")
+            logger.info(f"✅ Updated call {call_sid} - Status: {call_record.status}, Talk Time: {call_record.talk_time}s, S3 Key: {call_record.s3_key or 'None'}")
 
             return Response({
                 "success": True,
@@ -4421,7 +4526,8 @@ class ExotelWebhookView(APIView):
                 "call_sid": call_sid,
                 "status": call_record.status,
                 "talk_time": call_record.talk_time,
-                "has_recording": call_record.has_recording
+                "has_recording": call_record.has_recording,
+                "s3_key": call_record.s3_key  # ✅ Include s3_key in response
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -4430,7 +4536,6 @@ class ExotelWebhookView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
 
 from django.db.models import Prefetch
 
