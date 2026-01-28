@@ -48,6 +48,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       });
 
       console.log('✅ Auth verified:', response.data);
+      const id = response.data.id;
+      localStorage.setItem('id', id);
       setIsAdmin(response.data.is_admin);
       setUserData(response.data);
       
