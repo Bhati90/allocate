@@ -3659,6 +3659,8 @@ const handleSaveSuccess = async () => {
     </span>
   )}
                           </div>
+
+                          
                         </div>
                       )}
                     </div>
@@ -3853,6 +3855,17 @@ const handleSaveSuccess = async () => {
                                               <span className="text-indigo-600 font-semibold">👥 {alloc.crew_size}</span>
                                             )}
                                           </div>
+
+                                          {activity.activity_name === "Paper Wrapping" && (
+    <div className="flex items-center justify-between bg-orange-100 px-2 py-1 rounded mt-1 border border-orange-200">
+      <span className="text-orange-700 font-bold uppercase" style={{ fontSize: '10px' }}>
+        📦 Bundles:
+      </span>
+      <span className="font-bold text-orange-900">
+        {activity.crop_bundles || 0}
+      </span>
+    </div>
+  )}
                                         </div>
                                         <button
                                           onClick={() => {
