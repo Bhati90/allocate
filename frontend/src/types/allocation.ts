@@ -71,13 +71,17 @@ export interface Activity {
   remaining_area: number;
   scheduled_date: string;
   estimated_workers: number;
+  lost_reason:string;
   
   // ✅ PRICING FROM API
   rate_per_acre: number;
   total_price: number;       // Revenue
   transport_cost: number;    // Expected transport cost
   other_cost: number;
+  crop_bundles:string;
   subtotal: number;
+  is_manually_edited:boolean;
+  is_lost:boolean;
   
   is_fully_allocated: boolean;
   allocations?: any[];
@@ -85,10 +89,10 @@ export interface Activity {
 export interface Allocation {
   id: number;
   farmer_work_id: string;
-  activity_id:number;
+  activity_id:string;
   mukkadam_id: number;
-  mukkadam_price: number ;
-  transport_price: number ;
+  mukkadam_price: string ;
+  transport_price: string ;
   allocated_at: string;
   completed_at: string;
   created_by?: {
@@ -105,7 +109,7 @@ export interface Allocation {
   };
   status?: string;
   notes?: string;
-  job_activity?: number;
+  job_activity?: string;
   job_id?: string;
   activity_name?: string;
   allocated_area?: number;
@@ -124,6 +128,7 @@ export interface Mukkadam {
   village: string;
   crew_size: string;
   is_permanent: boolean;
+  paid_amount:number;
 
   price_metrics?: {
     asking_price: number | null;
@@ -144,6 +149,7 @@ export interface TransportProvider {
 
 export interface MukkadamAllocation {
   mukkadam: Mukkadam;
+  paid_amount:number;
   allocations: Allocation[];
   total_price: number;
   job_count: number;
@@ -151,6 +157,7 @@ export interface MukkadamAllocation {
 
 export interface TransportAllocation {
   provider: TransportProvider;
+  paid_amount:number;
   allocations: Allocation[];
   total_price: number;
   job_count: number;

@@ -23,7 +23,7 @@ const AdminRoute = ({ children }: { children: JSX.Element }) => {
   // ✅ Must be logged in
   if (!token) {
     console.log('❌ No token - redirecting to login');
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/loginf" replace />;
   }
 
   // ✅ Must be Admin

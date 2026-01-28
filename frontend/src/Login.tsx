@@ -33,6 +33,7 @@ const Login = () => {
       
       // Save token
       localStorage.setItem('auth_token', token);
+      
       console.log('✅ Token saved:', token);
       
       // ✅ Verify token was saved
