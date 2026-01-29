@@ -173,7 +173,7 @@ DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 # MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/media/'
 
 # # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-}
+
 
 # allocate/settings.py
 # SUPPLY_API_URL = 'http://localhost:8000'
