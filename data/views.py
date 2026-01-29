@@ -1671,7 +1671,7 @@ def completed_allocations_list(request):
     # Search filter (before pagination)
     if search:
         queryset = queryset.filter(
-            Q(farmer_work_id__icontains=search) |
+            # Q(farmer_work_id__icontains=search) |
             Q(job_activity__activity_name__icontains=search) |  # ✅ UNCOMMENTED
             Q(job_activity__job_id__icontains=search) |
             Q(mukkadam_id__icontains=search)

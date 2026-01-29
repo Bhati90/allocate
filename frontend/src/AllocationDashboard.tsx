@@ -830,13 +830,13 @@ const handleMarkComplete = async (allocationId: number) => {
     
     const config = getAuthConfig();
     try {
-      const [mukkadamRes, transportRes] = await Promise.all([
-        
+      const [jobsRes, mukkadamRes, transportRes] = await Promise.all([
+        axios.get(`${API_BASE_URL_A}/ap/jobs/`, config),
         axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`),
         axios.get(`${API_BASE_URL}/api/transport-providers/dropdown_list/`)
       ]);
 
-
+      setJobs(jobsRes.data);
       setMukkadams(mukkadamRes.data);
       setTransportProviders(transportRes.data);
       setTotalMukkadamsRegistered(mukkadamRes.data.length);
@@ -869,15 +869,17 @@ const refreshAllocations = async (
   try {
     setLoadingActivityLogs(true);  // ✅ NEW
     
-    const [ activityRes, mukkadamPayRes, transportPayRes] = await Promise.all([
-      
+    const [allocationsRes, activityRes, mukkadamPayRes, transportPayRes] = await Promise.all([
+      axios.get(`${API_BASE_URL_A}/ap/allocations/`, config),
       // ✅ UPDATED: Add pagination params
       axios.get(`${API_BASE_URL_A}/ap/activity-logs/?page=${activityLogPage}&page_size=${activityLogsPageSize}`, config),
       axios.get(`${API_BASE_URL_A}/ap/payment-requests/`, config),
       axios.get(`${API_BASE_URL_A}/ap/transport-payment-requests/`, config)
     ]);
 
-
+    const newAllocations = Array.isArray(allocationsRes.data) 
+      ? allocationsRes.data 
+      : allocationsRes.data.results || [];
 
     // ✅ UPDATED: Extract paginated activity logs
     const activityLogsData = activityRes.data;
@@ -895,10 +897,14 @@ const refreshAllocations = async (
       ? transportPayRes.data
       : transportPayRes.data.results || [];
 
+    setAllocations(newAllocations);
     setActivityLogs(activityLogsArray);
     setMukkadamPaymentRequests(mukkadamPayments);
     setTransportPaymentRequests(transportPayments);
 
+    if (currentMukkadams.length > 0) processMukkadamAllocations(newAllocations, currentMukkadams);
+    if (currentProviders.length > 0) processTransportAllocations(newAllocations, currentProviders);
+    buildDailyStats(newAllocations);
 
   } catch (error) {
     console.error('Error refreshing allocations:', error);
