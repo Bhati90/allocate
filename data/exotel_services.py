@@ -72,11 +72,13 @@ class ExotelService:
             
             logger.info(f"📤 Posting to recording webhook: {self.WEBHOOK_URL}")
             logger.info(f"   Payload: {webhook_payload}")
-            
+            headers = self.get_headers()
+            if not headers.get("Authorization"):
+                return {'success': False, 'error': 'Auth failed'}
             webhook_response = requests.post(
                 self.WEBHOOK_URL,
                 json=webhook_payload,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 timeout=10
             )
             
