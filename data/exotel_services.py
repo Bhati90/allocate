@@ -66,7 +66,7 @@ class ExotelService:
         """
         try:
             webhook_payload = {
-                "tech_side_name": "ALLOCATION",
+                "tech_side_name": "allocation",
                 "call_sid": call_sid
             }
             

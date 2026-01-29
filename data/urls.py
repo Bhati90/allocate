@@ -6,11 +6,11 @@ from rest_framework.authtoken.views import obtain_auth_token
 
 from .views import (DetailedRecommendationView, MakeCallView, UserProfileView,
    mukkadam_scorecard_details,UserListAPIView,edit_activity,mark_activity_lost,unmark_activity_lost,
-    mukkadam_scorecard_summary,update_activity,
+    mukkadam_scorecard_summary,update_activity,completed_allocations_list,pending_jobs_list,
     JobActivityViewSet, get_job_details,get_user_calls,get_call_details,MakeCallViews,
-    AllocationViewSet,transporter_work_history,ExotelWebhookView,
-    jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,
-    activity_logs_list,allocations_list,mukkadam_work_history,
+    AllocationViewSet,transporter_work_history,ExotelWebhookView,partially_allocated_jobs_list,
+    jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,lost_jobs_list,
+    activity_logs_list,allocations_list,mukkadam_work_history,allocated_jobs_list,
     allocations_by_mobile # ✅ Already imported
 )
 from django.views.decorators.csrf import csrf_exempt
@@ -34,12 +34,14 @@ urlpatterns = [
     # path('allocation-analytics/', comprehensive_analytics, name='allocation-analytics'),
     # path('supply-health/', supply_health_dashboard, name='supply-health'),
     # path('calls/user/', get_user_calls, name='user-calls'),
-
+    path('allocated-jobs/', allocated_jobs_list, name='allocated-jobs-list'),
     path('calls/make/web/', MakeCallViews.as_view(), name='make-call'),
     # Get specific call details
     path('calls/<int:call_id>/', get_call_details, name='call-details'),
     path('calls/webhook/', ExotelWebhookView.as_view(), name='exotel-webhook'),
     path('calls/make/', MakeCallView.as_view(), name='make-call'),
+
+    path('lost-jobs/', lost_jobs_list, name='lost-jobs-list'),
     # path('api/calls/status/<str:call_sid>/', CallStatusView.as_view(), name='call-status'),
     # path('api/calls/update/<str:call_sid>/', UpdateCallDetailsView.as_view(), name='update-call'),
 
@@ -58,10 +60,12 @@ urlpatterns = [
     # ========================================
     path('jobs/', jobs_list, name='jobs-list'),  # Fetch from external API + enrich
     path('activity-logs/', activity_logs_list, name='activity-logs'),
-    
+    path('partially-allocated-jobs/', partially_allocated_jobs_list, name='partially-allocated-jobs-list'),
     # ✅ ADD THIS: Allocations by mobile number
     path('allocations/by-mobile/', allocations_by_mobile, name='allocations-by-mobile'),
-
+    path('completed-allocations/', completed_allocations_list, name='completed-allocations'),
+    path('pending-jobs/', pending_jobs_list, name='pending-jobs'),
+    
     path('update-activity/', update_activity, name='update_activity'),
     path('mukkadam-history/', mukkadam_work_history, name='mukkadam-work-history'),
     path('allocations/by-mobile/main/', allocations_list, name='allocations-by-mobile_main'),
