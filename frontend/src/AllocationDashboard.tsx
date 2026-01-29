@@ -66,13 +66,55 @@ const [editingJobId, setEditingJobId] = useState(null);
 const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
 
+const [activityLogs, setActivityLogs] = useState<any[]>([]);
+const [activityFilter, setActivityFilter] = useState('all');
+const [expandedActivities, setExpandedActivities] = useState<Set<string>>(new Set());
+
+// Pagination state for Activity Logs
 const [activityLogsPage, setActivityLogsPage] = useState(1);
 const [activityLogsPageSize, setActivityLogsPageSize] = useState(20);
 const [activityLogsTotalPages, setActivityLogsTotalPages] = useState(0);
 const [activityLogsTotalCount, setActivityLogsTotalCount] = useState(0);
 const [loadingActivityLogs, setLoadingActivityLogs] = useState(false);
 
+// Pagination state for Completed Allocations
+const [completedPage, setCompletedPage] = useState(1);
+const [completedPageSize, setCompletedPageSize] = useState(10);
+const [completedTotalPages, setCompletedTotalPages] = useState(0);
+const [completedTotalCount, setCompletedTotalCount] = useState(0);
+const [loadingCompleted, setLoadingCompleted] = useState(false);
+const [completedAllocationsData, setCompletedAllocationsData] = useState<any[]>([]);
 
+// Pagination state for Pending Jobs
+const [pendingPage, setPendingPage] = useState(1);
+const [pendingPageSize, setPendingPageSize] = useState(10);
+const [pendingTotalPages, setPendingTotalPages] = useState(0);
+const [pendingTotalCount, setPendingTotalCount] = useState(0);
+const [loadingPending, setLoadingPending] = useState(false);
+const [pendingJobsData, setPendingJobsData] = useState<any[]>([]);
+
+const [partiallyPage, setPartiallyPage] = useState(1);
+const [partiallyPageSize, setPartiallyPageSize] = useState(10);
+const [partiallyTotalPages, setPartiallyTotalPages] = useState(0);
+const [partiallyTotalCount, setPartiallyTotalCount] = useState(0);
+const [loadingPartially, setLoadingPartially] = useState(false);
+const [partiallyAllocatedJobsData, setPartiallyAllocatedJobsData] = useState<any[]>([]);
+
+
+const [allocatedPage, setAllocatedPage] = useState(1);
+const [allocatedPageSize, setAllocatedPageSize] = useState(10);
+const [allocatedTotalPages, setAllocatedTotalPages] = useState(0);
+const [allocatedTotalCount, setAllocatedTotalCount] = useState(0);
+const [loadingAllocated, setLoadingAllocated] = useState(false);
+const [allocatedJobsData, setAllocatedJobsData] = useState<any[]>([]);
+
+
+const [lostPage, setLostPage] = useState(1);
+const [lostPageSize, setLostPageSize] = useState(10);
+const [lostTotalPages, setLostTotalPages] = useState(0);
+const [lostTotalCount, setLostTotalCount] = useState(0);
+const [loadingLost, setLoadingLost] = useState(false);
+const [lostJobsData, setLostJobsData] = useState<any[]>([]);
 // ADD these new state variables:
 const [editFormData, setEditFormData] = useState({
   activity_name: '',
@@ -86,7 +128,7 @@ const [editFormData, setEditFormData] = useState({
 });
 // Expandable card states
 const [expandedJobs, setExpandedJobs] = useState<Set<string>>(new Set());
-const [expandedActivities, setExpandedActivities] = useState<Set<string>>(new Set());
+// const [expandedActivities, setExpandedActivities] = useState<Set<string>>(new Set());
 const [expandedMukkadams, setExpandedMukkadams] = useState<Set<number>>(new Set());
 const [expandedTransporters, setExpandedTransporters] = useState<Set<number>>(new Set());
 
@@ -116,17 +158,49 @@ const toggleJob = (jobId: string) => {
   });
 };
 
-const toggleActivity = (activityId: string) => {
-  setExpandedActivities(prev => {
-    const newSet = new Set(prev);
-    if (newSet.has(activityId)) {
-      newSet.delete(activityId);
-    } else {
-      newSet.add(activityId);
-    }
-    return newSet;
-  });
+const fetchLostJobs = async (page = 1) => {
+  setLoadingLost(true);
+  const config = getAuthConfig();
+  
+  try {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(lostPageSize),
+    });
+    
+    if (searchTerm) params.append('search', searchTerm);
+    if (searchJobId) params.append('job_id', searchJobId);
+    if (filterDate) params.append('date', filterDate);
+    
+    const response = await axios.get(
+      `${API_BASE_URL_A}/ap/lost-jobs/?${params.toString()}`,
+      config
+    );
+    
+    const data = response.data;
+    setLostJobsData(data.jobs || []);
+    setLostTotalCount(data.count || 0);
+    setLostTotalPages(data.total_pages || 0);
+    setLostPage(page);
+    
+  } catch (error) {
+    console.error('Error fetching lost jobs:', error);
+    setLostJobsData([]);
+  } finally {
+    setLoadingLost(false);
+  }
 };
+// const toggleActivity = (activityId: string) => {
+//   setExpandedActivities(prev => {
+//     const newSet = new Set(prev);
+//     if (newSet.has(activityId)) {
+//       newSet.delete(activityId);
+//     } else {
+//       newSet.add(activityId);
+//     }
+//     return newSet;
+//   });
+// };
 
 // Helper to get the actual list of data for the table
 const getAllocatedList = () => {
@@ -249,6 +323,40 @@ const handleRejectMukkadamPayment = async (paymentRequestId: number) => {
   }
 };
 
+
+const fetchPartiallyAllocatedJobs = async (page = 1) => {
+  setLoadingPartially(true);
+  const config = getAuthConfig();
+  
+  try {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(partiallyPageSize),
+    });
+    
+    if (partialSearchQuery) params.append('search', partialSearchQuery);
+    if (selectedFilterDate) params.append('date', selectedFilterDate);
+    
+    const response = await axios.get(
+      `${API_BASE_URL_A}/ap/partially-allocated-jobs/?${params.toString()}`,
+      config
+    );
+    
+    const data = response.data;
+    setPartiallyAllocatedJobsData(data.jobs || []);
+    setPartiallyTotalCount(data.count || 0);
+    setPartiallyTotalPages(data.total_pages || 0);
+    setPartiallyPage(page);
+    
+  } catch (error) {
+    console.error('Error fetching partially allocated jobs:', error);
+    setPartiallyAllocatedJobsData([]);
+  } finally {
+    setLoadingPartially(false);
+  }
+};
+
+
 const handleRejectTransportPayment = async (paymentRequestId: number) => {
   if (!confirm('Reject this transport payment request?')) return;
 
@@ -353,7 +461,38 @@ const toggleSection = (section: 'complexJobs' | 'activityTypes' | 'crewDistribut
 };
 
 
-
+const fetchAllocatedJobs = async (page = 1) => {
+  setLoadingAllocated(true);
+  const config = getAuthConfig();
+  
+  try {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(allocatedPageSize),
+    });
+    
+    if (searchTerm) params.append('search', searchTerm);
+    if (selectedFilterDate) params.append('date', selectedFilterDate);
+    if (selectedActivityName) params.append('activity_name', selectedActivityName);
+    
+    const response = await axios.get(
+      `${API_BASE_URL_A}/ap/allocated-jobs/?${params.toString()}`,
+      config
+    );
+    
+    const data = response.data;
+    setAllocatedJobsData(data.jobs || []);
+    setAllocatedTotalCount(data.count || 0);
+    setAllocatedTotalPages(data.total_pages || 0);
+    setAllocatedPage(page);
+    
+  } catch (error) {
+    console.error('Error fetching allocated jobs:', error);
+    setAllocatedJobsData([]);
+  } finally {
+    setLoadingAllocated(false);
+  }
+};
   const [activeTab, setActiveTab] = useState<'overview' | 'allocated' |'completed'| 'pending' | 'partially' | 'mukkadams' | 'transport' | 'activity'| 'lost' >('overview');
   // State declarations - USE ONLY Job type (which now includes all properties)
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -381,7 +520,7 @@ const toggleSection = (section: 'complexJobs' | 'activityTypes' | 'crewDistribut
   });
 
 // Update your refreshAllocations to also fetch activity logs
-const [activityLogs, setActivityLogs] = useState<any[]>([]);
+// const [activityLogs, setActivityLogs] = useState<any[]>([]);
 
   // Complex allocation modal states
   const [showComplexAllocationModal, setShowComplexAllocationModal] = useState(false);
@@ -389,7 +528,276 @@ const [activityLogs, setActivityLogs] = useState<any[]>([]);
 
   const [mukkadamAllocations, setMukkadamAllocations] = useState<MukkadamAllocation[]>([]);
   const [transportAllocations, setTransportAllocations] = useState<TransportAllocation[]>([]);
+// ✅ Fetch Activity Logs (Server-Side)
+const fetchActivityLogs = async (page = 1) => {
+  setLoadingActivityLogs(true);
+  const config = getAuthConfig();
+  
+  try {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(activityLogsPageSize),
+    });
+    
+    if (searchTerm) params.append('search', searchTerm);
+    if (selectedFilterDate) params.append('date', selectedFilterDate);
+    if (activityFilter && activityFilter !== 'all') params.append('activity_type', activityFilter);
+    
+    const response = await axios.get(
+      `${API_BASE_URL_A}/ap/activity-logs/?${params.toString()}`,
+      config
+    );
+    
+    const data = response.data;
+    setActivityLogs(data.logs || []);
+    setActivityLogsTotalCount(data.count || 0);
+    setActivityLogsTotalPages(data.total_pages || 0);
+    setActivityLogsPage(page);
+    
+  } catch (error) {
+    console.error('Error fetching activity logs:', error);
+    setActivityLogs([]);
+  } finally {
+    setLoadingActivityLogs(false);
+  }
+};
 
+// ✅ Fetch Completed Allocations (Server-Side)
+const fetchCompletedAllocations = async (page = 1) => {
+  setLoadingCompleted(true);
+  const config = getAuthConfig();
+  
+  try {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(completedPageSize),
+    });
+    
+    if (searchTerm) params.append('search', searchTerm);
+    if (selectedFilterDate) params.append('work_date', selectedFilterDate);
+    
+    const response = await axios.get(
+      `${API_BASE_URL_A}/ap/completed-allocations/?${params.toString()}`,
+      config
+    );
+    
+    const data = response.data;
+    setCompletedAllocationsData(data.allocations || []);
+    setCompletedTotalCount(data.count || 0);
+    setCompletedTotalPages(data.total_pages || 0);
+    setCompletedPage(page);
+    
+  } catch (error) {
+    console.error('Error fetching completed allocations:', error);
+    setCompletedAllocationsData([]);
+  } finally {
+    setLoadingCompleted(false);
+  }
+};
+
+// ✅ Fetch Pending Jobs (Server-Side)
+const fetchPendingJobs = async (page = 1) => {
+  setLoadingPending(true);
+  const config = getAuthConfig();
+  
+  try {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(pendingPageSize),
+    });
+    
+    if (searchTerm) params.append('search', searchTerm);
+    if (selectedFilterDate) params.append('date', selectedFilterDate);
+    if (selectedActivityName) params.append('activity_name', selectedActivityName);
+    
+    const response = await axios.get(
+      `${API_BASE_URL_A}/ap/pending-jobs/?${params.toString()}`,
+      config
+    );
+    
+    const data = response.data;
+    setPendingJobsData(data.jobs || []);
+    setPendingTotalCount(data.count || 0);
+    setPendingTotalPages(data.total_pages || 0);
+    setPendingPage(page);
+    
+  } catch (error) {
+    console.error('Error fetching pending jobs:', error);
+    setPendingJobsData([]);
+  } finally {
+    setLoadingPending(false);
+  }
+};
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+const toggleActivity = (id: string) => {
+  setExpandedActivities(prev => {
+    const newSet = new Set(prev);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    return newSet;
+  });
+};
+
+// ============================================
+// USE EFFECTS
+// ============================================
+
+// Trigger fetches on tab change
+useEffect(() => {
+  if (activeTab === 'activity') {
+    fetchActivityLogs(1);
+  } else if (activeTab === 'completed') {
+    fetchCompletedAllocations(1);
+  } else if (activeTab === 'pending') {
+    fetchPendingJobs(1);
+  }
+}, [activeTab]);
+
+// Refetch when filters change (Activity)
+useEffect(() => {
+  if (activeTab === 'activity') {
+    fetchActivityLogs(1);
+  }
+}, [searchTerm, selectedFilterDate, activityFilter, activityLogsPageSize]);
+
+// Refetch when filters change (Completed)
+useEffect(() => {
+  if (activeTab === 'completed') {
+    fetchCompletedAllocations(1);
+  }
+}, [searchTerm, selectedFilterDate, completedPageSize]);
+
+// Refetch when filters change (Pending)
+useEffect(() => {
+  if (activeTab === 'pending') {
+    fetchPendingJobs(1);
+  }
+}, [searchTerm, selectedFilterDate, selectedActivityName, pendingPageSize]);
+
+// ============================================
+// PAGINATION COMPONENT
+// ============================================
+
+const PaginationControls = ({ 
+  currentPage, 
+  totalPages, 
+  totalCount,
+  pageSize,
+  onPageChange,
+  loading 
+}: {
+  currentPage: number;
+  totalPages: number;
+  totalCount: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+  loading?: boolean;
+}) => {
+  if (totalPages <= 1) return null;
+  
+  const startItem = (currentPage - 1) * pageSize + 1;
+  const endItem = Math.min(currentPage * pageSize, totalCount);
+  
+  // Generate page numbers to show
+  const getPageNumbers = () => {
+    const pages: (number | string)[] = [];
+    const maxVisible = 7;
+    
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      // Always show first page
+      pages.push(1);
+      
+      if (currentPage > 3) {
+        pages.push('...');
+      }
+      
+      // Show pages around current
+      for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
+        pages.push(i);
+      }
+      
+      if (currentPage < totalPages - 2) {
+        pages.push('...');
+      }
+      
+      // Always show last page
+      pages.push(totalPages);
+    }
+    
+    return pages;
+  };
+  
+  return (
+    <div className="mt-6 flex items-center justify-between bg-white p-4 rounded-xl border">
+      {/* Results Info */}
+      <div className="text-sm text-gray-600">
+        Showing {startItem} to {endItem} of {totalCount} results
+      </div>
+      
+      {/* Page Controls */}
+      <div className="flex items-center gap-2">
+        {/* Previous Button */}
+        <button
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1 || loading}
+          className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          <ChevronDown className="rotate-90" size={16} />
+          Previous
+        </button>
+        
+        {/* Page Numbers */}
+        <div className="flex items-center gap-1">
+          {getPageNumbers().map((page, index) => (
+            <React.Fragment key={index}>
+              {page === '...' ? (
+                <span className="px-2 text-gray-400">...</span>
+              ) : (
+                <button
+                  onClick={() => onPageChange(page as number)}
+                  disabled={loading}
+                  className={`px-3 py-1 rounded-lg font-medium ${
+                    page === currentPage
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {page}
+                </button>
+              )}
+            </React.Fragment>
+          ))}
+        </div>
+        
+        {/* Next Button */}
+        <button
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages || loading}
+          className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          Next
+          <ChevronDown className="-rotate-90" size={16} />
+        </button>
+      </div>
+      
+      {/* Page Info */}
+      <div className="text-sm font-semibold text-gray-700">
+        Page {currentPage} of {totalPages}
+      </div>
+    </div>
+  );
+};
 
 // ✅ NEW: Handle Mark Complete (Creates Payment Request)
 const handleMarkComplete = async (allocationId: number) => {
@@ -422,13 +830,13 @@ const handleMarkComplete = async (allocationId: number) => {
     
     const config = getAuthConfig();
     try {
-      const [jobsRes, mukkadamRes, transportRes] = await Promise.all([
-        axios.get(`${API_BASE_URL_A}/ap/jobs/`, config),
+      const [mukkadamRes, transportRes] = await Promise.all([
+        
         axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`),
         axios.get(`${API_BASE_URL}/api/transport-providers/dropdown_list/`)
       ]);
 
-      setJobs(jobsRes.data);
+
       setMukkadams(mukkadamRes.data);
       setTransportProviders(transportRes.data);
       setTotalMukkadamsRegistered(mukkadamRes.data.length);
@@ -461,17 +869,15 @@ const refreshAllocations = async (
   try {
     setLoadingActivityLogs(true);  // ✅ NEW
     
-    const [allocationsRes, activityRes, mukkadamPayRes, transportPayRes] = await Promise.all([
-      axios.get(`${API_BASE_URL_A}/ap/allocations/`, config),
+    const [ activityRes, mukkadamPayRes, transportPayRes] = await Promise.all([
+      
       // ✅ UPDATED: Add pagination params
       axios.get(`${API_BASE_URL_A}/ap/activity-logs/?page=${activityLogPage}&page_size=${activityLogsPageSize}`, config),
       axios.get(`${API_BASE_URL_A}/ap/payment-requests/`, config),
       axios.get(`${API_BASE_URL_A}/ap/transport-payment-requests/`, config)
     ]);
 
-    const newAllocations = Array.isArray(allocationsRes.data) 
-      ? allocationsRes.data 
-      : allocationsRes.data.results || [];
+
 
     // ✅ UPDATED: Extract paginated activity logs
     const activityLogsData = activityRes.data;
@@ -489,14 +895,10 @@ const refreshAllocations = async (
       ? transportPayRes.data
       : transportPayRes.data.results || [];
 
-    setAllocations(newAllocations);
     setActivityLogs(activityLogsArray);
     setMukkadamPaymentRequests(mukkadamPayments);
     setTransportPaymentRequests(transportPayments);
 
-    if (currentMukkadams.length > 0) processMukkadamAllocations(newAllocations, currentMukkadams);
-    if (currentProviders.length > 0) processTransportAllocations(newAllocations, currentProviders);
-    buildDailyStats(newAllocations);
 
   } catch (error) {
     console.error('Error refreshing allocations:', error);
@@ -520,11 +922,23 @@ const handleActivityLogPageSizeChange = (newSize: number) => {
   setActivityLogsPage(1); // Reset to first page
   refreshAllocations(mukkadams, transportProviders, 1);
 };
-const [activityFilter, setActivityFilter] = useState<string>('all');
+// const [activityFilter, setActivityFilter] = useState<string>('all');
 
 // Add to refreshAllocations
 
+// Fetch on tab change
+useEffect(() => {
+  if (activeTab === 'allocated') {
+    fetchAllocatedJobs(1);
+  }
+}, [activeTab]);
 
+// Refetch on filter change
+useEffect(() => {
+  if (activeTab === 'allocated') {
+    fetchAllocatedJobs(1);
+  }
+}, [searchTerm, selectedFilterDate, selectedActivityName, allocatedPageSize]);
 
 // Filter activity logs
 // Filter activity logs - add safety check
@@ -807,6 +1221,40 @@ const getActivityStats = (jobId: string, activity: any, totalArea: number) => {
 
   return { allocated, remaining, isFullyAllocated, count: activityAllocations.length };
 };
+
+
+// Update useEffect to fetch data when tab changes
+useEffect(() => {
+  if (activeTab === 'activity') {
+    fetchActivityLogs(1);
+  } else if (activeTab === 'completed') {
+    fetchCompletedAllocations(1);
+  } else if (activeTab === 'pending') {
+    fetchPendingJobs(1);
+  }
+}, [activeTab]);
+
+// Refetch when filters change
+useEffect(() => {
+  if (activeTab === 'activity') {
+    fetchActivityLogs(1);
+  }
+}, [searchTerm, selectedFilterDate, activityFilter]);
+
+useEffect(() => {
+  if (activeTab === 'completed') {
+    fetchCompletedAllocations(1);
+  }
+}, [searchTerm, selectedFilterDate]);
+
+useEffect(() => {
+  if (activeTab === 'pending') {
+    fetchPendingJobs(1);
+  }
+}, [searchTerm, selectedFilterDate, selectedActivityName]);
+
+
+
 // ✅ IMPROVED: Calculate job status dynamically
 // REPLACE WITH:
 // const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' | 'fully_lost' => {
@@ -1285,6 +1733,20 @@ const debugJobCounts = () => {
   });
 };
 
+
+// Fetch on tab change
+useEffect(() => {
+  if (activeTab === 'partially') {
+    fetchPartiallyAllocatedJobs(1);
+  }
+}, [activeTab]);
+
+// Refetch on filter change
+useEffect(() => {
+  if (activeTab === 'partially') {
+    fetchPartiallyAllocatedJobs(1);
+  }
+}, [partialSearchQuery, selectedFilterDate, partiallyPageSize]);
 debugJobCounts(); // ✅ Call it
 const stats = {
   totalJobs: getActiveJobs().length, // ✅ Only active jobs
@@ -1323,7 +1785,19 @@ const stats = {
 //   );
 // });
 
+// Fetch on tab change
+useEffect(() => {
+  if (activeTab === 'lost') {
+    fetchLostJobs(1);
+  }
+}, [activeTab]);
 
+// Refetch on filter change
+useEffect(() => {
+  if (activeTab === 'lost') {
+    fetchLostJobs(1);
+  }
+}, [searchTerm, searchJobId, filterDate, lostPageSize]);
 
   const closeAllocationModal = () => {
     setShowAllocationModal(false);
@@ -2660,6 +3134,21 @@ const handleSaveSuccess = async () => {
         />
       </div>
 
+      {/* Page Size Selector */}
+<div className="w-full lg:w-44">
+  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Per Page</label>
+  <select
+    value={allocatedPageSize}
+    onChange={(e) => setAllocatedPageSize(Number(e.target.value))}
+    className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-green-500"
+  >
+    <option value={5}>5</option>
+    <option value={10}>10</option>
+    <option value={20}>20</option>
+    <option value={50}>50</option>
+  </select>
+</div>
+
       {/* Reset Button */}
       {(searchTerm || selectedFilterDate || selectedActivityName) && (
         <button 
@@ -2670,98 +3159,47 @@ const handleSaveSuccess = async () => {
         </button>
       )}
     </div>
-
+{loadingAllocated ? (
+  <div className="flex items-center justify-center py-12">
+    <RefreshCw className="animate-spin text-green-600" size={32} />
+    <p className="ml-3 text-gray-600">Loading allocated jobs...</p>
+  </div>
+) : allocatedJobsData.length === 0 ? (
+  <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
+    <Search size={48} className="mx-auto text-gray-300 mb-4" />
+    <p className="text-gray-600 font-medium">No allocated jobs match your current filters</p>
+  </div>
+) : (
+  <>
     {(() => {
-      // Helper function to get the same date used for display
+      // KEEP helper function for date display
       const getEffectiveJobDate = (job) => {
         if (!job) return 0;
         let dStr = job.scheduled_date;
         if (!dStr && job.activities?.length > 0) {
-          const sorted = job.activities
-            .map(a => a.scheduled_date)
-            .filter(Boolean)
-            .sort();
+          const sorted = job.activities.map(a => a.scheduled_date).filter(Boolean).sort();
           if (sorted.length > 0) dStr = sorted[0];
         }
         return dStr ? new Date(dStr).getTime() : 0;
       };
 
-      // Group allocations by job ID
-      const allocationsByJob = getAllocatedAllocations().reduce((acc, allocation) => {
-        const jobId = allocation.farmer_work_id;
-        if (!acc[jobId]) { acc[jobId] = []; }
-        acc[jobId].push(allocation);
-        return acc;
-      }, {} as Record<string, Allocation[]>);
-
-      // --- Filter & Sort Logic ---
-      const filteredAndSortedJobIds = Object.keys(allocationsByJob)
-        .filter(jobId => {
-          const job = jobs.find(j => j.work_id === jobId);
-          const jobAllocations = allocationsByJob[jobId];
-          
-          // Date Filter Logic
-          const jobTime = getEffectiveJobDate(job);
-          if (selectedFilterDate) {
-            const filterTime = new Date(selectedFilterDate).setHours(0,0,0,0);
-            const actualJobTime = new Date(jobTime).setHours(0,0,0,0);
-            if (filterTime !== actualJobTime) return false;
-          }
-
-          // Activity Text Search Logic
-          if (selectedActivityName) {
-            const actSearch = selectedActivityName.toLowerCase();
-            const hasMatch = jobAllocations.some(a => 
-              String(a.activity_name || '').toLowerCase().includes(actSearch)
-            );
-            if (!hasMatch) return false;
-          }
-
-          // General Text Search Logic
-          if (!searchTerm) return true;
-          const searchLower = searchTerm.toLowerCase();
-          return (
-            String(jobId).toLowerCase().includes(searchLower) ||
-            String(job?.title || '').toLowerCase().includes(searchLower) ||
-            String(job?.point_of_contact || '').toLowerCase().includes(searchLower) || // ✅ Add this line
-            String(job?.farmer?.farmer_name || '').toLowerCase().includes(searchLower) ||
-            jobAllocations.some(a => {
-              const mukkadam = mukkadams.find(m => m.id === a.mukkadam_id);
-              return String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower);
-            })
-          );
-        })
-        .sort((idA, idB) => {
-          const jobA = jobs.find(j => j.work_id === idA);
-          const jobB = jobs.find(j => j.work_id === idB);
-          
-          // Sort by the calculated effective date (Oldest to Newest)
-          return getEffectiveJobDate(jobA) - getEffectiveJobDate(jobB);
-        });
-
-      if (filteredAndSortedJobIds.length === 0) {
-        return (
-          <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
-            <Search size={48} className="mx-auto text-gray-300 mb-4" />
-            <p className="text-gray-600 font-medium">No allocated jobs match your current filters</p>
-          </div>
-        );
-      }
-
       return (
         <div className="space-y-3">
-          {filteredAndSortedJobIds.map(jobId => {
-            const jobAllocations = allocationsByJob[jobId];
-            const job = jobs.find(j => j.work_id === jobId);
+          {/* CHANGE: Use allocatedJobsData */}
+          {allocatedJobsData.map(jobGroup => {
+            const jobId = jobGroup.job_id;
+            const jobAllocations = jobGroup.allocations;
+            const job = jobGroup.job_data;
             const isExpanded = expandedJobs.has(jobId);
             const farmer = job?.farmer;
-
-            const totalMukkadamCost = jobAllocations.reduce((sum, a) => sum + (parseFloat(String(a.mukkadam_price)) || 0), 0);
-            const totalTransportCost = jobAllocations.reduce((sum, a) => sum + (parseFloat(String(a.transport_price)) || 0), 0);
-            const totalArea = jobAllocations.reduce((sum, a) => sum + (parseFloat(String(a.allocated_area)) || 0), 0);
-
+            
+            const totalMukkadamCost = jobGroup.total_mukkadam_cost;
+            const totalTransportCost = jobGroup.total_transport_cost;
+            const totalArea = jobGroup.total_area;
+            
             return (
               <div key={jobId} className="border-2 border-green-300 bg-green-50 rounded-xl overflow-hidden shadow-sm">
+                {/* REST OF YOUR EXISTING JSX STAYS EXACTLY THE SAME */}
                 <div className="p-4 cursor-pointer hover:bg-green-100 transition" onClick={() => toggleJob(jobId)}>
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
@@ -2875,19 +3313,40 @@ const handleSaveSuccess = async () => {
         </div>
       );
     })()}
+    <PaginationControls
+      currentPage={allocatedPage}
+      totalPages={allocatedTotalPages}
+      totalCount={allocatedTotalCount}
+      pageSize={allocatedPageSize}
+      onPageChange={fetchAllocatedJobs}
+      loading={loadingAllocated}
+    />
+  </>
+)}
   </div>
 )}
-{/* ✅ COMPLETED TAB - NEW */}
+
 {activeTab === 'completed' && (
   <div className="p-6">
+    {/* ✅ CHANGE: Update refresh button to use new fetch function */}
     <div className="mb-4 flex items-center justify-between">
       <h2 className="text-xl font-bold text-gray-800">Completed Allocations</h2>
       <button
-        onClick={() => refreshAllocations()}
-        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
-        disabled={loadingPayments}
+        onClick={() => fetchCompletedAllocations(completedPage)}
+        className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition flex items-center gap-2"
+        disabled={loadingCompleted}
       >
-        {loadingPayments ? 'Refreshing...' : '🔄 Refresh Payments'}
+        {loadingCompleted ? (
+          <>
+            <RefreshCw className="animate-spin" size={16} />
+            Refreshing...
+          </>
+        ) : (
+          <>
+            <RefreshCw size={16} />
+            Refresh
+          </>
+        )}
       </button>
     </div>
 
@@ -2901,7 +3360,7 @@ const handleSaveSuccess = async () => {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search Job ID, Farmer, Mukkadam, or Activity..."
-            className="w-full px-4 py-2 pl-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            className="w-full px-4 py-2 pl-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
           />
           <Search className="absolute left-3 top-2.5 text-gray-400" size={18} />
         </div>
@@ -2914,7 +3373,7 @@ const handleSaveSuccess = async () => {
             type="date" 
             value={selectedFilterDate}
             onChange={(e) => setSelectedFilterDate(e.target.value)}
-            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
           />
           {selectedFilterDate && (
             <button 
@@ -2926,256 +3385,338 @@ const handleSaveSuccess = async () => {
           )}
         </div>
       </div>
+
+      {/* ✅ ADD: Page Size Selector */}
+      <div className="w-full md:w-48">
+        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Items per page</label>
+        <select
+          value={completedPageSize}
+          onChange={(e) => setCompletedPageSize(Number(e.target.value))}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+        >
+          <option value={5}>5</option>
+          <option value={10}>10</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+        </select>
+      </div>
     </div>
 
-    {(() => {
-        const filteredCompletedList = getCompletedAllocations()
-            .filter(allocation => {
-                const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
-                const farmerName = job?.farmer?.farmer_name || '';
-                const searchLower = searchTerm.toLowerCase();
-
-                if (selectedFilterDate) {
-                  if (!allocation.work_date || !allocation.work_date.startsWith(selectedFilterDate)) {
-                    return false;
-                  }
-                }
-
-                if (!searchTerm) return true;
-                const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
-                const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
-
-                return (
-                    String(allocation.farmer_work_id || '').toLowerCase().includes(searchLower) ||
-                    String(allocation.activity_name || '').toLowerCase().includes(searchLower) ||
-                    farmerName.toLowerCase().includes(searchLower) ||
-                    String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower) ||
-                    String(provider?.name || '').toLowerCase().includes(searchLower)
-                );
-            })
-            .sort((a, b) => {
-                // Sort by work_date descending (newest first)
-                const dateA = a.work_date ? new Date(a.work_date).getTime() : 0;
-                const dateB = b.work_date ? new Date(b.work_date).getTime() : 0;
-                return dateB - dateA;
-            });
-
-        if (filteredCompletedList.length === 0) {
-            return (
-                <div className="text-center py-12">
-                    <CheckSquare size={48} className="mx-auto text-gray-400 mb-4" />
-                    <p className="text-gray-600">
-                        {searchTerm || selectedFilterDate ? `No results match your filters` : "No completed allocations found"}
-                    </p>
-                </div>
-            );
-        }
-
-        return (
-            <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                        <tr>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Farmer Info</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Work Date</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam Payment</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport Payment</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                        {filteredCompletedList.map(allocation => {
-                            const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
-                            const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
-                            const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
-                            
-                            const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-                            const transportPayment = getTransportPaymentRequest(allocation.id);
-
-                            const mukkadamAmount = parseFloat(String(allocation.mukkadam_price || '0'));
-                            const transportAmount = parseFloat(String(allocation.transport_price || '0'));
-
-                            return (
-                                <tr key={allocation.id} className="hover:bg-gray-50">
-                                    <td className="px-4 py-4">
-                                      <div className="text-sm">
-                                        <div className="font-bold text-indigo-600">{job?.farmer?.farmer_name || 'N/A'}</div>
-                                        <div className="font-bold text-indigo-600">{job?.farmer?.phone_number || 'N/A'}</div>
-                                        <div className="text-gray-400 text-xs flex items-center mt-1">
-                                          <MapPin size={10} className="mr-1" /> {job?.farmer?.location || 'No Location'}
-                                        </div>
-                                      </div>
-                                    </td>
-
-                                    <td className="px-4 py-4">
-                                        <div className="text-sm">
-                                            <div className="font-medium text-gray-900">{mukkadam?.mukkadam_name || 'Unknown'}</div>
-                                            <div className="text-gray-500 text-xs">ID: {allocation.mukkadam_id}</div>
-                                        </div>
-                                    </td>
-
-                                    <td className="px-4 py-4">
-                                        <div className="text-sm">
-                                            <div className="font-medium text-gray-900">{allocation.activity_name || 'N/A'}</div>
-                                            <div className="text-gray-500 text-xs">Job: {allocation.farmer_work_id}</div>
-                                        </div>
-                                    </td>
-
-                                    <td className="px-4 py-4 text-sm text-gray-700">{allocation.allocated_area} acres</td>
-
-                                    <td className="px-4 py-4 text-sm text-gray-700">
-                                        {new Date(allocation.work_date).toLocaleDateString('en-IN')}
-                                    </td>
-
-                                    {/* --- Mukkadam Payment Column --- */}
-<td className="px-4 py-4">
-  <div className="space-y-2">
-    <div className="font-bold text-green-600">₹{mukkadamAmount.toLocaleString()}</div>
-    {mukkadamPayment ? (
-      <div>
-        {mukkadamPayment.status === 'paid' ? (
-          <div className="flex items-center">
-            <CheckCircle size={16} className="text-green-600 mr-1" />
-            <span className="text-xs font-semibold text-green-700">PAID</span>
-          </div>
-        ) : mukkadamPayment.status === 'pending' ? (
-          // ✅ LOGIC UPDATE: Check isAdmin before showing buttons
-          isAdmin ? (
-            <div className="flex flex-col space-y-1">
-              <button
-                onClick={() => handleMarkMukkadamPaid(mukkadamPayment.id)}
-                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
-              >
-                <CheckCircle size={14} className="mr-1" /> Mark Paid
-              </button>
-              <button
-                onClick={() => handleRejectMukkadamPayment(mukkadamPayment.id)}
-                className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
-              >
-                <XCircle size={14} className="mr-1" /> Reject
-              </button>
-            </div>
-          ) : (
-            // Non-Admins see a simple status badge
-            <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
-              <Clock size={14} className="text-yellow-600 mr-1" />
-              <span className="text-xs font-semibold text-yellow-700">PENDING</span>
-            </div>
-          )
-        ) : (
-          <div className="flex items-center">
-            <Ban size={16} className="text-red-600 mr-1" />
-            <span className="text-xs font-semibold text-red-700">REJECTED</span>
-          </div>
-        )}
+    {/* ✅ REPLACE: Client-side filter logic with server-side loading/data */}
+    {loadingCompleted ? (
+      <div className="flex items-center justify-center py-12">
+        <RefreshCw className="animate-spin text-purple-600" size={32} />
+        <p className="ml-3 text-gray-600">Loading completed allocations...</p>
+      </div>
+    ) : completedAllocationsData.length === 0 ? (
+      <div className="text-center py-12">
+        <CheckSquare size={48} className="mx-auto text-gray-400 mb-4" />
+        <p className="text-gray-600">
+          {searchTerm || selectedFilterDate ? `No results match your filters` : "No completed allocations found"}
+        </p>
       </div>
     ) : (
-      <span className="text-xs text-gray-500 italic">Not requested</span>
-    )}
-  </div>
-</td>
+      <>
+        {/* ✅ CHANGE: Use completedAllocationsData instead of filteredCompletedList */}
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Farmer Info</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Work Date</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam Payment</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport Payment</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {/* ✅ CHANGE: Map over completedAllocationsData */}
+              {completedAllocationsData.map(allocation => {
+                // ✅ KEEP: All your existing logic for getting mukkadam, provider, job data
+                const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
+                const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
+                const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
+                
+                const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+                const transportPayment = getTransportPaymentRequest(allocation.id);
 
-{/* --- Transport Payment Column --- */}
-<td className="px-4 py-4">
-  {allocation.transport_type === 'provider' && allocation.transport_provider_id ? (
-    <div className="space-y-2">
-      <div className="font-bold text-orange-600">₹{transportAmount.toLocaleString()}</div>
-      <div className="text-xs text-gray-600">{provider?.name || 'Unknown'}</div>
-      
-      {transportPayment ? (
-        <div>
-          {transportPayment.status === 'paid' ? (
-            <div className="flex items-center">
-              <CheckCircle size={16} className="text-green-600 mr-1" />
-              <span className="text-xs font-semibold text-green-700">PAID</span>
-            </div>
-          ) : transportPayment.status === 'pending' ? (
-            // ✅ LOGIC UPDATE: Check isAdmin before showing buttons
-            isAdmin ? (
-              <div className="flex flex-col space-y-1">
-                <button
-                  onClick={() => handleMarkTransportPaid(transportPayment.id)}
-                  className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
-                >
-                  <CheckCircle size={14} className="mr-1" /> Mark Paid
-                </button>
-                <button
-                  onClick={() => handleRejectTransportPayment(transportPayment.id)}
-                  className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
-                >
-                  <XCircle size={14} className="mr-1" /> Reject
-                </button>
-              </div>
-            ) : (
-              // Non-Admins see a simple status badge
-              <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
-                <Clock size={14} className="text-yellow-600 mr-1" />
-                <span className="text-xs font-semibold text-yellow-700">PENDING</span>
-              </div>
-            )
-          ) : (
-            <div className="flex items-center">
-              <Ban size={16} className="text-red-600 mr-1" />
-              <span className="text-xs font-semibold text-red-700">REJECTED</span>
-            </div>
-          )}
+                const mukkadamAmount = parseFloat(String(allocation.mukkadam_price || '0'));
+                const transportAmount = parseFloat(String(allocation.transport_price || '0'));
+
+                return (
+                  <tr key={allocation.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-4">
+                      <div className="text-sm">
+                        <div className="font-bold text-indigo-600">{job?.farmer?.farmer_name || allocation.farmer?.farmer_name || 'N/A'}</div>
+                        <div className="font-bold text-indigo-600">{job?.farmer?.phone_number || allocation.farmer?.phone_number || 'N/A'}</div>
+                        <div className="text-gray-400 text-xs flex items-center mt-1">
+                          <MapPin size={10} className="mr-1" /> {job?.farmer?.location || allocation.farmer?.location || 'No Location'}
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <div className="text-sm">
+                        <div className="font-medium text-gray-900">{mukkadam?.mukkadam_name || allocation.mukkadam_name || 'Unknown'}</div>
+                        <div className="text-gray-500 text-xs">ID: {allocation.mukkadam_id}</div>
+                      </div>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <div className="text-sm">
+                        <div className="font-medium text-gray-900">{allocation.activity_name || 'N/A'}</div>
+                        <div className="text-gray-500 text-xs">Job: {allocation.farmer_work_id}</div>
+                      </div>
+                    </td>
+
+                    <td className="px-4 py-4 text-sm text-gray-700">{allocation.allocated_area} acres</td>
+
+                    <td className="px-4 py-4 text-sm text-gray-700">
+                      {new Date(allocation.work_date).toLocaleDateString('en-IN')}
+                    </td>
+
+                    {/* --- Mukkadam Payment Column --- */}
+                    <td className="px-4 py-4">
+                      <div className="space-y-2">
+                        <div className="font-bold text-green-600">₹{mukkadamAmount.toLocaleString()}</div>
+                        {mukkadamPayment ? (
+                          <div>
+                            {mukkadamPayment.status === 'paid' ? (
+                              <div className="flex items-center">
+                                <CheckCircle size={16} className="text-green-600 mr-1" />
+                                <span className="text-xs font-semibold text-green-700">PAID</span>
+                              </div>
+                            ) : mukkadamPayment.status === 'pending' ? (
+                              isAdmin ? (
+                                <div className="flex flex-col space-y-1">
+                                  <button
+                                    onClick={() => handleMarkMukkadamPaid(mukkadamPayment.id)}
+                                    className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
+                                  >
+                                    <CheckCircle size={14} className="mr-1" /> Mark Paid
+                                  </button>
+                                  <button
+                                    onClick={() => handleRejectMukkadamPayment(mukkadamPayment.id)}
+                                    className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
+                                  >
+                                    <XCircle size={14} className="mr-1" /> Reject
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
+                                  <Clock size={14} className="text-yellow-600 mr-1" />
+                                  <span className="text-xs font-semibold text-yellow-700">PENDING</span>
+                                </div>
+                              )
+                            ) : (
+                              <div className="flex items-center">
+                                <Ban size={16} className="text-red-600 mr-1" />
+                                <span className="text-xs font-semibold text-red-700">REJECTED</span>
+                              </div>
+                            )}
+                          </div>
+                        ) : allocation.mukkadam_payment ? (
+                          <div>
+                            {allocation.mukkadam_payment.status === 'paid' ? (
+                              <div className="flex items-center">
+                                <CheckCircle size={16} className="text-green-600 mr-1" />
+                                <span className="text-xs font-semibold text-green-700">PAID</span>
+                              </div>
+                            ) : allocation.mukkadam_payment.status === 'pending' ? (
+                              isAdmin ? (
+                                <div className="flex flex-col space-y-1">
+                                  <button
+                                    onClick={() => handleMarkMukkadamPaid(allocation.mukkadam_payment.id)}
+                                    className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
+                                  >
+                                    <CheckCircle size={14} className="mr-1" /> Mark Paid
+                                  </button>
+                                  <button
+                                    onClick={() => handleRejectMukkadamPayment(allocation.mukkadam_payment.id)}
+                                    className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
+                                  >
+                                    <XCircle size={14} className="mr-1" /> Reject
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
+                                  <Clock size={14} className="text-yellow-600 mr-1" />
+                                  <span className="text-xs font-semibold text-yellow-700">PENDING</span>
+                                </div>
+                              )
+                            ) : (
+                              <div className="flex items-center">
+                                <Ban size={16} className="text-red-600 mr-1" />
+                                <span className="text-xs font-semibold text-red-700">REJECTED</span>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-500 italic">Not requested</span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* --- Transport Payment Column --- */}
+                    <td className="px-4 py-4">
+                      {allocation.transport_type === 'provider' && allocation.transport_provider_id ? (
+                        <div className="space-y-2">
+                          <div className="font-bold text-orange-600">₹{transportAmount.toLocaleString()}</div>
+                          <div className="text-xs text-gray-600">{provider?.name || allocation.transport_name || 'Unknown'}</div>
+                          
+                          {transportPayment ? (
+                            <div>
+                              {transportPayment.status === 'paid' ? (
+                                <div className="flex items-center">
+                                  <CheckCircle size={16} className="text-green-600 mr-1" />
+                                  <span className="text-xs font-semibold text-green-700">PAID</span>
+                                </div>
+                              ) : transportPayment.status === 'pending' ? (
+                                isAdmin ? (
+                                  <div className="flex flex-col space-y-1">
+                                    <button
+                                      onClick={() => handleMarkTransportPaid(transportPayment.id)}
+                                      className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
+                                    >
+                                      <CheckCircle size={14} className="mr-1" /> Mark Paid
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectTransportPayment(transportPayment.id)}
+                                      className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
+                                    >
+                                      <XCircle size={14} className="mr-1" /> Reject
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
+                                    <Clock size={14} className="text-yellow-600 mr-1" />
+                                    <span className="text-xs font-semibold text-yellow-700">PENDING</span>
+                                  </div>
+                                )
+                              ) : (
+                                <div className="flex items-center">
+                                  <Ban size={16} className="text-red-600 mr-1" />
+                                  <span className="text-xs font-semibold text-red-700">REJECTED</span>
+                                </div>
+                              )}
+                            </div>
+                          ) : allocation.transport_payment ? (
+                            <div>
+                              {allocation.transport_payment.status === 'paid' ? (
+                                <div className="flex items-center">
+                                  <CheckCircle size={16} className="text-green-600 mr-1" />
+                                  <span className="text-xs font-semibold text-green-700">PAID</span>
+                                </div>
+                              ) : allocation.transport_payment.status === 'pending' ? (
+                                isAdmin ? (
+                                  <div className="flex flex-col space-y-1">
+                                    <button
+                                      onClick={() => handleMarkTransportPaid(allocation.transport_payment.id)}
+                                      className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
+                                    >
+                                      <CheckCircle size={14} className="mr-1" /> Mark Paid
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectTransportPayment(allocation.transport_payment.id)}
+                                      className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
+                                    >
+                                      <XCircle size={14} className="mr-1" /> Reject
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
+                                    <Clock size={14} className="text-yellow-600 mr-1" />
+                                    <span className="text-xs font-semibold text-yellow-700">PENDING</span>
+                                  </div>
+                                )
+                              ) : (
+                                <div className="flex items-center">
+                                  <Ban size={16} className="text-red-600 mr-1" />
+                                  <span className="text-xs font-semibold text-red-700">REJECTED</span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-500 italic">Not requested</span>
+                          )}
+                        </div>
+                      ) : allocation.transport_type === 'own' ? (
+                        <div className="space-y-2">
+                          <div className="font-bold text-blue-600">₹{transportAmount.toLocaleString()}</div>
+                          <div className="text-xs text-gray-600">Own Transport</div>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-500">No Transport</div>
+                      )}
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <div className="flex flex-col space-y-2">
+                        {/* View Detail - Visible to Everyone */}
+                        <button
+                          onClick={() => navigate(`/allocations/${allocation.id}`)}
+                          className="text-blue-600 hover:text-blue-900 font-bold flex items-center text-xs"
+                        >
+                          <Eye size={14} className="mr-1" /> View Detail
+                        </button>
+                        
+                        {/* Edit Button: Visible ONLY if (User is Admin) AND (Not Paid) */}
+                        {isAdmin && !(
+                          mukkadamPayment?.status === 'paid' || 
+                          transportPayment?.status === 'paid' ||
+                          allocation.mukkadam_payment?.status === 'paid' ||
+                          allocation.transport_payment?.status === 'paid'
+                        ) && (
+                          <button 
+                            onClick={() => {
+                              setAllocationToEdit(allocation); 
+                              setShowEditModal(true);
+                            }}
+                            className="text-orange-600 hover:text-orange-800 font-bold flex items-center text-xs"
+                          >
+                            <Edit size={14} className="mr-1" /> Edit/Reallocate
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      ) : (
-        <span className="text-xs text-gray-500 italic">Not requested</span>
-      )}
-    </div>
-  ) : allocation.transport_type === 'own' ? (
-    <div className="space-y-2">
-      <div className="font-bold text-blue-600">₹{transportAmount.toLocaleString()}</div>
-      <div className="text-xs text-gray-600">Own Transport</div>
-    </div>
-  ) : (
-    <div className="text-xs text-gray-500">No Transport</div>
-  )}
-</td>
 
-                                    
-                           
-                                            <td className="px-4 py-4">
-  <div className="flex flex-col space-y-2">
-    {/* View Detail - Visible to Everyone */}
-    <button
-      onClick={() => navigate(`/allocations/${allocation.id}`)}
-      className="text-blue-600 hover:text-blue-900 font-bold flex items-center text-xs"
-    >
-      <Eye size={14} className="mr-1" /> View Detail
-    </button>
-    
-    {/* ✅ EDIT BUTTON: Visible ONLY if (User is Admin) AND (Not Paid) */}
-    {isAdmin && !(mukkadamPayment?.status === 'paid' || transportPayment?.status === 'paid') && (
-      <button 
-        onClick={() => {
-          setAllocationToEdit(allocation); 
-          setShowEditModal(true);
-        }}
-        className="text-orange-600 hover:text-orange-800 font-bold flex items-center text-xs"
-      >
-        <Edit size={14} className="mr-1" /> Edit/Reallocate
-      </button>
+        {/* ✅ ADD: Pagination Controls */}
+        <PaginationControls
+          currentPage={completedPage}
+          totalPages={completedTotalPages}
+          totalCount={completedTotalCount}
+          pageSize={completedPageSize}
+          onPageChange={fetchCompletedAllocations}
+          loading={loadingCompleted}
+        />
+      </>
     )}
-  </div>
-</td>
-                                   
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
-            </div>
-        );
-    })()}
   </div>
 )}
 {activeTab === 'pending' && (
   <div>
+    {/* ✅ ADD: Header with Refresh Button */}
+    <div className="mb-4 flex items-center justify-between">
+      <h2 className="text-xl font-bold text-gray-800">Pending Jobs</h2>
+      <button
+        onClick={() => fetchPendingJobs(pendingPage)}
+        className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition flex items-center gap-2"
+        disabled={loadingPending}
+      >
+        {loadingPending ? <RefreshCw className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+        Refresh
+      </button>
+    </div>
+
     {/* --- Filter Bar Section (Synced with Allocated Tab) --- */}
     <div className="flex flex-col lg:flex-row gap-4 mb-6 items-end bg-white p-4 rounded-xl shadow-sm border border-gray-200">
       
@@ -3220,6 +3761,21 @@ const handleSaveSuccess = async () => {
         />
       </div>
 
+      {/* ✅ ADD: Page Size Selector */}
+      <div className="w-full lg:w-44">
+        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Per Page</label>
+        <select
+          value={pendingPageSize}
+          onChange={(e) => setPendingPageSize(Number(e.target.value))}
+          className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-yellow-500"
+        >
+          <option value={5}>5</option>
+          <option value={10}>10</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+        </select>
+      </div>
+
       {/* Reset Button */}
       {(searchTerm || selectedFilterDate || selectedActivityName) && (
         <button 
@@ -3231,295 +3787,264 @@ const handleSaveSuccess = async () => {
       )}
     </div>
 
-    {(() => {
-      // Helper function to get the same date used for display
-      const getEffectiveJobDate = (job) => {
-        if (!job) return 0;
-        let dStr = job.scheduled_date;
-        if (!dStr && job.activities?.length > 0) {
-          const sorted = job.activities
-            .map(a => a.scheduled_date)
-            .filter(Boolean)
-            .sort();
-          if (sorted.length > 0) dStr = sorted[0];
-        }
-        return dStr ? new Date(dStr).getTime() : 0;
-      };
+    {/* ✅ REPLACE: Client-side filter logic with server-side loading/data */}
+    {loadingPending ? (
+      <div className="flex items-center justify-center py-12">
+        <RefreshCw className="animate-spin text-yellow-600" size={32} />
+        <p className="ml-3 text-gray-600">Loading pending jobs...</p>
+      </div>
+    ) : pendingJobsData.length === 0 ? (
+      <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
+        <Clock size={48} className="mx-auto text-gray-300 mb-4" />
+        <p className="text-gray-600 font-medium">
+          No pending jobs match your current filters
+        </p>
+      </div>
+    ) : (
+      <>
+        {/* ✅ KEEP: Helper function inside for date display */}
+        {(() => {
+          const getEffectiveJobDate = (job) => {
+            if (!job) return 0;
+            let dStr = job.scheduled_date;
+            if (!dStr && job.activities?.length > 0) {
+              const sorted = job.activities
+                .map(a => a.scheduled_date)
+                .filter(Boolean)
+                .sort();
+              if (sorted.length > 0) dStr = sorted[0];
+            }
+            return dStr ? new Date(dStr).getTime() : 0;
+          };
 
-      // 1. FILTER & SORT LOGIC
-      // 1. FILTER & SORT LOGIC
-      const filteredAndSortedPendingJobs = pendingJobs
-        .filter(job => {
-          // ✅ CRITICAL FIX: Exclude jobs where all activities are lost
-          const nonLostActivities = job.activities?.filter(a => !a.is_lost) || [];
-          if (nonLostActivities.length === 0) return false;
-
-          const jobTime = getEffectiveJobDate(job);
-          const jobDateString = jobTime > 0 ? new Date(jobTime).toISOString().split('T')[0] : '';
-
-          // A. Date Filter
-          if (selectedFilterDate && jobDateString !== selectedFilterDate) return false;
-
-          // B. Activity Text Search Filter
-          if (selectedActivityName) {
-            const actSearch = selectedActivityName.toLowerCase();
-            const hasMatch = nonLostActivities.some(a =>  // ✅ Use nonLostActivities
-              String(a.activity_name || '').toLowerCase().includes(actSearch)
-            );
-            if (!hasMatch) return false;
-          }
-
-          // C. General Text Search Filter
-          if (!searchTerm) return true;
-          const searchLower = searchTerm.toLowerCase();
           return (
-            job.work_id?.toLowerCase().includes(searchLower) ||
-            job.title?.toLowerCase().includes(searchLower) ||
-            job.farmer?.farmer_name?.toLowerCase().includes(searchLower) ||
-            job.farmer?.location?.toLowerCase().includes(searchLower) ||
-            job.farmer?.phone_number?.includes(searchLower)
-          );
-        })
-        .sort((a, b) => {
-          return getEffectiveJobDate(a) - getEffectiveJobDate(b);
-        });
-
-      // 2. EMPTY STATE
-      if (filteredAndSortedPendingJobs.length === 0) {
-        return (
-          <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
-            <Clock size={48} className="mx-auto text-gray-300 mb-4" />
-            <p className="text-gray-600 font-medium">
-              No pending jobs match your current filters
-            </p>
-          </div>
-        );
-      }
-
-      // 3. RENDER LIST
-      return (
-        <div className="space-y-3">
-          {filteredAndSortedPendingJobs.map(job => {
-            const isExpanded = expandedJobs.has(job.work_id);
-            const farmer = job.farmer;
-            
-            return (
-              <div 
-                key={job.id} 
-                className="border-2 border-yellow-300 bg-yellow-50 rounded-xl overflow-hidden transition-all shadow-sm"
-              >
-                <div 
-                  className="p-4 cursor-pointer hover:bg-yellow-100 transition"
-                  onClick={() => toggleJob(job.work_id)}
-                >
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-3 mb-2">
-                        <span className="text-lg font-mono font-bold text-blue-600">{job.work_id}</span>
-                        <span className="px-2 py-1 bg-yellow-500 text-white rounded-full text-xs font-bold">PENDING</span>
-                        <span className="px-2 py-1 bg-purple-500 text-white rounded-full text-xs font-bold">
-                          {job.total_activities} {job.total_activities === 1 ? 'activity' : 'activities'}
-                        </span>
-                      </div>
-
-                      {farmer && (
-                        <div className="mb-2">
-                          <div className="flex items-center space-x-2">
-                            <Users size={16} className="text-indigo-600" />
-                            <span className="font-semibold text-gray-900">{farmer.farmer_name}</span>
-                            <span className="text-sm text-gray-600">• {farmer.phone_number}</span>
-                            <span className="text-gray-500">• {farmer.village}</span>
-                            {job.point_of_contact && (
-                            <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
-                              <UserRound size={14} className="text-blue-600" />
-                              <span className="text-xs font-bold text-blue-700 uppercase">POC:</span>
-                              <span className="text-sm font-medium text-blue-800">
-                                {job.point_of_contact}
-                              </span>
-                            </div>
-                          )}
-                          {job.activities?.some(a => a.is_manually_edited) && (
-    <span className="px-2 py-1 bg-blue-500 text-white rounded-full text-xs font-bold flex items-center">
-      <Edit2 size={12} className="mr-1" />
-      EDITED
-    </span>
-  )}
+            <div className="space-y-3">
+              {/* ✅ CHANGE: Use pendingJobsData instead of filteredAndSortedPendingJobs */}
+              {pendingJobsData.map(job => {
+                const isExpanded = expandedJobs.has(job.work_id);
+                const farmer = job.farmer;
+                
+                return (
+                  <div 
+                    key={job.id} 
+                    className="border-2 border-yellow-300 bg-yellow-50 rounded-xl overflow-hidden transition-all shadow-sm"
+                  >
+                    <div 
+                      className="p-4 cursor-pointer hover:bg-yellow-100 transition"
+                      onClick={() => toggleJob(job.work_id)}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-3 mb-2">
+                            <span className="text-lg font-mono font-bold text-blue-600">{job.work_id}</span>
+                            <span className="px-2 py-1 bg-yellow-500 text-white rounded-full text-xs font-bold">PENDING</span>
+                            <span className="px-2 py-1 bg-purple-500 text-white rounded-full text-xs font-bold">
+                              {job.total_activities} {job.total_activities === 1 ? 'activity' : 'activities'}
+                            </span>
                           </div>
 
-                          {/* ✅ NEW: Point of Contact (POC) Section */}
-                          
+                          {farmer && (
+                            <div className="mb-2">
+                              <div className="flex items-center space-x-2">
+                                <Users size={16} className="text-indigo-600" />
+                                <span className="font-semibold text-gray-900">{farmer.farmer_name}</span>
+                                <span className="text-sm text-gray-600">• {farmer.phone_number}</span>
+                                <span className="text-gray-500">• {farmer.village}</span>
+                                {job.point_of_contact && (
+                                <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                                  <UserRound size={14} className="text-blue-600" />
+                                  <span className="text-xs font-bold text-blue-700 uppercase">POC:</span>
+                                  <span className="text-sm font-medium text-blue-800">
+                                    {job.point_of_contact}
+                                  </span>
+                                </div>
+                              )}
+                              {job.activities?.some(a => a.is_manually_edited) && (
+        <span className="px-2 py-1 bg-blue-500 text-white rounded-full text-xs font-bold flex items-center">
+          <Edit2 size={12} className="mr-1" />
+          EDITED
+        </span>
+      )}
+                              </div>
+
+                              {/* ✅ NEW: Point of Contact (POC) Section */}
+                              
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
 
-                    <div className="flex items-center space-x-4">
-                      <div className="text-right">
-                        <p className="text-xs text-gray-500 uppercase font-bold">Scheduled</p>
-                        <p className="text-sm font-semibold text-gray-700">
-                          {(() => {
-                            const time = getEffectiveJobDate(job);
-                            return time > 0 ? new Date(time).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'N/A';
-                          })()}
-                        </p>
+                        <div className="flex items-center space-x-4">
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500 uppercase font-bold">Scheduled</p>
+                            <p className="text-sm font-semibold text-gray-700">
+                              {(() => {
+                                const time = getEffectiveJobDate(job);
+                                return time > 0 ? new Date(time).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'N/A';
+                              })()}
+                            </p>
+                          </div>
+                          
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openComplexAllocationModal(job);
+                            }}
+                            className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium flex items-center shadow-sm transition"
+                          >
+                            <Plus size={16} className="mr-1" /> 
+                            Allocate
+                          </button>
+                          
+                          {isExpanded ? <ChevronUp className="text-yellow-600" /> : <ChevronDown className="text-yellow-600" />}
+                        </div>
                       </div>
-                      
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openComplexAllocationModal(job);
-                        }}
-                        className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium flex items-center shadow-sm transition"
-                      >
-                        <Plus size={16} className="mr-1" /> 
-                        Allocate
-                      </button>
-                      
-                      {isExpanded ? <ChevronUp className="text-yellow-600" /> : <ChevronDown className="text-yellow-600" />}
                     </div>
-                  </div>
-                </div>
 
-{isExpanded && (
-  <div className="p-4 bg-gray-50 border-t">
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {job.activities?.map((activity) => (
-      <div 
-  key={activity.activity_id || activity.id}
-  className="bg-white p-4 rounded-xl border border-gray-200 hover:border-yellow-400 transition shadow-sm relative"
->
-  {/* Activity Header with Close Icon */}
-  <div className="flex items-start justify-between mb-4">
-    <h4 className="font-semibold text-gray-800 text-base">
-      {activity.activity_name}
-    </h4>
-    
-  </div>
-          
-          {/* ✨ NEW: Edit Button */}
-          {/* <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleEditActivity(activity, job.work_id);
-            }}
-            className="ml-3 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition flex items-center gap-2 font-medium text-sm"
-            title="Edit activity details"
-          >
-            <Edit2 size={14} />
-            Edit
-          </button> */}
-        {/* </div> */}
-
-        {/* Activity Details */}
-
-  {/* Activity Details - Compact */}
-  <div className="space-y-2 text-sm">
-    <div className="flex justify-between">
-      <span className="text-gray-500">Area:</span>
-      <span className="font-medium text-gray-900">{activity.total_area} acres</span>
-    </div>
-    <div className="flex justify-between">
-      <span className="text-gray-500">Rate:</span>
-      <span className="font-medium text-gray-900">₹{activity.rate_per_acre}/acre</span>
-    </div>
-    <div className="flex justify-between">
-      <span className="text-gray-500">Total Price:</span>
-      <span className="font-medium text-gray-900">₹{activity.total_price}</span>
-    </div>
-    <div className="flex justify-between">
-      <span className="text-gray-500">Scheduled:</span>
-      <span className="font-medium text-gray-900">{activity.scheduled_date || 'Not set'}</span>
-    </div>
-
-        {activity.activity_name === "Paper Wrapping" && (
-    <div className="flex items-center justify-between bg-orange-100 px-2 py-1 rounded mt-1 border border-orange-200">
-      <span className="text-orange-700 font-bold uppercase" style={{ fontSize: '10px' }}>
-        📦 Bundles:
-      </span>
-      <span className="font-bold text-orange-900">
-        {activity.crop_bundles || 0}
-      </span>
-    </div>
-  )}
-
-
-
-
-
-  </div>
-
-  {isAdmin && !activity.is_lost && (
-  <div className="mt-3 pt-3 border-t border-gray-200 flex gap-2">
-<button
-  onClick={(e) => {
-    e.stopPropagation();
-    setSelectedActivityForEdit(activity);
-    setSelectedJobForEdit(job);
-    // ✅ POPULATE ALL FORM DATA INCLUDING NEW COST FIELDS
-    setEditFormData({
-      activity_name: activity.activity_name,
-      total_area: activity.total_area,
-      scheduled_date: activity.scheduled_date || '',
-      total_price: activity.total_price,
-      transport_cost: activity.transport_cost || 0,  // ✅ NEW
-      other_cost: activity.other_cost || 0,
-      crop_bundles: typeof activity.crop_bundles === 'number' ? activity.crop_bundles : parseFloat(activity.crop_bundles || '0'), // Ensure number
-      rate_per_acre: activity.rate_per_acre
-    });
-    setShowEditActivityModal(true);
-  }}
-  className="flex-1 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition flex items-center justify-center gap-1 text-sm font-medium"
->
-  <Edit2 size={14} />
-  Edit
-</button>
-    <button
-  onClick={(e) => {
-    e.stopPropagation();
-    setSelectedActivityForEdit(activity);
-    setSelectedJobForEdit(job);
-    setShowMarkLostModal(true);
-  }}
-      className="flex-1 px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition flex items-center justify-center gap-1 text-sm font-medium"
+    {isExpanded && (
+      <div className="p-4 bg-gray-50 border-t">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {job.activities?.map((activity) => (
+          <div 
+      key={activity.activity_id || activity.id}
+      className="bg-white p-4 rounded-xl border border-gray-200 hover:border-yellow-400 transition shadow-sm relative"
     >
-      <Ban size={14} />
-      Mark Lost
-    </button>
-  </div>
-)}
+      {/* Activity Header with Close Icon */}
+      <div className="flex items-start justify-between mb-4">
+        <h4 className="font-semibold text-gray-800 text-base">
+          {activity.activity_name}
+        </h4>
+        
+      </div>
+              
+              {/* ✨ NEW: Edit Button */}
+              {/* <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEditActivity(activity, job.work_id);
+                }}
+                className="ml-3 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition flex items-center gap-2 font-medium text-sm"
+                title="Edit activity details"
+              >
+                <Edit2 size={14} />
+                Edit
+              </button> */}
+            {/* </div> */}
 
-{activity.is_lost && (
-  <div className="mt-3 pt-3 border-t border-red-200">
-    <div className="px-3 py-2 bg-red-100 border border-red-300 rounded text-xs text-red-800">
-      <Ban size={12} className="inline mr-1" />
-      <strong>LOST:</strong> {activity.lost_reason}
+            {/* Activity Details */}
+
+      {/* Activity Details - Compact */}
+      <div className="space-y-2 text-sm">
+        <div className="flex justify-between">
+          <span className="text-gray-500">Area:</span>
+          <span className="font-medium text-gray-900">{activity.total_area} acres</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">Rate:</span>
+          <span className="font-medium text-gray-900">₹{activity.rate_per_acre}/acre</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">Total Price:</span>
+          <span className="font-medium text-gray-900">₹{activity.total_price}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-500">Scheduled:</span>
+          <span className="font-medium text-gray-900">{activity.scheduled_date || 'Not set'}</span>
+        </div>
+
+            {activity.activity_name === "Paper Wrapping" && (
+        <div className="flex items-center justify-between bg-orange-100 px-2 py-1 rounded mt-1 border border-orange-200">
+          <span className="text-orange-700 font-bold uppercase" style={{ fontSize: '10px' }}>
+            📦 Bundles:
+          </span>
+          <span className="font-bold text-orange-900">
+            {activity.crop_bundles || 0}
+          </span>
+        </div>
+      )}
+
+
+
+
+
+      </div>
+
+      {isAdmin && !activity.is_lost && (
+      <div className="mt-3 pt-3 border-t border-gray-200 flex gap-2">
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        setSelectedActivityForEdit(activity);
+        setSelectedJobForEdit(job);
+        // ✅ POPULATE ALL FORM DATA INCLUDING NEW COST FIELDS
+        setEditFormData({
+          activity_name: activity.activity_name,
+          total_area: activity.total_area,
+          scheduled_date: activity.scheduled_date || '',
+          total_price: activity.total_price,
+          transport_cost: activity.transport_cost || 0,  // ✅ NEW
+          other_cost: activity.other_cost || 0,
+          crop_bundles: typeof activity.crop_bundles === 'number' ? activity.crop_bundles : parseFloat(activity.crop_bundles || '0'), // Ensure number
+          rate_per_acre: activity.rate_per_acre
+        });
+        setShowEditActivityModal(true);
+      }}
+      className="flex-1 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition flex items-center justify-center gap-1 text-sm font-medium"
+    >
+      <Edit2 size={14} />
+      Edit
+    </button>
+        <button
+      onClick={(e) => {
+        e.stopPropagation();
+        setSelectedActivityForEdit(activity);
+        setSelectedJobForEdit(job);
+        setShowMarkLostModal(true);
+      }}
+          className="flex-1 px-3 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition flex items-center justify-center gap-1 text-sm font-medium"
+        >
+          <Ban size={14} />
+          Mark Lost
+        </button>
+      </div>
+    )}
+
+      {/* ✅ Lost Activity Badge (if applicable) */}
+      {activity.is_lost && (
+        <div className="mt-3 p-2 bg-red-50 border border-red-200 rounded-lg">
+          <div className="flex items-center gap-2 text-red-700">
+            <Ban size={14} />
+            <span className="text-xs font-bold">LOST</span>
+          </div>
+          {activity.lost_reason && (
+            <p className="text-xs text-red-600 mt-1">{activity.lost_reason}</p>
+          )}
+        </div>
+      )}
     </div>
-    {isAdmin && (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          handleUnmarkActivityLost(activity, job.work_id);
-        }}
-        className="mt-2 w-full px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-xs font-bold"
-      >
-        Restore Activity
-      </button>
+          ))}
+        </div>
+      </div>
+    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+
+        {/* ✅ ADD: Pagination Controls */}
+        <PaginationControls
+          currentPage={pendingPage}
+          totalPages={pendingTotalPages}
+          totalCount={pendingTotalCount}
+          pageSize={pendingPageSize}
+          onPageChange={fetchPendingJobs}
+          loading={loadingPending}
+        />
+      </>
     )}
   </div>
 )}
-</div>
-      // </div>
-    ))}
-    </div>
-  </div>)}
-              </div>
-            );
-          })}
-        </div>
-      );
-    })()}
-  </div>
-)}
-
 <EditActivityModal
   activity={editingActivity}
   jobId={editingJobId}
@@ -3569,10 +4094,41 @@ const handleSaveSuccess = async () => {
           )}
         </div>
       </div>
+
+      {/* Page Size Selector */}
+      <div className="w-full md:w-44">
+        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Per Page</label>
+        <select
+          value={partiallyPageSize}
+          onChange={(e) => setPartiallyPageSize(Number(e.target.value))}
+          className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+        >
+          <option value={5}>5</option>
+          <option value={10}>10</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+        </select>
+      </div>
     </div>
 
+{loadingPartially ? (
+  <div className="flex items-center justify-center py-12">
+    <RefreshCw className="animate-spin text-orange-600" size={32} />
+    <p className="ml-3 text-gray-600">Loading partially allocated jobs...</p>
+  </div>
+) : partiallyAllocatedJobsData.length === 0 ? (
+  <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
+    <TrendingUp size={48} className="mx-auto text-gray-300 mb-4" />
+    <p className="text-gray-600 font-medium">
+      {partialSearchQuery || selectedFilterDate 
+        ? 'No partially allocated jobs match your filters' 
+        : 'No partially allocated jobs available'}
+    </p>
+  </div>
+) : (
+  <>
     {(() => {
-      // Helper function for uniform date calculation
+      // KEEP this helper function for date display
       const getEffectiveJobDate = (job) => {
         if (!job) return 0;
         let dStr = job.scheduled_date;
@@ -3587,54 +4143,11 @@ const handleSaveSuccess = async () => {
         return dStr ? new Date(dStr).getTime() : 0;
       };
 
-      // --- REFINED FILTER & SORT LOGIC ---
-      const finalFilteredJobs = partiallyAllocatedJobs
-        .filter(job => {
-          const jobTime = getEffectiveJobDate(job);
-          const jobDateString = jobTime > 0 ? new Date(jobTime).toISOString().split('T')[0] : '';
-
-          // A. Filter by Date
-          if (selectedFilterDate && jobDateString !== selectedFilterDate) return false;
-
-          // B. Filter by Search Query
-          if (!partialSearchQuery) return true;
-          const searchLower = partialSearchQuery.toLowerCase();
-          return (
-            job.work_id?.toLowerCase().includes(searchLower) ||
-            job.title?.toLowerCase().includes(searchLower) ||
-            job.farmer?.farmer_name?.toLowerCase().includes(searchLower) ||
-            job.farmer?.location?.toLowerCase().includes(searchLower) ||
-            job.activities?.some(a => !a.is_lost && a.activity_name?.toLowerCase().includes(searchLower))
-          );
-        })
-        .sort((a, b) => {
-          return getEffectiveJobDate(a) - getEffectiveJobDate(b);
-        });
-
-      if (finalFilteredJobs.length === 0) {
-        return (
-          <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
-            <TrendingUp size={48} className="mx-auto text-gray-300 mb-4" />
-            <p className="text-gray-600 font-medium">
-              {partialSearchQuery || selectedFilterDate 
-                ? 'No partially allocated jobs match your filters' 
-                : 'No partially allocated jobs available'}
-            </p>
-            {(partialSearchQuery || selectedFilterDate) && (
-               <button 
-                 onClick={() => {setPartialSearchQuery(''); setSelectedFilterDate('');}}
-                 className="mt-4 text-blue-600 hover:text-blue-800 underline text-sm"
-               >
-                 Reset all filters
-               </button>
-            )}
-          </div>
-        );
-      }
-
       return (
         <div className="space-y-3">
-          {finalFilteredJobs.map(job => {
+          {/* CHANGE: Use partiallyAllocatedJobsData instead of finalFilteredJobs */}
+          {partiallyAllocatedJobsData.map(job => {
+            // ... rest of your existing map code stays exactly the same ...
             const isExpanded = expandedJobs.has(job.work_id);
             
             // ✅ FIX: Filter out lost activities when counting
@@ -3928,8 +4441,19 @@ const handleSaveSuccess = async () => {
         </div>
       );
     })()}
+    <PaginationControls
+      currentPage={partiallyPage}
+      totalPages={partiallyTotalPages}
+      totalCount={partiallyTotalCount}
+      pageSize={partiallyPageSize}
+      onPageChange={fetchPartiallyAllocatedJobs}
+      loading={loadingPartially}
+    />
+  </>
+)}
   </div>
 )}
+
 {/* Mukkadams Tab */}
 {activeTab === 'mukkadams' && (
   <div>
@@ -4268,7 +4792,6 @@ const handleSaveSuccess = async () => {
         </button>
       </div>
 
-
       {/* Row 2: Search + Date Filter */}
       <div className="flex gap-4">
         {/* Search */}
@@ -4276,7 +4799,7 @@ const handleSaveSuccess = async () => {
           <Search className="absolute left-3 top-3 text-gray-400" size={18} />
           <input
             type="text"
-            placeholder="Search by job ID, mukkadam, or description..."
+            placeholder="Search by job ID, mukkadam, farmer, or description..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -4302,73 +4825,41 @@ const handleSaveSuccess = async () => {
         </div>
       </div>
 
-<div className="flex items-center justify-between bg-white p-4 rounded-xl border">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-600">Show:</span>
+      <div className="flex items-center justify-between bg-white p-4 rounded-xl border">
+        {/* Page Size Selector */}
+        <div className="flex items-center gap-4">
+          <label className="text-sm font-medium text-gray-700">Items per page:</label>
           <select
             value={activityLogsPageSize}
-            onChange={(e) => handleActivityLogPageSizeChange(Number(e.target.value))}
-            className="px-3 py-1 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+            onChange={(e) => {
+              setActivityLogsPageSize(Number(e.target.value));
+            }}
+            className="px-3 py-2 border border-gray-300 rounded-lg"
           >
             <option value={10}>10</option>
             <option value={20}>20</option>
             <option value={50}>50</option>
             <option value={100}>100</option>
           </select>
-          <span className="text-sm text-gray-600">per page</span>
-        </div>
-
-        {/* ✅ NEW: Results Info */}
-        <div className="text-sm text-gray-600">
-          Showing {(activityLogsPage - 1) * activityLogsPageSize + 1} to{' '}
-          {Math.min(activityLogsPage * activityLogsPageSize, activityLogsTotalCount)} of{' '}
-          {activityLogsTotalCount} results
         </div>
       </div>
     </div>
 
-    {/* ✅ ACTIVITY LOGS LIST WITH EXPANDABLE CARDS */}
-{(() => {
-  // Filter logs
-  const filtered = (Array.isArray(activityLogs) ? activityLogs : []).filter(log => {
-    // Date Filter
-    if (selectedFilterDate) {
-      const logDate = new Date(log.performed_at || log.timestamp).toISOString().split('T')[0];
-      if (logDate !== selectedFilterDate) return false;
-    }
-
-    // Search Filter
-    const searchLower = searchTerm.toLowerCase();
-    const matchesSearch = 
-      String(log.job_id || '').toLowerCase().includes(searchLower) ||
-      String(log.mukkadam_name || '').toLowerCase().includes(searchLower) ||
-      String(log.transport_name || '').toLowerCase().includes(searchLower) ||
-      String(log.performed_by_name || '').toLowerCase().includes(searchLower) ||
-      String(log.description || '').toLowerCase().includes(searchLower) ||
-      String(log.farmer_name || '').toLowerCase().includes(searchLower);  // ✅ NEW
-    
-    if (!matchesSearch) return false;
-    
-    // Activity Type Filter
-    if (activityFilter === 'all') return true;
-    if (activityFilter === 'payment') {
-      return log.activity_type.includes('payment');
-    }
-    return log.activity_type === activityFilter;
-  });
-
-      if (filtered.length === 0) {
-        return (
-          <div className="text-center py-12">
-            <Activity size={48} className="mx-auto text-gray-400 mb-4" />
-            <p className="text-gray-600">No activity logs found</p>
-          </div>
-        );
-      }
-
-      return (
+    {loadingActivityLogs ? (
+      <div className="flex items-center justify-center py-12">
+        <RefreshCw className="animate-spin text-blue-600" size={32} />
+        <p className="ml-3 text-gray-600">Loading activity logs...</p>
+      </div>
+    ) : activityLogs.length === 0 ? (
+      <div className="text-center py-12">
+        <Activity size={48} className="mx-auto text-gray-400 mb-4" />
+        <p className="text-gray-600">No activity logs found</p>
+      </div>
+    ) : (
+      <>
+        {/* Activity Logs List */}
         <div className="space-y-3">
-          {filtered.map((log) => {
+          {activityLogs.map((log) => {
             const isExpanded = expandedActivities.has(log.id.toString());
             
             // Determine icon and colors
@@ -4437,7 +4928,7 @@ const handleSaveSuccess = async () => {
                 className={`${bgColor} rounded-xl border-l-4 ${borderColor} hover:shadow-md transition cursor-pointer`}
                 onClick={() => toggleActivity(log.id.toString())}
               >
-                {/* ✅ COLLAPSED VIEW - Always Visible */}
+                {/* COLLAPSED VIEW */}
                 <div className="p-4">
                   <div className="flex items-start space-x-4">
                     {/* Icon */}
@@ -4485,216 +4976,217 @@ const handleSaveSuccess = async () => {
                       <p className="text-sm text-gray-700 mb-2">{log.description}</p>
 
                       {/* Quick Info Row */}
-                      {/* Quick Info Row */}
-<div className="flex items-center gap-4 text-xs text-gray-600 flex-wrap">
-  <span>👤 {log.performed_by_name || 'System'}</span>
-  
-  {/* ✅ NEW: Farmer Name */}
-  {log.farmer_name && log.farmer_name !== 'Unknown' && (
-    <span className="flex items-center">
-      <span className="w-1 h-1 rounded-full bg-gray-300 mx-2"></span>
-      👨‍🌾 {log.farmer_name}
-    </span>
-  )}
-  
-  {log.mukkadam_name && log.mukkadam_name !== 'N/A (Job-level)' && (
-    <>
-      <span className="w-1 h-1 rounded-full bg-gray-300"></span>
-      <span>🔧 {log.mukkadam_name}</span>
-    </>
-  )}
-  
-  {log.amount && (
-    <>
-      <span className="w-1 h-1 rounded-full bg-gray-300"></span>
-      <span className={`font-bold ${iconColor}`}>
-        ₹{log.amount.toLocaleString()}
-      </span>
-    </>
-  )}
-  
-  {hasChanges && (
-    <>
-      <span className="w-1 h-1 rounded-full bg-gray-300"></span>
-      <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">
-        {changedFields.length} field{changedFields.length > 1 ? 's' : ''} changed
-      </span>
-    </>
-  )}
-</div>
+                      <div className="flex items-center gap-4 text-xs text-gray-600 flex-wrap">
+                        <span>👤 {log.performed_by_name || 'System'}</span>
+                        
+                        {log.farmer_name && log.farmer_name !== 'Unknown' && (
+                          <span className="flex items-center">
+                            <span className="w-1 h-1 rounded-full bg-gray-300 mx-2"></span>
+                            👨‍🌾 {log.farmer_name}
+                          </span>
+                        )}
+                        
+                        {log.mukkadam_name && log.mukkadam_name !== 'N/A (Job-level)' && (
+                          <>
+                            <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+                            <span>🔧 {log.mukkadam_name}</span>
+                          </>
+                        )}
+                        
+                        {log.amount && (
+                          <>
+                            <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+                            <span className={`font-bold ${iconColor}`}>
+                              ₹{log.amount.toLocaleString()}
+                            </span>
+                          </>
+                        )}
+                        
+                        {hasChanges && (
+                          <>
+                            <span className="w-1 h-1 rounded-full bg-gray-300"></span>
+                            <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium">
+                              {changedFields.length} field{changedFields.length > 1 ? 's' : ''} changed
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
 
-{/* ✅ EXPANDED VIEW - Details Section */}
-{isExpanded && (
-  <div className="px-4 pb-4 border-t border-gray-200 pt-4 bg-white">
-    {/* ✅ NEW: Activity Edit Details (Admin Only) */}
-    {/* ✅ NEW: Handle Metadata Changes (Matches your JSON structure) */}
-{isAdmin && log.activity_type === 'activity_marked_edited' && log.metadata?.changes && (
-  <div className="mb-4 p-4 bg-purple-50 border-2 border-purple-300 rounded-lg">
-    <p className="text-sm font-bold text-purple-800 mb-3 flex items-center">
-      <Edit size={16} className="mr-2" />
-      Activity Edit Details (Admin Only)
-    </p>
+                {/* EXPANDED VIEW */}
+                {isExpanded && (
+                  <div className="px-4 pb-4 border-t border-gray-200 pt-4 bg-white">
+                    {/* Admin: Activity Edit Details */}
+                    {isAdmin && log.activity_type === 'activity_marked_edited' && log.metadata?.changes && (
+                      <div className="mb-4 p-4 bg-purple-50 border-2 border-purple-300 rounded-lg">
+                        <p className="text-sm font-bold text-purple-800 mb-3 flex items-center">
+                          <Edit size={16} className="mr-2" />
+                          Activity Edit Details (Admin Only)
+                        </p>
 
-    {/* Reason from Metadata */}
-    {log.metadata.reason && (
-      <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded">
-        <p className="text-xs font-bold text-yellow-800 mb-1">Reason:</p>
-        <p className="text-sm text-yellow-900 font-medium">
-          {log.metadata.reason}
-        </p>
-      </div>
-    )}
+                        {log.metadata.reason && (
+                          <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded">
+                            <p className="text-xs font-bold text-yellow-800 mb-1">Reason:</p>
+                            <p className="text-sm text-yellow-900 font-medium">
+                              {log.metadata.reason}
+                            </p>
+                          </div>
+                        )}
 
-    {/* Changes List */}
-    <div className="space-y-2">
-      <p className="text-xs font-bold text-gray-700">Changes Made:</p>
-      {Object.entries(log.metadata.changes).map(([field, values]: [string, any]) => {
-        const fieldLabel = field
-          .replace(/_/g, ' ')
-          .replace(/\b\w/g, (l) => l.toUpperCase());
+                        <div className="space-y-2">
+                          <p className="text-xs font-bold text-gray-700">Changes Made:</p>
+                          {Object.entries(log.metadata.changes).map(([field, values]: [string, any]) => {
+                            const fieldLabel = field
+                              .replace(/_/g, ' ')
+                              .replace(/\b\w/g, (l) => l.toUpperCase());
 
-        // Handle nested structure from your JSON: { new_value: ..., old_value: ... }
-        const oldValue = values.old_value !== undefined ? values.old_value : 'N/A';
-        const newValue = values.new_value !== undefined ? values.new_value : 'N/A';
+                            const oldValue = values.old_value !== undefined ? values.old_value : 'N/A';
+                            const newValue = values.new_value !== undefined ? values.new_value : 'N/A';
 
-        return (
-          <div key={field} className="bg-white p-3 rounded border border-purple-200">
-            <p className="text-xs font-semibold text-purple-700 mb-2">
-              {fieldLabel}
-            </p>
-            <div className="flex items-center gap-2 text-xs flex-wrap">
-              <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through max-w-[200px] truncate">
-                {String(oldValue)}
-              </span>
-              <span className="text-gray-400 font-bold">→</span>
-              <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold max-w-[200px] truncate">
-                {String(newValue)}
-              </span>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  </div>
-)}
+                            return (
+                              <div key={field} className="bg-white p-3 rounded border border-purple-200">
+                                <p className="text-xs font-semibold text-purple-700 mb-2">
+                                  {fieldLabel}
+                                </p>
+                                <div className="flex items-center gap-2 text-xs flex-wrap">
+                                  <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through max-w-[200px] truncate">
+                                    {String(oldValue)}
+                                  </span>
+                                  <span className="text-gray-400 font-bold">→</span>
+                                  <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold max-w-[200px] truncate">
+                                    {String(newValue)}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
-    {/* Admin: Show Reason (for other types) */}
-    {isAdmin && log.reason && log.activity_type !== 'activity_marked_edited' && (
-      <div className="mb-4 p-3 bg-yellow-50 border-2 border-yellow-300 rounded-lg">
-        <p className="text-xs font-bold text-yellow-800 mb-1 flex items-center">
-          <AlertCircle size={14} className="mr-1" />
-          Reason for Change (Admin Only)
-        </p>
-        <p className="text-sm text-yellow-900 font-medium">
-          {log.reason}
-        </p>
-      </div>
-    )}
+                    {/* Admin: Reason for other types */}
+                    {isAdmin && log.reason && log.activity_type !== 'activity_marked_edited' && (
+                      <div className="mb-4 p-3 bg-yellow-50 border-2 border-yellow-300 rounded-lg">
+                        <p className="text-xs font-bold text-yellow-800 mb-1 flex items-center">
+                          <AlertCircle size={14} className="mr-1" />
+                          Reason for Change (Admin Only)
+                        </p>
+                        <p className="text-sm text-yellow-900 font-medium">
+                          {log.reason}
+                        </p>
+                      </div>
+                    )}
 
-    {/* Changes Section (for allocation updates) */}
-    {hasChanges && log.activity_type !== 'activity_marked_edited' && (
-      <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-        <p className="text-sm font-bold text-gray-800 mb-3 flex items-center">
-          <Edit size={14} className="mr-2" />
-          Changes Made ({changedFields.length})
-        </p>
+                    {/* Changes Section (for allocation updates) */}
+                    {hasChanges && log.activity_type !== 'activity_marked_edited' && (
+                      <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <p className="text-sm font-bold text-gray-800 mb-3 flex items-center">
+                          <Edit size={14} className="mr-2" />
+                          Changes Made ({changedFields.length})
+                        </p>
 
-        <div className="space-y-3">
-          {Object.entries(log.changes).map(([field, changeData]: [string, any]) => {
-            const fieldLabel = field
-              .replace(/_/g, ' ')
-              .replace(/\b\w/g, (l) => l.toUpperCase());
+                        <div className="space-y-3">
+                          {Object.entries(log.changes).map(([field, changeData]: [string, any]) => {
+                            const fieldLabel = field
+                              .replace(/_/g, ' ')
+                              .replace(/\b\w/g, (l) => l.toUpperCase());
 
-            return (
-              <div key={field} className="bg-white p-3 rounded border border-gray-200">
-                {/* Admin: Show Full Details */}
-                {isAdmin ? (
-                  <>
-                    <p className="text-xs font-semibold text-gray-700 mb-2">
-                      {fieldLabel}
-                    </p>
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through">
-                        {changeData.old_value || changeData.old || 'Not set'}
-                      </span>
-                      <span className="text-gray-400">→</span>
-                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold">
-                        {changeData.new_value || changeData.new}
-                      </span>
+                            return (
+                              <div key={field} className="bg-white p-3 rounded border border-gray-200">
+                                {isAdmin ? (
+                                  <>
+                                    <p className="text-xs font-semibold text-gray-700 mb-2">
+                                      {fieldLabel}
+                                    </p>
+                                    <div className="flex items-center gap-2 text-xs">
+                                      <span className="px-2 py-1 bg-red-100 text-red-700 rounded font-mono line-through">
+                                        {changeData.old_value || changeData.old || 'Not set'}
+                                      </span>
+                                      <span className="text-gray-400">→</span>
+                                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded font-mono font-semibold">
+                                        {changeData.new_value || changeData.new}
+                                      </span>
+                                    </div>
+                                  </>
+                                ) : (
+                                  <p className="text-sm font-medium text-gray-700">
+                                    {fieldLabel} was updated
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Full Details Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-gray-50 p-3 rounded">
+                      {log.farmer_name && (
+                        <div>
+                          <p className="text-gray-500 font-medium">Farmer</p>
+                          <p className="font-semibold text-gray-900">{log.farmer_name}</p>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-gray-500 font-medium">Mukkadam</p>
+                        <p className="font-semibold text-gray-900">{log.mukkadam_name}</p>
+                      </div>
+                      {log.transport_name && (
+                        <div>
+                          <p className="text-gray-500 font-medium">Transport</p>
+                          <p className="font-semibold text-gray-900">{log.transport_name}</p>
+                        </div>
+                      )}
+                      {log.amount && (
+                        <div>
+                          <p className="text-gray-500 font-medium">Amount</p>
+                          <p className={`font-bold ${iconColor}`}>
+                            ₹{log.amount.toLocaleString()}
+                          </p>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-gray-500 font-medium">Performed By</p>
+                        <p className="font-semibold text-gray-900">
+                          {log.performed_by_name || 'System'}
+                        </p>
+                      </div>
                     </div>
-                  </>
-                ) : (
-                  /* Non-Admin: Only Show Field Name */
-                  <p className="text-sm font-medium text-gray-700">
-                    {fieldLabel} was updated
-                  </p>
+
+                    {/* View Allocation Link */}
+                    {log.allocation_id && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/allocations/${log.allocation_id}`);
+                        }}
+                        className="mt-3 text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center"
+                      >
+                        <Eye size={12} className="mr-1" />
+                        View Allocation Details
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             );
           })}
         </div>
-      </div>
-    )}
 
-    {/* Full Details Grid */}
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-gray-50 p-3 rounded">
-      {/* ✅ NEW: Farmer Name */}
-      {log.farmer_name && (
-        <div>
-          <p className="text-gray-500 font-medium">Farmer</p>
-          <p className="font-semibold text-gray-900">{log.farmer_name}</p>
-        </div>
-      )}
-      <div>
-        <p className="text-gray-500 font-medium">Mukkadam</p>
-        <p className="font-semibold text-gray-900">{log.mukkadam_name}</p>
-      </div>
-      {log.transport_name && (
-        <div>
-          <p className="text-gray-500 font-medium">Transport</p>
-          <p className="font-semibold text-gray-900">{log.transport_name}</p>
-        </div>
-      )}
-      {log.amount && (
-        <div>
-          <p className="text-gray-500 font-medium">Amount</p>
-          <p className={`font-bold ${iconColor}`}>
-            ₹{log.amount.toLocaleString()}
-          </p>
-        </div>
-      )}
-      <div>
-        <p className="text-gray-500 font-medium">Performed By</p>
-        <p className="font-semibold text-gray-900">
-          {log.performed_by_name || 'System'}
-        </p>
-      </div>
-    </div>
-
-    {/* View Allocation Link */}
-    {log.allocation_id && (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          navigate(`/allocations/${log.allocation_id}`);
-        }}
-        className="mt-3 text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center"
-      >
-        <Eye size={12} className="mr-1" />
-        View Allocation Details
-      </button>
+        {/* Pagination */}
+        <PaginationControls
+          currentPage={activityLogsPage}
+          totalPages={activityLogsTotalPages}
+          totalCount={activityLogsTotalCount}
+          pageSize={activityLogsPageSize}
+          onPageChange={fetchActivityLogs}
+          loading={loadingActivityLogs}
+        />
+      </>
     )}
-  </div>
-)}
-              </div>
-            );
-          })}
-        </div>
-      );
-    })()}
   </div>
 )}
 {activeTab === 'lost' && (
@@ -4702,7 +5194,7 @@ const handleSaveSuccess = async () => {
     {/* --------------------------------------------------
         ✅ 1. SEARCH & FILTER CONTROLS
        -------------------------------------------------- */}
-    <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+    <div className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
       
       {/* Search by Farmer Name */}
       <div>
@@ -4714,7 +5206,7 @@ const handleSaveSuccess = async () => {
           <input
             type="text"
             placeholder="Name or Phone..."
-            value={searchTerm} // Make sure you have this state: const [searchTerm, setSearchTerm] = useState('')
+            value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
           />
@@ -4731,7 +5223,7 @@ const handleSaveSuccess = async () => {
           <input
             type="text"
             placeholder="e.g. 1045"
-            value={searchJobId} // Make sure you have this state: const [searchJobId, setSearchJobId] = useState('')
+            value={searchJobId}
             onChange={(e) => setSearchJobId(e.target.value)}
             className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
           />
@@ -4747,11 +5239,28 @@ const handleSaveSuccess = async () => {
           <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
           <input
             type="date"
-            value={filterDate} // Make sure you have this state: const [filterDate, setFilterDate] = useState('')
+            value={filterDate}
             onChange={(e) => setFilterDate(e.target.value)}
             className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
           />
         </div>
+      </div>
+
+      {/* Page Size Selector */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wide">
+          Per Page
+        </label>
+        <select
+          value={lostPageSize}
+          onChange={(e) => setLostPageSize(Number(e.target.value))}
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500"
+        >
+          <option value={5}>5</option>
+          <option value={10}>10</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+        </select>
       </div>
     </div>
 
@@ -4767,66 +5276,32 @@ const handleSaveSuccess = async () => {
     {/* --------------------------------------------------
         ✅ 2. FILTERING LOGIC & RENDER
        -------------------------------------------------- */}
-    {(() => {
-      // A. Initial Filter: Get all jobs that have lost activities
-      let filteredLostJobs = jobs.filter(job => 
-        job.activities?.some(a => a.is_lost)
-      );
-
-      // B. Apply Search Term (Farmer Name/Phone)
-      if (searchTerm) {
-        const lowerTerm = searchTerm.toLowerCase();
-        filteredLostJobs = filteredLostJobs.filter(job => 
-          job.farmer?.farmer_name?.toLowerCase().includes(lowerTerm) ||
-          job.farmer?.phone_number?.includes(searchTerm)
-        );
-      }
-
-      // C. Apply Job ID Filter
-      if (searchJobId) {
-        filteredLostJobs = filteredLostJobs.filter(job => 
-          String(job.work_id).includes(searchJobId)
-        );
-      }
-
-      // D. Apply Date Filter (Checks scheduled_date of the *lost* activity)
-      if (filterDate) {
-        filteredLostJobs = filteredLostJobs.filter(job => 
-          job.activities.some(a => 
-            a.is_lost && a.scheduled_date && a.scheduled_date.startsWith(filterDate)
-          )
-        );
-      }
-
-      // --------------------------------------------------
-      // ✅ 3. DISPLAY RESULTS
-      // --------------------------------------------------
-      
-      if (filteredLostJobs.length === 0) {
-        return (
-          <div className="text-center py-12 bg-white rounded-xl border border-dashed">
-            <Ban size={48} className="mx-auto text-gray-300 mb-4" />
-            <p className="text-gray-600">
-              {searchTerm || searchJobId || filterDate 
-                ? "No lost jobs match your filters" 
-                : "No lost jobs found"}
-            </p>
-            {(searchTerm || searchJobId || filterDate) && (
-              <button 
-                onClick={() => { setSearchTerm(''); setSearchJobId(''); setFilterDate(''); }}
-                className="mt-2 text-red-600 text-sm font-semibold hover:underline"
-              >
-                Clear Filters
-              </button>
-            )}
-          </div>
-        );
-      }
-
-      return (
+    {loadingLost ? (
+      <div className="flex items-center justify-center py-12">
+        <RefreshCw className="animate-spin text-red-600" size={32} />
+        <p className="ml-3 text-gray-600">Loading lost jobs...</p>
+      </div>
+    ) : lostJobsData.length === 0 ? (
+      <div className="text-center py-12 bg-white rounded-xl border border-dashed">
+        <Ban size={48} className="mx-auto text-gray-300 mb-4" />
+        <p className="text-gray-600">
+          {searchTerm || searchJobId || filterDate 
+            ? "No lost jobs match your filters" 
+            : "No lost jobs found"}
+        </p>
+        {(searchTerm || searchJobId || filterDate) && (
+          <button 
+            onClick={() => { setSearchTerm(''); setSearchJobId(''); setFilterDate(''); }}
+            className="mt-2 text-red-600 text-sm font-semibold hover:underline"
+          >
+            Clear Filters
+          </button>
+        )}
+      </div>
+    ) : (
+      <>
         <div className="space-y-3">
-          {filteredLostJobs.map(job => {
-            // Get only the lost activities for display
+          {lostJobsData.map(job => {
             const lostActivities = job.activities.filter(a => a.is_lost);
             
             return (
@@ -4848,17 +5323,16 @@ const handleSaveSuccess = async () => {
                         {job.farmer.phone_number}
 
                         {job.point_of_contact && (
-                            <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
-                              <UserRound size={14} className="text-blue-600" />
-                              <span className="text-xs font-bold text-blue-700 uppercase">POC:</span>
-                              <span className="text-sm font-medium text-blue-800">
-                                {job.point_of_contact}
-                              </span>
-                            </div>
-                          )}
+                          <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                            <UserRound size={14} className="text-blue-600" />
+                            <span className="text-xs font-bold text-blue-700 uppercase">POC:</span>
+                            <span className="text-sm font-medium text-blue-800">
+                              {job.point_of_contact}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
-                    
                   </div>
                 </div>
 
@@ -4872,13 +5346,13 @@ const handleSaveSuccess = async () => {
                         <div className="flex-1">
                           <div className="flex items-center justify-between mb-1">
                             <div className="flex items-center space-x-2">
-                                <Ban size={14} className="text-red-600" />
-                                <span className="font-semibold text-gray-800 line-through decoration-red-400">
+                              <Ban size={14} className="text-red-600" />
+                              <span className="font-semibold text-gray-800 line-through decoration-red-400">
                                 {activity.activity_name}
-                                </span>
+                              </span>
                             </div>
                             <span className="text-xs text-gray-400 font-mono">
-                                {activity.scheduled_date}
+                              {activity.scheduled_date}
                             </span>
                           </div>
                           
@@ -4886,13 +5360,6 @@ const handleSaveSuccess = async () => {
                             Area: <span className="font-medium">{activity.total_area} ac</span> • 
                             Price: <span className="font-medium">₹{activity.total_price}</span>
                           </p>
-                          
-                          {/* <div className="ml-6 bg-red-50 border border-red-100 rounded p-2 flex items-start">
-                            <AlertCircle size={14} className="text-red-500 mt-0.5 mr-2 flex-shrink-0" />
-                            <p className="text-xs text-red-800 italic">
-                              "{activity.lost_reason}"
-                            </p>
-                          </div> */}
                         </div>
                         
                         {isAdmin && (
@@ -4912,10 +5379,21 @@ const handleSaveSuccess = async () => {
             );
           })}
         </div>
-      );
-    })()}
+
+        <PaginationControls
+          currentPage={lostPage}
+          totalPages={lostTotalPages}
+          totalCount={lostTotalCount}
+          pageSize={lostPageSize}
+          onPageChange={fetchLostJobs}
+          loading={loadingLost}
+        />
+      </>
+    )}
   </div>
 )}
+
+
 {/* ✅ ENHANCED EDIT ACTIVITY MODAL - WITH INDIVIDUAL COSTS */}
 {showEditActivityModal && selectedActivityForEdit && (
   <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
