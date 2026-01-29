@@ -64,57 +64,6 @@ const [editReason, setEditReason] = useState('');
 const [lostReason, setLostReason] = useState('');
 const [editingJobId, setEditingJobId] = useState(null);
 const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-
-
-const [activityLogs, setActivityLogs] = useState<any[]>([]);
-const [activityFilter, setActivityFilter] = useState('all');
-const [expandedActivities, setExpandedActivities] = useState<Set<string>>(new Set());
-
-// Pagination state for Activity Logs
-const [activityLogsPage, setActivityLogsPage] = useState(1);
-const [activityLogsPageSize, setActivityLogsPageSize] = useState(20);
-const [activityLogsTotalPages, setActivityLogsTotalPages] = useState(0);
-const [activityLogsTotalCount, setActivityLogsTotalCount] = useState(0);
-const [loadingActivityLogs, setLoadingActivityLogs] = useState(false);
-
-// Pagination state for Completed Allocations
-const [completedPage, setCompletedPage] = useState(1);
-const [completedPageSize, setCompletedPageSize] = useState(10);
-const [completedTotalPages, setCompletedTotalPages] = useState(0);
-const [completedTotalCount, setCompletedTotalCount] = useState(0);
-const [loadingCompleted, setLoadingCompleted] = useState(false);
-const [completedAllocationsData, setCompletedAllocationsData] = useState<any[]>([]);
-
-// Pagination state for Pending Jobs
-const [pendingPage, setPendingPage] = useState(1);
-const [pendingPageSize, setPendingPageSize] = useState(10);
-const [pendingTotalPages, setPendingTotalPages] = useState(0);
-const [pendingTotalCount, setPendingTotalCount] = useState(0);
-const [loadingPending, setLoadingPending] = useState(false);
-const [pendingJobsData, setPendingJobsData] = useState<any[]>([]);
-
-const [partiallyPage, setPartiallyPage] = useState(1);
-const [partiallyPageSize, setPartiallyPageSize] = useState(10);
-const [partiallyTotalPages, setPartiallyTotalPages] = useState(0);
-const [partiallyTotalCount, setPartiallyTotalCount] = useState(0);
-const [loadingPartially, setLoadingPartially] = useState(false);
-const [partiallyAllocatedJobsData, setPartiallyAllocatedJobsData] = useState<any[]>([]);
-
-
-const [allocatedPage, setAllocatedPage] = useState(1);
-const [allocatedPageSize, setAllocatedPageSize] = useState(10);
-const [allocatedTotalPages, setAllocatedTotalPages] = useState(0);
-const [allocatedTotalCount, setAllocatedTotalCount] = useState(0);
-const [loadingAllocated, setLoadingAllocated] = useState(false);
-const [allocatedJobsData, setAllocatedJobsData] = useState<any[]>([]);
-
-
-const [lostPage, setLostPage] = useState(1);
-const [lostPageSize, setLostPageSize] = useState(10);
-const [lostTotalPages, setLostTotalPages] = useState(0);
-const [lostTotalCount, setLostTotalCount] = useState(0);
-const [loadingLost, setLoadingLost] = useState(false);
-const [lostJobsData, setLostJobsData] = useState<any[]>([]);
 // ADD these new state variables:
 const [editFormData, setEditFormData] = useState({
   activity_name: '',
@@ -862,32 +811,24 @@ const handleMarkComplete = async (allocationId: number) => {
 
 const refreshAllocations = async (
   currentMukkadams = mukkadams, 
-  currentProviders = transportProviders,
-  activityLogPage = 1  // ✅ NEW PARAMETER
+  currentProviders = transportProviders
 ) => {
   const config = getAuthConfig();
   try {
-    setLoadingActivityLogs(true);  // ✅ NEW
-    
     const [allocationsRes, activityRes, mukkadamPayRes, transportPayRes] = await Promise.all([
       axios.get(`${API_BASE_URL_A}/ap/allocations/`, config),
-      // ✅ UPDATED: Add pagination params
-      axios.get(`${API_BASE_URL_A}/ap/activity-logs/?page=${activityLogPage}&page_size=${activityLogsPageSize}`, config),
+      axios.get(`${API_BASE_URL_A}/ap/activity-logs/`, config),
       axios.get(`${API_BASE_URL_A}/ap/payment-requests/`, config),
       axios.get(`${API_BASE_URL_A}/ap/transport-payment-requests/`, config)
     ]);
 
+    // ✅ FIX: Extract 'logs' array from the response object
+    const activityLogsArray = activityRes.data.logs || [];  // ✅ CHANGED
+    
+    // Safe data extraction for others
     const newAllocations = Array.isArray(allocationsRes.data) 
       ? allocationsRes.data 
       : allocationsRes.data.results || [];
-
-    // ✅ UPDATED: Extract paginated activity logs
-    const activityLogsData = activityRes.data;
-    const activityLogsArray = activityLogsData.logs || [];
-    
-    // ✅ NEW: Store pagination metadata
-    setActivityLogsTotalCount(activityLogsData.count || 0);
-    setActivityLogsTotalPages(activityLogsData.total_pages || 0);
 
     const mukkadamPayments = Array.isArray(mukkadamPayRes.data)
       ? mukkadamPayRes.data
@@ -897,38 +838,27 @@ const refreshAllocations = async (
       ? transportPayRes.data
       : transportPayRes.data.results || [];
 
+    // Update State - All guaranteed to be arrays
     setAllocations(newAllocations);
-    setActivityLogs(activityLogsArray);
+    setActivityLogs(activityLogsArray);  // ✅ Now this is an array
     setMukkadamPaymentRequests(mukkadamPayments);
     setTransportPaymentRequests(transportPayments);
 
+    // Re-calculate derived stats
     if (currentMukkadams.length > 0) processMukkadamAllocations(newAllocations, currentMukkadams);
     if (currentProviders.length > 0) processTransportAllocations(newAllocations, currentProviders);
     buildDailyStats(newAllocations);
 
   } catch (error) {
     console.error('Error refreshing allocations:', error);
+    
+    // ✅ Set all to empty arrays on error
     setActivityLogs([]);
     setMukkadamPaymentRequests([]);
     setTransportPaymentRequests([]);
-  } finally {
-    setLoadingActivityLogs(false);  // ✅ NEW
   }
 };
-
-// ✅ NEW: Function to change page
-const handleActivityLogPageChange = (newPage: number) => {
-  setActivityLogsPage(newPage);
-  refreshAllocations(mukkadams, transportProviders, newPage);
-};
-
-// ✅ NEW: Function to change page size
-const handleActivityLogPageSizeChange = (newSize: number) => {
-  setActivityLogsPageSize(newSize);
-  setActivityLogsPage(1); // Reset to first page
-  refreshAllocations(mukkadams, transportProviders, 1);
-};
-// const [activityFilter, setActivityFilter] = useState<string>('all');
+const [activityFilter, setActivityFilter] = useState<string>('all');
 
 // Add to refreshAllocations
 
@@ -4829,25 +4759,6 @@ const handleSaveSuccess = async () => {
               Clear
             </button>
           )}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between bg-white p-4 rounded-xl border">
-        {/* Page Size Selector */}
-        <div className="flex items-center gap-4">
-          <label className="text-sm font-medium text-gray-700">Items per page:</label>
-          <select
-            value={activityLogsPageSize}
-            onChange={(e) => {
-              setActivityLogsPageSize(Number(e.target.value));
-            }}
-            className="px-3 py-2 border border-gray-300 rounded-lg"
-          >
-            <option value={10}>10</option>
-            <option value={20}>20</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-          </select>
         </div>
       </div>
     </div>
