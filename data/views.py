@@ -405,7 +405,11 @@ class AllocationViewSet(viewsets.ModelViewSet):
         data.pop('job_id', None)
 
         # Convert to Decimal for comparison
+        # Convert to Decimal for comparison
         allocated_area = Decimal(str(data.get('allocated_area', 0)))
+
+        # ✅ CRITICAL FIX: Refresh job_activity to get latest allocated_area
+        job_activity.refresh_from_db()
 
         # Validate allocated area doesn't exceed remaining
         if allocated_area > job_activity.remaining_area:
@@ -430,8 +434,18 @@ class AllocationViewSet(viewsets.ModelViewSet):
             allocation = serializer.save()
 
         # Update JobActivity allocated_area
-        job_activity.allocated_area = job_activity.allocated_area + allocated_area
-        job_activity.save()
+        
+        # ✅ CRITICAL FIX: Refresh job_activity from DB to avoid stale data
+        job_activity.refresh_from_db()
+
+        # Update JobActivity allocated_area atomically
+        from django.db.models import F
+        JobActivity.objects.filter(pk=job_activity.pk).update(
+            allocated_area=F('allocated_area') + allocated_area
+        )
+
+        # Refresh to get updated value for logging
+        job_activity.refresh_from_db()
 
         # Send WhatsApp notifications
         self._send_whatsapp_notifications(allocation)
@@ -1361,31 +1375,1797 @@ class ActivityLogPagination(PageNumberPagination):
     page_size_query_param = 'page_size'  # Allow client to override
     max_page_size = 100  # Maximum items per page
 
+
+from .models import PaymentRequest, TransportPaymentRequest
+
+# allocation_app/views.py
+
+import time
+from datetime import timedelta
+from django.utils import timezone
+from django.db.models import Q
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from django.conf import settings
+import requests
+
+from .models import ActivityLog, Allocation, JobActivity, PaymentRequest, TransportPaymentRequest
+from .utils import batch_fetch_farmers, batch_fetch_mukkadams, batch_fetch_transport_providers
+from .pagination import StandardResultsPagination, CompletedAllocationsPagination, PendingJobsPagination
+
+EXTERNAL_API_URL = getattr(settings, 'EXTERNAL_API_URL', 'https://ops.bharatintelligence.ai/ops/api')
+
+# ============================================
+# 1. ACTIVITY LOGS ENDPOINT (Server-Side Pagination)
+# ============================================
+
+# @api_view(['GET'])
+# @permission_classes([AllowAny])
+# def activity_logs_list(request):
+#     """
+#     Get all activity logs with complete details and pagination
+#     Query params:
+#     - page: Page number (default: 1)
+#     - page_size: Items per page (default: 20, max: 100)
+#     - activity_type: Filter by activity type
+#     - mukkadam_id: Filter by mukkadam
+#     - job_id: Filter by job
+#     - search: Search in job_id, mukkadam, farmer, description
+#     - date: Filter by specific date (YYYY-MM-DD)
+#     - days: Filter by days (default: 30)
+#     """
+#     start_time = time.time()
+    
+#     # Build queryset with filters
+#     activity_type = request.query_params.get('activity_type')
+#     mukkadam_id = request.query_params.get('mukkadam_id')
+#     job_id = request.query_params.get('job_id')
+#     search = request.query_params.get('search', '').strip()
+#     filter_date = request.query_params.get('date')
+#     days = request.query_params.get('days', 30)
+
+#     queryset = ActivityLog.objects.all()
+
+#     # Apply filters
+#     if activity_type and activity_type != 'all':
+#         if activity_type == 'payment':
+#             queryset = queryset.filter(activity_type__icontains='payment')
+#         else:
+#             queryset = queryset.filter(activity_type=activity_type)
+    
+#     if mukkadam_id:
+#         queryset = queryset.filter(mukkadam_id=mukkadam_id)
+    
+#     if job_id:
+#         queryset = queryset.filter(job_id=job_id)
+    
+#     if filter_date:
+#         # Filter by specific date
+#         from datetime import datetime
+#         target_date = datetime.strptime(filter_date, '%Y-%m-%d').date()
+#         queryset = queryset.filter(performed_at__date=target_date)
+#     elif days:
+#         # Filter by days range
+#         from_date = timezone.now() - timedelta(days=int(days))
+#         queryset = queryset.filter(performed_at__gte=from_date)
+
+#     # Search filter (applied before pagination for accurate count)
+#     if search:
+#         queryset = queryset.filter(
+#             Q(job_id__icontains=search) |
+#             Q(description__icontains=search) |
+#             Q(mukkadam_id__icontains=search) |
+#             Q(transport_provider_id__icontains=search)
+#         )
+
+#     # Order by most recent first
+#     queryset = queryset.select_related('performed_by').order_by('-performed_at')
+
+#     # Apply pagination
+#     paginator = StandardResultsPagination()
+#     paginated_queryset = paginator.paginate_queryset(queryset, request)
+
+#     if not paginated_queryset:
+#         return Response({
+#             'count': 0,
+#             'next': None,
+#             'previous': None,
+#             'total_pages': 0,
+#             'current_page': 1,
+#             'logs': []
+#         })
+
+#     # Fetch related data for current page only
+#     job_ids = set()
+#     for log in paginated_queryset:
+#         if log.job_id:
+#             job_ids.add(str(log.job_id))
+
+#     jobs_cache = {}
+#     job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+
+#     if job_ids:
+#         try:
+#             response = requests.get(
+#                 f'{EXTERNAL_API_URL}/get_allocated_jobs/',
+#                 headers={'Authorization': job_token},
+#                 timeout=50
+#             )
+#             if response.status_code == 200:
+#                 data = response.json()
+#                 jobs_list = data.get('data', data) if isinstance(data, dict) else data
+                
+#                 if isinstance(jobs_list, list):
+#                     for job in jobs_list:
+#                         j_id = str(job.get('work_id') or job.get('id') or job.get('job_id'))
+#                         if j_id in job_ids:
+#                             jobs_cache[j_id] = job
+#         except Exception as e:
+#             print(f"❌ Error fetching jobs: {str(e)}")
+
+#     # Extract IDs for batch fetching
+#     farmer_ids = set()
+#     for job in jobs_cache.values():
+#         f_id = job.get('farmer_id')
+#         if f_id:
+#             farmer_ids.add(str(f_id))
+
+#     mukkadam_ids = set()
+#     transport_provider_ids = set()
+#     for log in paginated_queryset:
+#         if log.mukkadam_id:
+#             mukkadam_ids.add(log.mukkadam_id)
+#         if log.transport_provider_id:
+#             transport_provider_ids.add(log.transport_provider_id)
+
+#     # Batch fetch
+#     batch_start = time.time()
+#     farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
+#     mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
+#     transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)
+#     batch_elapsed = time.time() - batch_start
+
+#     # Build enriched logs
+#     logs = []
+#     for log in paginated_queryset:
+#         mukkadam_name = 'Unknown'
+#         if log.mukkadam_id:
+#             m_data = mukkadams_cache.get(log.mukkadam_id)
+#             mukkadam_name = m_data.get('mukkadam_name', f'#{log.mukkadam_id}') if m_data else f'#{log.mukkadam_id}'
+
+#         transport_name = None
+#         if log.transport_provider_id:
+#             t_data = transport_providers_cache.get(log.transport_provider_id)
+#             transport_name = t_data.get('name', f'#{log.transport_provider_id}') if t_data else f'#{log.transport_provider_id}'
+
+#         farmer_name = None
+#         farmer_details = None
+#         job_details = None
+        
+#         if log.job_id:
+#             job_data = jobs_cache.get(str(log.job_id))
+#             if job_data:
+#                 f_id = str(job_data.get('farmer_id', ''))
+#                 f_details = farmers_cache.get(f_id)
+#                 if f_details:
+#                     farmer_details = f_details
+#                     farmer_name = (
+#                         f_details.get('farmer_name') or 
+#                         f_details.get('name') or 
+#                         f_details.get('full_name') or 
+#                         f_details.get('first_name')
+#                     )
+#                 else:
+#                     farmer_name = f'Farmer #{f_id}' if f_id else 'Unknown Farmer'
+
+#                 job_details = {
+#                     'job_name': job_data.get('job_name'),
+#                     'location': job_data.get('location'),
+#                     'scheduled_date': job_data.get('scheduled_date')
+#                 }
+
+#         logs.append({
+#             'id': log.id,
+#             'activity_type': log.activity_type,
+#             'activity_type_display': log.get_activity_type_display(),
+#             'description': log.description,
+#             'job_id': log.job_id,
+#             'job_details': job_details,
+#             'mukkadam_id': log.mukkadam_id,
+#             'mukkadam_name': mukkadam_name,
+#             'transport_provider_id': log.transport_provider_id,
+#             'transport_name': transport_name,
+#             'farmer_id': farmer_details.get('id') if farmer_details else None,
+#             'farmer_name': farmer_name,
+#             'farmer_details': farmer_details,
+#             'amount': float(log.amount) if log.amount else None,
+#             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
+#             'performed_at': log.performed_at.isoformat(),
+#             'timestamp': log.performed_at.isoformat(),
+#             'metadata': log.metadata,
+#             'changes': log.changes,
+#             'reason': log.reason if hasattr(log, 'reason') else None,
+#             'allocation_id': log.metadata.get('allocation_id') if log.metadata else None,
+#         })
+
+#     total_elapsed = time.time() - start_time
+
+#     return Response({
+#         'count': paginator.page.paginator.count,
+#         'next': paginator.get_next_link(),
+#         'previous': paginator.get_previous_link(),
+#         'total_pages': paginator.page.paginator.num_pages,
+#         'current_page': paginator.page.number,
+#         'page_size': len(logs),
+#         'logs': logs,
+#         'performance': {
+#             'total_time': f'{total_elapsed:.2f}s',
+#             'batch_fetch_time': f'{batch_elapsed:.2f}s',
+#         }
+#     })
+
+
+# ============================================
+# 2. COMPLETED ALLOCATIONS ENDPOINT (Server-Side Pagination)
+# ============================================
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def activity_logs_list(request):
+def completed_allocations_list(request):
     """
-    Get activity logs with pagination
+    Get completed allocations with pagination
     Query params:
-    - page: Page number (default: 1)
-    - page_size: Items per page (default: 20, max: 100)
-    - activity_type: Filter by activity type
-    - mukkadam_id: Filter by mukkadam
-    - job_id: Filter by job
-    - days: Filter by days (default: 30)
+    - page: Page number
+    - page_size: Items per page (default: 10, max: 50)
+    - search: Search in job_id, farmer, mukkadam, activity
+    - work_date: Filter by work date (YYYY-MM-DD)
     """
     start_time = time.time()
     
-    # ========================================
-    # STEP 1: BUILD QUERYSET WITH FILTERS
-    # ========================================
+    search = request.query_params.get('search', '').strip()
+    work_date_filter = request.query_params.get('work_date')
+    
+    # Get all allocations
+    queryset = Allocation.objects.select_related(
+        'job_activity', 
+        'allocated_by'
+    ).all()
+    
+    # Filter for completed allocations
+    completed_allocation_ids = []
+    
+    # Get all payment requests
+    mukkadam_payments = PaymentRequest.objects.filter(
+        status__in=['pending', 'paid']
+    ).values_list('allocation_id', flat=True)
+    
+    transport_payments = TransportPaymentRequest.objects.filter(
+        status__in=['pending', 'paid']
+    ).values_list('allocation_id', flat=True)
+    
+    payment_allocation_ids = set(list(mukkadam_payments) + list(transport_payments))
+    
+    for allocation in queryset:
+        # Include if completed OR has payment
+        is_completed = allocation.status == 'completed'
+        has_payment = allocation.id in payment_allocation_ids
+        
+        # Exclude if payment was rejected
+        rejected_payment = PaymentRequest.objects.filter(
+            allocation_id=allocation.id,
+            status='rejected'
+        ).exists()
+        
+        if (is_completed or has_payment) and not rejected_payment:
+            completed_allocation_ids.append(allocation.id)
+    
+    # Filter queryset to completed only
+    queryset = queryset.filter(id__in=completed_allocation_ids)
+    
+    # Apply work_date filter
+    if work_date_filter:
+        queryset = queryset.filter(work_date=work_date_filter)
+    
+    # Search filter (before pagination)
+    # Search filter (before pagination)
+    if search:
+        queryset = queryset.filter(
+            Q(farmer_work_id__icontains=search) |
+            Q(job_activity__activity_name__icontains=search) |  # ✅ UNCOMMENTED
+            Q(job_activity__job_id__icontains=search) |
+            Q(mukkadam_id__icontains=search)
+        )
+    
+    # Order by most recent work_date
+    queryset = queryset.order_by('-work_date', '-allocated_at')
+    
+    # Apply pagination
+    paginator = CompletedAllocationsPagination()
+    paginated_queryset = paginator.paginate_queryset(queryset, request)
+    
+    if not paginated_queryset:
+        return Response({
+            'count': 0,
+            'next': None,
+            'previous': None,
+            'total_pages': 0,
+            'current_page': 1,
+            'allocations': []
+        })
+    
+    # Collect IDs for batch fetching
+    job_ids = set()
+    farmer_ids = set()
+    mukkadam_ids = set()
+    transport_provider_ids = set()
+    
+    for allocation in paginated_queryset:
+        job_ids.add(str(allocation.farmer_work_id))
+        mukkadam_ids.add(allocation.mukkadam_id)
+        if allocation.transport_provider_id:
+            transport_provider_ids.add(allocation.transport_provider_id)
+    
+    # Fetch jobs from external API
+    jobs_cache = {}
+    try:
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
+        
+        response = requests.get(
+            api_url,
+            headers={'Authorization': token},
+            timeout=50
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            jobs_list = data.get('data', data) if isinstance(data, dict) else data
+            
+            if isinstance(jobs_list, list):
+                for job in jobs_list:
+                    j_id = str(job.get('work_id') or job.get('id'))
+                    if j_id in job_ids:
+                        jobs_cache[j_id] = job
+                        # Extract farmer_id
+                        f_id = job.get('farmer_id')
+                        if f_id:
+                            farmer_ids.add(str(f_id))
+    except Exception as e:
+        print(f"❌ Error fetching jobs: {str(e)}")
+    
+    # Batch fetch related data
+    batch_start = time.time()
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
+    transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)
+    batch_elapsed = time.time() - batch_start
+    
+    # Get payment requests
+    mukkadam_payment_dict = {}
+    for payment in PaymentRequest.objects.filter(allocation_id__in=[a.id for a in paginated_queryset]):
+        mukkadam_payment_dict[payment.allocation_id] = {
+            'id': payment.id,
+            'status': payment.status,
+            'amount': float(payment.requested_amount),
+            'requested_at': payment.requested_at.isoformat()
+        }
+    
+    transport_payment_dict = {}
+    for payment in TransportPaymentRequest.objects.filter(allocation_id__in=[a.id for a in paginated_queryset]):
+        transport_payment_dict[payment.allocation_id] = {
+            'id': payment.id,
+            'status': payment.status,
+            'amount': float(payment.requested_amount),
+            'requested_at': payment.requested_at.isoformat()
+        }
+    
+    # Build response
+    # Build response
+    allocations_data = []
+    for allocation in paginated_queryset:
+        # Get job and farmer info
+        job_data = jobs_cache.get(str(allocation.farmer_work_id), {})
+        farmer_id = str(job_data.get('farmer_id', ''))
+        farmer_data = farmers_cache.get(farmer_id, {})
+        
+        # Get mukkadam info
+        mukkadam_data = mukkadams_cache.get(allocation.mukkadam_id, {})
+        
+        # Get transport info
+        transport_data = None
+        if allocation.transport_provider_id:
+            transport_data = transport_providers_cache.get(allocation.transport_provider_id, {})
+        
+        # ✅ SAFELY GET ACTIVITY NAME
+        activity_name = 'Unknown'
+        if allocation.job_activity:
+            activity_name = allocation.job_activity.activity_name
+        
+        allocations_data.append({
+            'id': allocation.id,
+            'farmer_work_id': allocation.farmer_work_id,
+            'activity_name': activity_name,  # ✅ NOW INCLUDED
+            'allocated_area': float(allocation.allocated_area),
+            'work_date': str(allocation.work_date) if allocation.work_date else None,
+            'crew_size': allocation.crew_size,
+            'status': allocation.status,
+            
+            # Mukkadam info
+            'mukkadam_id': allocation.mukkadam_id,
+            'mukkadam_name': mukkadam_data.get('mukkadam_name', f'#{allocation.mukkadam_id}'),
+            'mukkadam_price': float(allocation.mukkadam_price),
+            'mukkadam_payment': mukkadam_payment_dict.get(allocation.id),
+            
+            # Transport info
+            'transport_type': allocation.transport_type,
+            'transport_provider_id': allocation.transport_provider_id,
+            'transport_name': transport_data.get('name') if transport_data else None,
+            'transport_price': float(allocation.transport_price or 0),
+            'transport_payment': transport_payment_dict.get(allocation.id),
+            
+            # Farmer info
+            'farmer': {
+                'farmer_name': farmer_data.get('farmer_name', 'Unknown'),
+                'phone_number': farmer_data.get('phone_number', 'N/A'),
+                'location': farmer_data.get('location', 'N/A'),
+                'village': farmer_data.get('village', 'N/A'),
+            },
+            
+            # Metadata
+            'created_at': allocation.allocated_at.isoformat(),
+            'total_cost': float(allocation.total_cost),
+        })
+
+    total_elapsed = time.time() - start_time
+    
+    return Response({
+        'count': paginator.page.paginator.count,
+        'next': paginator.get_next_link(),
+        'previous': paginator.get_previous_link(),
+        'total_pages': paginator.page.paginator.num_pages,
+        'current_page': paginator.page.number,
+        'page_size': len(allocations_data),
+        'allocations': allocations_data,
+        'performance': {
+            'total_time': f'{total_elapsed:.2f}s',
+            'batch_fetch_time': f'{batch_elapsed:.2f}s',
+        }
+    })
+
+# ============================================
+# 3. PENDING JOBS ENDPOINT (Server-Side Pagination)
+# ============================================
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def pending_jobs_list(request):
+    """
+    Get pending jobs with pagination - ENRICHED with DB data like jobs_list
+    Query params:
+    - page: Page number
+    - page_size: Items per page (default: 10, max: 50)
+    - search: Search in job_id, farmer, activity_name
+    - date: Filter by scheduled date (YYYY-MM-DD)
+    - activity_name: Filter by activity name
+    """
+    start_time = time.time()
+    
+    search = request.query_params.get('search', '').strip()
+    date_filter = request.query_params.get('date')
+    activity_name_filter = request.query_params.get('activity_name', '').strip()
+    
+    # ============================================
+    # STEP 1: FETCH & ENRICH ALL JOBS (Same as jobs_list)
+    # ============================================
+    try:
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
+        
+        response = requests.get(
+            api_url,
+            headers={'Authorization': token},
+            timeout=50
+        )
+        response.raise_for_status()
+        response_data = response.json()
+        
+        if isinstance(response_data, dict):
+            jobs_from_api = response_data.get('data', response_data.get('results', [response_data]))
+        else:
+            jobs_from_api = response_data
+            
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to fetch jobs: {str(e)}'},
+            status=503
+        )
+    
+    if not jobs_from_api:
+        return Response({
+            'count': 0,
+            'next': None,
+            'previous': None,
+            'total_pages': 0,
+            'current_page': 1,
+            'jobs': []
+        })
+    
+    # Collect farmer and mukkadam IDs
+    farmer_ids = set()
+    mukkadam_ids = set()
+    
+    for job in jobs_from_api:
+        farmer_id = job.get('farmer_id')
+        if farmer_id:
+            farmer_ids.add(str(farmer_id))
+    
+    # Get mukkadam IDs from allocations
+    all_allocations = Allocation.objects.all().select_related('job_activity')
+    for alloc in all_allocations:
+        mukkadam_ids.add(alloc.mukkadam_id)
+    
+    # Batch fetch
+    batch_start = time.time()
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
+    batch_elapsed = time.time() - batch_start
+    
+    # ============================================
+    # STEP 2: ENRICH JOBS WITH DB DATA (Same as jobs_list)
+    # ============================================
+    enriched_jobs = []
+    
+    for idx, job in enumerate(jobs_from_api):
+        job_id = str(
+            job.get('work_id') or
+            job.get('id') or
+            job.get('job_id') or
+            f"UNKNOWN_{idx}"
+        )
+        
+        # Get farmer details
+        farmer_id = str(job.get('farmer_id', ''))
+        farmer_details = farmers_cache.get(farmer_id)
+        
+        # Get activities
+        activities_from_api = job.get('activities', [])
+        activities_data = []
+        
+        for api_activity in activities_from_api:
+            activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
+            
+            # ✅ CHECK DB FOR ACTIVITY
+            db_activity = JobActivity.objects.filter(
+                job_id=job_id,
+                activity_id=activity_id
+            ).prefetch_related('allocations').first()
+            
+            # ✅ PRIORITY LOGIC: DB if edited/lost, else API
+            if db_activity and (db_activity.is_manually_edited or hasattr(db_activity, 'lost_record')):
+                activity_name = db_activity.activity_name
+                total_area = db_activity.total_area
+                total_price = db_activity.total_price
+                transport_cost = db_activity.transport_cost
+                other_cost = db_activity.other_cost
+                crop_bundles = getattr(db_activity, 'crop_bundles', api_activity.get('crop_bundles', 0))
+                scheduled_date = db_activity.scheduled_datetime.date() if db_activity.scheduled_datetime else None
+                rate_per_acre = db_activity.rate_per_acre
+                location = db_activity.location or api_activity.get('location', 'N/A')
+            else:
+                activity_name = api_activity.get('activity_name', 'Unknown')
+                total_area = Decimal(str(api_activity.get('acres', 0)))
+                total_price = Decimal(str(api_activity.get('total_price', 0)))
+                transport_cost = Decimal(str(api_activity.get('transport_cost', 0)))
+                crop_bundles = api_activity.get('crop_bundles', 0)
+                other_cost = Decimal(str(api_activity.get('other_cost', 0)))
+                scheduled_date = api_activity.get('date_time') or api_activity.get('scheduled_date')
+                rate_per_acre = round(
+                    float(total_price) / float(total_area), 2
+                ) if float(total_area) > 0 else 0.00
+                location = api_activity.get('location', 'N/A')
+            
+            # ✅ CALCULATE ALLOCATIONS
+            allocations_data = []
+            allocated_area = Decimal('0')
+            
+            if db_activity:
+                for alloc in db_activity.allocations.all():
+                    allocated_area += Decimal(str(alloc.allocated_area))
+                    mukkadam_data = mukkadams_cache.get(alloc.mukkadam_id, {})
+                    mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{alloc.mukkadam_id}')
+                    
+                    allocations_data.append({
+                        'allocation_id': alloc.id,
+                        'mukkadam_id': alloc.mukkadam_id,
+                        'mukkadam_name': mukkadam_name,
+                        'allocated_area': float(alloc.allocated_area),
+                        'work_date': str(alloc.work_date) if alloc.work_date else None,
+                        'crew_size': alloc.crew_size,
+                        'mukkadam_price': float(alloc.mukkadam_price),
+                        'transport_type': alloc.transport_type,
+                        'transport_price': float(alloc.transport_price or 0),
+                        'total_cost': float(alloc.total_cost)
+                    })
+            
+            # Calculate areas
+            remaining_area = total_area - allocated_area
+            is_fully_allocated = allocated_area >= total_area
+            
+            def safe_date(value):
+                if not value:
+                    return ''
+                if isinstance(value, str):
+                    return value.split('T')[0]
+                return str(value)
+            
+            activities_data.append({
+                'id': db_activity.id if db_activity else None,
+                'activity_id': activity_id,
+                'activity_name': activity_name,
+                'activity_type': api_activity.get('activity_type', ''),
+                'location': location,
+                'total_area': float(total_area),
+                'crop_bundles': crop_bundles,
+                'allocated_area': float(allocated_area),
+                'remaining_area': float(remaining_area),
+                'scheduled_date': safe_date(scheduled_date),
+                'scheduled_time': api_activity.get('scheduled_time', ''),
+                'estimated_workers': api_activity.get('estimated_workers', 10),
+                'rate_per_acre': float(rate_per_acre),
+                'total_price': float(total_price),
+                'transport_cost': float(transport_cost),
+                'other_cost': float(other_cost),
+                'subtotal': float(api_activity.get('subtotal', 0)),
+                'is_fully_allocated': is_fully_allocated,
+                'is_manually_edited': db_activity.is_manually_edited if db_activity else False,
+                'allocations': allocations_data,
+                'is_lost': db_activity.lost_record.is_active if (db_activity and hasattr(db_activity, 'lost_record')) else False,
+                'lost_reason': db_activity.lost_record.reason if (db_activity and hasattr(db_activity, 'lost_record') and db_activity.lost_record.is_active) else None,
+                'edit_history_count': db_activity.edit_history.count() if db_activity else 0,
+            })
+        
+        # Calculate job status
+        def calculate_status(activities):
+            if not activities:
+                return 'pending'
+            fully_allocated = sum(1 for a in activities if a['is_fully_allocated'])
+            partially_allocated = sum(1 for a in activities if a['allocated_area'] > 0 and not a['is_fully_allocated'])
+            if fully_allocated == len(activities):
+                return 'fully_allocated'
+            elif fully_allocated > 0 or partially_allocated > 0:
+                return 'partially_allocated'
+            else:
+                return 'pending'
+        
+        job_status = calculate_status(activities_data)
+        
+        # Extract visits and POC
+        visits_data = job.get('visits', [])
+        point_of_contact = None
+        if visits_data and isinstance(visits_data, list):
+            point_of_contact = visits_data[0].get('assigned_to')
+        
+        enriched_job = {
+            **job,
+            'work_id': job_id,
+            'farmer': farmer_details,
+            'activities': activities_data,
+            'status': job_status,
+            'total_activities': len(activities_data),
+            'is_complex': len(activities_data) > 1,
+            'booking': job.get('booking', {}),
+            'visits': visits_data,
+            'point_of_contact': point_of_contact,
+        }
+        
+        enriched_jobs.append(enriched_job)
+    
+    # ============================================
+    # STEP 3: FILTER FOR PENDING JOBS ONLY
+    # ============================================
+    pending_jobs = []
+    
+    for job in enriched_jobs:
+        # Skip jobs where ALL activities are lost
+        non_lost_activities = [a for a in job['activities'] if not a['is_lost']]
+        if not non_lost_activities:
+            continue
+        
+        # Check if job has any non-fully-allocated activities
+        has_pending = any(a['remaining_area'] > 0 for a in non_lost_activities)
+        
+        if has_pending:
+            pending_jobs.append(job)
+    
+    # ============================================
+    # STEP 4: APPLY FILTERS
+    # ============================================
+    filtered_jobs = []
+    
+    for job in pending_jobs:
+        # Date filter
+        if date_filter:
+            job_date = job.get('scheduled_date', '')
+            if not job_date or not job_date.startswith(date_filter):
+                activities = job.get('activities', [])
+                has_matching_date = False
+                for activity in activities:
+                    if activity.get('is_lost'):
+                        continue
+                    act_date = activity.get('scheduled_date', '')
+                    if act_date and act_date.startswith(date_filter):
+                        has_matching_date = True
+                        break
+                if not has_matching_date:
+                    continue
+        
+        # Activity name filter
+        if activity_name_filter:
+            activities = job.get('activities', [])
+            has_matching_activity = False
+            for activity in activities:
+                if activity.get('is_lost'):
+                    continue
+                if activity_name_filter.lower() in activity.get('activity_name', '').lower():
+                    has_matching_activity = True
+                    break
+            if not has_matching_activity:
+                continue
+        
+        # Search filter
+        if search:
+            farmer = job.get('farmer', {})
+            farmer_name = farmer.get('farmer_name', '')
+            farmer_phone = farmer.get('phone_number', '')
+            job_id = str(job.get('work_id', ''))
+            
+            if (search.lower() in job_id.lower() or 
+                search.lower() in farmer_name.lower() or 
+                search in farmer_phone):
+                filtered_jobs.append(job)
+            else:
+                # Check activities
+                activities = job.get('activities', [])
+                for activity in activities:
+                    if search.lower() in activity.get('activity_name', '').lower():
+                        filtered_jobs.append(job)
+                        break
+        else:
+            filtered_jobs.append(job)
+    
+    # ============================================
+    # STEP 5: SORT BY DATE
+    # ============================================
+# ============================================
+# STEP 5: SORT BY DATE
+# ============================================
+    from datetime import datetime
+    def get_job_date(job):
+        date_str = job.get('scheduled_date')
+        if not date_str:
+            activities = job.get('activities', [])
+            dates = [a.get('scheduled_date') for a in activities if not a.get('is_lost')]
+            dates = [d for d in dates if d]
+            if dates:
+                date_str = sorted(dates)[0]
+        
+        if date_str:
+            try:
+                # Remove timezone info to make it naive
+                parsed_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                return parsed_date.replace(tzinfo=None)
+            except:
+                pass
+        return datetime.min  # Now both are naive
+
+    filtered_jobs.sort(key=get_job_date)
+    
+    # ============================================
+    # STEP 6: PAGINATION
+    # ============================================
+    page = int(request.query_params.get('page', 1))
+    page_size = int(request.query_params.get('page_size', 10))
+    page_size = min(page_size, 50)
+    
+    total_count = len(filtered_jobs)
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+    
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paginated_jobs = filtered_jobs[start_idx:end_idx]
+    
+    # Build pagination links
+    base_url = request.build_absolute_uri(request.path)
+    next_link = None
+    prev_link = None
+    
+    if page < total_pages:
+        next_link = f"{base_url}?page={page + 1}&page_size={page_size}"
+        if search:
+            next_link += f"&search={search}"
+        if date_filter:
+            next_link += f"&date={date_filter}"
+        if activity_name_filter:
+            next_link += f"&activity_name={activity_name_filter}"
+    
+    if page > 1:
+        prev_link = f"{base_url}?page={page - 1}&page_size={page_size}"
+        if search:
+            prev_link += f"&search={search}"
+        if date_filter:
+            prev_link += f"&date={date_filter}"
+        if activity_name_filter:
+            prev_link += f"&activity_name={activity_name_filter}"
+    
+    total_elapsed = time.time() - start_time
+    
+    return Response({
+        'count': total_count,
+        'next': next_link,
+        'previous': prev_link,
+        'total_pages': total_pages,
+        'current_page': page,
+        'page_size': len(paginated_jobs),
+        'jobs': paginated_jobs,
+        'performance': {
+            'total_time': f'{total_elapsed:.2f}s',
+            'batch_fetch_time': f'{batch_elapsed:.2f}s',
+        }
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def partially_allocated_jobs_list(request):
+    """
+    Get partially allocated jobs with pagination
+    Query params:
+    - page: Page number
+    - page_size: Items per page (default: 10, max: 50)
+    - search: Search in job_id, farmer, activity_name
+    - date: Filter by scheduled date (YYYY-MM-MM)
+    """
+    start_time = time.time()
+    
+    search = request.query_params.get('search', '').strip()
+    date_filter = request.query_params.get('date')
+    
+    # ============================================
+    # STEP 1: FETCH & ENRICH ALL JOBS (Same as pending_jobs_list)
+    # ============================================
+    try:
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
+        
+        response = requests.get(
+            api_url,
+            headers={'Authorization': token},
+            timeout=50
+        )
+        response.raise_for_status()
+        response_data = response.json()
+        
+        if isinstance(response_data, dict):
+            jobs_from_api = response_data.get('data', response_data.get('results', [response_data]))
+        else:
+            jobs_from_api = response_data
+            
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to fetch jobs: {str(e)}'},
+            status=503
+        )
+    
+    if not jobs_from_api:
+        return Response({
+            'count': 0,
+            'next': None,
+            'previous': None,
+            'total_pages': 0,
+            'current_page': 1,
+            'jobs': []
+        })
+    
+    # Collect farmer and mukkadam IDs
+    farmer_ids = set()
+    mukkadam_ids = set()
+    
+    for job in jobs_from_api:
+        farmer_id = job.get('farmer_id')
+        if farmer_id:
+            farmer_ids.add(str(farmer_id))
+    
+    # Get mukkadam IDs from allocations
+    all_allocations = Allocation.objects.all().select_related('job_activity')
+    for alloc in all_allocations:
+        mukkadam_ids.add(alloc.mukkadam_id)
+    
+    # Batch fetch
+    batch_start = time.time()
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
+    batch_elapsed = time.time() - batch_start
+    
+    # ============================================
+    # STEP 2: ENRICH JOBS WITH DB DATA
+    # ============================================
+    enriched_jobs = []
+    
+    for idx, job in enumerate(jobs_from_api):
+        job_id = str(
+            job.get('work_id') or
+            job.get('id') or
+            job.get('job_id') or
+            f"UNKNOWN_{idx}"
+        )
+        
+        # Get farmer details
+        farmer_id = str(job.get('farmer_id', ''))
+        farmer_details = farmers_cache.get(farmer_id)
+        
+        # Get activities
+        activities_from_api = job.get('activities', [])
+        activities_data = []
+        
+        for api_activity in activities_from_api:
+            activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
+            
+            # Check DB for activity
+            db_activity = JobActivity.objects.filter(
+                job_id=job_id,
+                activity_id=activity_id
+            ).prefetch_related('allocations').first()
+            
+            # Priority logic: DB if edited/lost, else API
+            if db_activity and (db_activity.is_manually_edited or hasattr(db_activity, 'lost_record')):
+                activity_name = db_activity.activity_name
+                total_area = db_activity.total_area
+                total_price = db_activity.total_price
+                transport_cost = db_activity.transport_cost
+                other_cost = db_activity.other_cost
+                crop_bundles = getattr(db_activity, 'crop_bundles', api_activity.get('crop_bundles', 0))
+                scheduled_date = db_activity.scheduled_datetime.date() if db_activity.scheduled_datetime else None
+                rate_per_acre = db_activity.rate_per_acre
+                location = db_activity.location or api_activity.get('location', 'N/A')
+            else:
+                activity_name = api_activity.get('activity_name', 'Unknown')
+                total_area = Decimal(str(api_activity.get('acres', 0)))
+                total_price = Decimal(str(api_activity.get('total_price', 0)))
+                transport_cost = Decimal(str(api_activity.get('transport_cost', 0)))
+                crop_bundles = api_activity.get('crop_bundles', 0)
+                other_cost = Decimal(str(api_activity.get('other_cost', 0)))
+                scheduled_date = api_activity.get('date_time') or api_activity.get('scheduled_date')
+                rate_per_acre = round(
+                    float(total_price) / float(total_area), 2
+                ) if float(total_area) > 0 else 0.00
+                location = api_activity.get('location', 'N/A')
+            
+            # Calculate allocations
+            allocations_data = []
+            allocated_area = Decimal('0')
+            
+            if db_activity:
+                for alloc in db_activity.allocations.all():
+                    allocated_area += Decimal(str(alloc.allocated_area))
+                    mukkadam_data = mukkadams_cache.get(alloc.mukkadam_id, {})
+                    mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{alloc.mukkadam_id}')
+                    
+                    allocations_data.append({
+                        'allocation_id': alloc.id,
+                        'mukkadam_id': alloc.mukkadam_id,
+                        'mukkadam_name': mukkadam_name,
+                        'allocated_area': float(alloc.allocated_area),
+                        'work_date': str(alloc.work_date) if alloc.work_date else None,
+                        'crew_size': alloc.crew_size,
+                        'mukkadam_price': float(alloc.mukkadam_price),
+                        'transport_type': alloc.transport_type,
+                        'transport_price': float(alloc.transport_price or 0),
+                        'total_cost': float(alloc.total_cost)
+                    })
+            
+            # Calculate areas
+            remaining_area = total_area - allocated_area
+            is_fully_allocated = allocated_area >= total_area
+            
+            def safe_date(value):
+                if not value:
+                    return ''
+                if isinstance(value, str):
+                    return value.split('T')[0]
+                return str(value)
+            
+            activities_data.append({
+                'id': db_activity.id if db_activity else None,
+                'activity_id': activity_id,
+                'activity_name': activity_name,
+                'activity_type': api_activity.get('activity_type', ''),
+                'location': location,
+                'total_area': float(total_area),
+                'crop_bundles': crop_bundles,
+                'allocated_area': float(allocated_area),
+                'remaining_area': float(remaining_area),
+                'scheduled_date': safe_date(scheduled_date),
+                'scheduled_time': api_activity.get('scheduled_time', ''),
+                'estimated_workers': api_activity.get('estimated_workers', 10),
+                'rate_per_acre': float(rate_per_acre),
+                'total_price': float(total_price),
+                'transport_cost': float(transport_cost),
+                'other_cost': float(other_cost),
+                'subtotal': float(api_activity.get('subtotal', 0)),
+                'is_fully_allocated': is_fully_allocated,
+                'is_manually_edited': db_activity.is_manually_edited if db_activity else False,
+                'allocations': allocations_data,
+                'is_lost': db_activity.lost_record.is_active if (db_activity and hasattr(db_activity, 'lost_record')) else False,
+                'lost_reason': db_activity.lost_record.reason if (db_activity and hasattr(db_activity, 'lost_record') and db_activity.lost_record.is_active) else None,
+                'edit_history_count': db_activity.edit_history.count() if db_activity else 0,
+            })
+        
+        # Calculate job status
+        def calculate_status(activities):
+            if not activities:
+                return 'pending'
+            fully_allocated = sum(1 for a in activities if a['is_fully_allocated'])
+            partially_allocated = sum(1 for a in activities if a['allocated_area'] > 0 and not a['is_fully_allocated'])
+            if fully_allocated == len(activities):
+                return 'fully_allocated'
+            elif fully_allocated > 0 or partially_allocated > 0:
+                return 'partially_allocated'
+            else:
+                return 'pending'
+        
+        job_status = calculate_status(activities_data)
+        
+        # Extract visits and POC
+        visits_data = job.get('visits', [])
+        point_of_contact = None
+        if visits_data and isinstance(visits_data, list):
+            point_of_contact = visits_data[0].get('assigned_to')
+        
+        enriched_job = {
+            **job,
+            'work_id': job_id,
+            'farmer': farmer_details,
+            'activities': activities_data,
+            'status': job_status,
+            'total_activities': len(activities_data),
+            'is_complex': len(activities_data) > 1,
+            'booking': job.get('booking', {}),
+            'visits': visits_data,
+            'point_of_contact': point_of_contact,
+        }
+        
+        enriched_jobs.append(enriched_job)
+    
+    # ============================================
+    # STEP 3: FILTER FOR PARTIALLY ALLOCATED JOBS ONLY
+    # ============================================
+    partially_allocated_jobs = []
+    
+    for job in enriched_jobs:
+        # Skip jobs where ALL activities are lost
+        non_lost_activities = [a for a in job['activities'] if not a['is_lost']]
+        if not non_lost_activities:
+            continue
+        
+        # Check if job has:
+        # 1. At least one activity with some allocation (allocated_area > 0)
+        # 2. At least one activity not fully allocated (remaining_area > 0)
+        has_some_allocation = any(a['allocated_area'] > 0 for a in non_lost_activities)
+        has_remaining = any(a['remaining_area'] > 0 for a in non_lost_activities)
+        
+        # Job is "partially allocated" if it has both
+        if has_some_allocation and has_remaining:
+            partially_allocated_jobs.append(job)
+    
+    # ============================================
+    # STEP 4: APPLY FILTERS
+    # ============================================
+    filtered_jobs = []
+    
+    for job in partially_allocated_jobs:
+        # Date filter
+        if date_filter:
+            job_date = job.get('scheduled_date', '')
+            if not job_date or not job_date.startswith(date_filter):
+                activities = job.get('activities', [])
+                has_matching_date = False
+                for activity in activities:
+                    if activity.get('is_lost'):
+                        continue
+                    act_date = activity.get('scheduled_date', '')
+                    if act_date and act_date.startswith(date_filter):
+                        has_matching_date = True
+                        break
+                if not has_matching_date:
+                    continue
+        
+        # Search filter
+        if search:
+            farmer = job.get('farmer', {})
+            farmer_name = farmer.get('farmer_name', '')
+            farmer_phone = farmer.get('phone_number', '')
+            job_id = str(job.get('work_id', ''))
+            
+            if (search.lower() in job_id.lower() or 
+                search.lower() in farmer_name.lower() or 
+                search in farmer_phone):
+                filtered_jobs.append(job)
+            else:
+                # Check activities
+                activities = job.get('activities', [])
+                for activity in activities:
+                    if search.lower() in activity.get('activity_name', '').lower():
+                        filtered_jobs.append(job)
+                        break
+        else:
+            filtered_jobs.append(job)
+    
+    # ============================================
+    # STEP 5: SORT BY DATE
+    # ============================================
+    from datetime import datetime
+    def get_job_date(job):
+        date_str = job.get('scheduled_date')
+        if not date_str:
+            activities = job.get('activities', [])
+            dates = [a.get('scheduled_date') for a in activities if not a.get('is_lost')]
+            dates = [d for d in dates if d]
+            if dates:
+                date_str = sorted(dates)[0]
+        
+        if date_str:
+            try:
+                # Remove timezone info to make it naive
+                parsed_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                return parsed_date.replace(tzinfo=None)
+            except:
+                pass
+        return datetime.min
+    
+    filtered_jobs.sort(key=get_job_date)
+    
+    # ============================================
+    # STEP 6: PAGINATION
+    # ============================================
+    page = int(request.query_params.get('page', 1))
+    page_size = int(request.query_params.get('page_size', 10))
+    page_size = min(page_size, 50)
+    
+    total_count = len(filtered_jobs)
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+    
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paginated_jobs = filtered_jobs[start_idx:end_idx]
+    
+    # Build pagination links
+    base_url = request.build_absolute_uri(request.path)
+    next_link = None
+    prev_link = None
+    
+    if page < total_pages:
+        next_link = f"{base_url}?page={page + 1}&page_size={page_size}"
+        if search:
+            next_link += f"&search={search}"
+        if date_filter:
+            next_link += f"&date={date_filter}"
+    
+    if page > 1:
+        prev_link = f"{base_url}?page={page - 1}&page_size={page_size}"
+        if search:
+            prev_link += f"&search={search}"
+        if date_filter:
+            prev_link += f"&date={date_filter}"
+    
+    total_elapsed = time.time() - start_time
+    
+    return Response({
+        'count': total_count,
+        'next': next_link,
+        'previous': prev_link,
+        'total_pages': total_pages,
+        'current_page': page,
+        'page_size': len(paginated_jobs),
+        'jobs': paginated_jobs,
+        'performance': {
+            'total_time': f'{total_elapsed:.2f}s',
+            'batch_fetch_time': f'{batch_elapsed:.2f}s',
+        }
+    })
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def lost_jobs_list(request):
+    """
+    Get jobs with lost activities with pagination
+    Query params:
+    - page: Page number
+    - page_size: Items per page (default: 10, max: 50)
+    - search: Search in farmer name/phone
+    - job_id: Filter by job ID
+    - date: Filter by scheduled date of lost activities
+    """
+    start_time = time.time()
+    
+    search = request.query_params.get('search', '').strip()
+    job_id_filter = request.query_params.get('job_id', '').strip()
+    date_filter = request.query_params.get('date')
+    
+    # ============================================
+    # STEP 1: FETCH & ENRICH ALL JOBS
+    # ============================================
+    try:
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
+        
+        response = requests.get(
+            api_url,
+            headers={'Authorization': token},
+            timeout=50
+        )
+        response.raise_for_status()
+        response_data = response.json()
+        
+        if isinstance(response_data, dict):
+            jobs_from_api = response_data.get('data', response_data.get('results', [response_data]))
+        else:
+            jobs_from_api = response_data
+            
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to fetch jobs: {str(e)}'},
+            status=503
+        )
+    
+    if not jobs_from_api:
+        return Response({
+            'count': 0,
+            'next': None,
+            'previous': None,
+            'total_pages': 0,
+            'current_page': 1,
+            'jobs': []
+        })
+    
+    # Collect farmer and mukkadam IDs
+    farmer_ids = set()
+    mukkadam_ids = set()
+    
+    for job in jobs_from_api:
+        farmer_id = job.get('farmer_id')
+        if farmer_id:
+            farmer_ids.add(str(farmer_id))
+    
+    # Get mukkadam IDs from allocations
+    all_allocations = Allocation.objects.all().select_related('job_activity')
+    for alloc in all_allocations:
+        mukkadam_ids.add(alloc.mukkadam_id)
+    
+    # Batch fetch
+    batch_start = time.time()
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
+    batch_elapsed = time.time() - batch_start
+    
+    # ============================================
+    # STEP 2: ENRICH JOBS WITH DB DATA
+    # ============================================
+    enriched_jobs = []
+    
+    for idx, job in enumerate(jobs_from_api):
+        job_id = str(
+            job.get('work_id') or
+            job.get('id') or
+            job.get('job_id') or
+            f"UNKNOWN_{idx}"
+        )
+        
+        # Get farmer details
+        farmer_id = str(job.get('farmer_id', ''))
+        farmer_details = farmers_cache.get(farmer_id)
+        
+        # Get activities
+        activities_from_api = job.get('activities', [])
+        activities_data = []
+        
+        for api_activity in activities_from_api:
+            activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
+            
+            # Check DB for activity
+            db_activity = JobActivity.objects.filter(
+                job_id=job_id,
+                activity_id=activity_id
+            ).prefetch_related('allocations').first()
+            
+            # Priority logic: DB if edited/lost, else API
+            if db_activity and (db_activity.is_manually_edited or hasattr(db_activity, 'lost_record')):
+                activity_name = db_activity.activity_name
+                total_area = db_activity.total_area
+                total_price = db_activity.total_price
+                transport_cost = db_activity.transport_cost
+                other_cost = db_activity.other_cost
+                crop_bundles = getattr(db_activity, 'crop_bundles', api_activity.get('crop_bundles', 0))
+                scheduled_date = db_activity.scheduled_datetime.date() if db_activity.scheduled_datetime else None
+                rate_per_acre = db_activity.rate_per_acre
+                location = db_activity.location or api_activity.get('location', 'N/A')
+            else:
+                activity_name = api_activity.get('activity_name', 'Unknown')
+                total_area = Decimal(str(api_activity.get('acres', 0)))
+                total_price = Decimal(str(api_activity.get('total_price', 0)))
+                transport_cost = Decimal(str(api_activity.get('transport_cost', 0)))
+                crop_bundles = api_activity.get('crop_bundles', 0)
+                other_cost = Decimal(str(api_activity.get('other_cost', 0)))
+                scheduled_date = api_activity.get('date_time') or api_activity.get('scheduled_date')
+                rate_per_acre = round(
+                    float(total_price) / float(total_area), 2
+                ) if float(total_area) > 0 else 0.00
+                location = api_activity.get('location', 'N/A')
+            
+            # Calculate allocations
+            allocations_data = []
+            allocated_area = Decimal('0')
+            
+            if db_activity:
+                for alloc in db_activity.allocations.all():
+                    allocated_area += Decimal(str(alloc.allocated_area))
+                    mukkadam_data = mukkadams_cache.get(alloc.mukkadam_id, {})
+                    mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{alloc.mukkadam_id}')
+                    
+                    allocations_data.append({
+                        'allocation_id': alloc.id,
+                        'mukkadam_id': alloc.mukkadam_id,
+                        'mukkadam_name': mukkadam_name,
+                        'allocated_area': float(alloc.allocated_area),
+                        'work_date': str(alloc.work_date) if alloc.work_date else None,
+                        'crew_size': alloc.crew_size,
+                        'mukkadam_price': float(alloc.mukkadam_price),
+                        'transport_type': alloc.transport_type,
+                        'transport_price': float(alloc.transport_price or 0),
+                        'total_cost': float(alloc.total_cost)
+                    })
+            
+            # Calculate areas
+            remaining_area = total_area - allocated_area
+            is_fully_allocated = allocated_area >= total_area
+            
+            def safe_date(value):
+                if not value:
+                    return ''
+                if isinstance(value, str):
+                    return value.split('T')[0]
+                return str(value)
+            
+            activities_data.append({
+                'id': db_activity.id if db_activity else None,
+                'activity_id': activity_id,
+                'activity_name': activity_name,
+                'activity_type': api_activity.get('activity_type', ''),
+                'location': location,
+                'total_area': float(total_area),
+                'crop_bundles': crop_bundles,
+                'allocated_area': float(allocated_area),
+                'remaining_area': float(remaining_area),
+                'scheduled_date': safe_date(scheduled_date),
+                'scheduled_time': api_activity.get('scheduled_time', ''),
+                'estimated_workers': api_activity.get('estimated_workers', 10),
+                'rate_per_acre': float(rate_per_acre),
+                'total_price': float(total_price),
+                'transport_cost': float(transport_cost),
+                'other_cost': float(other_cost),
+                'subtotal': float(api_activity.get('subtotal', 0)),
+                'is_fully_allocated': is_fully_allocated,
+                'is_manually_edited': db_activity.is_manually_edited if db_activity else False,
+                'allocations': allocations_data,
+                'is_lost': db_activity.lost_record.is_active if (db_activity and hasattr(db_activity, 'lost_record')) else False,
+                'lost_reason': db_activity.lost_record.reason if (db_activity and hasattr(db_activity, 'lost_record') and db_activity.lost_record.is_active) else None,
+                'edit_history_count': db_activity.edit_history.count() if db_activity else 0,
+            })
+        
+        # Extract visits and POC
+        visits_data = job.get('visits', [])
+        point_of_contact = None
+        if visits_data and isinstance(visits_data, list):
+            point_of_contact = visits_data[0].get('assigned_to')
+        
+        enriched_job = {
+            **job,
+            'work_id': job_id,
+            'farmer': farmer_details,
+            'activities': activities_data,
+            'total_activities': len(activities_data),
+            'is_complex': len(activities_data) > 1,
+            'booking': job.get('booking', {}),
+            'visits': visits_data,
+            'point_of_contact': point_of_contact,
+        }
+        
+        enriched_jobs.append(enriched_job)
+    
+    # ============================================
+    # STEP 3: FILTER FOR JOBS WITH LOST ACTIVITIES
+    # ============================================
+    lost_jobs = []
+    
+    for job in enriched_jobs:
+        # Check if job has any lost activities
+        has_lost = any(a['is_lost'] for a in job['activities'])
+        
+        if has_lost:
+            lost_jobs.append(job)
+    
+    # ============================================
+    # STEP 4: APPLY FILTERS
+    # ============================================
+    filtered_jobs = []
+    
+    for job in lost_jobs:
+        # Job ID filter
+        if job_id_filter:
+            if job_id_filter not in str(job.get('work_id', '')):
+                continue
+        
+        # Date filter (check lost activities only)
+        if date_filter:
+            lost_activities = [a for a in job['activities'] if a['is_lost']]
+            has_matching_date = any(
+                a.get('scheduled_date', '').startswith(date_filter)
+                for a in lost_activities
+            )
+            if not has_matching_date:
+                continue
+        
+        # Search filter (farmer name/phone)
+        if search:
+            farmer = job.get('farmer', {})
+            farmer_name = farmer.get('farmer_name', '')
+            farmer_phone = farmer.get('phone_number', '')
+            
+            if not (search.lower() in farmer_name.lower() or search in farmer_phone):
+                continue
+        
+        filtered_jobs.append(job)
+    
+    # ============================================
+    # STEP 5: SORT (by work_id or date if needed)
+    # ============================================
+    # Sort by work_id for now
+    filtered_jobs.sort(key=lambda x: str(x.get('work_id', '')))
+    
+    # ============================================
+    # STEP 6: PAGINATION
+    # ============================================
+    page = int(request.query_params.get('page', 1))
+    page_size = int(request.query_params.get('page_size', 10))
+    page_size = min(page_size, 50)
+    
+    total_count = len(filtered_jobs)
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+    
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paginated_jobs = filtered_jobs[start_idx:end_idx]
+    
+    # Build pagination links
+    base_url = request.build_absolute_uri(request.path)
+    next_link = None
+    prev_link = None
+    
+    if page < total_pages:
+        next_link = f"{base_url}?page={page + 1}&page_size={page_size}"
+        if search:
+            next_link += f"&search={search}"
+        if job_id_filter:
+            next_link += f"&job_id={job_id_filter}"
+        if date_filter:
+            next_link += f"&date={date_filter}"
+    
+    if page > 1:
+        prev_link = f"{base_url}?page={page - 1}&page_size={page_size}"
+        if search:
+            prev_link += f"&search={search}"
+        if job_id_filter:
+            prev_link += f"&job_id={job_id_filter}"
+        if date_filter:
+            prev_link += f"&date={date_filter}"
+    
+    total_elapsed = time.time() - start_time
+    
+    return Response({
+        'count': total_count,
+        'next': next_link,
+        'previous': prev_link,
+        'total_pages': total_pages,
+        'current_page': page,
+        'page_size': len(paginated_jobs),
+        'jobs': paginated_jobs,
+        'performance': {
+            'total_time': f'{total_elapsed:.2f}s',
+            'batch_fetch_time': f'{batch_elapsed:.2f}s',
+        }
+    })
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def allocated_jobs_list(request):
+    """
+    Get allocated jobs (grouped by job_id) with pagination
+    Query params:
+    - page: Page number
+    - page_size: Items per page (default: 10, max: 50)
+    - search: Search in job_id, farmer, mukkadam, activity
+    - date: Filter by scheduled date (YYYY-MM-DD)
+    - activity_name: Filter by activity name
+    """
+    start_time = time.time()
+    
+    search = request.query_params.get('search', '').strip()
+    date_filter = request.query_params.get('date')
+    activity_name_filter = request.query_params.get('activity_name', '').strip()
+    
+    # Get allocated/in-progress allocations
+    queryset = Allocation.objects.filter(
+        status__in=['allocated', 'in_progress']
+    ).select_related('job_activity', 'allocated_by').order_by('-allocated_at')
+    
+    # Collect job IDs and related IDs
+    job_ids = set()
+    farmer_ids = set()
+    mukkadam_ids = set()
+    transport_provider_ids = set()
+    
+    for allocation in queryset:
+        job_id = str(allocation.farmer_work_id)
+        job_ids.add(job_id)
+        mukkadam_ids.add(allocation.mukkadam_id)
+        if allocation.transport_provider_id:
+            transport_provider_ids.add(allocation.transport_provider_id)
+    
+    # Fetch jobs from external API
+    jobs_cache = {}
+    try:
+        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
+        
+        response = requests.get(
+            api_url,
+            headers={'Authorization': token},
+            timeout=50
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            jobs_list = data.get('data', data) if isinstance(data, dict) else data
+            
+            if isinstance(jobs_list, list):
+                for job in jobs_list:
+                    j_id = str(job.get('work_id') or job.get('id'))
+                    if j_id in job_ids:
+                        jobs_cache[j_id] = job
+                        f_id = job.get('farmer_id')
+                        if f_id:
+                            farmer_ids.add(str(f_id))
+    except Exception as e:
+        print(f"❌ Error fetching jobs: {str(e)}")
+    
+    # Batch fetch related data
+    batch_start = time.time()
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
+    transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)
+    batch_elapsed = time.time() - batch_start
+    
+    # Group allocations by job_id
+    allocations_by_job = {}
+    for allocation in queryset:
+        job_id = str(allocation.farmer_work_id)
+        if job_id not in allocations_by_job:
+            allocations_by_job[job_id] = []
+        allocations_by_job[job_id].append(allocation)
+    
+    # Filter and enrich jobs
+    from datetime import datetime
+    def get_effective_job_date(job):
+        if not job:
+            return datetime.min
+        date_str = job.get('scheduled_date')
+        if not date_str and job.get('activities'):
+            dates = [a.get('scheduled_date') for a in job.get('activities', []) if a.get('scheduled_date')]
+            if dates:
+                date_str = sorted(dates)[0]
+        
+        if date_str:
+            try:
+                parsed_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                return parsed_date.replace(tzinfo=None)
+            except:
+                pass
+        return datetime.min
+    
+    enriched_jobs = []
+    
+    for job_id, job_allocations in allocations_by_job.items():
+        job_data = jobs_cache.get(job_id, {})
+        
+        # Apply date filter
+        if date_filter:
+            job_time = get_effective_job_date(job_data)
+            if job_time != datetime.min:
+                job_date_str = job_time.strftime('%Y-%m-%d')
+                if job_date_str != date_filter:
+                    continue
+            else:
+                continue
+        
+        # Apply activity name filter
+        if activity_name_filter:
+            has_matching_activity = any(
+                activity_name_filter.lower() in (alloc.job_activity.activity_name or '').lower()
+                for alloc in job_allocations
+            )
+            if not has_matching_activity:
+                continue
+        
+        # Apply search filter
+        if search:
+            farmer_id = str(job_data.get('farmer_id', ''))
+            farmer_data = farmers_cache.get(farmer_id, {})
+            farmer_name = farmer_data.get('farmer_name', '')
+            
+            mukkadam_names = [
+                mukkadams_cache.get(alloc.mukkadam_id, {}).get('mukkadam_name', '')
+                for alloc in job_allocations
+            ]
+            
+            search_lower = search.lower()
+            if not (
+                search_lower in job_id.lower() or
+                search_lower in (job_data.get('title', '') or '').lower() or
+                search_lower in farmer_name.lower() or
+                search_lower in (job_data.get('point_of_contact', '') or '').lower() or
+                any(search_lower in name.lower() for name in mukkadam_names)
+            ):
+                continue
+        
+        # Enrich job data
+        farmer_id = str(job_data.get('farmer_id', ''))
+        farmer_data = farmers_cache.get(farmer_id, {})
+        
+        # Enrich allocations
+        enriched_allocations = []
+        for allocation in job_allocations:
+            mukkadam_data = mukkadams_cache.get(allocation.mukkadam_id, {})
+            transport_data = None
+            if allocation.transport_provider_id:
+                transport_data = transport_providers_cache.get(allocation.transport_provider_id, {})
+            
+            enriched_allocations.append({
+                'id': allocation.id,
+                'farmer_work_id': allocation.farmer_work_id,
+                'activity_name': allocation.job_activity.activity_name if allocation.job_activity else 'Unknown',
+                'allocated_area': float(allocation.allocated_area),
+                'work_date': str(allocation.work_date) if allocation.work_date else None,
+                'crew_size': allocation.crew_size,
+                'status': allocation.status,
+                'mukkadam_id': allocation.mukkadam_id,
+                'mukkadam_name': mukkadam_data.get('mukkadam_name', f'#{allocation.mukkadam_id}'),
+                'mukkadam_price': float(allocation.mukkadam_price),
+                'transport_type': allocation.transport_type,
+                'transport_provider_id': allocation.transport_provider_id,
+                'transport_name': transport_data.get('name') if transport_data else None,
+                'transport_price': float(allocation.transport_price or 0),
+                'total_cost': float(allocation.total_cost),
+                'allocated_at': allocation.allocated_at.isoformat(),
+            })
+
+        effective_date = None
+        date_str = job_data.get('scheduled_date')
+
+        # Try to get from API job data first
+        if not date_str and job_data.get('activities'):
+            activity_dates = []
+            for activity in job_data.get('activities', []):
+                if not activity.get('is_lost'):
+                    act_date = activity.get('scheduled_date') or activity.get('date_time')
+                    if act_date:
+                        activity_dates.append(act_date)
+            
+            if activity_dates:
+                date_str = sorted(activity_dates)[0]
+
+        # ✅ FALLBACK: If job not in external API, get from JobActivity DB records
+        if not date_str:
+            db_dates = []
+            for allocation in job_allocations:
+                if allocation.job_activity and allocation.job_activity.scheduled_datetime:
+                    db_dates.append(allocation.job_activity.scheduled_datetime)
+            
+            if db_dates:
+                earliest_date = min(db_dates)
+                date_str = earliest_date.strftime('%Y-%m-%d')
+
+        if date_str:
+            effective_date = date_str.split('T')[0]  # Get just the date part (YYYY-MM-DD)
+
+        enriched_jobs.append({
+            'job_id': job_id,
+            'job_data': {
+                **job_data,
+                'farmer': farmer_data,
+                'scheduled_date': effective_date,  # ✅ ADD CALCULATED DATE
+            },
+            'allocations': enriched_allocations,
+            'total_mukkadam_cost': sum(float(a.mukkadam_price) for a in job_allocations),
+            'total_transport_cost': sum(float(a.transport_price or 0) for a in job_allocations),
+            'total_area': sum(float(a.allocated_area) for a in job_allocations),
+        })
+    
+    # Sort by scheduled date
+    enriched_jobs.sort(key=lambda x: get_effective_job_date(x['job_data']))
+    
+    # Manual pagination
+    page = int(request.query_params.get('page', 1))
+    page_size = int(request.query_params.get('page_size', 10))
+    page_size = min(page_size, 50)
+    
+    total_count = len(enriched_jobs)
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+    
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paginated_jobs = enriched_jobs[start_idx:end_idx]
+    
+    # Build pagination links
+    base_url = request.build_absolute_uri(request.path)
+    next_link = None
+    prev_link = None
+    
+    if page < total_pages:
+        next_link = f"{base_url}?page={page + 1}&page_size={page_size}"
+        if search:
+            next_link += f"&search={search}"
+        if date_filter:
+            next_link += f"&date={date_filter}"
+        if activity_name_filter:
+            next_link += f"&activity_name={activity_name_filter}"
+    
+    if page > 1:
+        prev_link = f"{base_url}?page={page - 1}&page_size={page_size}"
+        if search:
+            prev_link += f"&search={search}"
+        if date_filter:
+            prev_link += f"&date={date_filter}"
+        if activity_name_filter:
+            prev_link += f"&activity_name={activity_name_filter}"
+    
+    total_elapsed = time.time() - start_time
+    
+    return Response({
+        'count': total_count,
+        'next': next_link,
+        'previous': prev_link,
+        'total_pages': total_pages,
+        'current_page': page,
+        'page_size': len(paginated_jobs),
+        'jobs': paginated_jobs,
+        'performance': {
+            'total_time': f'{total_elapsed:.2f}s',
+            'batch_fetch_time': f'{batch_elapsed:.2f}s',
+        }
+    })
+@permission_classes([AllowAny])
+def activity_logs_list(request):
+    start_time = time.time()
+    print("\n" + "="*50)
+    print("🚀 STARTING DEBUG REQUEST")
+    print("="*50)
+
+    # --- Filter Logic (Standard) ---
     activity_type = request.query_params.get('activity_type')
     mukkadam_id = request.query_params.get('mukkadam_id')
     job_id = request.query_params.get('job_id')
     days = request.query_params.get('days', 30)
 
     queryset = ActivityLog.objects.all()
-
     if activity_type:
         queryset = queryset.filter(activity_type=activity_type)
     if mukkadam_id:
@@ -1396,91 +3176,87 @@ def activity_logs_list(request):
         from_date = timezone.now() - timedelta(days=int(days))
         queryset = queryset.filter(performed_at__gte=from_date)
 
-    # Order by most recent first
-    queryset = queryset.select_related('performed_by').order_by('-performed_at')
+    queryset = queryset.select_related('performed_by').order_by('-performed_at')[:200]
+    logs_queryset = list(queryset)
+
+    if not logs_queryset:
+        return Response([])
 
     # ========================================
-    # STEP 2: APPLY PAGINATION
+    # [DEBUG 1] ID EXTRACTION
     # ========================================
-    paginator = ActivityLogPagination()
-    paginated_queryset = paginator.paginate_queryset(queryset, request)
-
-    if not paginated_queryset:
-        return Response({
-            'count': 0,
-            'next': None,
-            'previous': None,
-            'total_pages': 0,
-            'current_page': 1,
-            'logs': []
-        })
-
-    # ========================================
-    # STEP 3: FETCH RELATED DATA (same as before)
-    # ========================================
-    # Collect all Job IDs from the CURRENT PAGE
-    job_ids = set()
-    for log in paginated_queryset:
-        if log.job_id:
-            job_ids.add(str(log.job_id))
-
-    jobs_cache = {}
-    EXTERNAL_API_URL = getattr(settings, 'EXTERNAL_API_URL', 'https://ops.bharatintelligence.ai/ops/api')
-    job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-
-    if job_ids:
-        try:
-            response = requests.get(
-                f'{EXTERNAL_API_URL}/get_allocated_jobs/',
-                headers={'Authorization': job_token},
-                timeout=50
-            )
-            if response.status_code == 200:
-                data = response.json()
-                jobs_list = data.get('data', data) if isinstance(data, dict) else data
-                
-                if isinstance(jobs_list, list):
-                    for job in jobs_list:
-                        j_id = str(job.get('work_id') or job.get('id') or job.get('job_id'))
-                        if j_id in job_ids:
-                            jobs_cache[j_id] = job
-        except Exception as e:
-            print(f"❌ Error fetching jobs: {str(e)}")
-
-    # Extract IDs for batch fetching
+    print("\n--- [DEBUG STEP 1] Extracting IDs ---")
     farmer_ids = set()
-    for job in jobs_cache.values():
-        f_id = job.get('farmer_id')
-        if f_id:
-            farmer_ids.add(str(f_id))
-
     mukkadam_ids = set()
     transport_provider_ids = set()
-    for log in paginated_queryset:
-        if log.mukkadam_id:
-            mukkadam_ids.add(log.mukkadam_id)
-        if log.transport_provider_id:
-            transport_provider_ids.add(log.transport_provider_id)
+    
+    # Counter to avoid spamming console
+    debug_print_count = 0 
 
-    # Batch fetch
-    print("\n⚡ PARALLEL BATCH FETCHING...")
-    batch_start = time.time()
-    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
-    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
-    transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)
-    batch_elapsed = time.time() - batch_start
-    print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
+    for log in logs_queryset:
+        if log.mukkadam_id: mukkadam_ids.add(log.mukkadam_id)
+        if log.transport_provider_id: transport_provider_ids.add(log.transport_provider_id)
+        
+        # --- Farmer Extraction ---
+        raw_f_id = getattr(log, 'farmer_id', None)
+        source = "Model Field"
+        
+        if not raw_f_id and log.metadata:
+            raw_f_id = log.metadata.get('farmer_id')
+            source = "Metadata"
+            
+        if raw_f_id:
+            # FORCE STRING
+            str_id = str(raw_f_id).strip()
+            farmer_ids.add(str_id)
+            
+            # Print details for the first 3 found farmers only
+            if debug_print_count < 3:
+                print(f"✅ Found Farmer ID: {raw_f_id} (Type: {type(raw_f_id)}) -> Converted to key: '{str_id}' (Source: {source})")
+                debug_print_count += 1
+    
+    print(f"📋 Total Unique Farmer IDs to fetch: {len(farmer_ids)}")
+    print(f"📋 IDs List: {list(farmer_ids)}")
 
     # ========================================
-    # STEP 4: BUILD ENRICHED LOGS (same as before)
+    # [DEBUG 2] BATCH FETCH
+    # ========================================
+    print("\n--- [DEBUG STEP 2] Fetching Data ---")
+    
+    mukkadams_cache = {} # (Assume these work)
+    transport_providers_cache = {} # (Assume these work)
+    farmers_cache = {}
+
+    if mukkadam_ids:
+        # Placeholder for existing function
+        # mukkadams_cache = batch_fetch_mukkadams(...)
+        pass
+    if transport_provider_ids:
+        # Placeholder for existing function
+        # transport_providers_cache = batch_fetch_transport_providers(...)
+        pass
+
+    if farmer_ids:
+        # CALLING THE DEBUGGABLE BATCH FUNCTION BELOW
+        farmers_cache = batch_fetch_farmers_debug(list(farmer_ids))
+
+    # ========================================
+    # [DEBUG 3] MAPPING BACK
+    # ========================================
+    print("\n--- [DEBUG STEP 3] Mapping Data to Logs ---")
+
+    # ========================================
+    # ✅ STEP 3: BUILD ENRICHED LOGS
     # ========================================
     logs = []
-    for log in paginated_queryset:
+    for log in logs_queryset:
+        # --- Mukkadam Logic ---
         mukkadam_name = 'Unknown'
         if log.mukkadam_id:
             m_data = mukkadams_cache.get(log.mukkadam_id)
             mukkadam_name = m_data.get('mukkadam_name', f'#{log.mukkadam_id}') if m_data else f'#{log.mukkadam_id}'
 
+        # --- Transport Logic ---
         transport_name = None
         if log.transport_provider_id:
             t_data = transport_providers_cache.get(log.transport_provider_id)
@@ -1488,29 +3264,35 @@ def activity_logs_list(request):
 
         farmer_name = None
         farmer_details = None
-        job_details = None
         
-        if log.job_id:
-            job_data = jobs_cache.get(str(log.job_id))
-            if job_data:
-                f_id = str(job_data.get('farmer_id', ''))
-                f_details = farmers_cache.get(f_id)
-                if f_details:
-                    farmer_details = f_details
-                    farmer_name = (
-                        f_details.get('farmer_name') or 
-                        f_details.get('name') or 
-                        f_details.get('full_name') or 
-                        f_details.get('first_name')
-                    )
-                else:
-                    farmer_name = f'Farmer #{f_id}' if f_id else 'Unknown Farmer'
-
-                job_details = {
-                    'job_name': job_data.get('job_name'),
-                    'location': job_data.get('location'),
-                    'scheduled_date': job_data.get('scheduled_date')
-                }
+        # RE-EXTRACT ID
+        raw_f_id = getattr(log, 'farmer_id', None)
+        if not raw_f_id and log.metadata:
+            raw_f_id = log.metadata.get('farmer_id')
+            
+        if raw_f_id:
+            f_id_str = str(raw_f_id).strip()
+            
+            # LOOKUP
+            f_data = farmers_cache.get(f_id_str)
+            
+            if f_data:
+                # TRY TO FIND A NAME
+                # Check for common keys
+                farmer_name = (
+                    f_data.get('farmer_name') or 
+                    f_data.get('name') or 
+                    f_data.get('full_name') or
+                    f_data.get('first_name')
+                )
+                farmer_details = f_data
+                mapped_count += 1
+            else:
+                farmer_name = f'Farmer #{f_id_str}'
+                failed_count += 1
+                # Log the first failure only to see what went wrong
+                if failed_count == 1:
+                     print(f"❌ MAPPING FAIL: Log ID {log.id} has ID '{f_id_str}' but it is NOT in farmers_cache keys: {list(farmers_cache.keys())}")
 
         logs.append({
             'id': log.id,
@@ -1518,217 +3300,33 @@ def activity_logs_list(request):
             'activity_type_display': log.get_activity_type_display(),
             'description': log.description,
             'job_id': log.job_id,
-            'job_details': job_details,
             'mukkadam_id': log.mukkadam_id,
             'mukkadam_name': mukkadam_name,
             'transport_provider_id': log.transport_provider_id,
             'transport_name': transport_name,
-            'farmer_id': farmer_details.get('id') if farmer_details else None,
+            
+            # ✅ Corrected Farmer Fields
+            'farmer_id': raw_f_id,
             'farmer_name': farmer_name,
             'farmer_details': farmer_details,
+            
             'amount': float(log.amount) if log.amount else None,
             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
             'performed_at': log.performed_at.isoformat(),
             'metadata': log.metadata,
-            'changes': log.changes,
-            'formatted_changes': format_changes_for_display(log.changes),
         })
 
     total_elapsed = time.time() - start_time
-
-    # ========================================
-    # STEP 5: RETURN PAGINATED RESPONSE
-    # ========================================
+    
     return Response({
-        'count': paginator.page.paginator.count,  # Total count
-        'next': paginator.get_next_link(),  # Next page URL
-        'previous': paginator.get_previous_link(),  # Previous page URL
-        'total_pages': paginator.page.paginator.num_pages,  # Total pages
-        'current_page': paginator.page.number,  # Current page number
-        'page_size': len(logs),  # Items in current page
+        'count': len(logs),
         'logs': logs,
         'performance': {
             'total_time': f'{total_elapsed:.2f}s',
-            'batch_fetch_time': f'{batch_elapsed:.2f}s',
+            # 'batch_fetch_time': f'{batch_elapsed:.2f}s',
             'farmers_fetched': len(farmers_cache)
         }
     })
-
-# @permission_classes([AllowAny])
-# def activity_logs_list(request):
-#     start_time = time.time()
-#     print("\n" + "="*50)
-#     print("🚀 STARTING DEBUG REQUEST")
-#     print("="*50)
-
-#     # --- Filter Logic (Standard) ---
-#     activity_type = request.query_params.get('activity_type')
-#     mukkadam_id = request.query_params.get('mukkadam_id')
-#     job_id = request.query_params.get('job_id')
-#     days = request.query_params.get('days', 30)
-
-#     queryset = ActivityLog.objects.all()
-#     if activity_type:
-#         queryset = queryset.filter(activity_type=activity_type)
-#     if mukkadam_id:
-#         queryset = queryset.filter(mukkadam_id=mukkadam_id)
-#     if job_id:
-#         queryset = queryset.filter(job_id=job_id)
-#     if days:
-#         from_date = timezone.now() - timedelta(days=int(days))
-#         queryset = queryset.filter(performed_at__gte=from_date)
-
-#     queryset = queryset.select_related('performed_by').order_by('-performed_at')[:200]
-#     logs_queryset = list(queryset)
-
-#     if not logs_queryset:
-#         return Response([])
-
-#     # ========================================
-#     # [DEBUG 1] ID EXTRACTION
-#     # ========================================
-#     print("\n--- [DEBUG STEP 1] Extracting IDs ---")
-#     farmer_ids = set()
-#     mukkadam_ids = set()
-#     transport_provider_ids = set()
-    
-#     # Counter to avoid spamming console
-#     debug_print_count = 0 
-
-#     for log in logs_queryset:
-#         if log.mukkadam_id: mukkadam_ids.add(log.mukkadam_id)
-#         if log.transport_provider_id: transport_provider_ids.add(log.transport_provider_id)
-        
-#         # --- Farmer Extraction ---
-#         raw_f_id = getattr(log, 'farmer_id', None)
-#         source = "Model Field"
-        
-#         if not raw_f_id and log.metadata:
-#             raw_f_id = log.metadata.get('farmer_id')
-#             source = "Metadata"
-            
-#         if raw_f_id:
-#             # FORCE STRING
-#             str_id = str(raw_f_id).strip()
-#             farmer_ids.add(str_id)
-            
-#             # Print details for the first 3 found farmers only
-#             if debug_print_count < 3:
-#                 print(f"✅ Found Farmer ID: {raw_f_id} (Type: {type(raw_f_id)}) -> Converted to key: '{str_id}' (Source: {source})")
-#                 debug_print_count += 1
-    
-#     print(f"📋 Total Unique Farmer IDs to fetch: {len(farmer_ids)}")
-#     print(f"📋 IDs List: {list(farmer_ids)}")
-
-#     # ========================================
-#     # [DEBUG 2] BATCH FETCH
-#     # ========================================
-#     print("\n--- [DEBUG STEP 2] Fetching Data ---")
-    
-#     mukkadams_cache = {} # (Assume these work)
-#     transport_providers_cache = {} # (Assume these work)
-#     farmers_cache = {}
-
-#     if mukkadam_ids:
-#         # Placeholder for existing function
-#         # mukkadams_cache = batch_fetch_mukkadams(...)
-#         pass
-#     if transport_provider_ids:
-#         # Placeholder for existing function
-#         # transport_providers_cache = batch_fetch_transport_providers(...)
-#         pass
-
-#     if farmer_ids:
-#         # CALLING THE DEBUGGABLE BATCH FUNCTION BELOW
-#         farmers_cache = batch_fetch_farmers_debug(list(farmer_ids))
-
-#     # ========================================
-#     # [DEBUG 3] MAPPING BACK
-#     # ========================================
-#     print("\n--- [DEBUG STEP 3] Mapping Data to Logs ---")
-
-#     # ========================================
-#     # ✅ STEP 3: BUILD ENRICHED LOGS
-#     # ========================================
-#     logs = []
-#     for log in logs_queryset:
-#         # --- Mukkadam Logic ---
-#         mukkadam_name = 'Unknown'
-#         if log.mukkadam_id:
-#             m_data = mukkadams_cache.get(log.mukkadam_id)
-#             mukkadam_name = m_data.get('mukkadam_name', f'#{log.mukkadam_id}') if m_data else f'#{log.mukkadam_id}'
-
-#         # --- Transport Logic ---
-#         transport_name = None
-#         if log.transport_provider_id:
-#             t_data = transport_providers_cache.get(log.transport_provider_id)
-#             transport_name = t_data.get('name', f'#{log.transport_provider_id}') if t_data else f'#{log.transport_provider_id}'
-
-#         farmer_name = None
-#         farmer_details = None
-        
-#         # RE-EXTRACT ID
-#         raw_f_id = getattr(log, 'farmer_id', None)
-#         if not raw_f_id and log.metadata:
-#             raw_f_id = log.metadata.get('farmer_id')
-            
-#         if raw_f_id:
-#             f_id_str = str(raw_f_id).strip()
-            
-#             # LOOKUP
-#             f_data = farmers_cache.get(f_id_str)
-            
-#             if f_data:
-#                 # TRY TO FIND A NAME
-#                 # Check for common keys
-#                 farmer_name = (
-#                     f_data.get('farmer_name') or 
-#                     f_data.get('name') or 
-#                     f_data.get('full_name') or
-#                     f_data.get('first_name')
-#                 )
-#                 farmer_details = f_data
-#                 mapped_count += 1
-#             else:
-#                 farmer_name = f'Farmer #{f_id_str}'
-#                 failed_count += 1
-#                 # Log the first failure only to see what went wrong
-#                 if failed_count == 1:
-#                      print(f"❌ MAPPING FAIL: Log ID {log.id} has ID '{f_id_str}' but it is NOT in farmers_cache keys: {list(farmers_cache.keys())}")
-
-#         logs.append({
-#             'id': log.id,
-#             'activity_type': log.activity_type,
-#             'activity_type_display': log.get_activity_type_display(),
-#             'description': log.description,
-#             'job_id': log.job_id,
-#             'mukkadam_id': log.mukkadam_id,
-#             'mukkadam_name': mukkadam_name,
-#             'transport_provider_id': log.transport_provider_id,
-#             'transport_name': transport_name,
-            
-#             # ✅ Corrected Farmer Fields
-#             'farmer_id': raw_f_id,
-#             'farmer_name': farmer_name,
-#             'farmer_details': farmer_details,
-            
-#             'amount': float(log.amount) if log.amount else None,
-#             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
-#             'performed_at': log.performed_at.isoformat(),
-#             'metadata': log.metadata,
-#         })
-
-#     total_elapsed = time.time() - start_time
-    
-#     return Response({
-#         'count': len(logs),
-#         'logs': logs,
-#         'performance': {
-#             'total_time': f'{total_elapsed:.2f}s',
-#             # 'batch_fetch_time': f'{batch_elapsed:.2f}s',
-#             'farmers_fetched': len(farmers_cache)
-#         }
-#     })
 
 def batch_fetch_farmers_debug(farmer_ids, max_workers=5):
     print(f"🔄 Executing batch_fetch for: {farmer_ids}")
