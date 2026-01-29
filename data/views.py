@@ -364,7 +364,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
                             location=target_activity.get('location', ''),
                             estimated_workers=int(target_activity.get('estimated_workers', 10)),
                             rate_per_acre=rate_per_acre , # ✅ CALCULATED
-                            is_manually_edited=target_activity.get('is_manually_edited')
+                            # ✅ CORRECT - Defaults to False if not in API response
+                            is_manually_edited=target_activity.get('is_manually_edited', False)
                         )
                         
                         print(f"✅ Created JobActivity #{job_activity.id} from API data")
