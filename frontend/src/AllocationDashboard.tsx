@@ -64,6 +64,15 @@ const [editReason, setEditReason] = useState('');
 const [lostReason, setLostReason] = useState('');
 const [editingJobId, setEditingJobId] = useState(null);
 const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
+
+const [activityLogsPage, setActivityLogsPage] = useState(1);
+const [activityLogsPageSize, setActivityLogsPageSize] = useState(20);
+const [activityLogsTotalPages, setActivityLogsTotalPages] = useState(0);
+const [activityLogsTotalCount, setActivityLogsTotalCount] = useState(0);
+const [loadingActivityLogs, setLoadingActivityLogs] = useState(false);
+
+
 // ADD these new state variables:
 const [editFormData, setEditFormData] = useState({
   activity_name: '',
@@ -445,24 +454,32 @@ const handleMarkComplete = async (allocationId: number) => {
 
 const refreshAllocations = async (
   currentMukkadams = mukkadams, 
-  currentProviders = transportProviders
+  currentProviders = transportProviders,
+  activityLogPage = 1  // ✅ NEW PARAMETER
 ) => {
   const config = getAuthConfig();
   try {
+    setLoadingActivityLogs(true);  // ✅ NEW
+    
     const [allocationsRes, activityRes, mukkadamPayRes, transportPayRes] = await Promise.all([
       axios.get(`${API_BASE_URL_A}/ap/allocations/`, config),
-      axios.get(`${API_BASE_URL_A}/ap/activity-logs/`, config),
+      // ✅ UPDATED: Add pagination params
+      axios.get(`${API_BASE_URL_A}/ap/activity-logs/?page=${activityLogPage}&page_size=${activityLogsPageSize}`, config),
       axios.get(`${API_BASE_URL_A}/ap/payment-requests/`, config),
       axios.get(`${API_BASE_URL_A}/ap/transport-payment-requests/`, config)
     ]);
 
-    // ✅ FIX: Extract 'logs' array from the response object
-    const activityLogsArray = activityRes.data.logs || [];  // ✅ CHANGED
-    
-    // Safe data extraction for others
     const newAllocations = Array.isArray(allocationsRes.data) 
       ? allocationsRes.data 
       : allocationsRes.data.results || [];
+
+    // ✅ UPDATED: Extract paginated activity logs
+    const activityLogsData = activityRes.data;
+    const activityLogsArray = activityLogsData.logs || [];
+    
+    // ✅ NEW: Store pagination metadata
+    setActivityLogsTotalCount(activityLogsData.count || 0);
+    setActivityLogsTotalPages(activityLogsData.total_pages || 0);
 
     const mukkadamPayments = Array.isArray(mukkadamPayRes.data)
       ? mukkadamPayRes.data
@@ -472,25 +489,36 @@ const refreshAllocations = async (
       ? transportPayRes.data
       : transportPayRes.data.results || [];
 
-    // Update State - All guaranteed to be arrays
     setAllocations(newAllocations);
-    setActivityLogs(activityLogsArray);  // ✅ Now this is an array
+    setActivityLogs(activityLogsArray);
     setMukkadamPaymentRequests(mukkadamPayments);
     setTransportPaymentRequests(transportPayments);
 
-    // Re-calculate derived stats
     if (currentMukkadams.length > 0) processMukkadamAllocations(newAllocations, currentMukkadams);
     if (currentProviders.length > 0) processTransportAllocations(newAllocations, currentProviders);
     buildDailyStats(newAllocations);
 
   } catch (error) {
     console.error('Error refreshing allocations:', error);
-    
-    // ✅ Set all to empty arrays on error
     setActivityLogs([]);
     setMukkadamPaymentRequests([]);
     setTransportPaymentRequests([]);
+  } finally {
+    setLoadingActivityLogs(false);  // ✅ NEW
   }
+};
+
+// ✅ NEW: Function to change page
+const handleActivityLogPageChange = (newPage: number) => {
+  setActivityLogsPage(newPage);
+  refreshAllocations(mukkadams, transportProviders, newPage);
+};
+
+// ✅ NEW: Function to change page size
+const handleActivityLogPageSizeChange = (newSize: number) => {
+  setActivityLogsPageSize(newSize);
+  setActivityLogsPage(1); // Reset to first page
+  refreshAllocations(mukkadams, transportProviders, 1);
 };
 const [activityFilter, setActivityFilter] = useState<string>('all');
 
@@ -4240,6 +4268,7 @@ const handleSaveSuccess = async () => {
         </button>
       </div>
 
+
       {/* Row 2: Search + Date Filter */}
       <div className="flex gap-4">
         {/* Search */}
@@ -4270,6 +4299,30 @@ const handleSaveSuccess = async () => {
               Clear
             </button>
           )}
+        </div>
+      </div>
+
+<div className="flex items-center justify-between bg-white p-4 rounded-xl border">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Show:</span>
+          <select
+            value={activityLogsPageSize}
+            onChange={(e) => handleActivityLogPageSizeChange(Number(e.target.value))}
+            className="px-3 py-1 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+          >
+            <option value={10}>10</option>
+            <option value={20}>20</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+          <span className="text-sm text-gray-600">per page</span>
+        </div>
+
+        {/* ✅ NEW: Results Info */}
+        <div className="text-sm text-gray-600">
+          Showing {(activityLogsPage - 1) * activityLogsPageSize + 1} to{' '}
+          {Math.min(activityLogsPage * activityLogsPageSize, activityLogsTotalCount)} of{' '}
+          {activityLogsTotalCount} results
         </div>
       </div>
     </div>

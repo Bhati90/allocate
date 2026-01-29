@@ -69,7 +69,7 @@ class MakeCallViews(APIView):
     """
     permission_classes = [AllowAny]
     
-    CENTRAL_PHONE = '+91-804-7361465'
+    CENTRAL_PHONE = '+918047361465'
     
     def post(self, request):
         to_number = request.data.get('to_number')
@@ -84,7 +84,11 @@ class MakeCallViews(APIView):
                 'message': 'Phone number is required'
             }, status=status.HTTP_400_BAD_REQUEST)
         
+        # ✅ Clean and add +91 if missing
         to_number = to_number.replace(' ', '').replace('-', '')
+        if not to_number.startswith('+'):
+            to_number = f'+91{to_number}'  # Add +91 prefix
+        
         
         try:
             # 1️⃣ Make the call via Exotel
@@ -1346,17 +1350,34 @@ from .models import ActivityLog
 
 # Ensure these are imported or defined in your file
 # from .utils import batch_fetch_farmers, batch_fetch_mukkadams, batch_fetch_transport_providers
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+
+class ActivityLogPagination(PageNumberPagination):
+    """Custom pagination for activity logs"""
+    page_size = 20  # Default items per page
+    page_size_query_param = 'page_size'  # Allow client to override
+    max_page_size = 100  # Maximum items per page
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def activity_logs_list(request):
     """
-    Get all activity logs with complete details (mirrors allocations_list logic)
-    OPTIMIZED with caching + async
+    Get activity logs with pagination
+    Query params:
+    - page: Page number (default: 1)
+    - page_size: Items per page (default: 20, max: 100)
+    - activity_type: Filter by activity type
+    - mukkadam_id: Filter by mukkadam
+    - job_id: Filter by job
+    - days: Filter by days (default: 30)
     """
     start_time = time.time()
     
     # ========================================
-    # STEP 1: GET LOGS FROM DATABASE
+    # STEP 1: BUILD QUERYSET WITH FILTERS
     # ========================================
     activity_type = request.query_params.get('activity_type')
     mukkadam_id = request.query_params.get('mukkadam_id')
@@ -1375,131 +1396,107 @@ def activity_logs_list(request):
         from_date = timezone.now() - timedelta(days=int(days))
         queryset = queryset.filter(performed_at__gte=from_date)
 
-    # Fetch 200 most recent logs
-    logs_queryset = list(queryset.select_related('performed_by').order_by('-performed_at'))
-
-    if not logs_queryset:
-        return Response({'count': 0, 'logs': []})
+    # Order by most recent first
+    queryset = queryset.select_related('performed_by').order_by('-performed_at')
 
     # ========================================
-    # STEP 2: FETCH JOBS FROM EXTERNAL API
+    # STEP 2: APPLY PAGINATION
     # ========================================
-    print("\n🔄 Fetching job details from external API...")
-    
-    # Collect all Job IDs from the logs
+    paginator = ActivityLogPagination()
+    paginated_queryset = paginator.paginate_queryset(queryset, request)
+
+    if not paginated_queryset:
+        return Response({
+            'count': 0,
+            'next': None,
+            'previous': None,
+            'total_pages': 0,
+            'current_page': 1,
+            'logs': []
+        })
+
+    # ========================================
+    # STEP 3: FETCH RELATED DATA (same as before)
+    # ========================================
+    # Collect all Job IDs from the CURRENT PAGE
     job_ids = set()
-    for log in logs_queryset:
+    for log in paginated_queryset:
         if log.job_id:
             job_ids.add(str(log.job_id))
 
     jobs_cache = {}
-    
-    # CONFIG (Ensure these match your settings)
     EXTERNAL_API_URL = getattr(settings, 'EXTERNAL_API_URL', 'https://ops.bharatintelligence.ai/ops/api')
     job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
 
     if job_ids:
         try:
-            # We fetch all allocated jobs (or you could filter by IDs if API supports it)
             response = requests.get(
                 f'{EXTERNAL_API_URL}/get_allocated_jobs/',
                 headers={'Authorization': job_token},
                 timeout=50
             )
-
             if response.status_code == 200:
                 data = response.json()
-                # Handle list vs dict response structure
                 jobs_list = data.get('data', data) if isinstance(data, dict) else data
                 
                 if isinstance(jobs_list, list):
                     for job in jobs_list:
-                        # Normalize ID extraction
                         j_id = str(job.get('work_id') or job.get('id') or job.get('job_id'))
-                        
-                        # Only cache if this job is relevant to our logs
                         if j_id in job_ids:
                             jobs_cache[j_id] = job
-            else:
-                print(f"⚠️ Job API returned status {response.status_code}")
-
         except Exception as e:
             print(f"❌ Error fetching jobs: {str(e)}")
-    # print(f"📊 Found {len(logs_queryset)} activity logs (Admin: {is_admin})")
 
-    if not logs_queryset:
-        return Response({'count': 0, 'logs': []})
-
-    # ========================================
-    # STEP 3: COLLECT ALL UNIQUE IDs
-    # ========================================
+    # Extract IDs for batch fetching
     farmer_ids = set()
-    
-    # Extract Farmer IDs from the JOBS we just fetched
     for job in jobs_cache.values():
         f_id = job.get('farmer_id')
         if f_id:
             farmer_ids.add(str(f_id))
 
-    # Extract Mukkadam & Transport IDs from LOGS
     mukkadam_ids = set()
     transport_provider_ids = set()
-
-    for log in logs_queryset:
+    for log in paginated_queryset:
         if log.mukkadam_id:
             mukkadam_ids.add(log.mukkadam_id)
         if log.transport_provider_id:
             transport_provider_ids.add(log.transport_provider_id)
 
-    # ========================================
-    # STEP 4: BATCH FETCH ALL DATA IN PARALLEL
-    # ========================================
+    # Batch fetch
     print("\n⚡ PARALLEL BATCH FETCHING...")
     batch_start = time.time()
-
-    # Reuse your existing batch functions
     farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
     mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
     transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)
-
     batch_elapsed = time.time() - batch_start
     print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
 
     # ========================================
-    # STEP 5: BUILD ENRICHED LOGS
+    # STEP 4: BUILD ENRICHED LOGS (same as before)
     # ========================================
     logs = []
-
-    for log in logs_queryset:
-        # 1. Mukkadam Data
+    for log in paginated_queryset:
         mukkadam_name = 'Unknown'
         if log.mukkadam_id:
             m_data = mukkadams_cache.get(log.mukkadam_id)
             mukkadam_name = m_data.get('mukkadam_name', f'#{log.mukkadam_id}') if m_data else f'#{log.mukkadam_id}'
 
-        # 2. Transport Data
         transport_name = None
         if log.transport_provider_id:
             t_data = transport_providers_cache.get(log.transport_provider_id)
             transport_name = t_data.get('name', f'#{log.transport_provider_id}') if t_data else f'#{log.transport_provider_id}'
 
-        # 3. Job & Farmer Data (The Bridge)
         farmer_name = None
         farmer_details = None
         job_details = None
         
         if log.job_id:
             job_data = jobs_cache.get(str(log.job_id))
-            
             if job_data:
-                # Get Farmer ID from the Job
                 f_id = str(job_data.get('farmer_id', ''))
-                
-                # Get Farmer Details from Cache
                 f_details = farmers_cache.get(f_id)
                 if f_details:
                     farmer_details = f_details
-                    # Robust name extraction
                     farmer_name = (
                         f_details.get('farmer_name') or 
                         f_details.get('name') or 
@@ -1509,56 +1506,54 @@ def activity_logs_list(request):
                 else:
                     farmer_name = f'Farmer #{f_id}' if f_id else 'Unknown Farmer'
 
-                # Store basic job info for the log
                 job_details = {
                     'job_name': job_data.get('job_name'),
                     'location': job_data.get('location'),
                     'scheduled_date': job_data.get('scheduled_date')
                 }
 
-        # 4. Construct Final Object
         logs.append({
             'id': log.id,
             'activity_type': log.activity_type,
             'activity_type_display': log.get_activity_type_display(),
             'description': log.description,
             'job_id': log.job_id,
-            'job_details': job_details, # Added this for extra context
-            
+            'job_details': job_details,
             'mukkadam_id': log.mukkadam_id,
             'mukkadam_name': mukkadam_name,
-            
             'transport_provider_id': log.transport_provider_id,
             'transport_name': transport_name,
-            
-            # ✅ CORRECTED FARMER FIELDS
             'farmer_id': farmer_details.get('id') if farmer_details else None,
             'farmer_name': farmer_name,
             'farmer_details': farmer_details,
-            
             'amount': float(log.amount) if log.amount else None,
             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
             'performed_at': log.performed_at.isoformat(),
             'metadata': log.metadata,
-            'changes': log.changes,  # ✅ Include changes for frontend
-            'formatted_changes': format_changes_for_display(log.changes),  # ✅ Helper
+            'changes': log.changes,
+            'formatted_changes': format_changes_for_display(log.changes),
         })
 
-        # ✅ ADMIN-ONLY: Include reason field
-        
-
     total_elapsed = time.time() - start_time
-    
+
+    # ========================================
+    # STEP 5: RETURN PAGINATED RESPONSE
+    # ========================================
     return Response({
-        'count': len(logs),
+        'count': paginator.page.paginator.count,  # Total count
+        'next': paginator.get_next_link(),  # Next page URL
+        'previous': paginator.get_previous_link(),  # Previous page URL
+        'total_pages': paginator.page.paginator.num_pages,  # Total pages
+        'current_page': paginator.page.number,  # Current page number
+        'page_size': len(logs),  # Items in current page
         'logs': logs,
-        # 'is_admin': is_admin,  # ✅ Tell frontend if user is admin
         'performance': {
             'total_time': f'{total_elapsed:.2f}s',
             'batch_fetch_time': f'{batch_elapsed:.2f}s',
             'farmers_fetched': len(farmers_cache)
         }
     })
+
 # @permission_classes([AllowAny])
 # def activity_logs_list(request):
 #     start_time = time.time()
