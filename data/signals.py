@@ -58,107 +58,46 @@ def capture_allocation_old_values(sender, instance, **kwargs):
     else:
         _thread_locals.old_allocation = None
 
-@receiver(post_save, sender=Allocation)
-def log_allocation_activity_with_changes(sender, instance, created, **kwargs):
-    """Log allocation with detailed change tracking"""
+# @receiver(post_save, sender=Allocation)
+# def log_allocation_activity_with_changes(sender, instance, created, **kwargs):
+#     """Log allocation with detailed change tracking"""
     
-    # Get names
-    mukkadam_name = get_mukkadam_name(instance.mukkadam_id)
-    transport_name = None
-    if instance.transport_provider_id:
-        transport_name = get_transport_provider_name(instance.transport_provider_id)
+#     # ✅ ONLY LOG CREATION - Updates are handled manually in viewset
+#     if not created:
+#         return  # Skip updates - they're logged manually with correct user
     
-    if created:
-        # New allocation - log all fields as "new"
-        ActivityLog.objects.create(
-            activity_type='allocation_created',
-            description=f"Allocated {instance.allocated_area} acres to {mukkadam_name} for {instance.job_activity.activity_name}",
-            allocation=instance,
-            # allocation_id=instance.id,
-            job_id=instance.job_activity.job_id,
-            mukkadam_id=instance.mukkadam_id,
-            mukkadam_name=mukkadam_name,
-            transport_provider_id=instance.transport_provider_id,
-            transport_name=transport_name,
-            amount=instance.total_cost,
-            performed_by=instance.allocated_by,
-            changes={
-                'allocated_area': {'old': None, 'new': float(instance.allocated_area)},
-                'mukkadam_price': {'old': None, 'new': float(instance.mukkadam_price)},
-                'transport_price': {'old': None, 'new': float(instance.transport_price or 0)},
-                'work_date': {'old': None, 'new': str(instance.work_date)},
-                'crew_size': {'old': None, 'new': instance.crew_size},
-                'transport_type': {'old': None, 'new': instance.transport_type},
-            },
-            metadata={
-                'activity_name': instance.job_activity.activity_name,
-                'status': instance.status,
-            }
-        )
-    else:
-        # Update - track what changed
-        old_instance = getattr(_thread_locals, 'old_allocation', None)
-        if not old_instance:
-            return
-        
-        changes = {}
-        
-        # Track field changes
-        fields_to_track = {
-            'allocated_area': 'Area',
-            'mukkadam_price': 'Mukkadam Price',
-            'transport_price': 'Transport Price',
-            'work_date': 'Work Date',
-            'crew_size': 'Crew Size',
-            'transport_type': 'Transport Type',
-            'transport_provider_id': 'Transport Provider',
-            'status': 'Status',
-            'notes': 'Notes',
-        }
-        
-        for field, label in fields_to_track.items():
-            old_val = getattr(old_instance, field)
-            new_val = getattr(instance, field)
-            
-            # Convert Decimal to float for comparison
-            if isinstance(old_val, Decimal):
-                old_val = float(old_val)
-            if isinstance(new_val, Decimal):
-                new_val = float(new_val)
-            
-            if old_val != new_val:
-                changes[field] = {
-                    'label': label,
-                    'old': str(old_val) if old_val is not None else 'Not set',
-                    'new': str(new_val) if new_val is not None else 'Not set'
-                }
-        
-        # Only log if there are actual changes
-        if changes:
-            # Build description
-            changed_fields = ', '.join([changes[k]['label'] for k in changes.keys()])
-            
-            ActivityLog.objects.create(
-                activity_type='allocation_updated',
-                description=f"Updated allocation for {mukkadam_name}: Changed {changed_fields}",
-                allocation=instance,
-                # allocation_id=instance.id,
-                job_id=instance.job_activity.job_id,
-                mukkadam_id=instance.mukkadam_id,
-                mukkadam_name=mukkadam_name,
-                transport_provider_id=instance.transport_provider_id,
-                transport_name=transport_name,
-                amount=instance.total_cost,
-                performed_by=instance.allocated_by,
-                changes=changes,
-                metadata={
-                    'activity_name': instance.job_activity.activity_name,
-                    'total_changes': len(changes),
-                }
-            )
-        
-        # Clean up thread local
-        _thread_locals.old_allocation = None
+#     # Get names
+#     mukkadam_name = get_mukkadam_name(instance.mukkadam_id)
+#     transport_name = None
+#     if instance.transport_provider_id:
+#         transport_name = get_transport_provider_name(instance.transport_provider_id)
+    
+#     # New allocation - log all fields as "new"
+#     ActivityLog.objects.create(
+#         activity_type='allocation_created',
+#         description=f"Allocated {instance.allocated_area} acres to {mukkadam_name} for {instance.job_activity.activity_name}",
+#         allocation=instance,
+#         job_id=instance.job_activity.job_id,
+#         mukkadam_id=instance.mukkadam_id,
+#         mukkadam_name=mukkadam_name,
+#         transport_provider_id=instance.transport_provider_id,
+#         transport_name=transport_name,
+#         amount=instance.total_cost,
+#         performed_by=instance.allocated_by,
+#         changes={
+#             'allocated_area': {'old': None, 'new': float(instance.allocated_area)},
+#             'mukkadam_price': {'old': None, 'new': float(instance.mukkadam_price)},
+#             'transport_price': {'old': None, 'new': float(instance.transport_price or 0)},
+#             'work_date': {'old': None, 'new': str(instance.work_date)},
+#             'crew_size': {'old': None, 'new': instance.crew_size},
+#             'transport_type': {'old': None, 'new': instance.transport_type},
+#         },
+#         metadata={
+#             'activity_name': instance.job_activity.activity_name,
+#             'status': instance.status,
+#         }
+#     )
+
 
 @receiver(post_delete, sender=Allocation)
 def log_allocation_deletion(sender, instance, **kwargs):

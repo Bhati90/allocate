@@ -307,7 +307,21 @@ class Allocation(models.Model):
     
     def __str__(self):
         return f"{self.job_activity.job_id} - {self.job_activity.activity_name} - Mukkadam #{self.mukkadam_id}"
-
+    
+    def save(self, *args, **kwargs):
+        # ✅ SYNC transport_price based on transport_type
+        if self.transport_type == 'own':
+            # For own transport, use own_transport_price
+            self.transport_price = self.own_transport_price or 0
+        elif self.transport_type == 'provider':
+            # For provider transport, transport_price is already set
+            # (no change needed)
+            pass
+        elif self.transport_type == 'none':
+            # No transport needed
+            self.transport_price = 0
+        
+        super().save(*args, **kwargs)
 
 class AllocationStats(models.Model):
     """Daily statistics for allocations"""
