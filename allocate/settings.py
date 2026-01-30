@@ -93,9 +93,7 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',  # ✅ Add this for development
-    ],
+   
 }
 
 # Presign API Configuration
@@ -177,7 +175,7 @@ DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 # # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 
-# allocate/settings.py
+# # allocate/settings.py
 # SUPPLY_API_URL = 'http://localhost:8000'
 # ALLOCATION_API_URL = 'http://localhost:8001'
 

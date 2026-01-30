@@ -464,6 +464,37 @@ class AllocationViewSet(viewsets.ModelViewSet):
         print(f"   Total Cost: ₹{allocation.total_cost}")
         print("="*80)
 
+        # ✅ CREATE ACTIVITY LOG FOR CREATION
+        mukkadam_name = 'Unknown'
+        try:
+            mukkadam_data = fetch_mukkadam_by_id(allocation.mukkadam_id)
+            if mukkadam_data:
+                mukkadam_name = mukkadam_data.get('mukkadam_name', f'#{allocation.mukkadam_id}')
+        except:
+            mukkadam_name = f'#{allocation.mukkadam_id}'
+
+        ActivityLog.objects.create(
+            activity_type='allocation_created',
+            description=f"Created allocation for {allocation.job_activity.activity_name}",
+            allocation=allocation,
+            job_id=allocation.job_activity.job_id,
+            mukkadam_id=allocation.mukkadam_id,
+            mukkadam_name=mukkadam_name,
+            transport_provider_id=allocation.transport_provider_id if allocation.transport_type == 'provider' else None,
+            amount=allocation.total_cost,
+            performed_by=request.user if request.user.is_authenticated else None,  # ✅ CREATOR
+            metadata={
+                'allocated_area': float(allocation.allocated_area),
+                'work_date': str(allocation.work_date),
+                'crew_size': allocation.crew_size,
+                'mukkadam_price': float(allocation.mukkadam_price),
+                'transport_type': allocation.transport_type,
+                'transport_price': float(allocation.transport_price or 0),
+            }
+        )
+
+        print("="*80)
+
         return Response(
             {
                 'message': 'Allocation created successfully',
@@ -616,7 +647,44 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 print(f"✅ Allocation #{updated_instance.id} updated")
                 print(f"   Changed fields: {', '.join(changes_made)}")
                 print(f"   Reason: {change_reason}")
-                
+
+                # ✅ CREATE ACTIVITY LOG FOR THE UPDATE
+                if changes_made:
+                    # Get mukkadam name
+                    mukkadam_name = 'Unknown'
+                    try:
+                        mukkadam_data = fetch_mukkadam_by_id(updated_instance.mukkadam_id)
+                        if mukkadam_data:
+                            mukkadam_name = mukkadam_data.get('mukkadam_name', f'#{updated_instance.mukkadam_id}')
+                    except:
+                        mukkadam_name = f'#{updated_instance.mukkadam_id}'
+                    
+                    # Create structured changes dict
+                    changes_dict = {}
+                    for field in changes_made:
+                        changes_dict[field] = {
+                            'old': old_values.get(field),
+                            'new': new_values.get(field)
+                        }
+                    
+                    ActivityLog.objects.create(
+                        activity_type='allocation_updated',
+                        description=f"Updated allocation for {updated_instance.job_activity.activity_name}",
+                        allocation=updated_instance,
+                        job_id=updated_instance.job_activity.job_id,
+                        mukkadam_id=updated_instance.mukkadam_id,
+                        mukkadam_name=mukkadam_name,
+                        transport_provider_id=updated_instance.transport_provider_id,
+                        amount=updated_instance.total_cost,
+                        performed_by=request.user if request.user.is_authenticated else None,  # ✅ CURRENT USER
+                        changes=changes_dict,  # ✅ Field-by-field changes
+                        metadata={
+                            'change_reason': change_reason,
+                            'changed_fields': changes_made,
+                            'allocation_id': updated_instance.id,
+                        }
+                    )
+
                 return Response({
                     'message': 'Allocation updated successfully',
                     'changes_made': changes_made,
@@ -1935,9 +2003,10 @@ def pending_jobs_list(request):
         activities_data = []
         
         for api_activity in activities_from_api:
-            activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
+            # ✅ FIXED: Prioritize activity_id over id
+            activity_id = str(api_activity.get('activity_id') or api_activity.get('id', ''))
             
-            # ✅ CHECK DB FOR ACTIVITY
+            # ✅ CHECK IF ACTIVITY EXISTS IN DB
             db_activity = JobActivity.objects.filter(
                 job_id=job_id,
                 activity_id=activity_id
@@ -3368,6 +3437,9 @@ def activity_logs_list(request):
             'farmers_fetched': len(farmers_cache)
         }
     })
+
+
+
 def batch_fetch_farmers_debug(farmer_ids, max_workers=5):
     print(f"🔄 Executing batch_fetch for: {farmer_ids}")
     results = {}
@@ -3709,7 +3781,8 @@ def jobs_list(request):
                         'crew_size': alloc.crew_size,
                         'mukkadam_price': float(alloc.mukkadam_price),
                         'transport_type': alloc.transport_type,
-                        'transport_price': float(alloc.transport_price or 0),
+                        'transport_provider_id': alloc.transport_provider_id,  # ✅ ADDED
+                        'own_transport_price': float(alloc.own_transport_price or 0),  # ✅ ADDED
                         'total_cost': float(alloc.total_cost)
                     })
 
@@ -4086,11 +4159,12 @@ def allocations_list(request):
             transport_provider_data = transport_providers_cache.get(allocation.transport_provider_id)
 
         # Get activity details
+        # Get activity details
         activity_details = None
         if job_data and 'activities' in job_data:
             activity_details = next(
                 (a for a in job_data.get('activities', [])
-                 if str(a.get('id') or a.get('activity_id')) == activity_id),
+                if str(a.get('activity_id') or a.get('id')) == activity_id),  # ✅ FIXED: Prioritize activity_id
                 None
             )
 
