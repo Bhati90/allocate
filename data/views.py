@@ -277,7 +277,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
         try:
             # First, try to find existing JobActivity by database ID
-            job_activity = JobActivity.objects.filter(pk=activity_id).first()
+            job_activity = JobActivity.objects.filter(
+                job_id=str(job_id),
+                activity_id=str(activity_id)
+            ).first()
 
             # If not found, try to find by job_id + activity_id (external ID)
             if not job_activity and job_id:
