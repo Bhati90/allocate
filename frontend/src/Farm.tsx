@@ -138,7 +138,7 @@ useEffect(() => {
   const dateStr = formatDate(selectedDate);   // ✅
 
   fetch(
-    `http://localhost:8001/tender/api/mukkadams/${selectedMukkadam.mukkadam_id}/daily_capacity/?date=${dateStr}&cluster_id=${clusterId}`,
+    `${API_BASE_URL}/api/mukkadams/${selectedMukkadam.mukkadam_id}/daily_capacity/?date=${dateStr}&cluster_id=${clusterId}`,
   )
     .then((r) => r.json())
     .then((data) => setSelectedMukkadamCapacity(data.available_crew_size))
@@ -171,7 +171,7 @@ useEffect(() => {
 // load all mukkadams
 const loadMukkadams = async () => {
   try {
-    const response = await fetch(`http://localhost:8001/tender/api/mukkadams/?cluster_id=${clusterId}`);
+    const response = await fetch(`${API_BASE_URL}/api/mukkadams/?cluster_id=${clusterId}`);
     const data = await response.json();
 
     const normalized = data.map((m: any) => ({
@@ -250,7 +250,7 @@ useEffect(() => {
   const dateStr = formatDate(selectedDate);   // ✅
 
   fetch(
-    `http://localhost:8001/tender/api/mukkadams/${selectedMukkadam.mukkadam_id}/daily_capacity/?date=${dateStr}&cluster_id=${clusterId}`,
+    `${API_BASE_URL}/api/mukkadams/${selectedMukkadam.mukkadam_id}/daily_capacity/?date=${dateStr}&cluster_id=${clusterId}`,
   )
     .then((r) => r.json())
     .then((data) => setSelectedMukkadamCapacity(data.available_crew_size))

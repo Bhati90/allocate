@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { X, Calendar } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Mukkadam } from '../types/types';
+import { API_BASE_URL } from '@/types/config';
 
 interface Props {
   selectedDate: Date;
@@ -54,8 +55,8 @@ const handleMarkLeave = async () => {
   };
 
   const url = existingLeaveForDate
-    ? `http://localhost:8001/tender/api/leaves/${existingLeaveForDate.id}/`
-    : 'http://localhost:8001/tender/api/leaves/';
+    ? `${API_BASE_URL}/api/leaves/${existingLeaveForDate.id}/`
+    : `${API_BASE_URL}/api/leaves/`;
 
   const method = existingLeaveForDate ? 'PATCH' : 'POST';
 
@@ -88,7 +89,7 @@ const handleMarkLeave = async () => {
   const handleRemoveLeave = async (leaveId: number) => {
     try {
       const response = await fetch(
-        `http://localhost:8001/tender/api/leaves/${leaveId}/`,
+        `${API_BASE_URL}/api/leaves/${leaveId}/`,
         { method: 'DELETE' }
       );
 

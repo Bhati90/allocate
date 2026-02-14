@@ -1,3 +1,4 @@
+from django.shortcuts import render
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -38,6 +39,9 @@ class CsrfExemptSessionAuthentication(SessionAuthentication):
     def enforce_csrf(self, request):
         return  # disable CSRF check
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
+def about(request):
+    return render(request,'data/index.html')
+
 
 # views.py - Update cluster_activity_calendar
 

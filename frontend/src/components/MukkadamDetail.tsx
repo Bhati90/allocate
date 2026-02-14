@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { Mukkadam } from '../types/types';
 
 import './detail.css'
+import { API_BASE_URL } from '@/types/config';
 interface Props {
   mukkadam: Mukkadam | null;
   onRefresh: () => void;
@@ -29,7 +30,7 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
 
   const loadActivities = async () => {
     try {
-      const response = await fetch('http://localhost:8001/tender/api/activities/');
+      const response = await fetch(`${API_BASE_URL}/api/activities/`);
       const data = await response.json();
       setActivities(data);
     } catch (error) {
@@ -53,7 +54,7 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
   const handleEditSave = async (activityRateId: number) => {
     try {
       const response = await fetch(
-        `http://localhost:8001/tender/api/mukkadam-rates/${activityRateId}/`,
+        `${API_BASE_URL}/api/mukkadam-rates/${activityRateId}/`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -82,7 +83,7 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
 
     try {
       const response = await fetch(
-        `http://localhost:8001/tender/api/mukkadam-rates/${activityRateId}/`,
+        `${API_BASE_URL}/api/mukkadam-rates/${activityRateId}/`,
         { method: 'DELETE' }
       );
 
@@ -106,7 +107,7 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
 
     try {
       const response = await fetch(
-        `http://localhost:8001/tender/api/mukkadams/${mukkadam.mukkadam_id}/add_activity_rate/`,
+        `${API_BASE_URL}/api/mukkadams/${mukkadam.mukkadam_id}/add_activity_rate/`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
