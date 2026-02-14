@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from 'lucide-react';
 import { Mukkadam, Allocation, Job } from '../types/types';
 import LeaveModal from './leave';
-import './Calender.css';
+import './calender.css';
 import DayDetailModal from './DayDetail';
 import { API_BASE_URL } from '../types/config';
 type PotentialStatus = 'PARTIAL' | 'NONE';
