@@ -29,6 +29,7 @@ ALLOWED_HOSTS = ['*']
 # ============================================
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "https://allocate-1.onrender.com",
     "http://localhost:5173",
     "http://127.0.0.1:3000",
     "http://localhost:5174",
@@ -57,6 +58,7 @@ CORS_ALLOW_HEADERS = [
 
 # CSRF Settings
 CSRF_TRUSTED_ORIGINS = [
+    "https://allocate-1.onrender.com",
     "https://supply.bharatintelligence.ai",
     "https://demand.bharatintelligence.ai",
     "https://payment.bharatintelligence.ai",
@@ -352,5 +354,6 @@ LOGGING = {
         },
     },
 }
+CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
