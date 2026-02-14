@@ -13,7 +13,8 @@ export default defineConfig({
   },
   server:{
      allowedHosts: [
-      "furtive-chrissy-reparably.ngrok-free.dev"
+      "furtive-chrissy-reparably.ngrok-free.dev",
+      "https://allocate-1.onrender.com"
     ]
   },
   build: {
