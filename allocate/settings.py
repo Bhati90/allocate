@@ -8,6 +8,8 @@ import os
 # ============================================
 # CORS & CSRF CONFIGURATION
 # ============================================
+import os
+import dj_database_url
 
 from decouple import config, Csv
 
@@ -17,7 +19,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw$9t'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# DEBUG = True
+DEBUG = os.environ.get("DEBUG", "False") == "True"
+
 ALLOWED_HOSTS = ['*']
 
 # ============================================
@@ -106,6 +110,8 @@ PRESIGN_API_TOKEN = 'Token c432208626a204d2d8de3d00b29f948eae61ebdb'  # ✅ Repl
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # ✅ MUST BE FIRST
     'django.middleware.security.SecurityMiddleware',
+
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -212,24 +218,34 @@ CACHE_MUKKADAM_TIMEOUT = 3600  # 1 hour
 CACHE_FARMER_TIMEOUT = 3600    # 1 hour
 CACHE_TRANSPORT_TIMEOUT = 21600  # 6 hours
 CACHE_JOB_TIMEOUT = 1800  # 30 minutes
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'registration_db',
-        'USER': 'postgres',
-        'PASSWORD': 'new_password',
-        'HOST': 'localhost',
-        'PORT': '5432',
-        'OPTIONS': {
-            'client_encoding': 'UTF8',
-        },
-    }
-}
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'registration_db',
+#         'USER': 'postgres',
+#         'PASSWORD': 'new_password',
+#         'HOST': 'localhost',
+#         'PORT': '5432',
+#         'OPTIONS': {
+#             'client_encoding': 'UTF8',
+#         },
+#     }
+# }
 
 # Static files
+
+
+DATABASES = {
+    'default': dj_database_url.config(
+        default=os.environ.get("DATABASE_URL")
+    )
+}
 STATIC_URL = '/static/'
-STATICFILES_DIRS = [BASE_DIR / 'static']
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+# STATIC_URL = '/static/'
+# STATICFILES_DIRS = [BASE_DIR / 'static']
+# STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
