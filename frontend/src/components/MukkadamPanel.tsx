@@ -4,6 +4,7 @@ import { Plus, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Mukkadam, Allocation } from '../types/types';
 import './job.css';
+import { API_BASE_URL } from '@/types/config';
 
 interface MukkadamPanelProps {
   mukkadams: Mukkadam[];
@@ -116,11 +117,11 @@ const [selectedActivities, setSelectedActivities] = useState<{
   const loadActivities = async () => {
     try {
       const res = await fetch(
-        'http://localhost:8001/tender/api/activities/',
+        `${API_BASE_URL}/api/activities/`,
       );
       const data = await res.json();
       setActivities(data);
-    } catch {
+    } catch (error) {
       toast.error('Failed to load activities');
     }
   };

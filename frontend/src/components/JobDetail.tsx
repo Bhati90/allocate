@@ -236,7 +236,7 @@ const JobDetailPanel: React.FC<Props> = ({
   const loadFarmers = async () => {
     try {
       const response = await fetch(
-        `http://localhost:8001/tender/api/farmers/?cluster_id=${clusterId}`
+        `${API_BASE_URL}/api/farmers/?cluster_id=${clusterId}`
       );
       const data = await response.json();
       setFarmers(data);
@@ -248,7 +248,7 @@ const JobDetailPanel: React.FC<Props> = ({
   const loadFarmerPlots = async (farmerId: string) => {
     try {
       const response = await fetch(
-        `http://localhost:8001/tender/api/plots/?farmer_id=${farmerId}`
+        `${API_BASE_URL}/api/plots/?farmer_id=${farmerId}`
       );
       const data = await response.json();
       setFarmerPlots(data);
@@ -275,7 +275,7 @@ const handleEditActivity = async () => {
 
   try {
     const response = await fetch(
-      `http://localhost:8001/tender/api/job-activities/${editingActivity.id}/`,
+      `${API_BASE_URL}/api/job-activities/${editingActivity.id}/`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -307,7 +307,7 @@ const handleEditActivity = async () => {
 };
   const loadPlotJobs = async (plotId: number) => {
     try {
-      const response = await fetch(`http://localhost:8001/tender/api/jobs/?plot=${plotId}`);
+      const response = await fetch(`${API_BASE_URL}/api/jobs/?plot=${plotId}`);
       const data = await response.json();
       setPlotJobs(data);
 
@@ -326,7 +326,7 @@ const handleEditActivity = async () => {
   const loadClusterCalendar = async () => {
     try {
       const response = await fetch(
-        `http://localhost:8001/tender/api/clusters/${clusterId}/activity-calendar/`
+        `${API_BASE_URL}/api/clusters/${clusterId}/activity-calendar/`
       );
       const data = await response.json();
       setClusterCalendar(data.activities || []);
@@ -337,7 +337,7 @@ const handleEditActivity = async () => {
 
   const loadClusterInfo = async () => {
     try {
-      const response = await fetch(`http://localhost:8001/tender/api/clusters/${clusterId}/info/`);
+      const response = await fetch(`${API_BASE_URL}/api/clusters/${clusterId}/info/`);
       const data = await response.json();
       setClusterInfo(data);
     } catch (error) {
@@ -347,7 +347,7 @@ const handleEditActivity = async () => {
 
   const loadAllActivities = async () => {
     try {
-      const response = await fetch('http://localhost:8001/tender/api/activities/');
+      const response = await fetch(`${API_BASE_URL}/api/activities/`);
       const data = await response.json();
       setAllActivities(data);
     } catch (error) {
@@ -360,7 +360,7 @@ const handleEditActivity = async () => {
     try {
       // Get all jobs for this plot
       const jobsResponse = await fetch(
-        `http://localhost:8001/tender/api/jobs/?cluster_id=${clusterId}&plot=${plotId}`
+        `${API_BASE_URL}/api/jobs/?cluster_id=${clusterId}&plot=${plotId}`
       );
       const jobs = await jobsResponse.json();
 
@@ -485,7 +485,7 @@ const handleEditActivity = async () => {
           return;
         }
 
-        const farmerResponse = await fetch('http://localhost:8001/tender/api/farmers/', {
+        const farmerResponse = await fetch(`${API_BASE_URL}/api/farmers/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -520,7 +520,7 @@ const handleEditActivity = async () => {
           return;
         }
 
-        const plotResponse = await fetch('http://localhost:8001/tender/api/plots/', {
+        const plotResponse = await fetch(`${API_BASE_URL}/api/plots/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -580,7 +580,7 @@ const handleEditActivity = async () => {
       }
 
       // Step 4: Create job
-      const jobResponse = await fetch('http://localhost:8001/tender/api/jobs/', {
+      const jobResponse = await fetch(`${API_BASE_URL}/api/jobs/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -612,7 +612,7 @@ const handleEditActivity = async () => {
       for (const a of activitiesToCreate) {
         if (!a.activity_id || a.total_area <= 0) continue;
 
-        await fetch(`http://localhost:8001/tender/api/jobs/${jobData.job_id}/add_activity/`, {
+        await fetch(`${API_BASE_URL}/api/jobs/${jobData.job_id}/add_activity/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -649,7 +649,7 @@ const handleEditActivity = async () => {
 
     try {
       const response = await fetch(
-        `http://localhost:8001/tender/api/jobs/${selectedJob.job_id}/add_activity/`,
+        `${API_BASE_URL}/api/jobs/${selectedJob.job_id}/add_activity/`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -686,7 +686,7 @@ const handleEditActivity = async () => {
 
     try {
       const response = await fetch(
-        `http://localhost:8001/tender/api/job-activities/${activityId}/`,
+        `${API_BASE_URL}/api/job-activities/${activityId}/`,
         { method: 'DELETE' }
       );
 

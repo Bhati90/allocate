@@ -44,7 +44,7 @@ const App = () => (
           } />
 
           <Route path="/tender" element={
-            <AdminRoute><TenderFront /></AdminRoute>
+           <TenderFront />
           } />
 
           <Route path="/mukkadam" element={
