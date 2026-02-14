@@ -107,6 +107,7 @@ const toggleJob = (jobId: string) => {
   });
 };
 
+
 const toggleActivity = (activityId: string) => {
   setExpandedActivities(prev => {
     const newSet = new Set(prev);
@@ -118,6 +119,34 @@ const toggleActivity = (activityId: string) => {
     return newSet;
   });
 };
+// Add state for farmer payments
+const [farmerPaymentStats, setFarmerPaymentStats] = useState({
+  total_expected: 0,
+  total_paid: 0,
+  total_pending: 0,
+  completion_percentage: 0,
+  payment_count: 0,
+  paid_count: 0,
+  pending_count: 0,
+});
+
+// Fetch farmer payment summary
+useEffect(() => {
+  const fetchFarmerPayments = async () => {
+    try {
+      const response = await axios.get(`${API_BASE_URL_A}/ap/farmer-payment-summary/`);
+      if (response.data.success) {
+        setFarmerPaymentStats(response.data.summary);
+      }
+    } catch (error) {
+      console.error('Error fetching farmer payments:', error);
+    }
+  };
+
+  fetchFarmerPayments();
+}, []);
+
+// Update your financial summary component
 
 // Helper to get the actual list of data for the table
 const getAllocatedList = () => {
@@ -260,50 +289,40 @@ const handleRejectTransportPayment = async (paymentRequestId: number) => {
 };
 
 
-// ✅ FIXED: Filter based on Allocation Status or Payment Existence
-const getCompletedAllocations = () => {
-  return allocations.filter(allocation => {
-    // 1. If the API says it's completed, show it here
-    if (allocation.status === 'completed') {
-      // BUT: If payment was rejected, DON'T show it here (it goes back to Allocated)
-      const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-      if (mukkadamPayment?.status === 'rejected') {
-        return false;
-      }
-      return true;
-    }
-
-    // 2. OR if a payment request exists with pending/paid status (implies work is done)
-    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-    return mukkadamPayment && (mukkadamPayment.status === 'pending' || mukkadamPayment.status === 'paid');
-  });
-};
-
-
 // ✅ FIXED: Only show allocations for FULLY allocated jobs
 // ✅ FIXED: Only show allocations for FULLY allocated jobs (0 remaining area)
 const getAllocatedAllocations = () => {
   return allocations.filter(allocation => {
-    // Find the job for this allocation
-    const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
+    // ✅ Use job_id instead of farmer_work_id
+    const job = jobs.find(j => j.work_id === allocation.job_id);
     if (!job) return false;
     
-    // Check the job's status based on remaining area
-    const jobStatus = calculateJobStatus(job);
+    // ✅ Check job-level status from backend
+    const jobStatus = job.status; // from your jobs API
     
-    // Only include if job is FULLY allocated (all activities have 0 remaining area)
+    // Only show fully allocated jobs
     if (jobStatus !== 'fully_allocated') return false;
     
-    // 1. If the allocation itself says it's allocated, show it here
-    if (allocation.status === 'allocated') return true;
+    // ✅ Don't show if allocation is completed
+    if (allocation.status === 'completed') return false;
+    
+    // ✅ Don't show if allocation is in_progress
+    if (allocation.status === 'in_progress') return false;
+    
+    // Show if allocation is allocated or fully_allocated
+    return allocation.status === 'allocated' || allocation.status === 'fully_allocated';
+  });
+};
 
-    // 2. Edge Case: If it's completed but the payment was rejected, move it back here
-    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-    if (allocation.status === 'completed' && mukkadamPayment?.status === 'rejected') {
-        return true;
-    }
-
-    return false;
+const getPartiallyAllocatedAllocations = () => {
+  return allocations.filter(allocation => {
+    const job = jobs.find(j => j.work_id === allocation.job_id);
+    if (!job) return false;
+    
+    const jobStatus = job.status;
+    
+    // Show jobs that are partially allocated
+    return jobStatus === 'partially_allocated';
   });
 };
 
@@ -328,6 +347,10 @@ const [reallocating, setReallocating] = useState(false);
 
 
 
+const formatMoney = (v: number | string | null | undefined) => {
+  const num = typeof v === 'number' ? v : parseFloat(String(v || '0'));
+  return num.toFixed(2);
+};
 
 
 const [expandedSections, setExpandedSections] = useState({
@@ -381,6 +404,7 @@ const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const [mukkadamAllocations, setMukkadamAllocations] = useState<MukkadamAllocation[]>([]);
   const [transportAllocations, setTransportAllocations] = useState<TransportAllocation[]>([]);
 
+const [backendRevenue, setBackendRevenue] = useState(0);
 
 // ✅ NEW: Handle Mark Complete (Creates Payment Request)
 const handleMarkComplete = async (allocationId: number) => {
@@ -406,6 +430,7 @@ const handleMarkComplete = async (allocationId: number) => {
     alert(`❌ ${errorMsg}`);
   }
 };
+const [backendJobsCount, setBackendJobsCount] = useState(0);
 
 // ✅ DEFINED OUTSIDE (so it can be passed to children)
   const fetchStaticData = async (showLoading = true) => {
@@ -413,12 +438,17 @@ const handleMarkComplete = async (allocationId: number) => {
     
     const config = getAuthConfig();
     try {
-      const [jobsRes, mukkadamRes, transportRes] = await Promise.all([
+      const [jobsRes, mukkadamRes, transportRes, revenueBreakdownRes] = await Promise.all([
         axios.get(`${API_BASE_URL_A}/ap/jobs/`, config),
         axios.get(`${API_BASE_URL}/api/mukkadam/minimal_list/`),
-        axios.get(`${API_BASE_URL}/api/transport-providers/dropdown_list/`)
+        axios.get(`${API_BASE_URL}/api/transport-providers/dropdown_list/`),
+        axios.get(`${API_BASE_URL_A}/ap/financial-breakdown-detail/?type=revenue`, config),
+      
       ]);
-
+      const backendRevenue = revenueBreakdownRes.data?.summary?.total_revenue || 0;
+      setBackendRevenue(backendRevenue);
+      const backendJobsCount = revenueBreakdownRes.data?.summary?.total_jobs || 0;
+      setBackendJobsCount(backendJobsCount);
       setJobs(jobsRes.data);
       setMukkadams(mukkadamRes.data);
       setTransportProviders(transportRes.data);
@@ -928,39 +958,39 @@ const getActiveJobs = () => {
   });
 };
 
-// ✅ NEW: Check if a job is FULLY COMPLETED (all allocations have payment requests)
+// ✅ Get allocations where work is completed
+const getCompletedAllocations = () => {
+  return allocations.filter(allocation => {
+    const job = jobs.find(j => j.work_id === allocation.job_id);
+    if (!job) return false;
+    
+    // Show if work is completed or in progress
+    return allocation.status === 'completed' || allocation.status === 'in_progress';
+  });
+};
+
+// ✅ Check if job is fully completed (all work done)
 const isJobFullyCompleted = (jobId: string): boolean => {
   const job = jobs.find(j => j.work_id === jobId);
   if (!job) return false;
   
-  // Get non-lost activities
   const activeActivities = job.activities?.filter(a => !a.is_lost) || [];
   if (activeActivities.length === 0) return false;
   
-  // Get all allocations for this job's active activities
-  const jobAllocations = allocations.filter(alloc => {
-    if (alloc.farmer_work_id !== jobId) return false;
-    
-    const activity = activeActivities.find(a => 
-      a.id === alloc.job_activity || 
-      a.activity_id === alloc.activity_id ||
-      a.activity_name === alloc.activity_name
-    );
-    return !!activity;
-  });
+  // ✅ Use job_id to match
+  const jobAllocations = allocations.filter(alloc => alloc.job_id === jobId);
   
   if (jobAllocations.length === 0) return false;
   
-  // Check if ALL allocations have payment requests (pending or paid)
-  const allHavePayments = jobAllocations.every(alloc => {
-    const payment = getMukkadamPaymentRequest(alloc.id);
-    return payment && (payment.status === 'pending' || payment.status === 'paid');
-  });
+  // ✅ Check if ALL allocations have status 'completed'
+  const allCompleted = jobAllocations.every(alloc => 
+    alloc.status === 'completed'
+  );
   
-  return allHavePayments;
+  return allCompleted;
 };
 
-// ✅ NEW: Get completed job IDs
+// ✅ Get completed job IDs
 const getCompletedJobIds = (): Set<string> => {
   const activeJobs = getActiveJobs();
   const completedIds = activeJobs
@@ -968,6 +998,7 @@ const getCompletedJobIds = (): Set<string> => {
     .map(job => job.work_id);
   return new Set(completedIds);
 };
+
 
 // ✅ NEW: Get allocated (but not completed) job IDs
 const getAllocatedNotCompletedJobIds = (): Set<string> => {
@@ -1021,7 +1052,7 @@ const getActiveTransportersCount = (): number => {
   
   return activeTransporterIds.size;
 };
-const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' | 'fully_lost' => {
+const calculateJobStatus = (job: Job): 'fully_allocated' | 'partially_allocated' | 'pending' | 'fully_lost'| 'allocated' => {
   // ✅ Filter out lost activities
   const activeActivities = job.activities?.filter(a => !a.is_lost) || [];
   
@@ -1127,82 +1158,184 @@ const getJobStatusCounts = () => {
   return { allocated, completed, partially, pending };
 };
 
+
 const calculateRevenueStats = () => {
   let totalRevenue = 0;
   let profitableCount = 0;
   let lossCount = 0;
   let lowMarginCount = 0;
+  
+  // ✅ Track PAID amounts
   let paidMukkadamAmount = 0;
   let paidTransportAmount = 0;
+  
+  // ✅ Track PENDING amounts
+  let pendingMukkadamAmount = 0;
+  let pendingTransportAmount = 0;
+  
+  // ✅ Track TOTAL ALLOCATED (regardless of payment status)
+  let totalAllocatedMukkadam = 0;
+  let totalAllocatedTransport = 0;
 
-  // ✅ FILTER: Only process allocations for active jobs
+  // ✅ NEW: arrays to collect job ids
+  const profitableJobIds: any[] = [];   // ✅ NEW
+  const lossJobIds: any[] = [];         // ✅ NEW
+  const lowMarginJobIds: any[] = [];    // ✅ NEW
+
+  console.log('🔍 Starting calculation...');
+  console.log('Total allocations in data:', allocations.length);
+
+  // ✅ STEP 1: Filter valid allocations (exclude cancelled)
+  const validAllocations = allocations.filter(a => 
+    a.status !== 'cancelled'
+  );
+
+  console.log('Valid allocations (non-cancelled):', validAllocations.length);
+
+  // ✅ NEW CODE - Calculate revenue from activity subtotals (excludes lost)
   const activeJobs = getActiveJobs();
-  const activeJobIds = new Set(activeJobs.map(j => j.work_id));
+  const uniqueJobRevenue = new Map();
 
-  allocations.forEach(allocation => {
-    // ✅ Skip if job is fully lost
-    if (!activeJobIds.has(allocation.farmer_work_id)) {
+  activeJobs.forEach(job => {
+    // ✅ Sum up subtotals from NON-LOST activities only
+    const jobRevenue = job.activities
+      ?.filter(a => !a.is_lost)  // Exclude lost activities
+      .reduce((sum, a) => {
+        // Use subtotal if available, otherwise calculate it
+        const subtotal = parseFloat(String(a.subtotal || '0')) 
+        return sum + subtotal;
+      }, 0) || 0;
+    
+    uniqueJobRevenue.set(job.work_id, jobRevenue);
+    totalRevenue = backendRevenue;
+  });
+
+  console.log('Unique active jobs:', uniqueJobRevenue.size);
+  console.log('Total revenue:', totalRevenue);
+
+  // ✅ STEP 3: Process valid allocations for costs
+  let skippedLost = 0;
+  let processedCount = 0;
+
+  validAllocations.forEach(allocation => {
+    // Find the job
+    const job = jobs.find((j: any) => 
+      j.work_id === allocation.farmer_work_id || 
+      j.work_id === allocation.job_id
+    );
+
+    // Check if activity is lost
+    let isLost = false;
+    if (job) {
+      const activity = job.activities?.find((a: any) => 
+        a.activity_name === allocation.activity_name
+      );
+      
+      if (activity?.is_lost) {
+        isLost = true;
+        skippedLost++;
+      }
+    }
+
+    // Skip if activity is lost
+    if (isLost) {
       return;
     }
 
-    const job = jobs.find((j: any) => j.work_id === allocation.farmer_work_id);
+    processedCount++;
+
+    // ✅ Calculate allocated costs (from Allocation model)
+    const mukkadamCost = parseFloat(String(allocation.mukkadam_price || '0'));
+    const transportCost = parseFloat(String(allocation.transport_price || '0'));
+    
+    totalAllocatedMukkadam += mukkadamCost;
+    totalAllocatedTransport += transportCost;
+
+    // ✅ Check payment status for this allocation
+    const allocationId = allocation.allocation_id || allocation.id;
+    
+    // Mukkadam payment status
+    const mukkadamPayment = mukkadamPaymentRequests?.find(
+      (p: any) => (p.allocation === allocationId || p.allocation_id === allocationId)
+    );
+    
+    if (mukkadamPayment) {
+      if (mukkadamPayment.status === 'paid') {
+        paidMukkadamAmount += parseFloat(String(mukkadamPayment.requested_amount || '0'));
+      } else if (mukkadamPayment.status === 'pending') {
+        pendingMukkadamAmount += parseFloat(String(mukkadamPayment.requested_amount || '0'));
+      }
+    }
+
+    // Transport payment status
+    const transportPayment = transportPaymentRequests?.find(
+      (p: any) => (p.allocation === allocationId || p.allocation_id === allocationId)
+    );
+    
+    if (transportPayment) {
+      if (transportPayment.status === 'paid') {
+        paidTransportAmount += parseFloat(String(transportPayment.requested_amount || '0'));
+      } else if (transportPayment.status === 'pending') {
+        pendingTransportAmount += parseFloat(String(transportPayment.requested_amount || '0'));
+      }
+    }
+
+    // Performance metrics
     if (job) {
       const activity = job.activities?.find((a: any) => 
         a.activity_name === allocation.activity_name
       );
       
       if (activity) {
-        // ✅ SKIP IF THIS SPECIFIC ACTIVITY IS LOST
-        if (activity.is_lost) {
-          return;
+        const activityRevenue = parseFloat(String(activity.total_price || '0'));
+        const totalCost = mukkadamCost + transportCost ;
+        const profit = activityRevenue - totalCost;
+        const margin = activityRevenue > 0 ? (profit / activityRevenue) * 100 : 0;
+
+        if (profit > 0) {
+          profitableCount++;
+          profitableJobIds.push(job.work_id);   // ✅ NEW
         }
-        
-        const revenue = activity.total_price || 0;
-        totalRevenue += revenue;
-
-        const cost = parseFloat(String(allocation.mukkadam_price || '0')) + 
-                     parseFloat(String(allocation.transport_price || '0'));
-        const profit = revenue - cost;
-        const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
-
-        if (profit > 0) profitableCount++;
-        if (profit < 0) lossCount++;
-        if (profit >= 0 && margin < 20) lowMarginCount++;
+        if (profit < 0) {
+          lossCount++;
+          lossJobIds.push(job.work_id);         // ✅ NEW
+        }
+        if (profit >= 0 && margin < 20) {
+          lowMarginCount++;
+          lowMarginJobIds.push(job.work_id);    // ✅ NEW
+        }
       }
-    }
-
-    // ✅ Payment tracking
-    const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-    if (mukkadamPayment && mukkadamPayment.status === 'paid') {
-      paidMukkadamAmount += parseFloat(String(allocation.mukkadam_price || '0'));
-    }
-
-    const transportPayment = getTransportPaymentRequest(allocation.id);
-    if (transportPayment && transportPayment.status === 'paid') {
-      paidTransportAmount += parseFloat(String(allocation.transport_price || '0'));
     }
   });
 
-  // ✅ Calculate costs only for non-lost activities
-  const totalAllocatedMukkadam = allocations.reduce((sum, a) => {
-    if (!activeJobIds.has(a.farmer_work_id)) return sum;
-    const job = jobs.find(j => j.work_id === a.farmer_work_id);
-    const activity = job?.activities?.find(act => act.activity_name === a.activity_name);
-    if (activity?.is_lost) return sum;
-    return sum + parseFloat(String(a.mukkadam_price || '0'));
-  }, 0);
-  
-  const totalAllocatedTransport = allocations.reduce((sum, a) => {
-    if (!activeJobIds.has(a.farmer_work_id)) return sum;
-    const job = jobs.find(j => j.work_id === a.farmer_work_id);
-    const activity = job?.activities?.find(act => act.activity_name === a.activity_name);
-    if (activity?.is_lost) return sum;
-    return sum + parseFloat(String(a.transport_price || '0'));
-  }, 0);
-  
   const totalCosts = totalAllocatedMukkadam + totalAllocatedTransport;
   const netProfit = totalRevenue - totalCosts;
   const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+
+  console.log('================================================================================');
+  console.log('📊 FINAL STATS:');
+  console.log('Total revenue:', totalRevenue.toLocaleString());
+  console.log('---');
+  console.log('Total allocated mukkadam:', totalAllocatedMukkadam.toLocaleString());
+  console.log('  ├─ Paid:', paidMukkadamAmount.toLocaleString());
+  console.log('  ├─ Pending:', pendingMukkadamAmount.toLocaleString());
+  console.log('  └─ Not requested:', (totalAllocatedMukkadam - paidMukkadamAmount - pendingMukkadamAmount).toLocaleString());
+  console.log('---');
+  console.log('Total allocated transport:', totalAllocatedTransport.toLocaleString());
+  console.log('  ├─ Paid:', paidTransportAmount.toLocaleString());
+  console.log('  ├─ Pending:', pendingTransportAmount.toLocaleString());
+  console.log('  └─ Not requested:', (totalAllocatedTransport - paidTransportAmount - pendingTransportAmount).toLocaleString());
+  console.log('---');
+  console.log('Total costs:', totalCosts.toLocaleString());
+  console.log('Net profit:', netProfit.toLocaleString());
+  console.log('Profit margin:', profitMargin.toFixed(2) + '%');
+
+  // ✅ NEW: print job ids by category
+  console.log('Profitable job ids:', [...new Set(profitableJobIds)]);
+  console.log('Loss job ids:', [...new Set(lossJobIds)]);
+  console.log('Low-margin job ids:', [...new Set(lowMarginJobIds)]);
+
+  console.log('================================================================================');
 
   return {
     totalRevenue,
@@ -1211,11 +1344,58 @@ const calculateRevenueStats = () => {
     profitableAllocations: profitableCount,
     lossAllocations: lossCount,
     lowMarginAllocations: lowMarginCount,
-    paidMukkadamAmount,
-    paidTransportAmount,
+    
+    // ✅ Mukkadam breakdown
     totalAllocatedMukkadam,
-    totalAllocatedTransport
+    paidMukkadamAmount,
+    pendingMukkadamAmount,
+    notRequestedMukkadamAmount: totalAllocatedMukkadam - paidMukkadamAmount - pendingMukkadamAmount,
+    
+    // ✅ Transport breakdown
+    totalAllocatedTransport,
+    paidTransportAmount,
+    pendingTransportAmount,
+    notRequestedTransportAmount: totalAllocatedTransport - paidTransportAmount - pendingTransportAmount,
+    
+    // ✅ Totals
+    totalPayout: totalCosts,
+    totalPaidOut: paidMukkadamAmount + paidTransportAmount,
+    totalPending: pendingMukkadamAmount + pendingTransportAmount,
+    
+    uniqueJobsCount: uniqueJobRevenue.size,
+
+    // ✅ NEW: expose job ids if you want to use them in UI
+    profitableJobIds: [...new Set(profitableJobIds)],
+    lossJobIds: [...new Set(lossJobIds)],
+    lowMarginJobIds: [...new Set(lowMarginJobIds)],
   };
+};
+
+
+
+
+// Add state for modal
+const [showDetailModal, setShowDetailModal] = useState(false);
+const [detailData, setDetailData] = useState<any>(null);
+const [loadingDetail, setLoadingDetail] = useState(false);
+
+// Function to fetch breakdown details
+const fetchBreakdownDetail = async (type: string) => {
+  setLoadingDetail(true);
+  setShowDetailModal(true);
+  
+  try {
+    const config = getAuthConfig();
+    const response = await axios.get(
+      `${API_BASE_URL_A}/ap/financial-breakdown-detail/?type=${type}`,
+      config
+    );
+    setDetailData(response.data);
+  } catch (error) {
+    console.error('Error fetching breakdown:', error);
+  } finally {
+    setLoadingDetail(false);
+  }
 };
 
 // ✅ 4. REPLACE THE STATS CALCULATION (around line 750)
@@ -1256,6 +1436,10 @@ const debugJobCounts = () => {
     });
   });
 };
+const formatRate = (v: number | string | null | undefined) => {
+  const num = typeof v === 'number' ? v : parseFloat(String(v || '0'));
+  return `₹${num.toFixed(2)}`;
+};
 
 debugJobCounts(); // ✅ Call it
 const stats = {
@@ -1272,11 +1456,12 @@ const stats = {
   // ✅ NEW: Transporter counts
   totalTransportersRegistered: transportProviders.length,
   activeTransportersCount: getActiveTransportersCount(),
+  totalRevenue: backendRevenue,
   
   totalMukkadamPayout: revenueStats.totalAllocatedMukkadam,
   totalTransportPayout: revenueStats.totalAllocatedTransport,
   totalPayout: revenueStats.totalAllocatedMukkadam + revenueStats.totalAllocatedTransport,
-  totalRevenue: revenueStats.totalRevenue,
+  // totalRevenue: revenueStats.totalRevenue,
   netProfit: revenueStats.netProfit,
   profitMargin: revenueStats.profitMargin,
   profitableAllocations: revenueStats.profitableAllocations,
@@ -1524,6 +1709,8 @@ const debugMissingJobs = () => {
     const totalCount = j.activities?.length || 0;
     return lostCount > 0 && lostCount < totalCount;
   });
+
+  
   
   if (mixedJobs.length > 0) {
     console.log('\n🔀 JOBS WITH MIXED LOST/NON-LOST ACTIVITIES:');
@@ -1615,7 +1802,7 @@ const handleEditActivity = async (activity: any, jobId: string) => {
           activity_name: editFormData.activity_name,
           total_area: editFormData.total_area,
           transport_cost:editFormData.transport_cost,
-          other_cost :editFormData.transport_cost,
+          other_cost :editFormData.other_cost,
           scheduled_datetime: editFormData.scheduled_date,
           total_price: editFormData.total_price,
           rate_per_acre: editFormData.rate_per_acre
@@ -1758,6 +1945,14 @@ const handleSaveSuccess = async () => {
 >
   <CheckCircle className="inline-block mr-2" size={18} />
   Allocated ({stats.allocatedJobs}) {/* ✅ Shows only allocated, not completed */}
+</button>
+
+<button
+  onClick={() => navigate('/total-jobs')}
+  className="px-6 py-4 text-sm font-medium border-b-2 transition whitespace-nowrap"
+>
+  <FileText className="inline-block mr-2" size={18} />
+  Total Jobs ({stats.totalJobs})
 </button>
 
 <button
@@ -2207,68 +2402,230 @@ const handleSaveSuccess = async () => {
   </div>
 </div>
                         {/* ✅ Enhanced Financial Summary with Revenue & P/L */}
+{/* ✅ Enhanced Financial Summary with Revenue & P/L + Farmer Payments */}
 <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl shadow-lg p-6 border border-purple-200">
   <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
     <DollarSign className="mr-2 text-purple-600" />
-    Financial Summary & P/L Analysis
+    Complete Financial Summary & P/L Analysis
   </h3>
   
   {/* Revenue & Costs Row */}
-  <div className="grid grid-cols-3 gap-4 mb-4">
+  <div className="grid grid-cols-4 gap-4 mb-4">
     {/* Total Revenue */}
-    <div className="bg-white p-4 rounded-lg border-2 border-green-300">
+    <div className="bg-white p-4 rounded-lg border-2 border-green-300" onClick={() => fetchBreakdownDetail('revenue')}>
       <p className="text-sm text-gray-600 mb-2 flex items-center">
         <TrendingUp size={16} className="mr-1 text-green-600" />
-        Total Revenue
+        Total Revenue (Booking)
       </p>
       <p className="text-2xl font-bold text-green-600">
         ₹{stats.totalRevenue.toLocaleString()}
       </p>
       <p className="text-xs text-gray-500 mt-1">
-        From {allocations.length} jobs
+        From {backendJobsCount} jobs
       </p>
     </div>
 
+    {/* ✅ NEW: Farmer Payments Received */}
+    <div className="bg-white p-4 rounded-lg border-2 border-emerald-300 relative" onClick={() => fetchBreakdownDetail('farmer_payments')}>
+      <p className="text-sm text-gray-600 mb-2 flex items-center">
+        <User size={16} className="mr-1 text-emerald-600" />
+        Farmer Payments
+      </p>
+      <div className="flex items-baseline space-x-2">
+        <p className="text-2xl font-bold text-emerald-600">
+          ₹{farmerPaymentStats.total_expected.toLocaleString()}
+        </p>
+        {/* <span className="text-xs font-medium text-gray-400">expected</span> */}
+      </div>
+      
+      {/* Received Badge */}
+      <div className="mt-2 flex items-center bg-emerald-50 px-2 py-1 rounded text-xs">
+        <CheckCircle size={12} className="text-emerald-600 mr-1" />
+        <span className="font-semibold text-emerald-700">
+          ₹{farmerPaymentStats.total_paid.toLocaleString()} Received
+        </span>
+      </div>
+      
+      {/* Pending Badge */}
+      <div className="mt-1 flex items-center bg-orange-50 px-2 py-1 rounded text-xs">
+        <Clock size={12} className="text-orange-600 mr-1" />
+        <span className="font-semibold text-orange-700">
+          ₹{farmerPaymentStats.total_pending.toLocaleString()} Pending
+        </span>
+      </div>
+    </div>
+
     {/* Mukkadam Costs */}
-    <div className="bg-white p-4 rounded-lg border border-gray-200 relative">
+    <div className="bg-white p-4 rounded-lg border border-gray-200 relative" onClick={() => fetchBreakdownDetail('mukkadam')}>
       <p className="text-sm text-gray-600 mb-2">Mukkadam Costs</p>
       <div className="flex items-baseline space-x-2">
         <p className="text-2xl font-bold text-blue-600">
-            ₹{stats.totalMukkadamPayout.toLocaleString()}
+          ₹{stats.totalMukkadamPayout.toLocaleString()}
         </p>
-        <span className="text-xs font-medium text-gray-400">allocated</span>
+        {/* <span className="text-xs font-medium text-gray-400">allocated</span> */}
       </div>
       
-      {/* ✅ Paid Amount Badge */}
       <div className="mt-2 flex items-center bg-blue-50 px-2 py-1 rounded text-xs">
         <CheckCircle size={12} className="text-blue-600 mr-1" />
         <span className="font-semibold text-blue-700">
-            ₹{stats.paidMukkadamAmount.toLocaleString()} Paid
+          ₹{stats.paidMukkadamAmount.toLocaleString()} Paid
         </span>
       </div>
     </div>
 
     {/* Transport Costs */}
-    <div className="bg-white p-4 rounded-lg border border-gray-200 relative">
+    <div className="bg-white p-4 rounded-lg border border-gray-200 relative" onClick={() => fetchBreakdownDetail('transport')}>
       <p className="text-sm text-gray-600 mb-2">Transport Costs</p>
       <div className="flex items-baseline space-x-2">
         <p className="text-2xl font-bold text-orange-600">
-            ₹{stats.totalTransportPayout.toLocaleString()}
+          ₹{stats.totalTransportPayout.toLocaleString()}
         </p>
-        <span className="text-xs font-medium text-gray-400">allocated</span>
+        {/* <span className="text-xs font-medium text-gray-400">allocated</span> */}
       </div>
 
-      {/* ✅ Paid Amount Badge */}
       <div className="mt-2 flex items-center bg-orange-50 px-2 py-1 rounded text-xs">
         <CheckCircle size={12} className="text-orange-600 mr-1" />
         <span className="font-semibold text-orange-700">
-            ₹{stats.paidTransportAmount.toLocaleString()} Paid
+          ₹{stats.paidTransportAmount.toLocaleString()} Paid
         </span>
       </div>
     </div>
   </div>
 
-  {/* Profit/Loss Summary (Unchanged) */}
+  {/* ✅ NEW: Cash Flow Summary */}
+  <div className="mb-4 bg-white p-4 rounded-lg border-2 border-indigo-200">
+    <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center">
+      <Activity size={16} className="mr-1 text-indigo-600" />
+      Cash Flow Status
+    </h4>
+    
+    <div className="grid grid-cols-3 gap-4">
+      {/* Money In (from farmers) */}
+      <div className="bg-green-50 p-3 rounded-lg border border-green-200">
+        <p className="text-xs text-gray-600 mb-1">Cash Received</p>
+        <p className="text-xl font-bold text-green-700">
+          ₹{farmerPaymentStats.total_paid.toLocaleString()}
+        </p>
+        <p className="text-xs text-green-600 mt-1">
+          {farmerPaymentStats.paid_count} payments
+        </p>
+      </div>
+
+      {/* Money Out (to mukkadam + transport) */}
+      <div className="bg-red-50 p-3 rounded-lg border border-red-200">
+        <p className="text-xs text-gray-600 mb-1">Cash Paid Out</p>
+        <p className="text-xl font-bold text-red-700">
+          ₹{(stats.paidMukkadamAmount + stats.paidTransportAmount).toLocaleString()}
+        </p>
+        <p className="text-xs text-red-600 mt-1">
+          Mukkadam + Transport
+        </p>
+      </div>
+
+      {/* Net Cash Position */}
+      <div className={`p-3 rounded-lg border-2 ${
+        (farmerPaymentStats.total_paid - (stats.paidMukkadamAmount + stats.paidTransportAmount)) >= 0
+          ? 'bg-emerald-50 border-emerald-300'
+          : 'bg-orange-50 border-orange-300'
+      }`}>
+        <p className="text-xs text-gray-600 mb-1">Net Cash Position</p>
+        <p className={`text-xl font-bold ${
+          (farmerPaymentStats.total_paid - (stats.paidMukkadamAmount + stats.paidTransportAmount)) >= 0
+            ? 'text-emerald-700'
+            : 'text-orange-700'
+        }`}>
+          ₹{(farmerPaymentStats.total_paid - (stats.paidMukkadamAmount + stats.paidTransportAmount)).toLocaleString()}
+        </p>
+        <p className={`text-xs mt-1 ${
+          (farmerPaymentStats.total_paid - (stats.paidMukkadamAmount + stats.paidTransportAmount)) >= 0
+            ? 'text-emerald-600'
+            : 'text-orange-600'
+        }`}>
+          {(farmerPaymentStats.total_paid - (stats.paidMukkadamAmount + stats.paidTransportAmount)) >= 0 
+            ? 'Positive' 
+            : 'Negative'}
+        </p>
+      </div>
+    </div>
+  </div>
+{/* Detail Modal */}
+{showDetailModal && (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-hidden">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-purple-600 to-pink-600 p-6 text-white flex justify-between items-center">
+        <h2 className="text-2xl font-bold">{detailData?.title || 'Loading...'}</h2>
+        <button
+          onClick={() => setShowDetailModal(false)}
+          className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-2 transition"
+        >
+          <X size={24} />
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
+        {loadingDetail ? (
+          <div className="text-center py-12">
+            <RefreshCw size={48} className="mx-auto text-gray-400 mb-4 animate-spin" />
+            <p className="text-gray-600">Loading details...</p>
+          </div>
+        ) : detailData ? (
+          <>
+            {/* Summary if available */}
+            {detailData.summary && Object.keys(detailData.summary).length > 0 && (
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                {Object.entries(detailData.summary).map(([key, value]) => (
+                  <div key={key} className="bg-gray-50 p-4 rounded-lg">
+                    <p className="text-xs text-gray-600 uppercase">{key.replace('_', ' ')}</p>
+                    <p className="text-2xl font-bold text-purple-600">
+                      ₹{Number(value).toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Items Table */}
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {detailData.items.length > 0 && Object.keys(detailData.items[0]).map(key => (
+                      <th key={key} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        {key.replace('_', ' ')}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {detailData.items.map((item: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-gray-50">
+                      {Object.entries(item).map(([key, value]) => (
+                        <td key={key} className="px-4 py-3 text-sm text-gray-700">
+                          {typeof value === 'number' && key.includes('amount') || key.includes('revenue') || key.includes('cost') || key.includes('profit') || key.includes('loss')
+                            ? `₹${value.toLocaleString()}`
+                            : String(value)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Count */}
+            <div className="mt-4 text-center text-sm text-gray-600">
+              Total: {detailData.count} records
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
+  </div>
+)}
+
+  {/* Profit/Loss Summary */}
   <div className="mb-4">
     <div className="grid grid-cols-2 gap-4">
       <div className="bg-white p-4 rounded-lg border border-gray-200">
@@ -2277,8 +2634,8 @@ const handleSaveSuccess = async () => {
           ₹{stats.totalPayout.toLocaleString()}
         </p>
         <div className="mt-1 flex items-center text-xs text-purple-600">
-            <CheckSquare size={12} className="mr-1" />
-            Total Paid: ₹{(stats.paidMukkadamAmount + stats.paidTransportAmount).toLocaleString()}
+          <CheckSquare size={12} className="mr-1" />
+          Total Paid: ₹{(stats.paidMukkadamAmount + stats.paidTransportAmount).toLocaleString()}
         </div>
       </div>
 
@@ -2311,7 +2668,7 @@ const handleSaveSuccess = async () => {
 
   {/* Detailed Metrics */}
   <div className="pt-4 border-t border-purple-300">
-    <div className="grid grid-cols-4 gap-2 text-xs">
+    <div className="grid grid-cols-5 gap-2 text-xs">
       <div className="bg-white p-2 rounded">
         <span className="text-gray-600">Avg Revenue/Job:</span>
         <span className="font-bold text-green-600 ml-2">
@@ -2330,6 +2687,13 @@ const handleSaveSuccess = async () => {
         <span className="text-gray-600">Avg Profit/Job:</span>
         <span className={`font-bold ml-2 ${stats.netProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
           ₹{allocations.length > 0 ? (stats.netProfit / allocations.length).toFixed(0) : 0}
+        </span>
+      </div>
+
+      <div className="bg-white p-2 rounded">
+        <span className="text-gray-600">Farmer Collection:</span>
+        <span className="font-bold text-emerald-600 ml-2">
+          {farmerPaymentStats.completion_percentage.toFixed(0)}%
         </span>
       </div>
 
@@ -2377,6 +2741,7 @@ const handleSaveSuccess = async () => {
     </div>
   </div>
 </div>
+
                     </div>
 
                     {/* Right Column - 1/3 width */}
@@ -2643,41 +3008,43 @@ const handleSaveSuccess = async () => {
       )}
     </div>
 
+
     {(() => {
-      // Helper function to get the same date used for display
-      const getEffectiveJobDate = (job) => {
-        if (!job) return 0;
-        let dStr = job.scheduled_date;
-        if (!dStr && job.activities?.length > 0) {
-          const sorted = job.activities
-            .map(a => a.scheduled_date)
-            .filter(Boolean)
-            .sort();
-          if (sorted.length > 0) dStr = sorted[0];
-        }
-        return dStr ? new Date(dStr).getTime() : 0;
+      // Helper to get earliest scheduled date from job's activities
+      const getEarliestScheduledDate = (job) => {
+        if (!job || !job.activities || job.activities.length === 0) return 0;
+        
+        const dates = job.activities
+          .map(a => a.scheduled_date)
+          .filter(Boolean)
+          .map(d => new Date(d).getTime())
+          .sort((a, b) => a - b); // Oldest first
+        
+        return dates.length > 0 ? dates[0] : 0;
       };
 
-      // Group allocations by job ID
+      // ✅ FIXED: Group by job_id (not farmer_work_id)
       const allocationsByJob = getAllocatedAllocations().reduce((acc, allocation) => {
-        const jobId = allocation.farmer_work_id;
+        const jobId = allocation.job_id; // ✅ Use job_id
         if (!acc[jobId]) { acc[jobId] = []; }
         acc[jobId].push(allocation);
         return acc;
       }, {} as Record<string, Allocation[]>);
 
-      // --- Filter & Sort Logic ---
+      // Filter & Sort Logic
       const filteredAndSortedJobIds = Object.keys(allocationsByJob)
         .filter(jobId => {
           const job = jobs.find(j => j.work_id === jobId);
           const jobAllocations = allocationsByJob[jobId];
           
-          // Date Filter Logic
-          const jobTime = getEffectiveJobDate(job);
+          // Date Filter Logic - check against earliest activity date
           if (selectedFilterDate) {
+            const earliestTime = getEarliestScheduledDate(job);
+            if (earliestTime === 0) return false;
+            
             const filterTime = new Date(selectedFilterDate).setHours(0,0,0,0);
-            const actualJobTime = new Date(jobTime).setHours(0,0,0,0);
-            if (filterTime !== actualJobTime) return false;
+            const earliestDate = new Date(earliestTime).setHours(0,0,0,0);
+            if (filterTime !== earliestDate) return false;
           }
 
           // Activity Text Search Logic
@@ -2692,11 +3059,15 @@ const handleSaveSuccess = async () => {
           // General Text Search Logic
           if (!searchTerm) return true;
           const searchLower = searchTerm.toLowerCase();
+          
+          // ✅ Get farmer from job (not from allocation)
+          const farmer = job?.farmer;
+          
           return (
             String(jobId).toLowerCase().includes(searchLower) ||
             String(job?.title || '').toLowerCase().includes(searchLower) ||
-            String(job?.point_of_contact || '').toLowerCase().includes(searchLower) || // ✅ Add this line
-            String(job?.farmer?.farmer_name || '').toLowerCase().includes(searchLower) ||
+            String(job?.point_of_contact || '').toLowerCase().includes(searchLower) ||
+            String(farmer?.farmer_name || '').toLowerCase().includes(searchLower) ||
             jobAllocations.some(a => {
               const mukkadam = mukkadams.find(m => m.id === a.mukkadam_id);
               return String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower);
@@ -2707,8 +3078,8 @@ const handleSaveSuccess = async () => {
           const jobA = jobs.find(j => j.work_id === idA);
           const jobB = jobs.find(j => j.work_id === idB);
           
-          // Sort by the calculated effective date (Oldest to Newest)
-          return getEffectiveJobDate(jobA) - getEffectiveJobDate(jobB);
+          // Sort by earliest scheduled date (Oldest to Newest)
+          return getEarliestScheduledDate(jobA) - getEarliestScheduledDate(jobB);
         });
 
       if (filteredAndSortedJobIds.length === 0) {
@@ -2726,7 +3097,12 @@ const handleSaveSuccess = async () => {
             const jobAllocations = allocationsByJob[jobId];
             const job = jobs.find(j => j.work_id === jobId);
             const isExpanded = expandedJobs.has(jobId);
+            
+            // ✅ Get farmer from job
             const farmer = job?.farmer;
+            
+            // ✅ Get earliest scheduled date
+            const earliestTime = getEarliestScheduledDate(job);
 
             const totalMukkadamCost = jobAllocations.reduce((sum, a) => sum + (parseFloat(String(a.mukkadam_price)) || 0), 0);
             const totalTransportCost = jobAllocations.reduce((sum, a) => sum + (parseFloat(String(a.transport_price)) || 0), 0);
@@ -2740,24 +3116,28 @@ const handleSaveSuccess = async () => {
                       <div className="flex items-center space-x-3 mb-2">
                         <span className="text-lg font-mono font-bold text-blue-600">{jobId}</span>
                         <span className="px-2 py-1 bg-green-500 text-white rounded-full text-xs font-bold">ALLOCATED</span>
-                        <span className="text-sm font-medium text-gray-700">{job?.title}</span>
+                        {job?.title && <span className="text-sm font-medium text-gray-700">{job.title}</span>}
                       </div>
+                      
+                      {/* ✅ FIXED: Show farmer from job */}
                       {farmer && (
-                        <div className="flex items-center space-x-2 text-sm">
+                        <div className="flex items-center flex-wrap gap-2 text-sm">
                           <span className="font-bold text-gray-900">{farmer.farmer_name}</span>
-                          <span className="text-gray-500">• {farmer.phone_number}</span>
-                          <span className="text-gray-500">• {farmer.village}</span>
-                          <span className="text-gray-500">• {farmer.district}</span>
-                          <span className="text-gray-500">• {farmer.taluka}</span>
-                          {job.activities?.some(a => a.is_manually_edited) && (
-    <span className="px-2 py-1 bg-blue-500 text-white rounded-full text-xs font-bold flex items-center">
-      <Edit2 size={12} className="mr-1" />
-      EDITED
-    </span>
-  )}
-  
-
-                          {job.point_of_contact && (
+                          {farmer.phone_number && farmer.phone_number !== 'N/A' && (
+                            <span className="text-gray-500">• {farmer.phone_number}</span>
+                          )}
+                          {farmer.village && <span className="text-gray-500">• {farmer.village}</span>}
+                          {farmer.taluka && <span className="text-gray-500">• {farmer.taluka}</span>}
+                          {farmer.district && <span className="text-gray-500">• {farmer.district}</span>}
+                          
+                          {job?.activities?.some(a => a.is_manually_edited) && (
+                            <span className="px-2 py-1 bg-blue-500 text-white rounded-full text-xs font-bold flex items-center">
+                              <Edit2 size={12} className="mr-1" />
+                              EDITED
+                            </span>
+                          )}
+                          
+                          {job?.point_of_contact && (
                             <div className="flex items-center space-x-1 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
                               <UserRound size={14} className="text-blue-600" />
                               <span className="text-xs font-bold text-blue-700 uppercase">POC:</span>
@@ -2769,29 +3149,35 @@ const handleSaveSuccess = async () => {
                         </div>
                       )}
                     </div>
+                    
                     <div className="flex items-center space-x-6 mr-4">
+                      {/* ✅ FIXED: Show earliest scheduled date */}
                       <div className="text-right">
                         <p className="text-xs text-gray-500 uppercase font-bold">Scheduled</p>
                         <p className="text-sm font-semibold text-gray-700">
-                          {(() => {
-                            const time = getEffectiveJobDate(job);
-                            return time > 0 ? new Date(time).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'N/A';
-                          })()}
+                          {earliestTime > 0 
+                            ? new Date(earliestTime).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                            : 'N/A'
+                          }
                         </p>
                       </div>
+                      
                       <div className="text-right">
                         <p className="text-xs text-gray-500">Total Area</p>
                         <p className="text-lg font-bold text-gray-700">{totalArea.toFixed(1)} ac</p>
                       </div>
+                      
                       <div className="text-right">
                         <p className="text-xs text-gray-500">Total Cost</p>
-                        <p className="text-2xl font-bold text-purple-600">₹{(totalMukkadamCost + totalTransportCost).toLocaleString()}</p>
+                        <p className="text-2xl font-bold text-purple-600">
+                          ₹{(totalMukkadamCost + totalTransportCost).toLocaleString()}
+                        </p>
                       </div>
+                      
                       {isExpanded ? <ChevronUp className="text-green-600" /> : <ChevronDown className="text-green-600" />}
                     </div>
                   </div>
                 </div>
-
                 {isExpanded && (
                   <div className="px-6 pb-6 border-t border-green-200 bg-white">
                     <div className="mt-4 overflow-x-auto">
@@ -2900,218 +3286,215 @@ const handleSaveSuccess = async () => {
       </div>
     </div>
 
-    {(() => {
-        const filteredCompletedList = getCompletedAllocations()
-            .filter(allocation => {
-                const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
-                const farmerName = job?.farmer?.farmer_name || '';
-                const searchLower = searchTerm.toLowerCase();
+{(() => {
+  
+    const filteredCompletedList = getCompletedAllocations()
+    .filter(allocation => {
+        const farmerName = allocation.farmer?.farmer_name || '';
+        const searchLower = searchTerm.toLowerCase();
 
-                if (selectedFilterDate) {
-                  if (!allocation.work_date || !allocation.work_date.startsWith(selectedFilterDate)) {
-                    return false;
-                  }
-                }
-
-                if (!searchTerm) return true;
-                const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
-                const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
-
-                return (
-                    String(allocation.farmer_work_id || '').toLowerCase().includes(searchLower) ||
-                    String(allocation.activity_name || '').toLowerCase().includes(searchLower) ||
-                    farmerName.toLowerCase().includes(searchLower) ||
-                    String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower) ||
-                    String(provider?.name || '').toLowerCase().includes(searchLower)
-                );
-            })
-            .sort((a, b) => {
-                // Sort by work_date descending (newest first)
-                const dateA = a.work_date ? new Date(a.work_date).getTime() : 0;
-                const dateB = b.work_date ? new Date(b.work_date).getTime() : 0;
-                return dateB - dateA;
-            });
-
-        if (filteredCompletedList.length === 0) {
-            return (
-                <div className="text-center py-12">
-                    <CheckSquare size={48} className="mx-auto text-gray-400 mb-4" />
-                    <p className="text-gray-600">
-                        {searchTerm || selectedFilterDate ? `No results match your filters` : "No completed allocations found"}
-                    </p>
-                </div>
-            );
+        if (selectedFilterDate) {
+          if (!allocation.work_date || !allocation.work_date.startsWith(selectedFilterDate)) {
+            return false;
+          }
         }
 
+        if (!searchTerm) return true;
+        const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
+        const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
+
         return (
-            <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                        <tr>
-                            <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Farmer Info</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Work Date</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam Payment</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport Payment</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                        {filteredCompletedList.map(allocation => {
-                            const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
-                            const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
-                            const job = jobs.find(j => j.work_id === allocation.farmer_work_id);
-                            
-                            const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
-                            const transportPayment = getTransportPaymentRequest(allocation.id);
+            // ✅ Use job_id instead of farmer_work_id
+            String(allocation.job_id || allocation.job?.job_id || '').toLowerCase().includes(searchLower) ||
+            String(allocation.activity?.activity_name || '').toLowerCase().includes(searchLower) ||
+            farmerName.toLowerCase().includes(searchLower) ||
+            String(mukkadam?.mukkadam_name || '').toLowerCase().includes(searchLower) ||
+            String(provider?.name || '').toLowerCase().includes(searchLower)
+        );
+    })
+    .sort((a, b) => {
+        const dateA = a.work_date ? new Date(a.work_date).getTime() : 0;
+        const dateB = b.work_date ? new Date(b.work_date).getTime() : 0;
+        return dateB - dateA;
+    });
 
-                            const mukkadamAmount = parseFloat(String(allocation.mukkadam_price || '0'));
-                            const transportAmount = parseFloat(String(allocation.transport_price || '0'));
 
-                            return (
-                                <tr key={allocation.id} className="hover:bg-gray-50">
-                                    <td className="px-4 py-4">
-                                      <div className="text-sm">
-                                        <div className="font-bold text-indigo-600">{job?.farmer?.farmer_name || 'N/A'}</div>
-                                        <div className="font-bold text-indigo-600">{job?.farmer?.phone_number || 'N/A'}</div>
-                                        <div className="text-gray-400 text-xs flex items-center mt-1">
-                                          <MapPin size={10} className="mr-1" /> {job?.farmer?.location || 'No Location'}
-                                        </div>
+    if (filteredCompletedList.length === 0) {
+        return (
+            <div className="text-center py-12">
+                <CheckSquare size={48} className="mx-auto text-gray-400 mb-4" />
+                <p className="text-gray-600">
+                    {searchTerm || selectedFilterDate ? `No results match your filters` : "No completed allocations found"}
+                </p>
+            </div>
+        );
+    }
+
+    return (
+        <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                    <tr>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Farmer Info</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Activity</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Work Date</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mukkadam Payment</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Transport Payment</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                    {filteredCompletedList.map(allocation => {
+                        const mukkadam = mukkadams.find(m => m.id === allocation.mukkadam_id);
+                        const provider = transportProviders.find(t => t.id === allocation.transport_provider_id);
+                        
+                        // ✅ FIXED: Use farmer data directly from allocation (comes from backend)
+                        const farmer = allocation.farmer;
+                        
+                        const mukkadamPayment = getMukkadamPaymentRequest(allocation.id);
+                        const transportPayment = getTransportPaymentRequest(allocation.id);
+
+                        const mukkadamAmount = parseFloat(String(allocation.mukkadam_price || '0'));
+                        const transportAmount = parseFloat(String(allocation.transport_price || '0'));
+
+                        return (
+                            <tr key={allocation.id} className="hover:bg-gray-50">
+                                <td className="px-4 py-4">
+                                  <div className="text-sm">
+                                    <div className="font-bold text-indigo-600">{farmer?.farmer_name || 'N/A'}</div>
+                                    <div className="font-bold text-indigo-600">{farmer?.phone_number || 'N/A'}</div>
+                                    <div className="text-gray-400 text-xs flex items-center mt-1">
+                                      <MapPin size={10} className="mr-1" /> {farmer?.location || 'No Location'}
+                                    </div>
+                                  </div>
+                                </td>
+
+                                <td className="px-4 py-4">
+                                    <div className="text-sm">
+                                        <div className="font-medium text-gray-900">{mukkadam?.mukkadam_name || 'Unknown'}</div>
+                                        <div className="text-gray-500 text-xs">ID: {allocation.mukkadam_id}</div>
+                                    </div>
+                                </td>
+
+                                <td className="px-4 py-4">
+                                    <div className="text-sm">
+                                        <div className="font-medium text-gray-900">{allocation.activity?.activity_name || 'N/A'}</div>
+                                        <div className="text-gray-500 text-xs">Job: {allocation.job?.job_id || 'N/A'}</div>
+                                    </div>
+                                </td>
+
+                                <td className="px-4 py-4 text-sm text-gray-700">{allocation.allocated_area} acres</td>
+
+                                <td className="px-4 py-4 text-sm text-gray-700">
+                                    {new Date(allocation.work_date).toLocaleDateString('en-IN')}
+                                </td>
+
+                                {/* --- Mukkadam Payment Column --- */}
+                                <td className="px-4 py-4">
+                                  <div className="space-y-2">
+                                    <div className="font-bold text-green-600">₹{mukkadamAmount.toLocaleString()}</div>
+                                    {mukkadamPayment ? (
+                                      <div>
+                                        {mukkadamPayment.status === 'paid' ? (
+                                          <div className="flex items-center">
+                                            <CheckCircle size={16} className="text-green-600 mr-1" />
+                                            <span className="text-xs font-semibold text-green-700">PAID</span>
+                                          </div>
+                                        ) : mukkadamPayment.status === 'pending' ? (
+                                          isAdmin ? (
+                                            <div className="flex flex-col space-y-1">
+                                              <button
+                                                onClick={() => handleMarkMukkadamPaid(mukkadamPayment.id)}
+                                                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
+                                              >
+                                                <CheckCircle size={14} className="mr-1" /> Mark Paid
+                                              </button>
+                                              <button
+                                                onClick={() => handleRejectMukkadamPayment(mukkadamPayment.id)}
+                                                className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
+                                              >
+                                                <XCircle size={14} className="mr-1" /> Reject
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
+                                              <Clock size={14} className="text-yellow-600 mr-1" />
+                                              <span className="text-xs font-semibold text-yellow-700">PENDING</span>
+                                            </div>
+                                          )
+                                        ) : (
+                                          <div className="flex items-center">
+                                            <Ban size={16} className="text-red-600 mr-1" />
+                                            <span className="text-xs font-semibold text-red-700">REJECTED</span>
+                                          </div>
+                                        )}
                                       </div>
-                                    </td>
+                                    ) : (
+                                      <span className="text-xs text-gray-500 italic">Not requested</span>
+                                    )}
+                                  </div>
+                                </td>
 
-                                    <td className="px-4 py-4">
-                                        <div className="text-sm">
-                                            <div className="font-medium text-gray-900">{mukkadam?.mukkadam_name || 'Unknown'}</div>
-                                            <div className="text-gray-500 text-xs">ID: {allocation.mukkadam_id}</div>
+                                {/* --- Transport Payment Column --- */}
+                                <td className="px-4 py-4">
+                                  {allocation.transport_type === 'provider' && allocation.transport_provider_id ? (
+                                    <div className="space-y-2">
+                                      <div className="font-bold text-orange-600">₹{transportAmount.toLocaleString()}</div>
+                                      <div className="text-xs text-gray-600">{provider?.name || 'Unknown'}</div>
+                                      
+                                      {transportPayment ? (
+                                        <div>
+                                          {transportPayment.status === 'paid' ? (
+                                            <div className="flex items-center">
+                                              <CheckCircle size={16} className="text-green-600 mr-1" />
+                                              <span className="text-xs font-semibold text-green-700">PAID</span>
+                                            </div>
+                                          ) : transportPayment.status === 'pending' ? (
+                                            isAdmin ? (
+                                              <div className="flex flex-col space-y-1">
+                                                <button
+                                                  onClick={() => handleMarkTransportPaid(transportPayment.id)}
+                                                  className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
+                                                >
+                                                  <CheckCircle size={14} className="mr-1" /> Mark Paid
+                                                </button>
+                                                <button
+                                                  onClick={() => handleRejectTransportPayment(transportPayment.id)}
+                                                  className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
+                                                >
+                                                  <XCircle size={14} className="mr-1" /> Reject
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
+                                                <Clock size={14} className="text-yellow-600 mr-1" />
+                                                <span className="text-xs font-semibold text-yellow-700">PENDING</span>
+                                              </div>
+                                            )
+                                          ) : (
+                                            <div className="flex items-center">
+                                              <Ban size={16} className="text-red-600 mr-1" />
+                                              <span className="text-xs font-semibold text-red-700">REJECTED</span>
+                                            </div>
+                                          )}
                                         </div>
-                                    </td>
+                                      ) : (
+                                        <span className="text-xs text-gray-500 italic">Not requested</span>
+                                      )}
+                                    </div>
+                                  ) : allocation.transport_type === 'own' ? (
+                                    <div className="space-y-2">
+                                      <div className="font-bold text-blue-600">₹{transportAmount.toLocaleString()}</div>
+                                      <div className="text-xs text-gray-600">Own Transport</div>
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-gray-500">No Transport</div>
+                                  )}
+                                </td>
 
-                                    <td className="px-4 py-4">
-                                        <div className="text-sm">
-                                            <div className="font-medium text-gray-900">{allocation.activity_name || 'N/A'}</div>
-                                            <div className="text-gray-500 text-xs">Job: {allocation.farmer_work_id}</div>
-                                        </div>
-                                    </td>
-
-                                    <td className="px-4 py-4 text-sm text-gray-700">{allocation.allocated_area} acres</td>
-
-                                    <td className="px-4 py-4 text-sm text-gray-700">
-                                        {new Date(allocation.work_date).toLocaleDateString('en-IN')}
-                                    </td>
-
-                                    {/* --- Mukkadam Payment Column --- */}
-<td className="px-4 py-4">
-  <div className="space-y-2">
-    <div className="font-bold text-green-600">₹{mukkadamAmount.toLocaleString()}</div>
-    {mukkadamPayment ? (
-      <div>
-        {mukkadamPayment.status === 'paid' ? (
-          <div className="flex items-center">
-            <CheckCircle size={16} className="text-green-600 mr-1" />
-            <span className="text-xs font-semibold text-green-700">PAID</span>
-          </div>
-        ) : mukkadamPayment.status === 'pending' ? (
-          // ✅ LOGIC UPDATE: Check isAdmin before showing buttons
-          isAdmin ? (
-            <div className="flex flex-col space-y-1">
-              <button
-                onClick={() => handleMarkMukkadamPaid(mukkadamPayment.id)}
-                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
-              >
-                <CheckCircle size={14} className="mr-1" /> Mark Paid
-              </button>
-              <button
-                onClick={() => handleRejectMukkadamPayment(mukkadamPayment.id)}
-                className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
-              >
-                <XCircle size={14} className="mr-1" /> Reject
-              </button>
-            </div>
-          ) : (
-            // Non-Admins see a simple status badge
-            <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
-              <Clock size={14} className="text-yellow-600 mr-1" />
-              <span className="text-xs font-semibold text-yellow-700">PENDING</span>
-            </div>
-          )
-        ) : (
-          <div className="flex items-center">
-            <Ban size={16} className="text-red-600 mr-1" />
-            <span className="text-xs font-semibold text-red-700">REJECTED</span>
-          </div>
-        )}
-      </div>
-    ) : (
-      <span className="text-xs text-gray-500 italic">Not requested</span>
-    )}
-  </div>
-</td>
-
-{/* --- Transport Payment Column --- */}
-<td className="px-4 py-4">
-  {allocation.transport_type === 'provider' && allocation.transport_provider_id ? (
-    <div className="space-y-2">
-      <div className="font-bold text-orange-600">₹{transportAmount.toLocaleString()}</div>
-      <div className="text-xs text-gray-600">{provider?.name || 'Unknown'}</div>
-      
-      {transportPayment ? (
-        <div>
-          {transportPayment.status === 'paid' ? (
-            <div className="flex items-center">
-              <CheckCircle size={16} className="text-green-600 mr-1" />
-              <span className="text-xs font-semibold text-green-700">PAID</span>
-            </div>
-          ) : transportPayment.status === 'pending' ? (
-            // ✅ LOGIC UPDATE: Check isAdmin before showing buttons
-            isAdmin ? (
-              <div className="flex flex-col space-y-1">
-                <button
-                  onClick={() => handleMarkTransportPaid(transportPayment.id)}
-                  className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition flex items-center justify-center"
-                >
-                  <CheckCircle size={14} className="mr-1" /> Mark Paid
-                </button>
-                <button
-                  onClick={() => handleRejectTransportPayment(transportPayment.id)}
-                  className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition flex items-center justify-center"
-                >
-                  <XCircle size={14} className="mr-1" /> Reject
-                </button>
-              </div>
-            ) : (
-              // Non-Admins see a simple status badge
-              <div className="flex items-center bg-yellow-100 px-2 py-1 rounded w-fit">
-                <Clock size={14} className="text-yellow-600 mr-1" />
-                <span className="text-xs font-semibold text-yellow-700">PENDING</span>
-              </div>
-            )
-          ) : (
-            <div className="flex items-center">
-              <Ban size={16} className="text-red-600 mr-1" />
-              <span className="text-xs font-semibold text-red-700">REJECTED</span>
-            </div>
-          )}
-        </div>
-      ) : (
-        <span className="text-xs text-gray-500 italic">Not requested</span>
-      )}
-    </div>
-  ) : allocation.transport_type === 'own' ? (
-    <div className="space-y-2">
-      <div className="font-bold text-blue-600">₹{transportAmount.toLocaleString()}</div>
-      <div className="text-xs text-gray-600">Own Transport</div>
-    </div>
-  ) : (
-    <div className="text-xs text-gray-500">No Transport</div>
-  )}
-</td>
-
-                                    
-                           
-                                            <td className="px-4 py-4">
+                                <td className="px-4 py-4">
   <div className="flex flex-col space-y-2">
     {/* View Detail - Visible to Everyone */}
     <button
@@ -3120,9 +3503,44 @@ const handleSaveSuccess = async () => {
     >
       <Eye size={14} className="mr-1" /> View Detail
     </button>
-    
-    {/* ✅ EDIT BUTTON: Visible ONLY if (User is Admin) AND (Not Paid) */}
-    {isAdmin && !(mukkadamPayment?.status === 'paid' || transportPayment?.status === 'paid') && (
+
+    {/* ✅ NEW: Edit Activity (like pending) – only for admin and not lost */}
+    {isAdmin && allocation.activity && !allocation.activity.is_lost && (
+      <button
+        onClick={() => {
+          // use the activity and job attached to allocation
+          const activity = allocation.activity;
+          const job = allocation.job.job_id;
+          console.log('Editing activity from completed tab:', { activity, job });
+
+          setSelectedActivityForEdit(activity);
+          setSelectedJobForEdit(job);
+
+          setEditFormData({
+            activity_name: activity.activity_name,
+            total_area: activity.total_area,
+            scheduled_date: activity.scheduled_date || '',
+            total_price: activity.total_price,
+            transport_cost: activity.transport_cost || 0,
+            other_cost: activity.other_cost || 0,
+            crop_bundles:
+              typeof activity.crop_bundles === 'number'
+                ? activity.crop_bundles
+                : parseFloat(activity.crop_bundles || '0'),
+            rate_per_acre: activity.rate_per_acre,
+          });
+
+          setShowEditActivityModal(true);
+        }}
+        className="text-orange-600 hover:text-orange-800 font-bold flex items-center text-xs"
+      >
+        <Edit size={14} className="mr-1" /> Edit Activity
+      </button>
+    )}
+
+    {/* Existing Edit/Reallocate button for allocation */}
+    {/* {isAdmin && !(mukkadamPayment?.status === 'paid' || transportPayment?.status === 'paid') && ( */}
+    {isAdmin && (
       <button 
         onClick={() => {
           setAllocationToEdit(allocation); 
@@ -3135,17 +3553,19 @@ const handleSaveSuccess = async () => {
     )}
   </div>
 </td>
-                                   
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
-            </div>
-        );
-    })()}
+
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </div>
+    );
+})()}
   </div>
 )}
+
+
 {activeTab === 'pending' && (
   <div>
     {/* --- Filter Bar Section (Synced with Allocated Tab) --- */}
@@ -4889,9 +5309,13 @@ const handleSaveSuccess = async () => {
       
       {/* Job Info */}
       <div className="mb-4 bg-blue-50 border border-blue-200 rounded p-3">
-        <p className="text-sm text-gray-700">
-          <strong>Job ID:</strong> {selectedJobForEdit?.work_id}
-        </p>
+       <p className="text-sm text-gray-700">
+  <strong>Job ID:</strong>{' '}
+  {typeof selectedJobForEdit === 'string'
+    ? selectedJobForEdit
+    : selectedJobForEdit?.work_id}
+</p>
+
       </div>
 
       {/* Editable Fields */}
@@ -5054,8 +5478,10 @@ const handleSaveSuccess = async () => {
               </span>
             </div>
             <p className="text-xs text-gray-500 mt-1">
-              Mukkadam (₹{editFormData.total_price.toFixed(2)}) + Transport (₹{editFormData.transport_cost.toFixed(2)}) + Other (₹{editFormData.other_cost.toFixed(2)})
-            </p>
+  Mukkadam (₹{formatMoney(editFormData.total_price)}) + 
+  Transport (₹{formatMoney(editFormData.transport_cost)}) + 
+  Other (₹{formatMoney(editFormData.other_cost)})
+</p>
           </div>
         </div>
 
@@ -5065,11 +5491,12 @@ const handleSaveSuccess = async () => {
             Rate Per Acre (₹) <span className="text-gray-500">(Auto-calculated)</span>
           </label>
           <input
-            type="text"
-            value={`₹${editFormData.rate_per_acre.toFixed(2)}`}
-            readOnly
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 cursor-not-allowed"
-          />
+  type="text"
+  value={formatRate(editFormData.rate_per_acre)}
+  readOnly
+  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 cursor-not-allowed"
+/>
+
           <p className="text-xs text-gray-500 mt-1">
             Calculated as: Subtotal ÷ Total Area
           </p>
@@ -5137,7 +5564,15 @@ const handleSaveSuccess = async () => {
           Cancel
         </button>
         <button
-          onClick={() => handleEditActivity(selectedActivityForEdit, selectedJobForEdit.work_id)}
+          onClick={() => {
+  const jobId =
+    typeof selectedJobForEdit === 'string'
+      ? selectedJobForEdit
+      : selectedJobForEdit?.work_id;
+
+  handleEditActivity(selectedActivityForEdit, jobId);
+}}
+
           disabled={!editReason.trim() || !editFormData.activity_name || editFormData.total_area <= 0 || editFormData.total_price < 0}
           className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
         >

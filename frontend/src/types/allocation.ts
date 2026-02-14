@@ -1,4 +1,5 @@
-// ✅ Add these helper interfaces below
+// ✅ UPDATED INTERFACES TO MATCH NEW API STRUCTURE
+
 export interface Visit {
   visit_id: number;
   status: string;
@@ -16,27 +17,24 @@ export interface MediaLocation {
     is_field_location: boolean;
   };
 }
+
 export interface Job {
   id: number;
   work_id: string;
   farmer_id?: string;
-latitude: number;  // ✅ Change Number to number (primitive)
+  latitude: number;
   longitude: number;
   
-
-  // ✅ NEW: Point of Contact (assigned_to from the first visit)
   point_of_contact?: string | null;
-
-  // ✅ NEW: Detailed Visits information
   visits?: Visit[];
-  // ✅ FARMER DETAILS (enriched by backend)
+  
   farmer?: {
     farmer_name: string;
     phone_number: string;
     village: string;
     taluka: string;
     district: string;
-    location: string;  // Combined location string
+    location: string;
   };
   
   title?: string;
@@ -47,7 +45,6 @@ latitude: number;  // ✅ Change Number to number (primitive)
   created_at: string;
   scheduled_date?: string;
   
-  // ✅ BOOKING INFO
   booking?: {
     id: number;
     total_amount: number;
@@ -71,30 +68,87 @@ export interface Activity {
   remaining_area: number;
   scheduled_date: string;
   estimated_workers: number;
-  lost_reason:string;
+  lost_reason: string;
   
-  // ✅ PRICING FROM API
   rate_per_acre: number;
-  total_price: number;       // Revenue
-  transport_cost: number;    // Expected transport cost
+  total_price: number;
+  transport_cost: number;
   other_cost: number;
-  crop_bundles:string;
+  crop_bundles: string;
   subtotal: number;
-  is_manually_edited:boolean;
-  is_lost:boolean;
+  is_manually_edited: boolean;
+  is_lost: boolean;
   
   is_fully_allocated: boolean;
   allocations?: any[];
 }
+
+// ✅ NEW: Simplified Farmer interface matching API response
+export interface Farmer {
+  farmer_id: string;
+  farmer_name: string;
+  phone_number: string;
+  location: string;
+}
+
+// ✅ NEW: Simplified Job info matching API response
+export interface JobInfo {
+  job_id: string;
+  job_name: string;
+  scheduled_date: string;
+  location: string;
+  central_team_phone: string;
+}
+
+// ✅ NEW: Simplified Activity info matching API response
+export interface ActivityInfo {
+  activity_id: string;
+  activity_name: string;
+  activity_type: string;
+  total_area: number;
+  scheduled_date: string;
+  scheduled_time: string;
+}
+
+// ✅ UPDATED: Main Allocation interface matching new API structure
 export interface Allocation {
-  id: number;
-  farmer_work_id: string;
-  activity_id:string;
+  // Core identification
+  allocation_id: number;
+  farmer_id: string;
+  
+  // ✅ Nested objects (simplified from API)
+  farmer: Farmer | null;
+  job: JobInfo;
+  activity: ActivityInfo;
+  
+  // ✅ Direct fields matching required format
   mukkadam_id: number;
-  mukkadam_price: string ;
-  transport_price: string ;
-  allocated_at: string;
-  completed_at: string;
+  allocated_area: number;
+  work_date: string;
+  mukkadam_price: number;
+  transport_type: 'provider' | 'own' | 'none';
+  transport_provider_id?: number | null;
+  transport_price: number;
+  status: 'allocated' | 'in_progress' | 'completed';
+  
+  // Additional fields
+  crew_size?: number;
+  notes?: string;
+  allocated_at?: string;
+  completed_at?: string;
+  
+  // ✅ Full nested objects for frontend use
+  mukkadam?: Mukkadam;
+  transport_provider?: TransportProvider;
+  
+  // Legacy fields for backward compatibility
+  id?: number;
+  farmer_work_id?: string;
+  activity_id?: string;
+  job_id?: string;
+  activity_name?: string;
+  job_activity?: string;
+  total_cost?: number;
   created_by?: {
     id: number;
     username: string;
@@ -107,18 +161,7 @@ export interface Allocation {
     first_name: string;
     last_name: string;
   };
-  status?: string;
-  notes?: string;
-  job_activity?: string;
-  job_id?: string;
-  activity_name?: string;
-  allocated_area?: number;
-  work_date?: string;  // ✅ ADD THIS
-  crew_size?: number;  // ✅ ADD THIS
-  transport_type?: 'provider' | 'own' | 'none';
-  transport_provider_id?: number;
   own_transport_price?: number;
-  total_cost?: number;
 }
 
 export interface Mukkadam {
@@ -128,7 +171,7 @@ export interface Mukkadam {
   village: string;
   crew_size: string;
   is_permanent: boolean;
-  paid_amount:number;
+  paid_amount: number;
 
   price_metrics?: {
     asking_price: number | null;
@@ -149,7 +192,7 @@ export interface TransportProvider {
 
 export interface MukkadamAllocation {
   mukkadam: Mukkadam;
-  paid_amount:number;
+  paid_amount: number;
   allocations: Allocation[];
   total_price: number;
   job_count: number;
@@ -157,7 +200,7 @@ export interface MukkadamAllocation {
 
 export interface TransportAllocation {
   provider: TransportProvider;
-  paid_amount:number;
+  paid_amount: number;
   allocations: Allocation[];
   total_price: number;
   job_count: number;
@@ -179,7 +222,7 @@ export interface ActivityLog {
   job_id: string;
   mukkadam_id: number;
   mukkadam_name: string;
-  transport_type: 'provider' | 'own' | 'none';  // ✅ ADD THIS
+  transport_type: 'provider' | 'own' | 'none';
   transport_provider_id?: number;
   transport_name: string;
   mukkadam_price: number;
@@ -191,9 +234,9 @@ export interface ActivityLog {
   allocated_area?: number;
   crew_size?: number;
   activity_name?: string;
-   farmer_name?: string;  // ✅ NEW
-  farmer_work_id?: string;  // ✅ NEW
-  activity_edit_details?: ActivityEditDetails;  // ✅ NEW
+  farmer_name?: string;
+  farmer_work_id?: string;
+  activity_edit_details?: ActivityEditDetails;
 }
 
 export interface DailyStat {
@@ -203,4 +246,22 @@ export interface DailyStat {
   total_mukkadam_price: number;
   total_transport_price: number;
   allocations_by_user: Record<string, number>;
+}
+
+// ✅ NEW: API Response interface
+export interface AllocationListResponse {
+  count: number;
+  allocations: Allocation[];
+  summary: {
+    total_allocations: number;
+    total_area_allocated: number;
+    total_cost: number;
+    active_allocations: number;
+    completed_allocations: number;
+    in_progress_allocations: number;
+  };
+  performance: {
+    total_time: string;
+    batch_fetch_time: string;
+  };
 }

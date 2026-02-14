@@ -12,36 +12,60 @@ SUPPLY_API_URL = getattr(settings, 'SUPPLY_API_URL')
 # ✅ Thread-local storage to track old values
 import threading
 _thread_locals = threading.local()
-
 def get_mukkadam_name(mukkadam_id):
-    """Fetch mukkadam name from supply service"""
+    """Fetch mukkadam name from supply service or imported data"""
+    # Check if it's an imported mukkadam (ID >= 10000)
+    if mukkadam_id >= 10000:
+        try:
+            from data.models import ImportedMukkadam
+            imported_mukkadam = ImportedMukkadam.objects.get(
+                external_mukkadam_id=mukkadam_id
+            )
+            return imported_mukkadam.team_name
+        except Exception:
+            return f'Mukkadam #{mukkadam_id}'
+    
+    # Fetch from Supply API (original logic for non-imported)
     try:
-        # REMOVED the '$' before {SUPPLY_API_URL}
         response = requests.get(
             f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/', 
-            timeout=5 # Reduced timeout (70s is too long for a signal)
+            timeout=400
         )
         if response.status_code == 200:
             return response.json().get('mukkadam_name', f'Mukkadam #{mukkadam_id}')
         else:
-            print(f"Error fetching Mukkadam: Status {response.status_code}") # Debug print
+            print(f"⚠️  Cannot connect to Supply API for Mukkadam {mukkadam_id}")
     except Exception as e:
-        print(f"Exception fetching Mukkadam: {str(e)}") # Print the actual error
-        pass
+        print(f"⚠️  Cannot connect to Supply API for Mukkadam {mukkadam_id}")
+    
     return f'Mukkadam #{mukkadam_id}'
+
+
 def get_transport_provider_name(provider_id):
-    """Fetch transport provider name from supply service"""
+    """Fetch transport provider name from supply service or imported data"""
+    # Check if it's an imported transporter (ID >= 20000)
+    if provider_id >= 20000:
+        try:
+            from data.models import ImportedTransporter
+            imported_transporter = ImportedTransporter.objects.get(
+                external_transporter_id=provider_id
+            )
+            return imported_transporter.name
+        except Exception:
+            return f'Provider #{provider_id}'
+    
+    # Fetch from Supply API (original logic for non-imported)
     try:
         response = requests.get(
             f'{SUPPLY_API_URL}/api/transport-providers/{provider_id}/',
-            timeout=2
+            timeout=200
         )
         if response.status_code == 200:
             return response.json().get('name', f'Provider #{provider_id}')
-    except:
-        pass
+    except Exception:
+        print(f"⚠️  Cannot connect to Supply API for Transporter {provider_id}")
+    
     return f'Provider #{provider_id}'
-
 # ========================================
 # ALLOCATION SIGNALS WITH CHANGE TRACKING
 # ========================================
@@ -58,45 +82,45 @@ def capture_allocation_old_values(sender, instance, **kwargs):
     else:
         _thread_locals.old_allocation = None
 
-# @receiver(post_save, sender=Allocation)
-# def log_allocation_activity_with_changes(sender, instance, created, **kwargs):
-#     """Log allocation with detailed change tracking"""
+@receiver(post_save, sender=Allocation)
+def log_allocation_activity_with_changes(sender, instance, created, **kwargs):
+    """Log allocation with detailed change tracking"""
     
-#     # ✅ ONLY LOG CREATION - Updates are handled manually in viewset
-#     if not created:
-#         return  # Skip updates - they're logged manually with correct user
+    # ✅ ONLY LOG CREATION - Updates are handled manually in viewset
+    if not created:
+        return  # Skip updates - they're logged manually with correct user
     
-#     # Get names
-#     mukkadam_name = get_mukkadam_name(instance.mukkadam_id)
-#     transport_name = None
-#     if instance.transport_provider_id:
-#         transport_name = get_transport_provider_name(instance.transport_provider_id)
+    # Get names
+    mukkadam_name = get_mukkadam_name(instance.mukkadam_id)
+    transport_name = None
+    if instance.transport_provider_id:
+        transport_name = get_transport_provider_name(instance.transport_provider_id)
     
-#     # New allocation - log all fields as "new"
-#     ActivityLog.objects.create(
-#         activity_type='allocation_created',
-#         description=f"Allocated {instance.allocated_area} acres to {mukkadam_name} for {instance.job_activity.activity_name}",
-#         allocation=instance,
-#         job_id=instance.job_activity.job_id,
-#         mukkadam_id=instance.mukkadam_id,
-#         mukkadam_name=mukkadam_name,
-#         transport_provider_id=instance.transport_provider_id,
-#         transport_name=transport_name,
-#         amount=instance.total_cost,
-#         performed_by=instance.allocated_by,
-#         changes={
-#             'allocated_area': {'old': None, 'new': float(instance.allocated_area)},
-#             'mukkadam_price': {'old': None, 'new': float(instance.mukkadam_price)},
-#             'transport_price': {'old': None, 'new': float(instance.transport_price or 0)},
-#             'work_date': {'old': None, 'new': str(instance.work_date)},
-#             'crew_size': {'old': None, 'new': instance.crew_size},
-#             'transport_type': {'old': None, 'new': instance.transport_type},
-#         },
-#         metadata={
-#             'activity_name': instance.job_activity.activity_name,
-#             'status': instance.status,
-#         }
-#     )
+    # New allocation - log all fields as "new"
+    ActivityLog.objects.create(
+        activity_type='allocation_created',
+        description=f"Allocated {instance.allocated_area} acres to {mukkadam_name} for {instance.job_activity.activity_name}",
+        allocation=instance,
+        job_id=instance.job_activity.job_id,
+        mukkadam_id=instance.mukkadam_id,
+        mukkadam_name=mukkadam_name,
+        transport_provider_id=instance.transport_provider_id,
+        transport_name=transport_name,
+        amount=instance.total_cost,
+        performed_by=instance.allocated_by,
+        changes={
+            'allocated_area': {'old': None, 'new': float(instance.allocated_area)},
+            'mukkadam_price': {'old': None, 'new': float(instance.mukkadam_price)},
+            'transport_price': {'old': None, 'new': float(instance.transport_price or 0)},
+            'work_date': {'old': None, 'new': str(instance.work_date)},
+            'crew_size': {'old': None, 'new': instance.crew_size},
+            'transport_type': {'old': None, 'new': instance.transport_type},
+        },
+        metadata={
+            'activity_name': instance.job_activity.activity_name,
+            'status': instance.status,
+        }
+    )
 
 
 @receiver(post_delete, sender=Allocation)

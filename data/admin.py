@@ -16,166 +16,84 @@ from django.contrib import admin
 from django.utils.html import format_html
 from .models import FarmerCall
 
+# allocation_app/admin.py
+from django.contrib import admin
+from django.utils.html import format_html
+from .models import FarmerCall
 
 @admin.register(FarmerCall)
 class FarmerCallAdmin(admin.ModelAdmin):
-    # --------------------
-    # LIST VIEW
-    # --------------------
+    # Columns to show in the list view
     list_display = (
-        'mobile_number',
-        'purpose',
-        'status_badge',
-        'direction',
-        'duration',
-        'talk_time',
-        'has_recording_display',
-        'initiated_at',
+        'initiated_at', 
+        'mobile_number', 
+        'purpose', 
+        'status', 
+        'duration_display', 
+        'play_audio'  # ✅ Custom audio player column
     )
+    
+    # Filters on the right sidebar
+    list_filter = ('status', 'purpose', 'initiated_at')
+    
+    # Search box
+    search_fields = ('mobile_number', 'call_sid', 'job_id')
+    
+    # Make some fields read-only to prevent accidental edits
+    readonly_fields = ('call_sid', 'audio_player_detail', 'initiated_at', 'webhook_data')
 
-    list_filter = (
-        'status',
-        'purpose',
-        'direction',
-        'initiated_at',
-    )
+    def duration_display(self, obj):
+        if obj.duration:
+            return f"{obj.duration}s"
+        return "-"
+    duration_display.short_description = "Duration"
 
-    search_fields = (
-        'mobile_number',
-        'call_sid',
-        'job_id',
-        'user_id',
-        'from_number',
-    )
-
-    ordering = ('-initiated_at',)
-
-    # --------------------
-    # READONLY FIELDS
-    # --------------------
-    readonly_fields = (
-        'call_sid',
-        'initiated_at',
-        'answered_at',
-        'completed_at',
-        'created_time',
-        'updated_time',
-        'recording_preview',
-        'webhook_data',
-        'created_by',
-    )
-
-    # --------------------
-    # FIELD GROUPING
-    # --------------------
-    fieldsets = (
-        ('Call Identifiers', {
-            'fields': (
-                'call_sid',
-                'user_id',
-                'job_id',
-                'created_by',
-            )
-        }),
-
-        ('Call Parties', {
-            'fields': (
-                'mobile_number',
-                'from_number',
-                'virtual_number',
-                'direction',
-            )
-        }),
-
-        ('Call Status', {
-            'fields': (
-                'purpose',
-                'status',
-                'state',
-            )
-        }),
-
-        ('Call Metrics', {
-            'fields': (
-                'duration',
-                'talk_time',
-                'price',
-            )
-        }),
-
-        ('Recording', {
-            'fields': (
-                'recording_preview',
-                'recording_url',
-                'recording_urls',
-            )
-        }),
-
-        ('Timestamps', {
-            'fields': (
-                'initiated_at',
-                'answered_at',
-                'completed_at',
-                'created_time',
-                'updated_time',
-            )
-        }),
-
-        ('Exotel Metadata', {
-            'fields': (
-                'custom_field',
-                'legs_url',
-                'webhook_data',
-            )
-        }),
-
-        ('Notes', {
-            'fields': ('notes',)
-        }),
-    )
-
-    # --------------------
-    # BADGES & HELPERS
-    # --------------------
-    def status_badge(self, obj):
-        color_map = {
-            'completed': 'green',
-            'answered': 'blue',
-            'in-progress': 'orange',
-            'ringing': 'orange',
-            'failed': 'red',
-            'busy': 'red',
-            'no-answer': 'gray',
-            'cancelled': 'gray',
-            'pending': 'gray',
-            'queued': 'gray',
-            'terminal': 'black',
-        }
-        color = color_map.get(obj.status, 'gray')
-
-        return format_html(
-            '<span style="padding:4px 8px; border-radius:6px; background:{}; color:white;">{}</span>',
-            color,
-            obj.status.upper()
-        )
-    status_badge.short_description = "Status"
-
-    def has_recording_display(self, obj):
-        return "🎧 Yes" if obj.has_recording else "—"
-    has_recording_display.short_description = "Recording"
-
-    def recording_preview(self, obj):
-        url = obj.primary_recording_url
+    def play_audio(self, obj):
+        """Renders a compact audio player in the list view"""
+        url = obj.audio_url
         if url:
             return format_html(
-                '<audio controls style="width:300px;">'
+                '<audio controls preload="none" style="width: 200px; height: 30px;">'
                 '<source src="{}" type="audio/mpeg">'
+                'Your browser does not support audio.'
                 '</audio>',
                 url
             )
-        return "No recording available"
-    recording_preview.short_description = "Play Recording"
+        return format_html('<span style="color: #999;">No Recording</span>')
+    play_audio.short_description = "Audio Preview"
 
+    def audio_player_detail(self, obj):
+        """Renders a larger audio player for the detail view"""
+        url = obj.audio_url
+        if url:
+            return format_html(
+                '<div>'
+                '<audio controls style="width: 100%; max-width: 400px;">'
+                '<source src="{}" type="audio/mpeg">'
+                '</audio>'
+                '<p style="margin-top: 5px;"><a href="{}" target="_blank">Download Recording</a></p>'
+                '</div>',
+                url, url
+            )
+        return "No recording available"
+    audio_player_detail.short_description = "Recording Player"
+
+    # Group fields in the detail view
+    fieldsets = (
+        ('Primary Info', {
+            'fields': ('call_sid', 'mobile_number', 'from_number', 'purpose', 'status')
+        }),
+        ('Recording', {
+            'fields': ('audio_player_detail', 's3_key', 'recording_url')
+        }),
+        ('Metrics & Timing', {
+            'fields': ('duration', 'talk_time', 'price', 'initiated_at', 'completed_at')
+        }),
+        ('Technical Data', {
+            'classes': ('collapse',), # Hide by default
+            'fields': ('virtual_number', 'job_id', 'webhook_data', 'legs_url')
+        }),
+    )
 # -------------------------
 # PaymentRequest Admin
 # -------------------------

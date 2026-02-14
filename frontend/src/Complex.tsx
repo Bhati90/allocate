@@ -383,6 +383,17 @@ const payload = {
   job_id: job.work_id,
   activity_name: selectedActivity.activity_name,
   mukkadam_id: parseInt(allocationForm.mukkadam_id),
+  // ✅ NEW: Send mukkadam name
+  mukkadam_name: selectedMukkadam?.mukkadam_name || '',
+  mukkadam_contact: selectedMukkadam?.mobile_numbers || '',
+  
+  transporter_name: allocationForm.transport_type === 'provider' && selectedProvider 
+    ? selectedProvider.name 
+    : null,
+  transporter_contact: allocationForm.transport_type === 'provider' && selectedProvider 
+    ? selectedProvider.contact_number 
+    : null,
+  
   allocated_area: parseFloat(allocationForm.allocated_area),
   work_date: allocationForm.work_date,
   crew_size: finalCrewSize,
@@ -683,7 +694,7 @@ const totalCost = (
                     <h4 className="font-bold text-blue-900 mb-3 flex items-center justify-between">
                       <span>{selectedActivity.activity_name}</span>
                       <span className="text-sm bg-green-100 text-green-700 px-3 py-1 rounded-full">
-                        Revenue: ₹{selectedActivity.total_price?.toLocaleString() || 0}
+                        Revenue: ₹{selectedActivity.subtotal?.toLocaleString() || 0}
                       </span>
                     </h4>
                     

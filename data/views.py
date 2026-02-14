@@ -238,6 +238,275 @@ class JobActivityViewSet(viewsets.ModelViewSet):
         })
 from .models import AllocationChangeLog
 from django.db import transaction
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from django.core.cache import cache
+# views.py
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.db.models import Sum, Count, Q
+from decimal import Decimal
+from .models import FarmerPayment, JobActivity
+from .serializers import FarmerPaymentSerializer, FarmerPaymentSummarySerializer
+
+
+class FarmerPaymentViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet for FarmerPayment
+    """
+    queryset = FarmerPayment.objects.all()
+    serializer_class = FarmerPaymentSerializer
+    
+    def get_queryset(self):
+        """
+        Filter by job_activity if provided in query params
+        """
+        queryset = super().get_queryset()
+        
+        # Filter by job activity
+        job_activity_id = self.request.query_params.get('job_activity', None)
+        if job_activity_id:
+            queryset = queryset.filter(job_activity_id=job_activity_id)
+        
+        # Filter by farmer
+        farmer_id = self.request.query_params.get('farmer', None)
+        if farmer_id:
+            queryset = queryset.filter(imported_farmer_id=farmer_id)
+        
+        # Filter by payment status
+        payment_status = self.request.query_params.get('payment_status', None)
+        if payment_status:
+            queryset = queryset.filter(payment_status=payment_status)
+        
+        return queryset.order_by('-activity_date', '-date_of_payment')
+    
+    @action(detail=False, methods=['get'], url_path='summary')
+    def summary(self, request):
+        """
+        Get payment summary for a specific job activity or overall
+        Usage: 
+        - /ap/farmer-payments/summary/?job_activity=123
+        - /ap/farmer-payments/summary/ (overall summary)
+        """
+        job_activity_id = request.query_params.get('job_activity', None)
+        
+        # Base queryset
+        if job_activity_id:
+            payments = FarmerPayment.objects.filter(job_activity_id=job_activity_id)
+        else:
+            payments = FarmerPayment.objects.all()
+        
+        # Calculate aggregates
+        paid_payments = payments.filter(payment_status='paid')
+        pending_payments = payments.filter(payment_status='pending')
+        
+        total_paid = paid_payments.aggregate(
+            total=Sum('booking_value')
+        )['total'] or Decimal('0')
+        
+        total_pending = pending_payments.aggregate(
+            total=Sum('booking_value')
+        )['total'] or Decimal('0')
+        
+        total_expected = total_paid + total_pending
+        
+        # Get last payment date
+        last_payment = paid_payments.filter(
+            date_of_payment__isnull=False
+        ).order_by('-date_of_payment').first()
+        
+        last_payment_date = last_payment.date_of_payment if last_payment else None
+        
+        # Calculate completion percentage
+        completion_percentage = 0
+        if total_expected > 0:
+            completion_percentage = float((total_paid / total_expected) * 100)
+        
+        summary_data = {
+            'total_expected': total_expected,
+            'total_paid': total_paid,
+            'total_pending': total_pending,
+            'payment_count': payments.count(),
+            'paid_count': paid_payments.count(),
+            'pending_count': pending_payments.count(),
+            'last_payment_date': last_payment_date,
+            'completion_percentage': round(completion_percentage, 2)
+        }
+        
+        serializer = FarmerPaymentSummarySerializer(summary_data)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], url_path='by-farmer')
+    def by_farmer(self, request):
+        """
+        Get all payments for a specific farmer across all jobs
+        Usage: /ap/farmer-payments/by-farmer/?farmer_id=123
+        """
+        farmer_id = request.query_params.get('farmer_id', None)
+        
+        if not farmer_id:
+            return Response(
+                {'error': 'farmer_id parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        payments = FarmerPayment.objects.filter(
+            imported_farmer_id=farmer_id
+        ).order_by('-activity_date')
+        
+        serializer = self.get_serializer(payments, many=True)
+        return Response(serializer.data)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def farmer_payment_summary(request):
+    """
+    Get comprehensive farmer payment summary
+    Shows total expected, paid, pending amounts from FarmerPayment model
+    ✅ USES total_value (booking + transport) instead of just booking_value
+    """
+    import time
+    from decimal import Decimal
+    from django.db.models import Sum, Count, Q
+    
+    start_time = time.time()
+    
+    # Get filter params
+    farmer_id = request.GET.get('farmer_id')
+    job_id = request.GET.get('job_id')
+    days = request.GET.get('days')  # ✅ Remove default=30 to get ALL records
+    
+    # Base queryset
+    queryset = FarmerPayment.objects.select_related('job_activity', 'imported_farmer')
+    
+    # Apply filters
+    if farmer_id:
+        queryset = queryset.filter(imported_farmer__external_farmer_id=farmer_id)
+    
+    if job_id:
+        queryset = queryset.filter(job_activity__job_id=job_id)
+    
+    if days:  # ✅ Only filter by days if explicitly provided
+        from django.utils import timezone
+        from datetime import timedelta
+        from_date = timezone.now() - timedelta(days=int(days))
+        queryset = queryset.filter(activity_date__gte=from_date)
+    
+    # ✅ Calculate totals using total_value (not booking_value)
+    totals = queryset.aggregate(
+        total_expected=Sum('total_value'),  # ✅ Changed from booking_value
+        total_paid=Sum('total_value', filter=Q(payment_status='paid')),  # ✅ Changed
+        total_pending=Sum('total_value', filter=Q(payment_status='pending')),  # ✅ Changed
+        payment_count=Count('id'),
+        paid_count=Count('id', filter=Q(payment_status='paid')),
+        pending_count=Count('id', filter=Q(payment_status='pending')),
+    )
+    
+    total_expected = totals['total_expected'] or Decimal('0')
+    total_paid = totals['total_paid'] or Decimal('0')
+    total_pending = totals['total_pending'] or Decimal('0')
+    
+    # ✅ Get payment breakdown by farmer (using total_value)
+    farmer_breakdown = queryset.values(
+        'imported_farmer__external_farmer_id',
+        'imported_farmer__name'
+    ).annotate(
+        farmer_total=Sum('total_value'),  # ✅ Changed from booking_value
+        farmer_paid=Sum('total_value', filter=Q(payment_status='paid')),  # ✅ Changed
+        farmer_pending=Sum('total_value', filter=Q(payment_status='pending')),  # ✅ Changed
+        payment_count=Count('id'),
+        paid_count=Count('id', filter=Q(payment_status='paid')),
+        pending_count=Count('id', filter=Q(payment_status='pending')),
+    ).order_by('-farmer_total')[:20]  # Top 20 farmers
+    
+    # Get recent payments
+    recent_payments = queryset.filter(payment_status='paid').order_by('-date_of_payment')[:10]
+    
+    recent_payments_data = []
+    for payment in recent_payments:
+        recent_payments_data.append({
+            'payment_id': payment.id,
+            'farmer_id': payment.imported_farmer.external_farmer_id if payment.imported_farmer else None,
+            'farmer_name': payment.imported_farmer.name if payment.imported_farmer else 'Unknown',
+            'job_id': payment.job_activity.job_id if payment.job_activity else None,
+            'activity_name': payment.job_activity.activity_name if payment.job_activity else 'N/A',
+            'amount': float(payment.total_value or payment.booking_value),  # ✅ Use total_value
+            'booking_value': float(payment.booking_value),
+            'transport_cost': float(payment.transportation_cost or 0),
+            'payment_date': str(payment.date_of_payment),
+            'payment_route': payment.payment_route,
+            'reference_no': payment.reference_no,
+        })
+    
+    # Get pending payments (urgent - oldest first)
+    pending_payments = queryset.filter(payment_status='pending').order_by('activity_date')[:10]
+    
+    pending_payments_data = []
+    for payment in pending_payments:
+        from django.utils import timezone
+        days_pending = (timezone.now().date() - payment.activity_date).days if payment.activity_date else 0
+        
+        pending_payments_data.append({
+            'payment_id': payment.id,
+            'farmer_id': payment.imported_farmer.external_farmer_id if payment.imported_farmer else None,
+            'farmer_name': payment.imported_farmer.name if payment.imported_farmer else 'Unknown',
+            'job_id': payment.job_activity.job_id if payment.job_activity else None,
+            'activity_name': payment.job_activity.activity_name if payment.job_activity else 'N/A',
+            'amount': float(payment.total_value or payment.booking_value),  # ✅ Use total_value
+            'booking_value': float(payment.booking_value),
+            'transport_cost': float(payment.transportation_cost or 0),
+            'activity_date': str(payment.activity_date),
+            'days_pending': days_pending,
+            'village': payment.village,
+            'acres': payment.acres,
+        })
+    
+    # Format farmer breakdown
+    farmer_breakdown_data = []
+    for farmer in farmer_breakdown:
+        farmer_paid = farmer['farmer_paid'] or Decimal('0')
+        farmer_total = farmer['farmer_total'] or Decimal('0')
+        
+        farmer_breakdown_data.append({
+            'farmer_id': farmer['imported_farmer__external_farmer_id'],
+            'farmer_name': farmer['imported_farmer__name'],
+            'total_expected': float(farmer_total),
+            'total_paid': float(farmer_paid),
+            'total_pending': float(farmer['farmer_pending'] or Decimal('0')),
+            'payment_count': farmer['payment_count'],
+            'paid_count': farmer['paid_count'],
+            'pending_count': farmer['pending_count'],
+            'completion_percentage': round(
+                (float(farmer_paid) / float(farmer_total) * 100) if farmer_total > 0 else 0,
+                1
+            )
+        })
+    
+    elapsed = time.time() - start_time
+    
+    return Response({
+        'success': True,
+        'summary': {
+            'total_expected': float(total_expected),
+            'total_paid': float(total_paid),
+            'total_pending': float(total_pending),
+            'completion_percentage': round(
+                (float(total_paid) / float(total_expected) * 100) if total_expected > 0 else 0,
+                1
+            ),
+            'payment_count': totals['payment_count'],
+            'paid_count': totals['paid_count'],
+            'pending_count': totals['pending_count'],
+        },
+        'farmer_breakdown': farmer_breakdown_data,
+        'recent_payments': recent_payments_data,
+        'pending_payments': pending_payments_data,
+        'performance': {
+            'query_time': f'{elapsed:.2f}s',
+            'farmers_analyzed': len(farmer_breakdown_data),
+            'total_records': queryset.count(),
+        }
+    })
 
 class AllocationViewSet(viewsets.ModelViewSet):
     queryset = Allocation.objects.all()
@@ -245,29 +514,37 @@ class AllocationViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        queryset = Allocation.objects.all()
+        queryset = Allocation.objects.select_related(
+            'job_activity',
+            'allocated_by',
+            'imported_mukkadam',
+            'imported_transporter',
+            'imported_farmer'  # ✅ Make sure this is here!
+        ).all()
 
-        # Filter by mukkadam_id
         mukkadam_id = self.request.query_params.get('mukkadam_id')
         if mukkadam_id:
             queryset = queryset.filter(mukkadam_id=mukkadam_id)
 
-        # Filter by work_date
         work_date = self.request.query_params.get('work_date')
         if work_date:
             queryset = queryset.filter(work_date=work_date)
 
-        return queryset.select_related('job_activity', 'allocated_by')
+        return queryset
 
+    # ✅ REMOVE: list() method - No need for batch fetching anymore
+    # ✅ REMOVE: _batch_fetch_external_data()
+    # ✅ REMOVE: _fetch_farmers_batch()
+    # ✅ REMOVE: _fetch_jobs_batch()
     def create(self, request, *args, **kwargs):
-        """Create allocation for any activity type"""
+        """Create allocation - fetch from ImportedJobSheet if not in JobActivity"""
         print("="*80)
         print("📥 ALLOCATION REQUEST RECEIVED")
         print("="*80)
-        print(f"Raw data: {request.data}")
 
         activity_id = request.data.get('activity_id')
         job_id = request.data.get('job_id')
+        activity_name = request.data.get('activity_name')
 
         if not activity_id:
             return Response(
@@ -276,278 +553,304 @@ class AllocationViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            # First, try to find existing JobActivity by database ID
+            # ✅ FIRST: Try to find by job_id + activity_name (most reliable)
             job_activity = JobActivity.objects.filter(
                 job_id=str(job_id),
-                activity_id=str(activity_id)
+                activity_name__iexact=activity_name
             ).first()
-
-            # If not found, try to find by job_id + activity_id (external ID)
-            if not job_activity and job_id:
-                print(f"⚠️ JobActivity with pk={activity_id} not found, checking by external ID...")
-                
+            
+            # ✅ SECOND: If not found, try by job_id + activity_id
+            if not job_activity:
                 job_activity = JobActivity.objects.filter(
                     job_id=str(job_id),
                     activity_id=str(activity_id)
                 ).first()
 
-                if not job_activity:
-                    print(f"🔨 JobActivity not in DB. Fetching from external API...")
+            # If not found, create from ImportedJobSheet
+            if not job_activity:
+                print(f"🔨 JobActivity not in DB. Looking in ImportedJobSheet...")
+                
+                if not activity_name:
+                    return Response(
+                        {'error': 'activity_name is required when JobActivity not found'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Find in ImportedJobSheet
+                job_sheet = ImportedJobSheet.objects.filter(
+                    generated_job_id=str(job_id),
+                    activity_name__iexact=activity_name
+                ).first()
+                
+                if not job_sheet:
+                    return Response(
+                        {'error': f'Job {job_id} with activity "{activity_name}" not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                # ✅ TRIPLE CHECK: Does JobActivity exist but with different activity_id?
+                existing_ja = JobActivity.objects.filter(
+                    job_id=str(job_id),
+                    activity_name__iexact=activity_name
+                ).first()
+                
+                if existing_ja:
+                    print(f"✅ Found existing JobActivity #{existing_ja.id} (was searching with wrong activity_id)")
+                    job_activity = existing_ja
+                else:
+                    # Create new JobActivity
+                    from datetime import datetime
+                    from django.utils import timezone
+                    from decimal import Decimal, InvalidOperation
+                    import re
                     
-                    # ✅ FETCH FULL JOB DATA FROM EXTERNAL API
+                    scheduled_datetime = timezone.make_aware(
+                        datetime.combine(job_sheet.activity_start_date, datetime.min.time())
+                    ) if job_sheet.activity_start_date else timezone.now()
+                    
+                    # Parse acres
                     try:
-                        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-                        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
-                        
-                        response = requests.get(
-                            api_url,
-                            headers={'Authorization': token},
-                            timeout=30
-                        )
-                        response.raise_for_status()
-                        response_data = response.json()
-                        
-                        # Extract jobs list
-                        if isinstance(response_data, dict):
-                            jobs_from_api = response_data.get('data', response_data.get('results', [response_data]))
-                        else:
-                            jobs_from_api = response_data
-                        
-                        # Find the specific job
-                        target_job = None
-                        for job in jobs_from_api:
-                            if str(job.get('work_id') or job.get('id')) == str(job_id):
-                                target_job = job
-                                break
-                        
-                        if not target_job:
-                            return Response(
-                                {'error': f'Job {job_id} not found in external API'},
-                                status=status.HTTP_404_NOT_FOUND
-                            )
-                        
-                        # Find the specific activity
-                        target_activity = None
-                        for activity in target_job.get('activities', []):
-                            if str(activity.get('id') or activity.get('activity_id')) == str(activity_id):
-                                target_activity = activity
-                                break
-                        
-                        if not target_activity:
-                            return Response(
-                                {'error': f'Activity {activity_id} not found in job {job_id}'},
-                                status=status.HTTP_404_NOT_FOUND
-                            )
-                        
-                        # ✅ CREATE JobActivity with REAL DATA from API
-                        from datetime import datetime
-                        scheduled_date = target_activity.get('date_time') or target_activity.get('scheduled_date')
-                        if scheduled_date and isinstance(scheduled_date, str):
-                            try:
-                                scheduled_datetime = datetime.fromisoformat(scheduled_date.replace('Z', '+00:00'))
-                            except:
-                                scheduled_datetime = timezone.now()
-                        else:
-                            scheduled_datetime = timezone.now()
-                        
-                        total_area = Decimal(str(target_activity.get('acres', 0)))
-                        total_price = Decimal(str(target_activity.get('total_price', 0)))
-                        transport_cost = Decimal(str(target_activity.get('transport_cost', 0)))
-                        other_cost = Decimal(str(target_activity.get('other_cost', 0)))
-                        subtotal = total_price + transport_cost + other_cost
-                        rate_per_acre = total_price / total_area if total_area > 0 else Decimal('0')
-                        
-                        job_activity = JobActivity.objects.create(
-                            job_id=str(job_id),
-                            activity_id=str(activity_id),
-                            activity_name=target_activity.get('activity_name', 'Unknown Activity'),
-                            activity_type=target_activity.get('activity_type', ''),
-                            scheduled_datetime=scheduled_datetime,
-                            total_area=total_area,  # ✅ FROM API
-                            total_price=total_price,  # ✅ FROM API
-                            transport_cost=transport_cost,  # ✅ FROM API
-                            other_cost=other_cost,  # ✅ FROM API
-                            subtotal=subtotal,  # ✅ CALCULATED
-                            location=target_activity.get('location', ''),
-                            estimated_workers=int(target_activity.get('estimated_workers', 10)),
-                            rate_per_acre=rate_per_acre , # ✅ CALCULATED
-                            # ✅ CORRECT - Defaults to False if not in API response
-                            is_manually_edited=target_activity.get('is_manually_edited', False)
-                        )
-                        
-                        print(f"✅ Created JobActivity #{job_activity.id} from API data")
-                        print(f"   Total Area: {total_area} acres")
-                        print(f"   Total Price: ₹{total_price}")
-                        print(f"   Rate: ₹{rate_per_acre}/acre")
-                        
-                    except requests.exceptions.RequestException as e:
-                        return Response(
-                            {'error': f'Failed to fetch activity from external API: {str(e)}'},
-                            status=status.HTTP_503_SERVICE_UNAVAILABLE
-                        )
-                    except Exception as e:
-                        print(f"❌ Error creating JobActivity from API: {str(e)}")
-                        return Response(
-                            {'error': f'Error processing activity: {str(e)}'},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                        )
+                        acres_str = str(job_sheet.acres).strip()
+                        match = re.search(r'[\d.]+', acres_str)
+                        total_area = Decimal(match.group()) if match else Decimal('0')
+                    except (ValueError, InvalidOperation):
+                        total_area = Decimal('0')
+                    
+                    total_price = job_sheet.total_price or job_sheet.booking_value or Decimal('0')
+                    transport_cost = job_sheet.transport_cost or Decimal('0')
+                    rate_per_acre = total_price / total_area if total_area > 0 else Decimal('0')
+                    
+                    job_activity = JobActivity.objects.create(
+                        job_id=str(job_id),
+                        activity_id=str(activity_id),
+                        activity_name=job_sheet.activity_name,
+                        activity_type=job_sheet.activity_name,
+                        scheduled_datetime=scheduled_datetime,
+                        total_area=total_area,
+                        total_price=total_price,
+                        transport_cost=transport_cost,
+                        other_cost=Decimal('0'),
+                        subtotal=job_sheet.subtotal or total_price,
+                        location=job_sheet.location or '',
+                        estimated_workers=10,
+                        rate_per_acre=rate_per_acre,
+                        farmer_work_id=job_sheet.generated_farmer_id or '',
+                        is_manually_edited=False,
+                        allocated_area=Decimal('0')
+                    )
+                    
+                    print(f"✅ Created NEW JobActivity #{job_activity.id}")
+                
+                # Link ImportedJobSheet to this JobActivity
+                if not job_sheet.job_activity:
+                    job_sheet.job_activity = job_activity
+                    job_sheet.save(update_fields=['job_activity'])
 
-                print(f"✅ Found/Created Activity: {job_activity.activity_name} ({job_activity.total_area} acres)")
+            print(f"✅ Using JobActivity #{job_activity.id}: {job_activity.activity_name}")
+            print(f"   Total Area: {job_activity.total_area} acres")
+            print(f"   Allocated Area: {job_activity.allocated_area} acres")
 
         except Exception as e:
+            import traceback
             print(f"❌ Error finding/creating JobActivity: {str(e)}")
+            print(traceback.format_exc())
             return Response(
                 {'error': f'Error processing activity: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-        # Prepare data
+        # Prepare allocation data
         data = request.data.copy()
         data['job_activity'] = job_activity.id
         data.pop('activity_id', None)
         data.pop('job_id', None)
+        data.pop('activity_name', None)
 
-        # Convert to Decimal for comparison
-        # Convert to Decimal for comparison
-        allocated_area = Decimal(str(data.get('allocated_area', 0)))
+        print(f"📋 Allocation data prepared:")
+        print(f"   job_activity: {data.get('job_activity')}")
+        print(f"   mukkadam_id: {data.get('mukkadam_id')}")
+        print(f"   allocated_area: {data.get('allocated_area')}")
 
-        # ✅ CRITICAL FIX: Refresh job_activity to get latest allocated_area
+        # Validate allocated area
+        try:
+            from decimal import Decimal, InvalidOperation
+            allocated_area = Decimal(str(data.get('allocated_area', 0)))
+            print(f"✅ Allocated area validated: {allocated_area} acres")
+        except (ValueError, InvalidOperation) as e:
+            print(f"❌ Invalid allocated_area: {e}")
+            return Response(
+                {'error': 'Invalid allocated_area value'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+    # After validating allocated_area
         job_activity.refresh_from_db()
-
-        # Validate allocated area doesn't exceed remaining
+        
         if allocated_area > job_activity.remaining_area:
             return Response(
                 {'error': f'Cannot allocate {allocated_area} acres. Only {job_activity.remaining_area} acres remaining.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        # ✅ NEW: Set initial status based on allocation coverage
+        total_area = job_activity.total_area
+        total_allocated_after = job_activity.allocated_area + allocated_area
+        if total_allocated_after >= total_area:
+            initial_status = 'fully_allocated'  # ✅ CHANGED: Use 'fully_allocated' not 'allocated'
+        else:
+            initial_status = 'partially_allocated'  # Partial coverage
 
-        # Create allocation
+                
+        data['status'] = initial_status  # ✅ Add status to data
+        print(f"📊 Setting initial status: {initial_status} ({total_allocated_after}/{total_area} acres)")
+        
+        # Create allocation using serializer
         serializer = self.get_serializer(data=data)
 
+        # Create allocation using serializer
+        print(f"🔧 Creating serializer with data...")
+        serializer = self.get_serializer(data=data)
+
+        print(f"🔍 Validating serializer...")
         if not serializer.is_valid():
-            print(f"❌ VALIDATION FAILED: {serializer.errors}")
+            print(f"❌ VALIDATION FAILED!")
+            print(f"   Errors: {serializer.errors}")
             return Response(
                 {'error': 'Validation failed', 'details': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if request.user and request.user.is_authenticated:
-            allocation = serializer.save(allocated_by=request.user)
-        else:
-            allocation = serializer.save()
+        print(f"✅ Serializer validated successfully!")
+
+
+        
+        
+        # Save allocation
+        try:
+            print(f"💾 Saving allocation...")
+            if request.user and request.user.is_authenticated:
+                allocation = serializer.save(allocated_by=request.user)
+            else:
+                allocation = serializer.save()
+            
+            print(f"✅ Allocation created with ID: {allocation.id}")
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ Error saving allocation: {str(e)}")
+            print(traceback.format_exc())
+            return Response(
+                {'error': f'Error saving allocation: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
         # Update JobActivity allocated_area
-        
-        # ✅ CRITICAL FIX: Refresh job_activity from DB to avoid stale data
-        job_activity.refresh_from_db()
-
-        # Update JobActivity allocated_area atomically
-        from django.db.models import F
-        JobActivity.objects.filter(pk=job_activity.pk).update(
-            allocated_area=F('allocated_area') + allocated_area
-        )
-
-        # Refresh to get updated value for logging
-        job_activity.refresh_from_db()
+        try:
+            print(f"📈 Updating JobActivity allocated_area...")
+            from django.db.models import F
+            JobActivity.objects.filter(pk=job_activity.pk).update(
+                allocated_area=F('allocated_area') + allocated_area
+            )
+            job_activity.refresh_from_db()
+            print(f"   After: {job_activity.allocated_area} acres")
+            
+        except Exception as e:
+            print(f"❌ Error updating JobActivity: {str(e)}")
+            # ✅ Don't return here - continue to save the allocation
 
         # Send WhatsApp notifications
-        self._send_whatsapp_notifications(allocation)
+        try:
+            self._send_whatsapp_notifications(allocation)
+        except Exception as e:
+            print(f"⚠️ WhatsApp notification failed: {str(e)}")
         
         print("="*80)
-        print("✅ ALLOCATION CREATED")
-        print("="*80)
-        print(f"   Job: {allocation.job_activity.job_id}")
-        print(f"   Activity: {allocation.job_activity.activity_name}")
-        print(f"   Area: {allocation.allocated_area} acres")
-        print(f"   Remaining: {job_activity.remaining_area} acres")
-        print(f"   Crew: {allocation.crew_size or 'Default'} workers")
-        print(f"   Total Cost: ₹{allocation.total_cost}")
+        print("✅ ALLOCATION CREATED SUCCESSFULLY")
         print("="*80)
 
-        # ✅ CREATE ACTIVITY LOG FOR CREATION
-        mukkadam_name = 'Unknown'
+        # Create activity log
         try:
-            mukkadam_data = fetch_mukkadam_by_id(allocation.mukkadam_id)
-            if mukkadam_data:
-                mukkadam_name = mukkadam_data.get('mukkadam_name', f'#{allocation.mukkadam_id}')
-        except:
-            mukkadam_name = f'#{allocation.mukkadam_id}'
+            mukkadam_name = 'Unknown'
+            try:
+                mukkadam = ImportedMukkadam.objects.filter(
+                    external_mukkadam_id=allocation.mukkadam_id
+                ).first()
+                if mukkadam:
+                    mukkadam_name = mukkadam.team_name
+            except:
+                mukkadam_name = f'#{allocation.mukkadam_id}'
 
-        ActivityLog.objects.create(
-            activity_type='allocation_created',
-            description=f"Created allocation for {allocation.job_activity.activity_name}",
-            allocation=allocation,
-            job_id=allocation.job_activity.job_id,
-            mukkadam_id=allocation.mukkadam_id,
-            mukkadam_name=mukkadam_name,
-            transport_provider_id=allocation.transport_provider_id if allocation.transport_type == 'provider' else None,
-            amount=allocation.total_cost,
-            performed_by=request.user if request.user.is_authenticated else None,  # ✅ CREATOR
-            metadata={
-                'allocated_area': float(allocation.allocated_area),
-                'work_date': str(allocation.work_date),
-                'crew_size': allocation.crew_size,
-                'mukkadam_price': float(allocation.mukkadam_price),
-                'transport_type': allocation.transport_type,
-                'transport_price': float(allocation.transport_price or 0),
-            }
-        )
+            ActivityLog.objects.create(
+                activity_type='allocation_created',
+                description=f"Created allocation for {allocation.job_activity.activity_name}",
+                allocation=allocation,
+                job_id=allocation.job_activity.job_id,
+                mukkadam_id=allocation.mukkadam_id,
+                mukkadam_name=mukkadam_name,
+                transport_provider_id=allocation.transport_provider_id if allocation.transport_type == 'provider' else None,
+                amount=allocation.total_cost,
+                performed_by=request.user if request.user.is_authenticated else None,
+                metadata={
+                    'allocated_area': float(allocation.allocated_area),
+                    'work_date': str(allocation.work_date),
+                    'crew_size': allocation.crew_size,
+                    'mukkadam_price': float(allocation.mukkadam_price),
+                    'transport_type': allocation.transport_type,
+                    'transport_price': float(allocation.transport_price or 0),
+                }
+            )
+            print(f"✅ Activity log created")
+        except Exception as e:
+            print(f"⚠️ Activity log creation failed: {str(e)}")
 
-        print("="*80)
-
+        # ✅ MUST RETURN Response at the end!
         return Response(
             {
                 'message': 'Allocation created successfully',
+                'allocation_id': allocation.id,
                 'data': serializer.data
             },
             status=status.HTTP_201_CREATED
         )
-    
-    
-    
+
+
+    # ... rest of your code stays the same ...
+
     def _send_whatsapp_notifications(self, allocation):
         """Helper to trigger notifications for Mukkadam and Transporter"""
         try:
             from .services import WhatsAppService
-            # A. Notify Mukkadam
             WhatsAppService.send_allocation_to_mukkadam(allocation)
             print(f"📲 WhatsApp sent to Mukkadam: {allocation.mukkadam_id}")
 
-            # B. Notify Transporter (if assigned)
-            if hasattr(allocation, 'transport_provider_id') :
+            if hasattr(allocation, 'transport_provider_id'):
                 WhatsAppService.send_allocation_to_transporter(allocation)
                 print(f"📲 WhatsApp sent to Transporter: {allocation.transport_provider_id}")
 
         except Exception as e:
             logger.error(f"⚠️ WhatsApp Notification Flow failed: {str(e)}")
+    
+    # ✅ Keep destroy(), update(), partial_update(), change_history() as-is
+    # (No changes needed - they don't use external API)
+    
     def destroy(self, request, *args, **kwargs):
         """Delete allocation and update activity allocated_area"""
         allocation = self.get_object()
         job_activity = allocation.job_activity
 
-        # Reduce allocated area
         allocated_area = Decimal(str(allocation.allocated_area))
         job_activity.allocated_area = job_activity.allocated_area - allocated_area
         job_activity.save()
 
-        print(f"✅ Allocation deleted. {job_activity.remaining_area} acres now available for {job_activity.activity_name}")
+        print(f"✅ Allocation deleted. {job_activity.remaining_area} acres now available")
 
         return super().destroy(request, *args, **kwargs)
-
-
-    def perform_create(self, serializer):
-        allocation = super().perform_create(serializer)
-        # Clear mukkadam cache when new allocation is created
-        clear_mukkadam_cache(allocation.mukkadam_id)
-        return allocation
-    
 
     def update(self, request, *args, **kwargs):
         """Update allocation with mandatory change reason"""
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         
-        # Require change_reason for any edit
         change_reason = request.data.get('change_reason', '').strip()
         if not change_reason:
             return Response(
@@ -561,10 +864,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # ✅ CRITICAL: Store old area value BEFORE any modifications
         old_area_decimal = instance.allocated_area
         
-        # Store old values for comparison
         old_values = {
             'allocated_area': str(instance.allocated_area),
             'work_date': str(instance.work_date),
@@ -577,13 +878,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
             'mukkadam_id': str(instance.mukkadam_id),
         }
         
-        # Validate area changes
         if 'allocated_area' in request.data:
             new_area = Decimal(str(request.data['allocated_area']))
             job_activity = instance.job_activity
-            
-            # Calculate available area (including current allocation)
-            available_area = job_activity.remaining_area + old_area_decimal  # ✅ Use saved value
+            available_area = job_activity.remaining_area + old_area_decimal
             
             if new_area > available_area:
                 return Response(
@@ -593,15 +891,11 @@ class AllocationViewSet(viewsets.ModelViewSet):
         
         try:
             with transaction.atomic():
-                # Update the allocation
                 serializer = self.get_serializer(instance, data=request.data, partial=partial)
                 serializer.is_valid(raise_exception=True)
-                
-                # Save the updated allocation
                 self.perform_update(serializer)
                 updated_instance = self.get_object()
                 
-                # Track changes
                 changes_made = []
                 new_values = {
                     'allocated_area': str(updated_instance.allocated_area),
@@ -615,7 +909,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     'mukkadam_id': str(updated_instance.mukkadam_id),
                 }
                 
-                # Create change log entries for each changed field
                 for field, old_val in old_values.items():
                     new_val = new_values.get(field)
                     if old_val != new_val:
@@ -629,37 +922,24 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         )
                         changes_made.append(field)
                 
-                # ✅ FIXED: Update job activity allocated_area using saved old value
                 if 'allocated_area' in request.data:
                     new_area_decimal = updated_instance.allocated_area
-                    area_diff = new_area_decimal - old_area_decimal  # ✅ Use saved old_area_decimal
+                    area_diff = new_area_decimal - old_area_decimal
                     
                     job_activity = updated_instance.job_activity
                     job_activity.allocated_area = job_activity.allocated_area + area_diff
                     job_activity.save()
-                    
-                    print(f"✅ Allocation #{updated_instance.id} area updated")
-                    print(f"   Old: {old_area_decimal} → New: {new_area_decimal}")
-                    print(f"   Diff: {area_diff}")
-                    print(f"   JobActivity total allocated: {job_activity.allocated_area}")
-                    print(f"   Remaining: {job_activity.remaining_area}")
                 
-                print(f"✅ Allocation #{updated_instance.id} updated")
-                print(f"   Changed fields: {', '.join(changes_made)}")
-                print(f"   Reason: {change_reason}")
-
-                # ✅ CREATE ACTIVITY LOG FOR THE UPDATE
+                # Create activity log
                 if changes_made:
-                    # Get mukkadam name
                     mukkadam_name = 'Unknown'
                     try:
-                        mukkadam_data = fetch_mukkadam_by_id(updated_instance.mukkadam_id)
-                        if mukkadam_data:
-                            mukkadam_name = mukkadam_data.get('mukkadam_name', f'#{updated_instance.mukkadam_id}')
+                        mukkadam = ImportedMukkadam.objects.filter(external_mukkadam_id=updated_instance.mukkadam_id).first()
+                        if mukkadam:
+                            mukkadam_name = mukkadam.team_name
                     except:
                         mukkadam_name = f'#{updated_instance.mukkadam_id}'
                     
-                    # Create structured changes dict
                     changes_dict = {}
                     for field in changes_made:
                         changes_dict[field] = {
@@ -676,8 +956,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         mukkadam_name=mukkadam_name,
                         transport_provider_id=updated_instance.transport_provider_id,
                         amount=updated_instance.total_cost,
-                        performed_by=request.user if request.user.is_authenticated else None,  # ✅ CURRENT USER
-                        changes=changes_dict,  # ✅ Field-by-field changes
+                        performed_by=request.user if request.user.is_authenticated else None,
+                        changes=changes_dict,
                         metadata={
                             'change_reason': change_reason,
                             'changed_fields': changes_made,
@@ -697,6 +977,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to update allocation: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+    
     def partial_update(self, request, *args, **kwargs):
         """Handle PATCH requests"""
         kwargs['partial'] = True
@@ -720,8 +1001,407 @@ class AllocationViewSet(viewsets.ModelViewSet):
             })
         
         return Response({'history': history})
+# views.py
+import requests
+from django.conf import settings
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from django.utils import timezone
+from django.db import transaction, models
+from datetime import datetime
+import json
+import logging
 
-from .models import JobActivity, Allocation, AllocationStats  # ✅ CORRECT
+from .models import (
+    ImportedJob, 
+    ImportedJobSheet, 
+    ImportedFarmer, 
+    ImportedPayment, 
+    ImportedVisit, 
+    ImportedMedia
+)
+
+logger = logging.getLogger(__name__)
+
+# External API Configuration
+EXTERNAL_API_URL_A = getattr(settings, 'EXTERNAL_API_URL', 'https://demand.bharatintelligence.ai/fir/api')
+JOB_TOKEN = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
+
+# views.py
+
+def fetch_farmer_from_external_api(farmer_id):
+    """
+    Fetch farmer details from external API with detailed logging
+    """
+    try:
+        url = f"{EXTERNAL_API_URL_A}/get_farmer_details/{farmer_id}/"
+        headers = {
+            'Authorization': JOB_TOKEN,
+            'Content-Type': 'application/json'
+        }
+        
+        logger.info(f"🌐 Fetching farmer {farmer_id}")
+        logger.info(f"📍 URL: {url}")  # ✅ Log full URL
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        logger.info(f"📡 Status Code: {response.status_code}")
+        logger.info(f"📄 Response Headers: {dict(response.headers)}")
+        
+        # ✅ Log response body regardless of status
+        try:
+            response_data = response.json()
+            logger.info(f"📦 Response Data: {response_data}")
+        except:
+            logger.info(f"📦 Response Text: {response.text[:500]}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            farmer_name = data.get('farmer_name') or data.get('name', 'Unknown')
+            logger.info(f"✅ Fetched farmer: {farmer_name}")
+            return data
+        elif response.status_code == 404:
+            logger.warning(f"⚠️  Farmer {farmer_id} not found in external API (404)")
+            return None
+        else:
+            logger.warning(f"⚠️  API error: {response.status_code}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        logger.error(f"❌ Timeout fetching farmer {farmer_id}")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"❌ Connection error: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Unexpected error: {str(e)}", exc_info=True)
+        return None
+
+def get_or_create_farmer(farmer_id):
+    """
+    Get farmer from local DB or fetch from external API
+    Returns: (ImportedFarmer instance, created: bool)
+    """
+    # Step 1: Check local database
+    try:
+        farmer = ImportedFarmer.objects.get(external_farmer_id=farmer_id)
+        logger.info(f"📋 Found farmer in local DB: {farmer.name}")
+        return farmer, False
+    except ImportedFarmer.DoesNotExist:
+        pass
+    
+    # Step 2: Fetch from external API
+    farmer_data = fetch_farmer_from_external_api(farmer_id)
+    
+    if farmer_data:
+        # ✅ FIX: Use correct field names from API
+        farmer = ImportedFarmer.objects.create(
+            external_farmer_id=farmer_id,
+            name=farmer_data.get('farmer_name', f'Farmer {farmer_id}'),  # ✅ Changed from 'name'
+            contact_no=farmer_data.get('phone_number', ''),  # ✅ Changed from 'contact_no'
+            location=farmer_data.get('location', ''),
+            village=farmer_data.get('village', ''),
+            taluka=farmer_data.get('taluka', ''),
+            district=farmer_data.get('district', ''),
+            state='Maharashtra',  # ✅ Default or parse from location
+            created_from_import=False,
+        )
+        logger.info(f"✅ Created farmer from API: {farmer.name}")
+        return farmer, True
+    else:
+        # Create placeholder farmer
+        farmer = ImportedFarmer.objects.create(
+            external_farmer_id=farmer_id,
+            name=f'Farmer {farmer_id}',
+            contact_no='',
+            location='',
+            created_from_import=False,
+        )
+        logger.warning(f"⚠️  Created placeholder farmer: {farmer_id}")
+        return farmer, True
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def ops_webhook_receiver(request):
+    """
+    Complete webhook receiver with:
+    - Auto-fetch farmer from API
+    - Store payments
+    - Store visits
+    - Store media locations
+    """
+    logger.info(f"📥 Webhook received from {request.META.get('REMOTE_ADDR')}")
+    
+    try:
+        payload = json.loads(request.body)
+        job_id = payload.get('id')
+        logger.info(f"📦 Processing Job ID: {job_id}")
+        
+        # Extract job-level data
+        farmer_id = payload.get('farmer_id')
+        plot_id = payload.get('plot_id', '')
+        status = payload.get('status', 'PENDING')
+        priority = payload.get('priority', 'MEDIUM')
+        scheduled_date = payload.get('scheduled_date')
+        activity_notes = payload.get('activity_notes') or ''
+        internal_notes = payload.get('internal_notes') or ''
+        total_activities_amount = payload.get('total_activities_amount', 0)
+        is_field_verified = payload.get('is_field_verified', False)
+        booking_type_value = payload.get('booking_type', '')
+        
+        # Booking data
+        booking = payload.get('booking', {})
+        visits = payload.get('visits', [])
+        
+        # Parse created_at
+        created_at_str = payload.get('created_at')
+        created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00')) if created_at_str else timezone.now()
+        
+        # Generate job_id
+        generated_job_id = f"JOB-{job_id}"
+
+
+
+
+        
+        with transaction.atomic():
+            # ✅ STEP 1: Get or create farmer
+            farmer, farmer_created = get_or_create_farmer(farmer_id)
+            
+            # ✅ STEP 2: Create/Update Job
+            try:
+                job = ImportedJob.objects.get(external_job_id=job_id)
+                job_created = False
+                
+                # Update existing job
+                job.generated_job_id = generated_job_id
+                job.farmer_id = str(farmer_id)
+                job.imported_farmer = farmer  # ✅ Link to farmer
+                job.plot_id = str(plot_id) if plot_id else ''
+                job.status = status
+                job.priority = priority
+                job.scheduled_date = datetime.fromisoformat(scheduled_date).date() if scheduled_date else None
+                job.activity_notes = activity_notes
+                job.internal_notes = internal_notes
+                job.total_activities_amount = total_activities_amount
+                job.is_field_verified = is_field_verified
+                job.booking_id = booking.get('id')
+                job.booking_status = booking.get('status', '')
+                job.booking_total_amount = booking.get('total_amount', 0)
+                job.booking_type = booking_type_value
+                job.booking_advance_paid = booking.get('advance_paid', 0)
+                job.booking_balance = booking.get('balance', 0)
+                job.assignee_number = booking.get('assignee_number', '')
+                
+                # Add farmer details
+                job.farmer_name = farmer.name
+                job.farmer_contact = farmer.contact_no
+                job.location = farmer.location
+                
+                job.raw_booking_data = booking
+                job.raw_visits_data = visits
+                job.raw_payments_data = booking.get('payments', [])
+                job.raw_full_payload = payload
+                job.last_webhook_sync = timezone.now()
+                job.webhook_update_count = models.F('webhook_update_count') + 1
+                job.save()
+                
+                logger.info(f"🔄 Updated ImportedJob #{job_id}")
+
+            
+            
+                
+            except ImportedJob.DoesNotExist:
+                # Create new job
+                job = ImportedJob.objects.create(
+                    external_job_id=job_id,
+                    generated_job_id=generated_job_id,
+                    farmer_id=str(farmer_id),
+                    imported_farmer=farmer,  # ✅ Link to farmer
+                    plot_id=str(plot_id) if plot_id else '',
+                    status=status,
+                    priority=priority,
+                    scheduled_date=datetime.fromisoformat(scheduled_date).date() if scheduled_date else None,
+                    activity_notes=activity_notes,
+                    internal_notes=internal_notes,
+                    total_activities_amount=total_activities_amount,
+                    is_field_verified=is_field_verified,
+                    booking_id=booking.get('id'),
+                    booking_status=booking.get('status', ''),
+                    booking_total_amount=booking.get('total_amount', 0),
+                    booking_type=booking_type_value,
+                    booking_advance_paid=booking.get('advance_paid', 0),
+                    booking_balance=booking.get('balance', 0),
+                    assignee_number=booking.get('assignee_number', ''),
+                    farmer_name=farmer.name,
+                    farmer_contact=farmer.contact_no,
+                    location=farmer.location,
+                    raw_booking_data=booking,
+                    raw_visits_data=visits,
+                    raw_payments_data=booking.get('payments', []),
+                    raw_full_payload=payload,
+                    created_at=created_at,
+                    last_webhook_sync=timezone.now(),
+                    webhook_update_count=1,
+                )
+                job_created = True
+                logger.info(f"✅ Created ImportedJob #{job_id}")
+            
+            # ✅ STEP 3: Process Payments
+            payments = booking.get('payments', [])
+            payment_records = []
+            
+            for payment_data in payments:
+                payment_id = payment_data.get('id')
+                
+                # Check if payment already exists
+                if not ImportedPayment.objects.filter(external_payment_id=payment_id).exists():
+                    payment = ImportedPayment.objects.create(
+                        imported_job=job,
+                        external_payment_id=payment_id,
+                        amount=payment_data.get('amount', 0),
+                        mode=payment_data.get('mode', ''),
+                        paid_at=datetime.fromisoformat(payment_data.get('paid_at').replace('Z', '+00:00')),
+                        notes=payment_data.get('notes', ''),
+                        paid_status=payment_data.get('paid_status', False),
+                    )
+                    payment_records.append(payment_id)
+                    logger.info(f"  ✅ Created Payment #{payment_id}: ₹{payment.amount}")
+                else:
+                    logger.info(f"  ⏭️  Payment #{payment_id} already exists")
+            
+            # ✅ STEP 4: Process Visits
+            visit_records = []
+            
+            for visit_data in visits:
+                visit_id = visit_data.get('visit_id')
+                
+                # Create or update visit
+                visit, created = ImportedVisit.objects.update_or_create(
+                    external_visit_id=visit_id,
+                    defaults={
+                        'imported_job': job,
+                        'status': visit_data.get('status', ''),
+                        'assigned_to': visit_data.get('assigned_to', ''),
+                        'media_locations': visit_data.get('media_locations', []),
+                    }
+                )
+                visit_records.append(visit_id)
+                logger.info(f"  {'✅ Created' if created else '🔄 Updated'} Visit #{visit_id}")
+                
+                # Process media locations
+                media_locations = visit_data.get('media_locations', [])
+                for media_data in media_locations:
+                    media_id = media_data.get('media_id')
+                    location = media_data.get('location', {})
+                    
+                    ImportedMedia.objects.update_or_create(
+                        visit=visit,
+                        external_media_id=media_id,
+                        defaults={
+                            'media_type': media_data.get('media_type', ''),
+                            'latitude': location.get('latitude'),
+                            'longitude': location.get('longitude'),
+                            'address': location.get('address', ''),
+                            'is_field_location': location.get('is_field_location', False),
+                        }
+                    )
+                    logger.info(f"    📸 Stored Media #{media_id}")
+            
+            # ✅ STEP 5: Process Activities
+            activities = payload.get('activities', [])
+            activity_records = []
+            
+            logger.info(f"📋 Processing {len(activities)} activities")
+            
+            for idx, activity in enumerate(activities, 1):
+                activity_id = activity.get('id')
+                activity_name = activity.get('activity_name', 'Unknown')
+                date_time_str = activity.get('date_time')
+                acres = activity.get('acres', 0)
+                total_price = activity.get('total_price', 0)
+                transport_cost = activity.get('transport_cost', 0)
+                other_cost = activity.get('other_cost', 0)
+                subtotal = activity.get('subtotal', 0)
+                activity_note = activity.get('activity_note') or ''
+                crop_bundles = activity.get('crop_bundles')
+                
+                # Parse datetime
+                activity_datetime = None
+                activity_start_date = None
+                if date_time_str:
+                    try:
+                        activity_datetime = datetime.fromisoformat(date_time_str.replace('Z', '+00:00'))
+                        activity_start_date = activity_datetime.date()
+                    except:
+                        pass
+                
+                # Create/Update activity
+                sheet, created = ImportedJobSheet.objects.update_or_create(
+                    external_activity_id=activity_id,
+                    defaults={
+                        'imported_job': job,
+                        'data_source': 'external_api',
+                        'activity_name': activity_name,
+                        'activity_datetime': activity_datetime,
+                        'activity_start_date': activity_start_date,
+                        'acres': str(acres),
+                        'total_price': total_price,
+                        'transport_cost': transport_cost,
+                        'other_cost': other_cost,
+                        'subtotal': subtotal,
+                        'activity_note': activity_note,
+                        'crop_bundles': crop_bundles,
+                        'generated_job_id': generated_job_id,
+                        'generated_farmer_id': str(farmer_id),
+                        'farmer_name': farmer.name,
+                        'farmer_contact': farmer.contact_no,
+                        'location': farmer.location,
+                        'import_status': 'pending',
+                    }
+                )
+                
+                activity_records.append({
+                    'activity_id': activity_id,
+                    'activity_name': activity_name,
+                    'created': created
+                })
+                
+                logger.info(f"  [{ idx}/{len(activities)}] {'✅ Created' if created else '🔄 Updated'} Activity #{activity_id}: {activity_name}")
+        
+        # Success response
+        logger.info(f"🎉 Successfully processed Job #{job_id}")
+        logger.info(f"   - Farmer: {farmer.name} ({'created' if farmer_created else 'existing'})")
+        logger.info(f"   - Activities: {len(activity_records)}")
+        logger.info(f"   - Payments: {len(payment_records)}")
+        logger.info(f"   - Visits: {len(visit_records)}")
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': f'Processed job #{job_id}',
+            'job': {
+                'job_id': job_id,
+                'generated_job_id': generated_job_id,
+                'created': job_created,
+            },
+            'farmer': {
+                'farmer_id': farmer_id,
+                'name': farmer.name,
+                'created': farmer_created,
+            },
+            'counts': {
+                'activities': len(activity_records),
+                'payments': len(payment_records),
+                'visits': len(visit_records),
+            }
+        }, status=200)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        logger.error(f"❌ Error: {str(e)}", exc_info=True)
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -1204,7 +1884,7 @@ def allocations_by_mobile(request):
         supply_response = requests.get(
             f'{SUPPLY_API_URL}/api/mukkadam/by-mobile/',
             params={'mobile_number': mobile_number},
-            timeout=50
+            timeout=5000
         )
         supply_data = supply_response.json()
         if not supply_data.get('found'):
@@ -1270,7 +1950,7 @@ def allocations_by_mobile(request):
                 try:
                     provider_response = requests.get(
                         f'{SUPPLY_API_URL}/api/transport-provider/{alloc.transport_provider_id}/',
-                        timeout=50
+                        timeout=500
                     )
                     if provider_response.status_code == 200:
                         provider_json = provider_response.json()
@@ -1786,7 +2466,7 @@ def completed_allocations_list(request):
         response = requests.get(
             api_url,
             headers={'Authorization': token},
-            timeout=50
+            timeout=500
         )
         
         if response.status_code == 200:
@@ -1935,7 +2615,7 @@ def pending_jobs_list(request):
         response = requests.get(
             api_url,
             headers={'Authorization': token},
-            timeout=50
+            timeout=500
         )
         response.raise_for_status()
         response_data = response.json()
@@ -2312,7 +2992,7 @@ def partially_allocated_jobs_list(request):
         response = requests.get(
             api_url,
             headers={'Authorization': token},
-            timeout=50
+            timeout=500
         )
         response.raise_for_status()
         response_data = response.json()
@@ -2673,7 +3353,7 @@ def lost_jobs_list(request):
         response = requests.get(
             api_url,
             headers={'Authorization': token},
-            timeout=50
+            timeout=500
         )
         response.raise_for_status()
         response_data = response.json()
@@ -3001,7 +3681,7 @@ def allocated_jobs_list(request):
         response = requests.get(
             api_url,
             headers={'Authorization': token},
-            timeout=50
+            timeout=500
         )
         
         if response.status_code == 200:
@@ -3228,8 +3908,8 @@ def allocated_jobs_list(request):
 @permission_classes([AllowAny])
 def activity_logs_list(request):
     """
-    Get all activity logs with complete details (mirrors allocations_list logic)
-    OPTIMIZED with caching + async
+    Get all activity logs with complete details from LOCAL DB
+    NO external API calls - everything from ImportedJobSheet, ImportedFarmer, etc.
     """
     start_time = time.time()
     
@@ -3254,114 +3934,140 @@ def activity_logs_list(request):
         queryset = queryset.filter(performed_at__gte=from_date)
 
     # Fetch 200 most recent logs
-    logs_queryset = list(queryset.select_related('performed_by').order_by('-performed_at'))
+    logs_queryset = list(queryset.select_related('performed_by').order_by('-performed_at'))[:200]
 
     if not logs_queryset:
         return Response({'count': 0, 'logs': []})
 
     # ========================================
-    # STEP 2: FETCH JOBS FROM EXTERNAL API
+    # STEP 2: COLLECT ALL UNIQUE IDs
     # ========================================
-    print("\n🔄 Fetching job details from external API...")
+    print("\n📊 Processing activity logs from local DB...")
     
-    # Collect all Job IDs from the logs
     job_ids = set()
-    for log in logs_queryset:
-        if log.job_id:
-            job_ids.add(str(log.job_id))
-
-    jobs_cache = {}
-    
-    # CONFIG (Ensure these match your settings)
-    EXTERNAL_API_URL = getattr(settings, 'EXTERNAL_API_URL', 'https://ops.bharatintelligence.ai/ops/api')
-    job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-
-    if job_ids:
-        try:
-            # We fetch all allocated jobs (or you could filter by IDs if API supports it)
-            response = requests.get(
-                f'{EXTERNAL_API_URL}/get_allocated_jobs/',
-                headers={'Authorization': job_token},
-                timeout=50
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                # Handle list vs dict response structure
-                jobs_list = data.get('data', data) if isinstance(data, dict) else data
-                
-                if isinstance(jobs_list, list):
-                    for job in jobs_list:
-                        # Normalize ID extraction
-                        j_id = str(job.get('work_id') or job.get('id') or job.get('job_id'))
-                        
-                        # Only cache if this job is relevant to our logs
-                        if j_id in job_ids:
-                            jobs_cache[j_id] = job
-            else:
-                print(f"⚠️ Job API returned status {response.status_code}")
-
-        except Exception as e:
-            print(f"❌ Error fetching jobs: {str(e)}")
-    # print(f"📊 Found {len(logs_queryset)} activity logs (Admin: {is_admin})")
-
-    if not logs_queryset:
-        return Response({'count': 0, 'logs': []})
-
-    # ========================================
-    # STEP 3: COLLECT ALL UNIQUE IDs
-    # ========================================
     farmer_ids = set()
-    
-    # Extract Farmer IDs from the JOBS we just fetched
-    for job in jobs_cache.values():
-        f_id = job.get('farmer_id')
-        if f_id:
-            farmer_ids.add(str(f_id))
-
-    # Extract Mukkadam & Transport IDs from LOGS
     mukkadam_ids = set()
     transport_provider_ids = set()
 
     for log in logs_queryset:
+        if log.job_id:
+            job_ids.add(str(log.job_id))
         if log.mukkadam_id:
             mukkadam_ids.add(log.mukkadam_id)
         if log.transport_provider_id:
             transport_provider_ids.add(log.transport_provider_id)
 
     # ========================================
-    # STEP 4: BATCH FETCH ALL DATA IN PARALLEL
+    # STEP 3: FETCH ALL DATA FROM LOCAL DB
     # ========================================
-    print("\n⚡ PARALLEL BATCH FETCHING...")
+    print(f"⚡ Fetching from local DB...")
+    print(f"   Jobs: {len(job_ids)}")
+    print(f"   Mukkadams: {len(mukkadam_ids)}")
+    print(f"   Transporters: {len(transport_provider_ids)}")
+    
     batch_start = time.time()
 
-    # Reuse your existing batch functions
-    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
-    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
-    transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)
+    # ✅ 1. Fetch Jobs from ImportedJobSheet
+    jobs_cache = {}
+    if job_ids:
+        job_sheets = ImportedJobSheet.objects.filter(
+            generated_job_id__in=job_ids
+        ).values('generated_job_id', 'farmer_name', 'location', 'activity_start_date', 
+                 'generated_farmer_id', 'allocation_status',)
+        
+        # Group by job_id (in case multiple activities per job)
+        for sheet in job_sheets:
+            job_id = sheet['generated_job_id']
+            if job_id not in jobs_cache:
+                jobs_cache[job_id] = {
+                    'job_id': job_id,
+                    'job_name': f"Job #{job_id}",
+                    'location': sheet['location'] or 'N/A',
+                    'scheduled_date': str(sheet['activity_start_date']) if sheet['activity_start_date'] else 'N/A',
+                    'farmer_id': sheet['generated_farmer_id'],
+                    # 'status': sheet['job_status'] or 'PENDING',
+                    # 'priority': sheet['job_priority'] or 'MEDIUM',
+                    'farmer_name': sheet['farmer_name'],
+                }
+                
+                # Add farmer_id to set
+                if sheet['generated_farmer_id']:
+                    farmer_ids.add(str(sheet['generated_farmer_id']))
+
+    # ✅ 2. Fetch Farmers from ImportedFarmer
+    farmers_cache = {}
+    if farmer_ids:
+        farmers_qs = ImportedFarmer.objects.filter(external_farmer_id__in=farmer_ids)
+        for farmer in farmers_qs:
+            location_parts = farmer.location.split(',') if farmer.location else []
+            farmers_cache[farmer.external_farmer_id] = {
+                'farmer_id': farmer.external_farmer_id,
+                'farmer_name': farmer.name,
+                'phone_number': farmer.contact_no or 'N/A',
+                'location': farmer.location or 'N/A',
+                'village': location_parts[0].strip() if len(location_parts) > 0 else '',
+                'taluka': location_parts[1].strip() if len(location_parts) > 1 else '',
+                'district': location_parts[2].strip() if len(location_parts) > 2 else '',
+            }
+
+    # ✅ 3. Fetch Mukkadams from ImportedMukkadam
+    mukkadams_cache = {}
+    if mukkadam_ids:
+        mukkadams_qs = ImportedMukkadam.objects.filter(external_mukkadam_id__in=mukkadam_ids)
+        for mukkadam in mukkadams_qs:
+            mukkadams_cache[mukkadam.external_mukkadam_id] = {
+                'mukkadam_id': mukkadam.external_mukkadam_id,
+                'mukkadam_name': mukkadam.team_name,
+                'contact_no': mukkadam.contact_no or 'N/A'
+            }
+
+    # ✅ 4. Fetch Transporters from ImportedTransporter
+    transport_providers_cache = {}
+    if transport_provider_ids:
+        transporters_qs = ImportedTransporter.objects.filter(external_transporter_id__in=transport_provider_ids)
+        for transporter in transporters_qs:
+            transport_providers_cache[transporter.external_transporter_id] = {
+                'transporter_id': transporter.external_transporter_id,
+                'name': transporter.name,
+                'contact_no': transporter.contact_no or 'N/A'
+            }
 
     batch_elapsed = time.time() - batch_start
-    print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
+    print(f"✅ Local DB fetching completed in {batch_elapsed:.2f}s")
+    print(f"   Jobs found: {len(jobs_cache)}")
+    print(f"   Farmers found: {len(farmers_cache)}")
+    print(f"   Mukkadams found: {len(mukkadams_cache)}")
+    print(f"   Transporters found: {len(transport_providers_cache)}")
 
     # ========================================
-    # STEP 5: BUILD ENRICHED LOGS
+    # STEP 4: BUILD ENRICHED LOGS
     # ========================================
     logs = []
 
     for log in logs_queryset:
         # 1. Mukkadam Data
         mukkadam_name = 'Unknown'
+        mukkadam_contact = None
         if log.mukkadam_id:
             m_data = mukkadams_cache.get(log.mukkadam_id)
-            mukkadam_name = m_data.get('mukkadam_name', f'#{log.mukkadam_id}') if m_data else f'#{log.mukkadam_id}'
+            if m_data:
+                mukkadam_name = m_data.get('mukkadam_name', f'#{log.mukkadam_id}')
+                mukkadam_contact = m_data.get('contact_no')
+            else:
+                mukkadam_name = f'#{log.mukkadam_id}'
 
         # 2. Transport Data
         transport_name = None
+        transport_contact = None
         if log.transport_provider_id:
             t_data = transport_providers_cache.get(log.transport_provider_id)
-            transport_name = t_data.get('name', f'#{log.transport_provider_id}') if t_data else f'#{log.transport_provider_id}'
+            if t_data:
+                transport_name = t_data.get('name', f'#{log.transport_provider_id}')
+                transport_contact = t_data.get('contact_no')
+            else:
+                transport_name = f'#{log.transport_provider_id}'
 
-        # 3. Job & Farmer Data (The Bridge)
+        # 3. Job & Farmer Data (from ImportedJobSheet + ImportedFarmer)
         farmer_name = None
         farmer_details = None
         job_details = None
@@ -3377,67 +4083,152 @@ def activity_logs_list(request):
                 f_details = farmers_cache.get(f_id)
                 if f_details:
                     farmer_details = f_details
-                    # Robust name extraction
-                    farmer_name = (
-                        f_details.get('farmer_name') or 
-                        f_details.get('name') or 
-                        f_details.get('full_name') or 
-                        f_details.get('first_name')
-                    )
+                    farmer_name = f_details.get('farmer_name', 'Unknown Farmer')
                 else:
-                    farmer_name = f'Farmer #{f_id}' if f_id else 'Unknown Farmer'
+                    # Fallback to farmer_name from ImportedJobSheet
+                    farmer_name = job_data.get('farmer_name', f'Farmer #{f_id}' if f_id else 'Unknown Farmer')
+                    farmer_details = {
+                        'farmer_id': f_id,
+                        'farmer_name': farmer_name,
+                        'phone_number': 'N/A',
+                        'location': 'N/A'
+                    }
 
-                # Store basic job info for the log
+                # Store job info for the log
                 job_details = {
+                    'job_id': job_data.get('job_id'),
                     'job_name': job_data.get('job_name'),
                     'location': job_data.get('location'),
-                    'scheduled_date': job_data.get('scheduled_date')
+                    'scheduled_date': job_data.get('scheduled_date'),
+                    'status': job_data.get('status'),
+                    'priority': job_data.get('priority'),
+                }
+            else:
+                # Job not found in ImportedJobSheet
+                job_details = {
+                    'job_id': log.job_id,
+                    'job_name': f'Job #{log.job_id}',
+                    'location': 'N/A',
+                    'scheduled_date': 'N/A',
+                    'status': 'N/A',
                 }
 
         # 4. Construct Final Object
-        logs.append({
+        log_entry = {
             'id': log.id,
             'activity_type': log.activity_type,
             'activity_type_display': log.get_activity_type_display(),
             'description': log.description,
             'job_id': log.job_id,
-            'job_details': job_details, # Added this for extra context
+            'job_details': job_details,
             
             'mukkadam_id': log.mukkadam_id,
             'mukkadam_name': mukkadam_name,
+            'mukkadam_contact': mukkadam_contact,
             
             'transport_provider_id': log.transport_provider_id,
             'transport_name': transport_name,
+            'transport_contact': transport_contact,
             
-            # ✅ CORRECTED FARMER FIELDS
-            'farmer_id': farmer_details.get('id') if farmer_details else None,
+            # Farmer fields
+            'farmer_id': farmer_details.get('farmer_id') if farmer_details else None,
             'farmer_name': farmer_name,
             'farmer_details': farmer_details,
             
             'amount': float(log.amount) if log.amount else None,
+            'performed_by': log.performed_by.username if log.performed_by else 'System',
             'performed_by_name': log.performed_by.username if log.performed_by else 'System',
             'performed_at': log.performed_at.isoformat(),
             'metadata': log.metadata,
-            'changes': log.changes,  # ✅ Include changes for frontend
-            'formatted_changes': format_changes_for_display(log.changes),  # ✅ Helper
-        })
-
-        # ✅ ADMIN-ONLY: Include reason field
+            'changes': log.changes,
+        }
         
+        # Format changes for display (if exists)
+        if log.changes:
+            log_entry['formatted_changes'] = format_changes_for_display(log.changes)
+        
+        logs.append(log_entry)
 
     total_elapsed = time.time() - start_time
     
     return Response({
         'count': len(logs),
         'logs': logs,
-        # 'is_admin': is_admin,  # ✅ Tell frontend if user is admin
         'performance': {
             'total_time': f'{total_elapsed:.2f}s',
             'batch_fetch_time': f'{batch_elapsed:.2f}s',
-            'farmers_fetched': len(farmers_cache)
+            'jobs_fetched': len(jobs_cache),
+            'farmers_fetched': len(farmers_cache),
+            'mukkadams_fetched': len(mukkadams_cache),
+            'transporters_fetched': len(transport_providers_cache),
         }
     })
 
+
+# Helper function for formatting changes
+def format_changes_for_display(changes):
+    """
+    Format changes dict for human-readable display
+    
+    Input:
+    {
+        "allocated_area": {"old": "1.5", "new": "2.0"},
+        "mukkadam_price": {"old": "5000", "new": "5500"}
+    }
+    
+    Output:
+    [
+        {"field": "Allocated Area", "old_value": "1.5 acres", "new_value": "2.0 acres"},
+        {"field": "Mukkadam Price", "old_value": "₹5000", "new_value": "₹5500"}
+    ]
+    """
+    if not changes or not isinstance(changes, dict):
+        return []
+    
+    formatted = []
+    
+    # Field name mappings for display
+    field_labels = {
+        'allocated_area': 'Allocated Area',
+        'work_date': 'Work Date',
+        'crew_size': 'Crew Size',
+        'mukkadam_price': 'Mukkadam Price',
+        'transport_type': 'Transport Type',
+        'transport_provider_id': 'Transport Provider',
+        'transport_price': 'Transport Price',
+        'own_transport_price': 'Own Transport Price',
+        'mukkadam_id': 'Mukkadam',
+        'status': 'Status',
+    }
+    
+    # Value formatting rules
+    def format_value(field, value):
+        if value is None or value == '':
+            return 'N/A'
+        
+        if field in ['mukkadam_price', 'transport_price', 'own_transport_price']:
+            return f"₹{float(value):,.2f}"
+        
+        if field == 'allocated_area':
+            return f"{value} acres"
+        
+        if field == 'crew_size':
+            return f"{value} workers"
+        
+        if field == 'transport_type':
+            return value.replace('_', ' ').title()
+        
+        return str(value)
+    
+    for field, change_data in changes.items():
+        if isinstance(change_data, dict) and 'old' in change_data and 'new' in change_data:
+            formatted.append({
+                'field': field_labels.get(field, field.replace('_', ' ').title()),
+                'old_value': format_value(field, change_data['old']),
+                'new_value': format_value(field, change_data['new']),
+            })
+    
+    return formatted
 
 
 def batch_fetch_farmers_debug(farmer_ids, max_workers=5):
@@ -3619,57 +4410,223 @@ from decimal import Decimal
 import requests
 import time
 from concurrent.futures import ThreadPoolExecutor
+# allocation_app/views.py
+from rest_framework import viewsets, permissions
+from .models import FarmerCall
+from .serializers import FarmerCallSerializer
+
+class FarmerCallViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    API endpoint that allows FarmerCalls to be viewed.
+    """
+    queryset = FarmerCall.objects.all().order_by('-initiated_at')
+    serializer_class = FarmerCallSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # Optional: Filter by mobile_number or job_id if passed in params
+        queryset = super().get_queryset()
+        mobile = self.request.query_params.get('mobile_number')
+        if mobile:
+            queryset = queryset.filter(mobile_number=mobile)
+        return queryset
+
 
 # Import your models
-# from .models import Allocation, ActivityLog
-import random  # ✅ Make sure to import this at the top
-
+import random
+from django.db.models import Q
+from decimal import Decimal
+from .models import ImportedJobSheet
+import random
+from django.db.models import Q
+from decimal import Decimal
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def jobs_list(request):
     """
-    Fetch jobs from external API and enrich with allocation data
-    OPTIMIZED with caching + async + Maharashtra Geo-tagging
+    Fetch jobs from LOCAL DB (ImportedJobSheet) and enrich with allocation data
+    ✅ Check allocations in BOTH JobActivity AND Allocation table directly
     """
     import time
+    import random
+    from decimal import Decimal
+    
     start_time = time.time()
 
-    try:
-        # Fetch jobs from external API
-        token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-        api_url = f'{EXTERNAL_API_URL}/get_allocated_jobs/'
+    # Get filter params
+    farmer_name_filter = request.GET.get('farmer_name', '').strip()
+    status_filter = request.GET.get('status', '').strip()
+    booking_type_filter = request.GET.get('booking_type', '').strip().upper()
 
-        response = requests.get(
-            api_url,
-            headers={'Authorization': token},
-            timeout=50
-        )
-
-        response.raise_for_status()
-        response_data = response.json()
-
-        if isinstance(response_data, dict):
-            jobs_from_api = response_data.get('data', response_data.get('results', [response_data]))
-        else:
-            jobs_from_api = response_data
-
-        if not isinstance(jobs_from_api, list):
-            return Response(
-                {'error': f'Expected list, got {type(jobs_from_api).__name__}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    except requests.exceptions.RequestException as e:
-        return Response(
-            {'error': f'Failed to fetch jobs from external API: {str(e)}'},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE
-        )
-
-    if not jobs_from_api:
-        return Response([])
 
     # ========================================
-    # STEP 1: COLLECT ALL UNIQUE IDs
+    # STEP 1: FETCH JOBS FROM DB
+    # ========================================
+    print("📥 Fetching jobs from ImportedJobSheet...")
+    
+    # ✅ FIX: Use 'imported_job' instead of 'job_activity'
+    job_sheets = ImportedJobSheet.objects.all().select_related(
+        'imported_job',
+        'job_activity'
+    ).order_by('generated_job_id', 'activity_start_date')
+    
+    total_count = job_sheets.count()
+    print(f"📊 Total records in ImportedJobSheet: {total_count}")
+    
+    if total_count == 0:
+        print("⚠️ WARNING: No data in ImportedJobSheet!")
+        return Response({
+            'error': 'No data found in ImportedJobSheet. Please sync data first.',
+            'suggestion': 'Run: python manage.py sync_external_jobs'
+        }, status=404)
+    
+    # ========================================
+    # STEP 2: GROUP BY JOB
+    # ========================================
+    jobs_dict = {}
+    
+    for sheet in job_sheets:
+        job_id = sheet.generated_job_id
+        
+        if job_id not in jobs_dict:
+            # ✅ FIX: Get external_job_id from imported_job relationship
+            if sheet.imported_job:
+                external_job_id = sheet.imported_job.external_job_id
+                job_status = sheet.imported_job.status
+                job_priority = sheet.imported_job.priority
+                scheduled_date = sheet.imported_job.scheduled_date
+                activity_notes = sheet.imported_job.activity_notes
+                internal_notes = sheet.imported_job.internal_notes
+                total_activities_amount = float(sheet.total_booking_value or 0)
+                is_field_verified = sheet.imported_job.is_field_verified
+                plot_id = sheet.imported_job.plot_id
+                raw_booking_data = sheet.imported_job.raw_booking_data
+                raw_visits_data = sheet.imported_job.raw_visits_data
+                created_at = sheet.imported_job.created_at
+                booking_type = sheet.imported_job.booking_type
+            else:
+                # Fallback for sheet imports
+                external_job_id = int(job_id.replace('SHEET_', '').replace('_', '')) if 'SHEET' in job_id else None
+                job_status = 'PENDING'
+                job_priority = 'MEDIUM'
+                scheduled_date = None
+                activity_notes = sheet.allocation_team_remarks or ''
+                internal_notes = sheet.field_team_remarks or ''
+                total_activities_amount = 0
+                is_field_verified = False
+                plot_id = None
+                booking_type = sheet.imported_job.booking_type if sheet.imported_job else 'ON_DEMAND'
+                raw_booking_data = {}
+                raw_visits_data = []
+                created_at = sheet.activity_start_date
+            
+            jobs_dict[job_id] = {
+                'id': job_id,
+                'work_id': job_id,
+                'farmer_id': sheet.generated_farmer_id or '',
+                'plot_id': plot_id,
+                'status': job_status,
+                'priority': job_priority,
+                'scheduled_date': scheduled_date.isoformat() if scheduled_date else None,
+                'activity_notes': activity_notes,
+                'internal_notes': internal_notes,
+                'total_activities_amount': float(sheet.total_booking_value or 0),
+                'is_field_verified': is_field_verified,
+                'booking_type': booking_type,
+                'activities': [],
+                'booking': raw_booking_data or {},
+                'visits': raw_visits_data or [],
+                'created_at': created_at.isoformat() if created_at else None,
+            }
+        
+        # Parse acres
+        try:
+            acres_str = str(sheet.acres or '0')
+            # Extract numbers from strings like "7 Labours" or "1.5"
+            import re
+            match = re.search(r'[\d.]+', acres_str)
+            acres_value = float(match.group()) if match else 0
+        except:
+            acres_value = 0
+        
+        activity_id = sheet.external_activity_id if sheet.external_activity_id else f"{job_id}_ACT_{len(jobs_dict[job_id]['activities']) + 1}"
+        subtotal_value = sheet.total_booking_value
+        if subtotal_value is None:
+            # fall back to total_price or booking_value or 0
+            if sheet.total_price is not None:
+                subtotal_value = sheet.total_price
+            elif sheet.booking_value is not None:
+                subtotal_value = sheet.booking_value
+            else:
+                subtotal_value = 0
+        jobs_dict[job_id]['activities'].append({
+            'id': activity_id,
+            'activity_id': str(activity_id),
+            'activity_name': sheet.activity_name,
+            'activity_type': '',
+            'date_time': sheet.activity_start_date.isoformat() if sheet.activity_start_date else None,
+            'acres': acres_value,
+            'total_price':  (float(sheet.booking_value) if sheet.booking_value else 0),  # ✅ Use total_price or booking_value
+            'transport_cost': float(sheet.transport_cost) if sheet.transport_cost else 0,
+            'other_cost': float(sheet.other_cost) if sheet.other_cost else 0,
+            'subtotal': float(subtotal_value),
+            'activity_note': sheet.allocation_team_remarks or sheet.activity_note or None,
+            'crop_bundles': 0,
+            'location': sheet.location or 'N/A',
+            'sheet_id': sheet.id,
+        })
+
+        
+        # Update total if from booking value
+        if sheet.booking_value:
+            if jobs_dict[job_id]['total_activities_amount'] == 0:  # Only update if not set from ImportedJob
+                jobs_dict[job_id]['total_activities_amount'] += float(sheet.booking_value)
+    
+    jobs_from_api = list(jobs_dict.values())
+    
+    print(f"✓ Grouped into {len(jobs_from_api)} jobs\n")
+    
+    if len(jobs_from_api) == 0:
+        return Response([])
+
+
+    # ========================================
+    # STEP 3: FILTER BY BOOKING TYPE (TENDER / ON_DEMAND)
+    # ========================================
+    if booking_type_filter:
+        # Expect values: TENDER or ON_DEMAND (matches ImportedJob.booking_type)
+        jobs_from_api = [
+            job for job in jobs_from_api
+            if str(job.get('booking_type') or '').upper() == booking_type_filter
+        ]
+        print(f"🔍 Filtered by booking_type={booking_type_filter}, remaining jobs: {len(jobs_from_api)}")
+
+        if not jobs_from_api:
+            return Response([])
+
+    
+    # ========================================
+    # STEP 3: FILTER BY FARMER NAME (if provided)
+    # ========================================
+    if farmer_name_filter:
+        print(f"🔍 Filtering jobs by farmer name: {farmer_name_filter}")
+        
+        matching_farmers = ImportedFarmer.objects.filter(
+            name__icontains=farmer_name_filter
+        ).values_list('external_farmer_id', flat=True)
+        
+        jobs_from_api = [
+            job for job in jobs_from_api 
+            if job.get('farmer_id') in list(matching_farmers)
+        ]
+        
+        print(f"✓ Found {len(jobs_from_api)} jobs for farmer '{farmer_name_filter}'\n")
+        
+        if not jobs_from_api:
+            return Response([])
+
+    # ========================================
+    # STEP 4: COLLECT ALL UNIQUE IDs FOR ENRICHMENT
     # ========================================
     farmer_ids = set()
     mukkadam_ids = set()
@@ -3679,117 +4636,252 @@ def jobs_list(request):
         if farmer_id:
             farmer_ids.add(str(farmer_id))
 
-    # Get mukkadam IDs from allocations
-    all_allocations = Allocation.objects.all().select_related('job_activity')
-    for alloc in all_allocations:
-        mukkadam_ids.add(alloc.mukkadam_id)
+    job_ids_from_api = set(str(job.get('work_id') or job.get('id')) for job in jobs_from_api)
+    
+    # ✅ FIX: Get JobActivity by job_id OR by sheet relationship
+    db_activities = JobActivity.objects.filter(
+        job_id__in=job_ids_from_api
+    ).values('id', 'job_id', 'farmer_work_id', 'activity_name')
+    
+    job_to_farmer_map = {}
+    job_activity_map = {}  # Map by job_id -> activity_name -> JobActivity
+    
+    for activity in db_activities:
+        job_id = str(activity['job_id'])
+        farmer_work_id = str(activity['farmer_work_id']) if activity['farmer_work_id'] else None
+        activity_name = activity['activity_name'].lower()
+        
+        if farmer_work_id:
+            job_to_farmer_map[job_id] = farmer_work_id
+            farmer_ids.add(farmer_work_id)
+        
+        if job_id not in job_activity_map:
+            job_activity_map[job_id] = {}
+        
+        job_activity_map[job_id][activity_name] = activity['id']
+    
+    # ✅ Get ALL allocations for these JobActivities
+    all_allocations_qs = Allocation.objects.filter(
+        job_activity__job_id__in=job_ids_from_api
+    ).select_related('job_activity')
+    
+    for alloc in all_allocations_qs:
+        if alloc.mukkadam_id:
+            mukkadam_ids.add(alloc.mukkadam_id)
 
     # ========================================
-    # STEP 2: BATCH FETCH ALL DATA IN PARALLEL
+    # STEP 5: FETCH FARMERS & MUKKADAMS FROM LOCAL DB
     # ========================================
-    print(f"\n⚡ PARALLEL BATCH FETCHING...")
+    print(f"\n⚡ FETCHING FROM LOCAL DB...")
+    print(f"   Fetching {len(farmer_ids)} farmers, {len(mukkadam_ids)} mukkadams")
     batch_start = time.time()
 
-    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
-    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
+    farmers_cache = {}
+    if farmer_ids:
+        farmers_qs = ImportedFarmer.objects.filter(external_farmer_id__in=farmer_ids)
+        for farmer in farmers_qs:
+            location_parts = farmer.location.split(',') if farmer.location else []
+            farmers_cache[farmer.external_farmer_id] = {
+                'farmer_id': farmer.external_farmer_id,
+                'farmer_name': farmer.name,
+                'phone_number': farmer.contact_no,
+                'village': location_parts[0].strip() if len(location_parts) > 0 else '',
+                'taluka': location_parts[1].strip() if len(location_parts) > 1 else '',
+                'district': location_parts[2].strip() if len(location_parts) > 2 else '',
+                'location': farmer.location or ''
+            }
+
+    mukkadams_cache = {}
+    if mukkadam_ids:
+        mukkadams_qs = ImportedMukkadam.objects.filter(external_mukkadam_id__in=mukkadam_ids)
+        for mukkadam in mukkadams_qs:
+            mukkadams_cache[mukkadam.external_mukkadam_id] = {
+                'mukkadam_name': mukkadam.team_name,
+                'contact_no': mukkadam.contact_no
+            }
 
     batch_elapsed = time.time() - batch_start
-    print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
+    print(f"✅ Local DB fetching completed in {batch_elapsed:.2f}s")
 
     # ========================================
-    # STEP 3: ENRICH JOBS
+    # STEP 6: ENRICH JOBS (WITH REAL STATUS CALCULATION)
     # ========================================
     enriched_jobs = []
-
-    # ✅ MAHARASHTRA BOUNDS (Approximate)
-    # Latitude: 15.6°N to 22.0°N
-    # Longitude: 72.6°E to 80.9°E
     MH_LAT_MIN, MH_LAT_MAX = 16.0, 21.0
     MH_LON_MIN, MH_LON_MAX = 73.0, 79.0
 
     for idx, job in enumerate(jobs_from_api):
-        job_id = str(
-            job.get('work_id') or
-            job.get('id') or
-            job.get('job_id') or
-            f"UNKNOWN_{idx}"
-        )
+        job_id = str(job.get('work_id') or job.get('id'))
 
-        # Get farmer details from cache
-        farmer_id = str(job.get('farmer_id', ''))
+        farmer_id = job_to_farmer_map.get(job_id) or str(job.get('farmer_id', ''))
         farmer_details = farmers_cache.get(farmer_id)
 
-        # Get activities
+        # ✅ Get JobActivities for this job
+        job_activities_for_job = JobActivity.objects.filter(
+            job_id=job_id
+        ).prefetch_related('allocations')
+        
+        # Create a map by activity name
+        job_activities_by_name = {}
+        for ja in job_activities_for_job:
+            job_activities_by_name[ja.activity_name.lower()] = ja
+
         activities_from_api = job.get('activities', [])
         activities_data = []
 
-        # REPLACE the entire loop with this:
         for api_activity in activities_from_api:
             activity_id = str(api_activity.get('id') or api_activity.get('activity_id', ''))
+            activity_name = api_activity.get('activity_name', 'Unknown')
 
-            # ✅ CHECK IF ACTIVITY EXISTS IN DB
-            db_activity = JobActivity.objects.filter(
-                job_id=job_id,
-                activity_id=activity_id
-            ).prefetch_related('allocations').first()
+            # ✅ Match by activity name
+            db_activity = job_activities_by_name.get(activity_name.lower())
 
-            # ✅ PRIORITY LOGIC: Use DB data if edited or lost, else use API data
-            if db_activity and (db_activity.is_manually_edited or hasattr(db_activity, 'lost_record')):
-                # 🔵 USE DATABASE DATA (edited or lost activity)
+            # Use DB data if manually edited, otherwise use API data
+            if db_activity and db_activity.is_manually_edited:
                 activity_name = db_activity.activity_name
                 total_area = db_activity.total_area
                 total_price = db_activity.total_price
                 transport_cost = db_activity.transport_cost
                 other_cost = db_activity.other_cost
-                crop_bundles = getattr(db_activity, 'crop_bundles', api_activity.get('crop_bundles', 0))
+                crop_bundles = getattr(db_activity, 'crop_bundles', 0)
                 scheduled_date = db_activity.scheduled_datetime.date() if db_activity.scheduled_datetime else None
                 rate_per_acre = db_activity.rate_per_acre
-                location = db_activity.location or api_activity.get('location', 'N/A')
+                location = db_activity.location
             else:
-                # 🟢 USE EXTERNAL API DATA (fresh, unedited activity)
                 activity_name = api_activity.get('activity_name', 'Unknown')
                 total_area = Decimal(str(api_activity.get('acres', 0)))
                 total_price = Decimal(str(api_activity.get('total_price', 0)))
-                transport_cost = Decimal(str(api_activity.get('transport_cost', 0))) 
-                crop_bundles = api_activity.get('crop_bundles', 0) # ✅ FROM API
-                other_cost = Decimal(str(api_activity.get('other_cost', 0)))          # ✅ FROM API
-    
-                scheduled_date = api_activity.get('date_time') or api_activity.get('scheduled_date')
-                rate_per_acre = round(
-                    float(total_price) / float(total_area),
-                    2
-                ) if float(total_area) > 0 else 0.00
+                transport_cost = Decimal(str(api_activity.get('transport_cost', 0)))
+                crop_bundles = 0
+                other_cost = Decimal('0')
+                scheduled_date = api_activity.get('date_time', '')
+                rate_per_acre = round(float(total_price) / float(total_area), 2) if float(total_area) > 0 else 0
                 location = api_activity.get('location', 'N/A')
 
-            # Calculate allocations (same as before)
+            # Get allocations
             allocations_data = []
             allocated_area = Decimal('0')
 
+            pending_count = 0
+            completed_count = 0
+            in_progress_count = 0
+            partially_allocated_count = 0
+            fully_allocated_count = 0  # ✅ NEW
+            mukkadam_price =0
+            transport_price = 0
+            total_price = 0
+            other_cost = 0
+            subtotal_value = 0
+
             if db_activity:
                 for alloc in db_activity.allocations.all():
-                    allocated_area += Decimal(str(alloc.allocated_area))
+                    allocated_area += alloc.allocated_area
+                    
+                    # ✅ UPDATED: Handle legacy 'allocated' status
+                    alloc_status = alloc.status
+                    
+                    # Map legacy 'allocated' to appropriate status
+                    if alloc_status == 'allocated':
+                        # Check if activity is fully allocated
+                        if is_fully_allocated or alloc.allocated_area >= db_activity.total_area:
+                            alloc_status = 'fully_allocated'
+                        else:
+                            alloc_status = 'partially_allocated'
+                    
+                    # Count by status
+                    if alloc_status == 'completed':
+                        completed_count += 1
+                    elif alloc_status == 'in_progress':
+                        in_progress_count += 1
+                    elif alloc_status == 'partially_allocated':
+                        partially_allocated_count += 1
+                    elif alloc_status == 'fully_allocated':
+                        fully_allocated_count += 1
+                    else:
+                        pending_count += 1
 
-                    mukkadam_data = mukkadams_cache.get(alloc.mukkadam_id, {})
-                    mukkadam_name = mukkadam_data.get('mukkadam_name', f'Mukkadam #{alloc.mukkadam_id}')
+                    # ✅ Get mukkadam name (with auto-fetch from external API)
+                    mukkadam_name = None
+                    mukkadam_contact = None
+
+                    # First check if linked to ImportedMukkadam
+                    if alloc.imported_mukkadam:
+                        mukkadam_name = alloc.imported_mukkadam.team_name
+                        mukkadam_contact = alloc.imported_mukkadam.contact_no
+                    else:
+                        # Check mukkadams_cache (from external API call)
+                        mukkadam_data = mukkadams_cache.get(alloc.mukkadam_id, {})
+                        if mukkadam_data:
+                            mukkadam_name = mukkadam_data.get('mukkadam_name', None)
+                            mukkadam_contact = mukkadam_data.get('mobile_numbers', None)
+                        
+                        # If still not found, check local DB
+                        if not mukkadam_name:
+                            local_mukkadam = ImportedMukkadam.objects.filter(
+                                external_mukkadam_id=alloc.mukkadam_id
+                            ).first()
+                            
+                            if local_mukkadam:
+                                mukkadam_name = local_mukkadam.team_name
+                                mukkadam_contact = local_mukkadam.contact_no
+                            else:
+                                # ✅ FETCH FROM EXTERNAL API AND CACHE IN DB
+                                mukkadam_name, mukkadam_contact = fetch_and_cache_mukkadam(alloc.mukkadam_id)
+            # ✅ Get payment request info
+                    payment_request_data = None
+                    try:
+                        if hasattr(alloc, 'payment_request'):
+                            pr = alloc.payment_request
+                            payment_request_data = {
+                                'status': pr.status,
+                                'requested_amount': float(pr.requested_amount),
+                                'requested_at': pr.requested_at.isoformat() if pr.requested_at else None,
+                                'paid_at': pr.paid_at.isoformat() if pr.paid_at else None,
+                            }
+                    except:
+                        pass
+
+                    # ✅ Get transport payment request info
+                    
+                    transport_payment_data = None
+                    try:
+                        if hasattr(alloc, 'transport_payment_request'):
+                            tpr = alloc.transport_payment_request
+                            transport_payment_data = {
+                                'status': tpr.status,
+                                'requested_amount': float(tpr.requested_amount),
+                                'requested_at': tpr.requested_at.isoformat() if tpr.requested_at else None,
+                                'paid_at': tpr.paid_at.isoformat() if tpr.paid_at else None,
+                            }
+                    except:
+                        pass
 
                     allocations_data.append({
                         'allocation_id': alloc.id,
                         'mukkadam_id': alloc.mukkadam_id,
                         'mukkadam_name': mukkadam_name,
                         'allocated_area': float(alloc.allocated_area),
-                        'work_date': str(alloc.work_date) if alloc.work_date else None,
+                        'work_date': str(alloc.work_date),
                         'crew_size': alloc.crew_size,
                         'mukkadam_price': float(alloc.mukkadam_price),
                         'transport_type': alloc.transport_type,
-                        'transport_provider_id': alloc.transport_provider_id,  # ✅ ADDED
-                        'own_transport_price': float(alloc.own_transport_price or 0),  # ✅ ADDED
-                        'total_cost': float(alloc.total_cost)
+                        'transport_provider_id': alloc.transport_provider_id,
+                        'own_transport_price': float(alloc.own_transport_price or 0),
+                        'transport_price': float(alloc.transport_price or 0),
+                        'total_cost': float(alloc.total_cost),
+                        'status': alloc_status,
+                        'payment_request': payment_request_data,  # ✅ ADD THIS
+                        'transport_payment_request': transport_payment_data,  # ✅ ADD THIS
                     })
 
-            # Calculate areas
+
             remaining_area = total_area - allocated_area
             is_fully_allocated = allocated_area >= total_area
 
+            mukkadam_price = float(db_activity.total_price) if db_activity and db_activity.total_price else float(total_price)
+            transport_price = float(db_activity.transport_cost) if db_activity and db_activity.transport_cost else float(transport_cost)
+            other_cost = float(db_activity.other_cost) if db_activity and db_activity.other_cost else float(other_cost)
+            subtotal_value = float(db_activity.total_price + db_activity.transport_cost + db_activity.other_cost) if db_activity else float(subtotal_value)
             def safe_date(value):
                 if not value:
                     return ''
@@ -3797,99 +4889,970 @@ def jobs_list(request):
                     return value.split('T')[0]
                 return str(value)
 
+            # ✅ UPDATED: Calculate activity allocation status
+            activity_allocation_status = 'pending'
+
+            if allocations_data:
+                # Priority: completed > in_progress > fully_allocated > partially_allocated
+                if completed_count == len(allocations_data):
+                    activity_allocation_status = 'completed'
+                elif in_progress_count > 0 or completed_count > 0:
+                    activity_allocation_status = 'in_progress'
+                elif fully_allocated_count > 0 and is_fully_allocated:  # ✅ Check for fully_allocated
+                    activity_allocation_status = 'fully_allocated'
+                elif partially_allocated_count > 0 or (allocated_area > 0 and not is_fully_allocated):
+                    activity_allocation_status = 'partially_allocated'
+                else:
+                    activity_allocation_status = 'allocated'
+            # ✅✅✅ ADD FARMER PAYMENTS BEFORE APPENDING TO activities_data
+            farmer_payments_data = None
+            if db_activity:
+                # Fetch farmer payments for this activity
+                farmer_payments_qs = db_activity.farmer_payments.all()
+                
+                farmer_payment_list = []
+                total_farmer_paid = Decimal('0')
+                total_farmer_pending = Decimal('0')
+                
+                for fp in farmer_payments_qs:
+                    farmer_payment_list.append({
+                        'payment_id': fp.id,
+                        'booking_value': float(fp.booking_value),
+                        'payment_status': fp.payment_status,
+                        'payment_route': fp.payment_route,
+                        'date_of_payment': str(fp.date_of_payment) if fp.date_of_payment else None,
+                        'activity_date': str(fp.activity_date),
+                        'reference_no': fp.reference_no,
+                        'description': fp.description,
+                        'village': fp.village,
+                        'acres': fp.acres
+                    })
+                    
+                    if fp.payment_status == 'paid':
+                        total_farmer_paid += fp.booking_value
+                    else:
+                        total_farmer_pending += fp.booking_value
+                
+                total_expected = total_farmer_paid + total_farmer_pending
+                
+                farmer_payments_data = {
+                    'total_expected': float(total_expected),
+                    'total_paid': float(total_farmer_paid),
+                    'total_pending': float(total_farmer_pending),
+                    'payment_count': len(farmer_payment_list),
+                    'paid_count': sum(1 for p in farmer_payment_list if p['payment_status'] == 'paid'),
+                    'pending_count': sum(1 for p in farmer_payment_list if p['payment_status'] == 'pending'),
+                    'completion_percentage': round(
+                        (float(total_farmer_paid) / float(total_expected) * 100) 
+                        if total_expected > 0 else 0, 
+                        2
+                    ),
+                    'payments': farmer_payment_list
+                }
+
+            # ✅ NOW APPEND WITH farmer_payments
             activities_data.append({
                 'id': db_activity.id if db_activity else None,
                 'activity_id': activity_id,
                 'activity_name': activity_name,
-                'activity_type': api_activity.get('activity_type', ''),
+                'activity_type': '',
                 'location': location,
                 'total_area': float(total_area),
-                'crop_bundles': crop_bundles,  # ✅ ADDED TO RESPONSE
+                'crop_bundles': crop_bundles,
                 'allocated_area': float(allocated_area),
                 'remaining_area': float(remaining_area),
                 'scheduled_date': safe_date(scheduled_date),
-                'scheduled_time': api_activity.get('scheduled_time', ''),
-                'estimated_workers': api_activity.get('estimated_workers', 10),
+                'scheduled_time': '',
+                'estimated_workers': 10,
                 'rate_per_acre': float(rate_per_acre),
-                'total_price': float(total_price),
-                'transport_cost': float(transport_cost),  # ✅ USE VARIABLE
-                'other_cost': float(other_cost),
-                'subtotal': float(api_activity.get('subtotal', 0)),
+                'total_price': mukkadam_price,
+                'transport_cost': transport_price,
+                'other_cost': other_cost,
+                'subtotal': subtotal_value,
                 'is_fully_allocated': is_fully_allocated,
                 'is_manually_edited': db_activity.is_manually_edited if db_activity else False,
                 'allocations': allocations_data,
-                # ✅ ADD LOST STATUS
+                'allocation_status': activity_allocation_status,
+                'allocation_counts': {
+                    'total': len(allocations_data),
+                    'pending': pending_count,
+                    'in_progress': in_progress_count,
+                    'completed': completed_count,
+                    'partially_allocated': partially_allocated_count,
+                    'fully_allocated': fully_allocated_count,
+                },
                 'is_lost': db_activity.lost_record.is_active if (db_activity and hasattr(db_activity, 'lost_record')) else False,
                 'lost_reason': db_activity.lost_record.reason if (db_activity and hasattr(db_activity, 'lost_record') and db_activity.lost_record.is_active) else None,
-                'edit_history_count': db_activity.edit_history.count() if db_activity else 0,
+                'farmer_payments': farmer_payments_data,  # ✅✅✅ ADD THIS LINE
             })
-        # Calculate job status
-        def calculate_status(activities):
+
+
+        # Calculate JOB-LEVEL status
+        def calculate_job_status(activities):
             if not activities:
                 return 'pending'
 
-            fully_allocated = sum(1 for a in activities if a['is_fully_allocated'])
-            partially_allocated = sum(1 for a in activities if a['allocated_area'] > 0 and not a['is_fully_allocated'])
+            all_statuses = [a['allocation_status'] for a in activities]
+            
+            # If any activity is in progress, job is in progress
+            if 'in_progress' in all_statuses:
+                return 'in_progress'
+            
+            # If all activities are completed
+            if all(status == 'completed' for status in all_statuses):
+                return 'completed'
+            
+            # ✅ If all activities are fully allocated (not necessarily completed)
+            if all(status in ['completed', 'fully_allocated'] for status in all_statuses):
+                if any(status == 'completed' for status in all_statuses):
+                    return 'in_progress'  # Some completed = work started
+                return 'fully_allocated'  # All allocated but not started
+            
+            # If any activity has some allocation
+            if any(status in ['partially_allocated', 'fully_allocated', 'in_progress', 'completed'] for status in all_statuses):
+                # If at least one activity is NOT fully allocated
+                if any(status == 'partially_allocated' for status in all_statuses):
+                    return 'partially_allocated'
+                # All that have allocations are fully allocated
+                return 'partially_allocated'  # Some activities might still be pending
+            
+            return 'pending'
 
-            if fully_allocated == len(activities):
-                return 'fully_allocated'
-            elif fully_allocated > 0 or partially_allocated > 0:
-                return 'partially_allocated'
-            else:
-                return 'pending'
+        job_status = calculate_job_status(activities_data)
 
-        job_status = calculate_status(activities_data)
+                
+        job_allocation_summary = {
+            'total_activities': len(activities_data),
+            'total_allocations': sum(a['allocation_counts']['total'] for a in activities_data),
+            'pending_allocations': sum(a['allocation_counts']['pending'] for a in activities_data),
+            'in_progress_allocations': sum(a['allocation_counts']['in_progress'] for a in activities_data),
+            'completed_allocations': sum(a['allocation_counts']['completed'] for a in activities_data),
+        }
         
-
-        # 1. EXTRACT VISITS
         visits_data = job.get('visits', [])
+        point_of_contact = visits_data[0].get('assigned_to') if visits_data and len(visits_data) > 0 else None
         
-        # 2. EXTRACT POINT OF CONTACT (from the first visit's assigned_to)
-        point_of_contact = None
-        if visits_data and isinstance(visits_data, list):
-            # Taking the assigned_to from the first visit as the primary contact
-            point_of_contact = visits_data[0].get('assigned_to')
-        # -------------------------------------------------------------
-        # ✅ GENERATE UNIQUE COORDINATES FOR MAHARASHTRA
-        # -------------------------------------------------------------
-        # We seed the random generator with the job_id so that the
-        # location stays stable for this job across page refreshes,
-        # but is different for every job.
         random.seed(str(job_id))
-        
         latitude = round(random.uniform(MH_LAT_MIN, MH_LAT_MAX), 6)
         longitude = round(random.uniform(MH_LON_MIN, MH_LON_MAX), 6)
-        
-        # Reset seed so we don't affect other random operations
         random.seed()
-        # -------------------------------------------------------------
 
         enriched_job = {
             **job,
             'work_id': job_id,
             'farmer': farmer_details,
+            'farmer_id': farmer_id,
             'activities': activities_data,
             'status': job_status,
+            'allocation_summary': job_allocation_summary,
             'total_activities': len(activities_data),
             'is_complex': len(activities_data) > 1,
             'booking': job.get('booking', {}),
-
-            # New Fields
             'visits': visits_data,
             'point_of_contact': point_of_contact,
-            
-            # ✅ ADDED FIELDS
             'latitude': latitude,
             'longitude': longitude
         }
 
         enriched_jobs.append(enriched_job)
 
+    # ========================================
+    # STEP 7: ENRICH MISSING FARMER DATA
+    # ========================================
+    print(f"\n🔍 Checking for jobs with missing farmer data...")
+
+    jobs_needing_farmer_fetch = []
+    for job in enriched_jobs:
+        if not job.get('farmer') or not job.get('farmer_id'):
+            jobs_needing_farmer_fetch.append(job)
+
+    if jobs_needing_farmer_fetch:
+        print(f"   Found {len(jobs_needing_farmer_fetch)} jobs missing farmer data")
+        print(f"   Fetching from job-details API...")
+        
+        from django.test.client import RequestFactory
+        factory = RequestFactory()
+        
+        for job in jobs_needing_farmer_fetch:
+            job_id = job.get('work_id') or job.get('id')
+            
+            try:
+                # Call job-details API
+                fake_request = factory.get(f'/ap/job-details/{job_id}/')
+                fake_request.user = request.user
+                
+                details_response = get_job_details(fake_request, job_id)
+                
+                if details_response.status_code == 200:
+                    details_data = details_response.data
+                    
+                    # Extract farmer info
+                    if details_data.get('farmer'):
+                        job['farmer'] = details_data['farmer']
+                        job['farmer_id'] = details_data['farmer'].get('farmer_id', '')
+                        print(f"   ✓ Enriched {job_id} with farmer: {details_data['farmer'].get('farmer_name')}")
+            except Exception as e:
+                print(f"   ✗ Failed to fetch farmer for {job_id}: {e}")
+                continue
+
+    print(f"✅ Farmer enrichment completed\n")
+
+    # ========================================
+    # STEP 7: FILTER BY CALCULATED STATUS (if provided)
+    # ========================================
+    if status_filter:
+        print(f"🔍 Filtering by status: {status_filter}")
+        
+        status_filter_lower = status_filter.lower().replace('_', '').replace(' ', '')
+        
+        filtered_jobs = []
+        for job in enriched_jobs:
+            job_status_normalized = job['status'].lower().replace('_', '').replace(' ', '')
+            
+            if job_status_normalized == status_filter_lower:
+                filtered_jobs.append(job)
+        
+        enriched_jobs = filtered_jobs
+        print(f"✓ Found {len(enriched_jobs)} jobs with status '{status_filter}'\n")
+
     total_elapsed = time.time() - start_time
     print(f"\n✅ Jobs API completed in {total_elapsed:.2f}s")
+    print(f"   Total jobs returned: {len(enriched_jobs)}")
 
     return Response(enriched_jobs)
+
+
+from django.db.models import Q, Count, Sum, Min, Max
+from datetime import datetime
+
 # allocation_app/views.py
+
+from django.db.models import Q, Count, Sum, Min, Max, Prefetch
+from datetime import datetime
+# # allocation_app/views.py
+
+
+from django.db.models import Q, Count, Sum, Min, Max, Prefetch
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from django.db import models
+from django.db.models import Min  # ✅ Add this import
+
+from django.db.models import Min  # ✅ Add this import at top
+from django.db.models import Min, Sum, Q
+from decimal import Decimal
+import time
+# views.py
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def total_jobs_view(request):
+    """
+    Total jobs view with filters and payment summary
+    SIMPLIFIED VERSION - Direct filtering on enriched data
+    """
+    
+    import time
+    start_time = time.time()
+    
+    # ========================================
+    # GET FILTER PARAMETERS
+    # ========================================
+    status_filter = request.GET.get('status', 'all')
+    search_query = request.GET.get('search', '')
+    date_from = request.GET.get('date_from')
+    date_to = request.GET.get('date_to')
+    farmer_name = request.GET.get('farmer_name', '')
+    mukkadam_name = request.GET.get('mukkadam_name', '')
+    transporter_name = request.GET.get('transporter_name', '')
+    payment_type = request.GET.get('payment_type', 'all')
+    payment_status_filter = request.GET.get('payment_status', 'all')
+    
+    # ========================================
+    # CALL EXISTING jobs_list API (NO FILTERS)
+    # ========================================
+    from django.test.client import RequestFactory
+    factory = RequestFactory()
+    
+    # ✅ Don't pass any filters to jobs_list - let it return everything
+    fake_request = factory.get('/ap/jobs/')
+    fake_request.user = request.user
+    fake_request.GET = {}  # Empty GET params
+    
+    jobs_response = jobs_list(fake_request)
+    
+    if jobs_response.status_code != 200:
+        return Response({'error': 'Failed to fetch jobs'}, status=500)
+    
+    all_jobs = jobs_response.data if isinstance(jobs_response.data, list) else []
+    
+    # ========================================
+    # MARK JOBS AS FULLY LOST
+    # ========================================
+    for job in all_jobs:
+        activities = job.get('activities', [])
+        if activities:
+            all_lost = all(activity.get('is_lost', False) for activity in activities)
+            job['is_fully_lost'] = all_lost
+            if all_lost:
+                job['status'] = 'fully_lost'
+        else:
+            job['is_fully_lost'] = False
+    
+    # ========================================
+    # APPLY ALL FILTERS
+    # ========================================
+    filtered_jobs = all_jobs
+    
+    # 1. STATUS FILTER
+    if status_filter != 'all':
+        temp = []
+        for j in filtered_jobs:
+            if status_filter == 'fully_lost':
+                if j.get('is_fully_lost', False):
+                    temp.append(j)
+            else:
+                if not j.get('is_fully_lost', False) and j.get('status', '').lower() == status_filter.lower():
+                    temp.append(j)
+        filtered_jobs = temp
+    
+    # 2. SEARCH FILTER (Job ID or Farmer Name)
+    if search_query:
+        search_lower = search_query.lower()
+        temp = []
+        for j in filtered_jobs:
+            # Check work_id
+            if search_lower in str(j.get('work_id', '')).lower():
+                temp.append(j)
+                continue
+            # Check farmer_id
+            if search_lower in str(j.get('farmer_id', '')).lower():
+                temp.append(j)
+                continue
+            # Check farmer name
+            farmer = j.get('farmer')
+            if farmer:
+                farmer_name_val = farmer.get('farmer_name', '')
+                if farmer_name_val and search_lower in str(farmer_name_val).lower():
+                    temp.append(j)
+        filtered_jobs = temp
+    
+    # 3. DATE RANGE FILTER
+    if date_from or date_to:
+        from datetime import datetime
+        
+        def parse_date(date_str):
+            try:
+                return datetime.strptime(date_str, '%Y-%m-%d')
+            except:
+                return None
+        
+        from_dt = parse_date(date_from) if date_from else None
+        to_dt = parse_date(date_to) if date_to else None
+        
+        temp = []
+        for job in filtered_jobs:
+            activities = job.get('activities', [])
+            matched = False
+            
+            for activity in activities:
+                sched = activity.get('scheduled_date', '')
+                if not sched:
+                    continue
+                
+                sched_dt = parse_date(sched.split('T')[0] if 'T' in sched else sched)
+                if not sched_dt:
+                    continue
+                
+                if from_dt and sched_dt < from_dt:
+                    continue
+                if to_dt and sched_dt > to_dt:
+                    continue
+                
+                matched = True
+                break
+            
+            if matched:
+                temp.append(job)
+        
+        filtered_jobs = temp
+    
+    # 4. FARMER NAME FILTER
+    if farmer_name:
+        farmer_lower = farmer_name.lower()
+        temp = []
+        for j in filtered_jobs:
+            farmer = j.get('farmer')
+            if farmer:
+                fname = farmer.get('farmer_name', '')
+                if fname and farmer_lower in str(fname).lower():
+                    temp.append(j)
+        filtered_jobs = temp
+    
+    # 5. MUKKADAM NAME FILTER
+    if mukkadam_name:
+        mukkadam_lower = mukkadam_name.lower()
+        temp = []
+        for job in filtered_jobs:
+            found = False
+            for activity in job.get('activities', []):
+                for alloc in activity.get('allocations', []):
+                    mname = alloc.get('mukkadam_name', '')
+                    if mname and mukkadam_lower in str(mname).lower():
+                        found = True
+                        break
+                if found:
+                    break
+            if found:
+                temp.append(job)
+        filtered_jobs = temp
+    
+    # 6. TRANSPORTER NAME FILTER
+    if transporter_name:
+        transporter_lower = transporter_name.lower()
+        temp = []
+        for job in filtered_jobs:
+            found = False
+            for activity in job.get('activities', []):
+                for alloc in activity.get('allocations', []):
+                    tname = alloc.get('transporter_name', '')
+                    if tname and transporter_lower in str(tname).lower():
+                        found = True
+                        break
+                if found:
+                    break
+            if found:
+                temp.append(job)
+        filtered_jobs = temp
+    
+    # 7. PAYMENT TYPE FILTER
+    if payment_type != 'all':
+        temp = []
+        for job in filtered_jobs:
+            found = False
+            for activity in job.get('activities', []):
+                if payment_type == 'farmer':
+                    fp = activity.get('farmer_payments')
+                    if fp and fp.get('payment_count', 0) > 0:
+                        found = True
+                        break
+                elif payment_type == 'mukkadam':
+                    for alloc in activity.get('allocations', []):
+                        if alloc.get('payment_request'):
+                            found = True
+                            break
+                elif payment_type == 'transport':
+                    for alloc in activity.get('allocations', []):
+                        if alloc.get('transport_payment_request'):
+                            found = True
+                            break
+                if found:
+                    break
+            if found:
+                temp.append(job)
+        filtered_jobs = temp
+    
+    # 8. PAYMENT STATUS FILTER
+    if payment_status_filter != 'all':
+        temp = []
+        for job in filtered_jobs:
+            found = False
+            for activity in job.get('activities', []):
+                # Check farmer payments
+                fp = activity.get('farmer_payments')
+                if fp and fp.get('payments'):
+                    for payment in fp['payments']:
+                        if payment.get('payment_status') == payment_status_filter:
+                            found = True
+                            break
+                
+                if found:
+                    break
+                
+                # Check mukkadam/transport payments
+                for alloc in activity.get('allocations', []):
+                    pr = alloc.get('payment_request')
+                    if pr and pr.get('status') == payment_status_filter:
+                        found = True
+                        break
+                    
+                    tpr = alloc.get('transport_payment_request')
+                    if tpr and tpr.get('status') == payment_status_filter:
+                        found = True
+                        break
+                
+                if found:
+                    break
+            
+            if found:
+                temp.append(job)
+        filtered_jobs = temp
+    
+    # ========================================
+    # CALCULATE STATS FROM FILTERED JOBS
+    # ========================================
+    stats = {
+        'total': len(filtered_jobs),
+        'pending': 0,
+        'partial': 0,
+        'allocated': 0,
+        'completed': 0,
+        'lost': 0,
+    }
+    
+    for job in filtered_jobs:
+        if job.get('is_fully_lost', False):
+            stats['lost'] += 1
+        else:
+            status = job.get('status', 'pending').lower()
+            if status == 'completed':
+                stats['completed'] += 1
+            elif 'partial' in status:
+                stats['partial'] += 1
+            elif 'allocated' in status:
+                stats['allocated'] += 1
+            else:
+                stats['pending'] += 1
+    
+    # ========================================
+    # CALCULATE PAYMENT SUMMARY
+    # ========================================
+    payment_summary = {
+        'total_revenue': 0,
+        'total_cost': 0,
+        'total_profit': 0,
+        'farmer_payments_expected': 0,
+        'farmer_payments_paid': 0,
+        'farmer_payments_pending': 0,
+        'mukkadam_payments_expected': 0,
+        'mukkadam_payments_paid': 0,
+        'mukkadam_payments_pending': 0,
+        'transport_payments_expected': 0,
+        'transport_payments_paid': 0,
+        'transport_payments_pending': 0,
+    }
+    
+    for job in filtered_jobs:
+        for activity in job.get('activities', []):
+            if activity.get('is_lost', False):
+                continue
+            
+            # Revenue
+            payment_summary['total_revenue'] += float(activity.get('subtotal', 0))
+            
+            # Farmer payments
+            fp = activity.get('farmer_payments')
+            if fp:
+                payment_summary['farmer_payments_expected'] += float(fp.get('total_expected', 0))
+                payment_summary['farmer_payments_paid'] += float(fp.get('total_paid', 0))
+                payment_summary['farmer_payments_pending'] += float(fp.get('total_pending', 0))
+            
+            # Mukkadam and Transport costs
+            for alloc in activity.get('allocations', []):
+                mukkadam_price = float(alloc.get('mukkadam_price', 0))
+                transport_price = float(alloc.get('transport_price', 0))
+                
+                payment_summary['total_cost'] += mukkadam_price + transport_price
+                
+                # Mukkadam payment status
+                pr = alloc.get('payment_request')
+                if pr:
+                    amount = float(pr.get('requested_amount', 0))
+                    payment_summary['mukkadam_payments_expected'] += amount
+                    if pr.get('status') == 'paid':
+                        payment_summary['mukkadam_payments_paid'] += amount
+                    elif pr.get('status') == 'pending':
+                        payment_summary['mukkadam_payments_pending'] += amount
+                
+                # Transport payment status
+                tpr = alloc.get('transport_payment_request')
+                if tpr:
+                    amount = float(tpr.get('requested_amount', 0))
+                    payment_summary['transport_payments_expected'] += amount
+                    if tpr.get('status') == 'paid':
+                        payment_summary['transport_payments_paid'] += amount
+                    elif tpr.get('status') == 'pending':
+                        payment_summary['transport_payments_pending'] += amount
+    
+    payment_summary['total_profit'] = payment_summary['total_revenue'] - payment_summary['total_cost']
+    
+    elapsed = time.time() - start_time
+    
+    return Response({
+        'success': True,
+        'stats': stats,
+        'count': len(filtered_jobs),
+        'jobs': filtered_jobs,
+        'payment_summary': payment_summary,
+        'performance': {
+            'query_time': f'{elapsed:.2f}s',
+        }
+    })
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def financial_breakdown_detail(request):
+    """
+    Get detailed breakdown for financial metrics
+    Type: revenue, farmer_payments, mukkadam, transport, profitable, loss, low_margin
+    ✅ REVENUE: Uses JobActivity.subtotal and excludes lost activities
+    """
+    breakdown_type = request.GET.get('type')
+    
+    if not breakdown_type:
+        return Response({'error': 'type parameter required'}, status=400)
+    
+    from decimal import Decimal
+    from django.db.models import Sum, Q, F
+    from django.db.models.functions import Coalesce
+    
+    result = {
+        'type': breakdown_type,
+        'title': '',
+        'items': [],
+        'summary': {},
+        'count': 0
+    }
+    
+    # ========================================
+    # 1. REVENUE BREAKDOWN (CORRECTED)
+    # ========================================
+    if breakdown_type == 'revenue':
+        result['title'] = 'Revenue Breakdown by Job (from Activity Subtotals)'
+        
+        # ✅ Get all NON-LOST JobActivities grouped by job_id
+        activities = JobActivity.objects.exclude(
+            lost_record__is_active=True  # ✅ Exclude lost activities
+        ).select_related('lost_record').order_by('job_id', 'activity_name')
+        
+        job_revenue = {}
+        for activity in activities:
+            job_id = activity.job_id
+            
+            if job_id not in job_revenue:
+                job_revenue[job_id] = {
+                    'job_id': job_id,
+                    'total_revenue': Decimal('0'),
+                    'activities_count': 0,
+                    'activities': []
+                }
+            
+            # ✅ Use subtotal (which is total_price + transport_cost + other_cost)
+            activity_revenue = activity.subtotal or Decimal('0')
+            
+            job_revenue[job_id]['total_revenue'] += activity_revenue
+            job_revenue[job_id]['activities_count'] += 1
+            job_revenue[job_id]['activities'].append({
+                'activity_name': activity.activity_name,
+                'activity_id': activity.activity_id,
+                'area': float(activity.total_area),
+                'total_price': float(activity.total_price),
+                'transport_cost': float(activity.transport_cost),
+                'other_cost': float(activity.other_cost),
+                'subtotal': float(activity_revenue),
+                'scheduled_date': str(activity.scheduled_datetime.date()) if activity.scheduled_datetime else None,
+                'rate_per_acre': float(activity.rate_per_acre),
+                'is_lost': False,
+            })
+        
+        result['items'] = sorted(
+            job_revenue.values(),
+            key=lambda x: x['total_revenue'],
+            reverse=True
+        )
+        
+        # Convert Decimal to float for JSON serialization
+        total_revenue_sum = Decimal('0')
+        for item in result['items']:
+            item['total_revenue'] = float(item['total_revenue'])
+            total_revenue_sum += Decimal(str(item['total_revenue']))
+        
+        result['summary'] = {
+            'total_revenue': float(total_revenue_sum),
+            'total_jobs': len(result['items']),
+            'total_activities': sum(item['activities_count'] for item in result['items']),
+        }
+    
+    # ========================================
+    # 2. FARMER PAYMENTS BREAKDOWN
+    # ========================================
+    elif breakdown_type == 'farmer_payments':
+        result['title'] = 'Farmer Payments Breakdown'
+        
+        payments = FarmerPayment.objects.select_related(
+            'imported_farmer',
+            'job_activity'
+        ).order_by('-activity_date')
+        
+        for payment in payments:
+            result['items'].append({
+                'id': payment.id,
+                'farmer_id': payment.imported_farmer.external_farmer_id if payment.imported_farmer else None,
+                'farmer_name': payment.farmer_name,
+                'job_id': payment.job_activity.job_id if payment.job_activity else 'N/A',
+                'activity_name': payment.activity_name,
+                'activity_date': str(payment.activity_date),
+                'village': payment.village,
+                'acres': payment.acres,
+                'booking_value': float(payment.booking_value),
+                'transport_cost': float(payment.transportation_cost or 0),
+                'total_value': float(payment.total_value or payment.booking_value),
+                'payment_status': payment.payment_status,
+                'payment_route': payment.payment_route,
+                'date_of_payment': str(payment.date_of_payment) if payment.date_of_payment else None,
+                'reference_no': payment.reference_no,
+                'description': payment.description,
+            })
+        
+        result['summary'] = {
+            'total_expected': float(payments.aggregate(total=Coalesce(Sum('total_value'), Decimal('0')))['total']),
+            'total_paid': float(payments.filter(payment_status='paid').aggregate(total=Coalesce(Sum('total_value'), Decimal('0')))['total']),
+            'total_pending': float(payments.filter(payment_status='pending').aggregate(total=Coalesce(Sum('total_value'), Decimal('0')))['total']),
+            'total_count': payments.count(),
+            'paid_count': payments.filter(payment_status='paid').count(),
+            'pending_count': payments.filter(payment_status='pending').count(),
+        }
+    
+    # ========================================
+    # 3. MUKKADAM PAYMENTS BREAKDOWN
+    # ========================================
+    elif breakdown_type == 'mukkadam':
+        result['title'] = 'Mukkadam Payments Breakdown'
+        
+        payment_requests = PaymentRequest.objects.select_related(
+            'allocation__job_activity',
+            'allocation__imported_mukkadam',
+            'requested_by',
+            'paid_by'
+        ).order_by('-requested_at')
+        
+        for pr in payment_requests:
+            alloc = pr.allocation
+            result['items'].append({
+                'id': pr.id,
+                'allocation_id': alloc.id,
+                'job_id': alloc.job_activity.job_id if alloc.job_activity else None,
+                'activity_name': alloc.job_activity.activity_name if alloc.job_activity else 'N/A',
+                'mukkadam_id': pr.mukkadam_id,
+                'mukkadam_name': alloc.imported_mukkadam.team_name if alloc.imported_mukkadam else f'Mukkadam #{pr.mukkadam_id}',
+                'mukkadam_contact': alloc.imported_mukkadam.contact_no if alloc.imported_mukkadam else 'N/A',
+                'work_date': str(alloc.work_date),
+                'allocated_area': float(alloc.allocated_area),
+                'crew_size': alloc.crew_size,
+                'requested_amount': float(pr.requested_amount),
+                'status': pr.status,
+                'requested_at': pr.requested_at.isoformat(),
+                'requested_by': pr.requested_by.username if pr.requested_by else 'System',
+                'paid_at': pr.paid_at.isoformat() if pr.paid_at else None,
+                'paid_by': pr.paid_by.username if pr.paid_by else None,
+                'notes': pr.notes,
+            })
+        
+        result['summary'] = {
+            'total_requested': float(payment_requests.aggregate(total=Coalesce(Sum('requested_amount'), Decimal('0')))['total']),
+            'total_paid': float(payment_requests.filter(status='paid').aggregate(total=Coalesce(Sum('requested_amount'), Decimal('0')))['total']),
+            'total_pending': float(payment_requests.filter(status='pending').aggregate(total=Coalesce(Sum('requested_amount'), Decimal('0')))['total']),
+            'total_count': payment_requests.count(),
+            'paid_count': payment_requests.filter(status='paid').count(),
+            'pending_count': payment_requests.filter(status='pending').count(),
+        }
+    
+    # ========================================
+    # 4. TRANSPORT PAYMENTS BREAKDOWN
+    # ========================================
+    elif breakdown_type == 'transport':
+        result['title'] = 'Transport Payments Breakdown'
+        
+        transport_requests = TransportPaymentRequest.objects.select_related(
+            'allocation__job_activity',
+            'allocation__imported_transporter',
+            'requested_by',
+            'paid_by'
+        ).order_by('-requested_at')
+        
+        for tr in transport_requests:
+            alloc = tr.allocation
+            result['items'].append({
+                'id': tr.id,
+                'allocation_id': alloc.id,
+                'job_id': alloc.job_activity.job_id if alloc.job_activity else None,
+                'activity_name': alloc.job_activity.activity_name if alloc.job_activity else 'N/A',
+                'transport_provider_id': tr.transport_provider_id,
+                'transporter_name': alloc.imported_transporter.name if alloc.imported_transporter else f'Transporter #{tr.transport_provider_id}',
+                'transporter_contact': alloc.imported_transporter.contact_no if alloc.imported_transporter else 'N/A',
+                'transport_type': alloc.transport_type,
+                'work_date': str(alloc.work_date),
+                'allocated_area': float(alloc.allocated_area),
+                'requested_amount': float(tr.requested_amount),
+                'status': tr.status,
+                'requested_at': tr.requested_at.isoformat(),
+                'requested_by': tr.requested_by.username if tr.requested_by else 'System',
+                'paid_at': tr.paid_at.isoformat() if tr.paid_at else None,
+                'paid_by': tr.paid_by.username if tr.paid_by else None,
+                'notes': tr.notes,
+            })
+        
+        result['summary'] = {
+            'total_requested': float(transport_requests.aggregate(total=Coalesce(Sum('requested_amount'), Decimal('0')))['total']),
+            'total_paid': float(transport_requests.filter(status='paid').aggregate(total=Coalesce(Sum('requested_amount'), Decimal('0')))['total']),
+            'total_pending': float(transport_requests.filter(status='pending').aggregate(total=Coalesce(Sum('requested_amount'), Decimal('0')))['total']),
+            'total_count': transport_requests.count(),
+            'paid_count': transport_requests.filter(status='paid').count(),
+            'pending_count': transport_requests.filter(status='pending').count(),
+        }
+    
+    # ========================================
+    # 5. PROFITABLE ALLOCATIONS
+    # ========================================
+    elif breakdown_type == 'profitable':
+        result['title'] = 'Profitable Allocations'
+        
+        allocations = Allocation.objects.select_related(
+            'job_activity',
+            'imported_mukkadam',
+            'imported_transporter'
+        ).filter(
+            job_activity__isnull=False
+        ).exclude(
+            job_activity__lost_record__is_active=True  # ✅ Exclude lost
+        )
+        
+        for alloc in allocations:
+            # ✅ Use subtotal for revenue
+            revenue = alloc.job_activity.subtotal or Decimal('0')
+            cost = alloc.total_cost
+            profit = revenue - cost
+            
+            if profit > 0:
+                result['items'].append({
+                    'allocation_id': alloc.id,
+                    'job_id': alloc.job_activity.job_id,
+                    'activity_name': alloc.job_activity.activity_name,
+                    'work_date': str(alloc.work_date),
+                    'mukkadam_name': alloc.imported_mukkadam.team_name if alloc.imported_mukkadam else f'#{alloc.mukkadam_id}',
+                    'transporter_name': alloc.imported_transporter.name if alloc.imported_transporter else 'Own/None',
+                    'allocated_area': float(alloc.allocated_area),
+                    'revenue': float(revenue),
+                    'mukkadam_cost': float(alloc.mukkadam_price),
+                    'transport_cost': float(alloc.transport_price or 0),
+                    'total_cost': float(cost),
+                    'profit': float(profit),
+                    'profit_margin': round((float(profit) / float(revenue) * 100), 1) if revenue > 0 else 0,
+                    'status': alloc.status,
+                })
+        
+        result['items'].sort(key=lambda x: x['profit'], reverse=True)
+        
+        result['summary'] = {
+            'total_revenue': sum(item['revenue'] for item in result['items']),
+            'total_cost': sum(item['total_cost'] for item in result['items']),
+            'total_profit': sum(item['profit'] for item in result['items']),
+        }
+    
+    # ========================================
+    # 6. LOSS-MAKING ALLOCATIONS
+    # ========================================
+    elif breakdown_type == 'loss':
+        result['title'] = 'Loss-Making Allocations'
+        
+        allocations = Allocation.objects.select_related(
+            'job_activity',
+            'imported_mukkadam',
+            'imported_transporter'
+        ).filter(
+            job_activity__isnull=False
+        ).exclude(
+            job_activity__lost_record__is_active=True  # ✅ Exclude lost
+        )
+        
+        for alloc in allocations:
+            # ✅ Use subtotal for revenue
+            revenue = alloc.job_activity.subtotal or Decimal('0')
+            cost = alloc.total_cost
+            loss = revenue - cost
+            
+            if loss < 0:
+                result['items'].append({
+                    'allocation_id': alloc.id,
+                    'job_id': alloc.job_activity.job_id,
+                    'activity_name': alloc.job_activity.activity_name,
+                    'work_date': str(alloc.work_date),
+                    'mukkadam_name': alloc.imported_mukkadam.team_name if alloc.imported_mukkadam else f'#{alloc.mukkadam_id}',
+                    'transporter_name': alloc.imported_transporter.name if alloc.imported_transporter else 'Own/None',
+                    'allocated_area': float(alloc.allocated_area),
+                    'revenue': float(revenue),
+                    'mukkadam_cost': float(alloc.mukkadam_price),
+                    'transport_cost': float(alloc.transport_price or 0),
+                    'total_cost': float(cost),
+                    'loss': float(abs(loss)),
+                    'loss_margin': round((float(abs(loss)) / float(revenue) * 100), 1) if revenue > 0 else 0,
+                    'status': alloc.status,
+                })
+        
+        result['items'].sort(key=lambda x: x['loss'], reverse=True)
+        
+        result['summary'] = {
+            'total_revenue': sum(item['revenue'] for item in result['items']),
+            'total_cost': sum(item['total_cost'] for item in result['items']),
+            'total_loss': sum(item['loss'] for item in result['items']),
+        }
+    
+    # ========================================
+    # 7. LOW MARGIN ALLOCATIONS
+    # ========================================
+    elif breakdown_type == 'low_margin':
+        result['title'] = 'Low Margin Allocations (0-10% profit)'
+        
+        allocations = Allocation.objects.select_related(
+            'job_activity',
+            'imported_mukkadam',
+            'imported_transporter'
+        ).filter(
+            job_activity__isnull=False
+        ).exclude(
+            job_activity__lost_record__is_active=True  # ✅ Exclude lost
+        )
+        
+        for alloc in allocations:
+            # ✅ Use subtotal for revenue
+            revenue = alloc.job_activity.subtotal or Decimal('0')
+            cost = alloc.total_cost
+            profit = revenue - cost
+            profit_margin = (float(profit) / float(revenue) * 100) if revenue > 0 else 0
+            
+            if 0 < profit_margin < 10:
+                result['items'].append({
+                    'allocation_id': alloc.id,
+                    'job_id': alloc.job_activity.job_id,
+                    'activity_name': alloc.job_activity.activity_name,
+                    'work_date': str(alloc.work_date),
+                    'mukkadam_name': alloc.imported_mukkadam.team_name if alloc.imported_mukkadam else f'#{alloc.mukkadam_id}',
+                    'transporter_name': alloc.imported_transporter.name if alloc.imported_transporter else 'Own/None',
+                    'allocated_area': float(alloc.allocated_area),
+                    'revenue': float(revenue),
+                    'mukkadam_cost': float(alloc.mukkadam_price),
+                    'transport_cost': float(alloc.transport_price or 0),
+                    'total_cost': float(cost),
+                    'profit': float(profit),
+                    'profit_margin': round(profit_margin, 1),
+                    'status': alloc.status,
+                })
+        
+        result['items'].sort(key=lambda x: x['profit_margin'])
+        
+        result['summary'] = {
+            'total_revenue': sum(item['revenue'] for item in result['items']),
+            'total_cost': sum(item['total_cost'] for item in result['items']),
+            'total_profit': sum(item['profit'] for item in result['items']),
+            'avg_margin': round(sum(item['profit_margin'] for item in result['items']) / len(result['items']), 1) if result['items'] else 0,
+        }
+    
+    else:
+        return Response({'error': 'Invalid type'}, status=400)
+    
+    result['count'] = len(result['items'])
+    return Response(result)
+
 
 from .utils import batch_fetch_mukkadams, batch_fetch_farmers, batch_fetch_transport_providers
 # allocation_app/views.py
@@ -3964,7 +5927,7 @@ def update_activity(request):
                 'Authorization': token,
                 'Content-Type': 'application/json'
             },
-            timeout=30
+            timeout=300
         )
         
         response.raise_for_status()
@@ -4001,14 +5964,13 @@ def update_activity(request):
             'error': f'Unexpected error: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def allocations_list(request):
     """
     Get all allocations with complete details from external APIs
     OPTIMIZED with caching + async
+    ✅ Returns simplified structure matching the required format
     """
     import time
     start_time = time.time()
@@ -4048,7 +6010,7 @@ def allocations_list(request):
             mukkadam_response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/',
                 params={'search': mukkadam_phone},
-                timeout=50
+                timeout=500
             )
 
             if mukkadam_response.status_code == 200:
@@ -4087,7 +6049,7 @@ def allocations_list(request):
         response = requests.get(
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
-            timeout=50
+            timeout=500
         )
 
         if response.status_code == 200:
@@ -4105,10 +6067,18 @@ def allocations_list(request):
     # STEP 4: COLLECT ALL UNIQUE IDs
     # ========================================
     farmer_ids = set()
+    
+    # ✅ Get farmer IDs from BOTH sources
+    # 1. From API jobs
     for job in jobs_cache.values():
         farmer_id = job.get('farmer_id')
         if farmer_id:
             farmer_ids.add(str(farmer_id))
+    
+    # 2. From JobActivity.farmer_work_id (for imported records)
+    for alloc in allocations:
+        if alloc.job_activity and alloc.job_activity.farmer_work_id:
+            farmer_ids.add(str(alloc.job_activity.farmer_work_id))
 
     mukkadam_ids = set(alloc.mukkadam_id for alloc in allocations)
 
@@ -4122,18 +6092,19 @@ def allocations_list(request):
     # ✅ STEP 5: BATCH FETCH ALL DATA IN PARALLEL
     # ========================================
     print("\n⚡ PARALLEL BATCH FETCHING...")
+    print(f"   Fetching {len(farmer_ids)} farmers, {len(mukkadam_ids)} mukkadams, {len(transport_provider_ids)} transporters")
     batch_start = time.time()
 
     # Fetch all data types in parallel
-    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)  # ✅ Reduced
-    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)  # ✅ Reduced
-    transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)  # ✅ Reduced
+    farmers_cache = batch_fetch_farmers(list(farmer_ids), max_workers=5)
+    mukkadams_cache = batch_fetch_mukkadams(list(mukkadam_ids), max_workers=5)
+    transport_providers_cache = batch_fetch_transport_providers(list(transport_provider_ids), max_workers=5)
 
     batch_elapsed = time.time() - batch_start
     print(f"✅ Batch fetching completed in {batch_elapsed:.2f}s")
 
     # ========================================
-    # STEP 6: BUILD ENRICHED ALLOCATIONS
+    # STEP 6: BUILD SIMPLIFIED ALLOCATIONS (MATCHING REQUIRED FORMAT)
     # ========================================
     enriched_allocations = []
     total_area = Decimal('0')
@@ -4147,10 +6118,22 @@ def allocations_list(request):
         job_id = str(job_activity.job_id)
         activity_id = str(job_activity.activity_id)
 
-        # Get cached data
+        # Get cached job data
         job_data = jobs_cache.get(job_id, {})
-        farmer_id = str(job_data.get('farmer_id', ''))
-        farmer_data = farmers_cache.get(farmer_id)
+        
+        # ✅ Get farmer ID with priority logic
+        farmer_id = None
+        if job_activity.farmer_work_id:
+            # Priority 1: Use farmer_work_id from JobActivity
+            farmer_id = str(job_activity.farmer_work_id)
+        elif job_data.get('farmer_id'):
+            # Priority 2: Use farmer_id from API job
+            farmer_id = str(job_data.get('farmer_id'))
+        
+        # Get farmer details from cache
+        farmer_data = farmers_cache.get(farmer_id) if farmer_id else None
+        
+        # Get mukkadam data
         mukkadam_data = mukkadams_cache.get(allocation.mukkadam_id, {})
 
         # Get transport provider data
@@ -4159,38 +6142,36 @@ def allocations_list(request):
             transport_provider_data = transport_providers_cache.get(allocation.transport_provider_id)
 
         # Get activity details
-        # Get activity details
         activity_details = None
         if job_data and 'activities' in job_data:
             activity_details = next(
                 (a for a in job_data.get('activities', [])
-                if str(a.get('activity_id') or a.get('id')) == activity_id),  # ✅ FIXED: Prioritize activity_id
+                if str(a.get('activity_id') or a.get('id')) == activity_id),
                 None
             )
 
         # Central team contact
         central_team_phone = "+91-804-7361465"
-        if job_data and 'booking' in job_data:
-            booking = job_data['booking']
-            central_team_phone = "+91-804-7361465"
 
-        # Calculate payment
-        revenue = float(allocation.mukkadam_price) 
-        transport_cost = float(allocation.transport_price or 0)
-        total_cost_alloc = revenue + transport_cost
+        # Calculate costs
+        mukkadam_price = float(allocation.mukkadam_price) if allocation.mukkadam_price else 0.0
+        transport_price = float(allocation.transport_price) if allocation.transport_price else 0.0
+        total_cost_alloc = mukkadam_price + transport_price
 
+        # ✅ BUILD SIMPLIFIED STRUCTURE MATCHING REQUIRED FORMAT
         enriched_allocation = {
             'allocation_id': allocation.id,
-            'work_date': str(allocation.work_date) if allocation.work_date else None,
-            'allocated_area': float(allocation.allocated_area),
-            'crew_size': allocation.crew_size,
-            'status': allocation.status,
-            'notes': allocation.notes,
-            'allocated_at': allocation.allocated_at.isoformat() if allocation.allocated_at else None,
-
-            'mukkadam': mukkadam_data,
-            'farmer': farmer_data,
-
+            'farmer_id': farmer_id,
+            
+            # ✅ Farmer object with simplified structure
+            'farmer': {
+                'farmer_id': farmer_id,
+                'farmer_name': farmer_data.get('farmer_name', 'N/A') if farmer_data else 'N/A',
+                'phone_number': farmer_data.get('phone_number', 'N/A') if farmer_data else 'N/A',
+                'location': farmer_data.get('location', 'N/A') if farmer_data else 'N/A',
+            } if farmer_data else None,
+            
+            # ✅ Job object
             'job': {
                 'job_id': job_id,
                 'job_name': job_data.get('job_name', 'N/A'),
@@ -4198,7 +6179,8 @@ def allocations_list(request):
                 'location': job_data.get('location', 'N/A'),
                 'central_team_phone': central_team_phone,
             },
-
+            
+            # ✅ Activity object
             'activity': {
                 'activity_id': activity_id,
                 'activity_name': activity_details.get('activity_name', 'Unknown') if activity_details else 'Unknown',
@@ -4207,26 +6189,28 @@ def allocations_list(request):
                 'scheduled_date': activity_details.get('scheduled_date', 'N/A') if activity_details else 'N/A',
                 'scheduled_time': activity_details.get('scheduled_time', 'N/A') if activity_details else 'N/A',
             },
-
-            'payment': {
-                'mukkadam_price_per_acre': (
-                    float(allocation.mukkadam_price / allocation.allocated_area)
-                    if allocation.allocated_area > 0 else 0.0
-                ),
-                'allocated_acres': float(allocation.allocated_area),
-                'mukkadam_total_payment': revenue,
-                'transport_type': allocation.transport_type,
-                'transport_price': transport_cost,
-                'total_amount': total_cost_alloc,
-            },
-
-            # Transport provider details
-            'transport': {
-                'transport_type': allocation.transport_type,
-                'transport_price': transport_cost,
-                'transport_provider_id': allocation.transport_provider_id if allocation.transport_type == 'provider' else None,
-                'transport_provider_details': transport_provider_data,
-            }
+            
+            # ✅ Direct fields (matching required format)
+            'mukkadam_id': allocation.mukkadam_id,
+            'allocated_area': float(allocation.allocated_area),
+            'work_date': str(allocation.work_date) if allocation.work_date else None,
+            'mukkadam_price': mukkadam_price,
+            'transport_type': allocation.transport_type,
+            'transport_provider_id': allocation.transport_provider_id if allocation.transport_type == 'provider' else None,
+            'transport_price': transport_price,
+            'status': allocation.status,
+            
+            # ✅ Additional useful fields
+            'crew_size': allocation.crew_size,
+            'notes': allocation.notes,
+            'allocated_at': allocation.allocated_at.isoformat() if allocation.allocated_at else None,
+            'completed_at': allocation.completed_at.isoformat() if allocation.completed_at else None,
+            
+            # ✅ Mukkadam details (nested for frontend convenience)
+            'mukkadam': mukkadam_data,
+            
+            # ✅ Transport provider details (nested for frontend convenience)
+            'transport_provider': transport_provider_data,
         }
 
         enriched_allocations.append(enriched_allocation)
@@ -4237,7 +6221,7 @@ def allocations_list(request):
     summary = {
         'total_allocations': len(allocations),
         'total_area_allocated': float(total_area),
-        'total_earnings': float(total_cost),
+        'total_cost': float(total_cost),
         'active_allocations': len([a for a in allocations if a.status == 'allocated']),
         'completed_allocations': len([a for a in allocations if a.status == 'completed']),
         'in_progress_allocations': len([a for a in allocations if a.status == 'in_progress']),
@@ -4256,8 +6240,6 @@ def allocations_list(request):
             'batch_fetch_time': f'{batch_elapsed:.2f}s'
         }
     })
-
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def transporter_work_history(request):
@@ -4288,7 +6270,7 @@ def transporter_work_history(request):
             print(f"   🔍 Fetching by ID: {provider_id}")
             response = requests.get(
                 f'{SUPPLY_API_URL}/api/transport-providers/{provider_id}/',
-                timeout=50
+                timeout=500
             )
             if response.status_code == 200:
                 provider_data = response.json()
@@ -4305,7 +6287,7 @@ def transporter_work_history(request):
             response = requests.post(
                 check_url,
                 json={'contact_number': mobile_number}, # Send data in body
-                timeout=50
+                timeout=500
             )
 
             print(f"   📊 Response Status: {response.status_code}")
@@ -4369,7 +6351,7 @@ def transporter_work_history(request):
         response = requests.get(
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
-            timeout=50
+            timeout=500
         )
 
         if response.status_code == 200:
@@ -4391,7 +6373,7 @@ def transporter_work_history(request):
                     f_resp = requests.get(
                         f'{FARMER_API_BASE}/get_farmer_details/{fid}/',
                         headers={'Authorization': farmer_token},
-                        timeout=50
+                        timeout=500
                     )
                     if f_resp.status_code == 200:
                         print(f"   ✅ Fetched farmer ID: {fid}")
@@ -4407,7 +6389,7 @@ def transporter_work_history(request):
         for mid in mukkadam_ids:
             m_resp = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/{mid}/',
-                timeout=50
+                timeout=500
             )
             if m_resp.status_code == 200:
                 mukkadams_cache[mid] = m_resp.json()
@@ -4532,7 +6514,7 @@ def get_supply_users_mapping():
     try:
         response = requests.get(
             f'{SUPPLY_API_URL}/api/users/all/',
-            timeout=50
+            timeout=500
         )
         if response.status_code == 200:
             users_data = response.json()
@@ -4552,7 +6534,7 @@ def get_allocation_users_mapping():
     try:
         response = requests.get(
             f'{ALLOCATION_API_URL}/ap/users/all/',
-            timeout=50
+            timeout=500
         )
         if response.status_code == 200:
             users_data = response.json()
@@ -4572,7 +6554,7 @@ def get_all_mukkadams_from_supply():
     try:
         response = requests.get(
             f'{SUPPLY_API_URL}/api/mukkadam/',
-            timeout=50
+            timeout=500
         )
         
         if response.status_code == 200:
@@ -4733,7 +6715,7 @@ def mukkadam_scorecard_summary(request):
     try:
         allocations_response = requests.get(
             f'{ALLOCATION_API_URL}/ap/allocations/by-mobile/main/',
-            timeout=60
+            timeout=600
         )
         
         if allocations_response.status_code == 200:
@@ -5134,7 +7116,7 @@ def mukkadam_scorecard_details(request, mukkadam_id):
     try:
         mukkadam_response = requests.get(
             f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-            timeout=50
+            timeout=500
         )
         
         if mukkadam_response.status_code != 200:
@@ -5202,7 +7184,7 @@ def mukkadam_scorecard_details(request, mukkadam_id):
         response = requests.get(
             f'{EXTERNAL_API_URL}/get_allocated_jobs/',
             headers={'Authorization': job_token},
-            timeout=50
+            timeout=500
         )
         
         if response.status_code == 200:
@@ -5530,7 +7512,7 @@ def mukkadam_work_history(request):
             # Fetch by ID
             response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-                timeout=50
+                timeout=500
             )
             if response.status_code == 200:
                 mukkadam_data = response.json()
@@ -5539,7 +7521,7 @@ def mukkadam_work_history(request):
             # Search by phone
             response = requests.get(
                 f'{SUPPLY_API_URL}/api/mukkadam/',
-                timeout=50
+                timeout=500
             )
             if response.status_code == 200:
                 mukkadams = response.json()
@@ -5549,7 +7531,7 @@ def mukkadam_work_history(request):
                         # Fetch full details
                         full_response = requests.get(
                             f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-                            timeout=50
+                            timeout=500
                         )
                         if full_response.status_code == 200:
                             mukkadam_data = full_response.json()
@@ -5648,7 +7630,7 @@ def mukkadam_work_history(request):
     EXTERNAL_API_URL = 'https://ops.bharatintelligence.ai/ops/api'
     job_token = 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
     try:
-        response = requests.get(f'{EXTERNAL_API_URL}/get_allocated_jobs/', headers={'Authorization': job_token}, timeout=50)
+        response = requests.get(f'{EXTERNAL_API_URL}/get_allocated_jobs/', headers={'Authorization': job_token}, timeout=500)
         if response.status_code == 200:
             data = response.json()
             jobs_list = data.get('data', []) if isinstance(data, dict) else data
@@ -5667,7 +7649,7 @@ def mukkadam_work_history(request):
     farmer_token = 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704'
     for farmer_id in farmer_ids:
         try:
-            response = requests.get(f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/', headers={'Authorization': farmer_token}, timeout=50)
+            response = requests.get(f'{FARMER_API_BASE}/get_farmer_details/{farmer_id}/', headers={'Authorization': farmer_token}, timeout=500)
             if response.status_code == 200:
                 farmers_cache[farmer_id] = response.json()
         except Exception:
@@ -6246,88 +8228,892 @@ class ExotelWebhookView(APIView):
             )
 
 from django.db.models import Prefetch
+# views.py
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from django.db.models import Prefetch, Sum, Q
+from decimal import Decimal
+from .models import (
+    JobActivity, Allocation, ImportedFarmer, ImportedMukkadam, 
+    ImportedTransporter, PaymentRequest, TransportPaymentRequest,
+    FarmerPayment
+)
+
+# views.py
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from django.db.models import Prefetch, Sum, Q
+from decimal import Decimal
+from .models import (
+    JobActivity, Allocation, ImportedFarmer, ImportedMukkadam, 
+    ImportedTransporter, PaymentRequest, TransportPaymentRequest,
+    FarmerPayment
+)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def link_farmer_payment(request):
+    """
+    Link a farmer payment to a job activity.
+    
+    Body:
+    {
+        "farmer_payment_id": 123,
+        "job_activity_id": 456,
+        "notes": "Manual link by admin"
+    }
+    """
+    
+    farmer_payment_id = request.data.get('farmer_payment_id')
+    job_activity_id = request.data.get('job_activity_id')
+    notes = request.data.get('notes', '')
+    
+    # Validation
+    if not farmer_payment_id or not job_activity_id:
+        return Response({
+            'error': 'Both farmer_payment_id and job_activity_id are required'
+        }, status=400)
+    
+    try:
+        payment = FarmerPayment.objects.get(id=farmer_payment_id)
+    except FarmerPayment.DoesNotExist:
+        return Response({'error': 'Farmer payment not found'}, status=404)
+    
+    try:
+        activity = JobActivity.objects.get(id=job_activity_id)
+    except JobActivity.DoesNotExist:
+        return Response({'error': 'Job activity not found'}, status=404)
+    
+    # Check if already linked
+    if payment.job_activity is not None:
+        return Response({
+            'error': 'This payment is already linked to another activity',
+            'linked_to': {
+                'job_id': payment.job_activity.job_id,
+                'activity_name': payment.job_activity.activity_name
+            }
+        }, status=400)
+    
+    # ✅ Check for duplicate payment (same booking_value for same activity)
+    duplicate_check = FarmerPayment.objects.filter(
+        job_activity=activity,
+        booking_value=payment.booking_value,
+        activity_date=payment.activity_date
+    ).exclude(id=payment.id).exists()
+    
+    if duplicate_check:
+        return Response({
+            'warning': 'A similar payment already exists for this activity',
+            'proceed': 'Set force=true to proceed anyway'
+        }, status=400)
+    
+    # Get user
+    user = request.user if request.user.is_authenticated else None
+    username = user.username if user else 'System'
+    
+    # Store old values for activity log
+    old_values = {
+        'job_activity': None,
+        'is_matched': payment.is_matched,
+        'match_notes': payment.match_notes
+    }
+    
+    # Link payment
+    payment.job_activity = activity
+    payment.is_matched = True
+    
+    # Update match notes
+    timestamp = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    new_note = f"[{timestamp}] Linked by {username} to Job #{activity.job_id} - {activity.activity_name}"
+    if notes:
+        new_note += f". Notes: {notes}"
+    
+    if payment.match_notes:
+        payment.match_notes += f"\n{new_note}"
+    else:
+        payment.match_notes = new_note
+    
+    payment.save()
+    
+    # ✅ Create Activity Log
+    ActivityLog.objects.create(
+        activity_type='payment_linked',  # ✅ Add this to ACTIVITY_TYPES choices
+        description=f"Farmer payment ₹{payment.booking_value} linked to activity {activity.activity_name}",
+        allocation=None,  # Not related to specific allocation
+        job_id=activity.job_id,
+        mukkadam_id=0,  # N/A for farmer payments
+        mukkadam_name=payment.farmer_name,
+        amount=payment.booking_value,
+        performed_by=user,
+        changes={
+            'farmer_payment_id': {
+                'old': None,
+                'new': payment.id
+            },
+            'job_activity': {
+                'old': None,
+                'new': f"{activity.job_id} - {activity.activity_name}"
+            },
+            'is_matched': {
+                'old': old_values['is_matched'],
+                'new': True
+            }
+        },
+        metadata={
+            'farmer_payment_id': payment.id,
+            'job_activity_id': activity.id,
+            'farmer_name': payment.farmer_name,
+            'activity_date': str(payment.activity_date),
+            'booking_value': float(payment.booking_value),
+            'notes': notes
+        }
+    )
+    
+    return Response({
+        'success': True,
+        'message': f'Payment linked successfully to {activity.activity_name}',
+        'payment': {
+            'id': payment.id,
+            'farmer_name': payment.farmer_name,
+            'booking_value': float(payment.booking_value),
+            'activity_date': str(payment.activity_date),
+            'linked_to': {
+                'job_id': activity.job_id,
+                'activity_id': activity.id,
+                'activity_name': activity.activity_name
+            }
+        }
+    })
+
+
+# views.py
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_unmatched_farmer_payments(request):
+    """
+    Get unmatched farmer payments with smart suggestions for a specific activity.
+    """
+    
+    # Base queryset - only unmatched payments
+    payments = FarmerPayment.objects.filter(
+        job_activity__isnull=True,
+        is_matched=False
+    ).select_related('imported_farmer')
+    
+    # Filters
+    job_activity_id = request.query_params.get('job_activity_id')
+    farmer_name = request.query_params.get('farmer_name')
+    activity_name = request.query_params.get('activity_name')
+    date_from = request.query_params.get('date_from')
+    date_to = request.query_params.get('date_to')
+    payment_status = request.query_params.get('payment_status')
+    
+    # Apply filters
+    if farmer_name:
+        payments = payments.filter(farmer_name__icontains=farmer_name)
+    
+    if activity_name:
+        payments = payments.filter(activity_name__icontains=activity_name)
+    
+    if date_from:
+        payments = payments.filter(activity_date__gte=date_from)
+    
+    if date_to:
+        payments = payments.filter(activity_date__lte=date_to)
+    
+    if payment_status:
+        payments = payments.filter(payment_status=payment_status)
+    
+    print(f"📊 Filtered payments count: {payments.count()}")
+    
+    # Smart suggestions for specific activity
+    suggestions = []
+    if job_activity_id:
+        try:
+            activity = JobActivity.objects.prefetch_related(
+                Prefetch(
+                    'allocations',
+                    queryset=Allocation.objects.select_related('imported_farmer')
+                )
+            ).get(id=job_activity_id)
+            
+            # ✅ Get activity date safely
+            if activity.scheduled_datetime:
+                activity_date = activity.scheduled_datetime.date()
+            else:
+                first_alloc = activity.allocations.first()
+                if first_alloc and first_alloc.work_date:
+                    activity_date = first_alloc.work_date
+                else:
+                    activity_date = timezone.now().date()
+            
+            print(f"🔍 Activity: {activity.activity_name} | Date: {activity_date}")
+            
+            # Get farmer info from allocations
+            farmer_names = set()
+            for alloc in activity.allocations.all():
+                if alloc.farmer_name:
+                    farmer_names.add(alloc.farmer_name.strip().lower())
+                if alloc.imported_farmer and alloc.imported_farmer.name:
+                    farmer_names.add(alloc.imported_farmer.name.strip().lower())
+            
+            print(f"   Farmer names in activity: {farmer_names}")
+            
+            activity_name_normalized = activity.activity_name.strip().lower()
+            
+            # Filter payments matching this activity
+            for payment in payments:
+                confidence = 'low'
+                reasons = []
+                score = 0
+                
+                # Farmer name match
+                payment_farmer = payment.farmer_name.strip().lower()
+                if payment_farmer in farmer_names:
+                    score += 40
+                    reasons.append("Farmer name matches")
+                
+                # Activity name match (fuzzy)
+                payment_activity = payment.activity_name.strip().lower()
+                if payment_activity in activity_name_normalized or activity_name_normalized in payment_activity:
+                    score += 30
+                    reasons.append("Activity name matches")
+                
+                # ✅ Date proximity (±10 days)
+                date_diff = abs((payment.activity_date - activity_date).days)
+                if date_diff <= 3:
+                    score += 20
+                    reasons.append(f"Date within {date_diff} days")
+                elif date_diff <= 7:
+                    score += 15
+                    reasons.append(f"Date within {date_diff} days")
+                elif date_diff <= 10:  # ✅ EXTENDED TO 10 DAYS
+                    score += 10
+                    reasons.append(f"Date within {date_diff} days")
+                
+                # Booking value check
+                if activity.rate_per_acre > 0 and payment.acres:
+                    try:
+                        acres_float = float(payment.acres.split()[0]) if isinstance(payment.acres, str) else float(payment.acres)
+                        expected_value = float(activity.rate_per_acre) * acres_float
+                        actual_value = float(payment.booking_value)
+                        variance = abs(expected_value - actual_value) / expected_value
+                        if variance <= 0.15:
+                            score += 10
+                            reasons.append("Amount matches expected rate")
+                    except (ValueError, ZeroDivisionError, IndexError):
+                        pass
+                
+                # Determine confidence
+                if score >= 70:
+                    confidence = 'high'
+                elif score >= 40:
+                    confidence = 'medium'
+                
+                # ✅ ALWAYS ADD TO SUGGESTIONS (even with score 0)
+                suggestions.append({
+                    'payment': payment,
+                    'confidence': confidence,
+                    'score': score,
+                    'reasons': reasons if reasons else ['No strong matches found'],
+                    'match_suggestion': {
+                        'job_activity_id': activity.id,
+                        'job_id': activity.job_id,
+                        'activity_name': activity.activity_name,
+                        'scheduled_date': str(activity_date),
+                    }
+                })
+            
+            # Sort by score
+            suggestions.sort(key=lambda x: x['score'], reverse=True)
+            
+            print(f"✅ Generated {len(suggestions)} suggestions")
+        
+        except JobActivity.DoesNotExist:
+            print(f"❌ JobActivity {job_activity_id} not found")
+            pass
+    
+    # Build response
+    if suggestions:
+        payments_data = []
+        for item in suggestions:
+            payment = item['payment']
+            payments_data.append({
+                'id': payment.id,
+                'farmer_name': payment.farmer_name,
+                'activity_name': payment.activity_name,
+                'activity_date': str(payment.activity_date),
+                'booking_value': float(payment.booking_value),
+                'payment_status': payment.payment_status,
+                'payment_route': payment.payment_route,
+                'date_of_payment': str(payment.date_of_payment) if payment.date_of_payment else None,
+                'village': payment.village,
+                'acres': payment.acres,
+                'reference_no': payment.reference_no,
+                'description': payment.description,
+                'match_suggestion': item['match_suggestion'],
+                'confidence': item['confidence'],
+                'score': item['score'],
+                'reasons': item['reasons']
+            })
+    else:
+        # Return all filtered payments without suggestions
+        payments_data = []
+        for payment in payments[:50]:
+            payments_data.append({
+                'id': payment.id,
+                'farmer_name': payment.farmer_name,
+                'activity_name': payment.activity_name,
+                'activity_date': str(payment.activity_date),
+                'booking_value': float(payment.booking_value),
+                'payment_status': payment.payment_status,
+                'payment_route': payment.payment_route,
+                'date_of_payment': str(payment.date_of_payment) if payment.date_of_payment else None,
+                'village': payment.village,
+                'acres': payment.acres,
+                'reference_no': payment.reference_no,
+                'description': payment.description,
+            })
+    
+    return Response({
+        'count': len(payments_data),
+        'payments': payments_data
+    })
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def unlink_farmer_payment(request):
+    """
+    Unlink a farmer payment from a job activity.
+    
+    Body:
+    {
+        "farmer_payment_id": 123,
+        "reason": "Wrong activity linked"
+    }
+    """
+    
+    farmer_payment_id = request.data.get('farmer_payment_id')
+    reason = request.data.get('reason', 'No reason provided')
+    
+    if not farmer_payment_id:
+        return Response({'error': 'farmer_payment_id is required'}, status=400)
+    
+    try:
+        payment = FarmerPayment.objects.select_related('job_activity').get(id=farmer_payment_id)
+    except FarmerPayment.DoesNotExist:
+        return Response({'error': 'Farmer payment not found'}, status=404)
+    
+    # Check if linked
+    if payment.job_activity is None:
+        return Response({'error': 'This payment is not linked to any activity'}, status=400)
+    
+    # Get user
+    user = request.user if request.user.is_authenticated else None
+    username = user.username if user else 'System'
+    
+    # Store old values for log
+    old_activity = payment.job_activity
+    old_values = {
+        'job_activity': f"{old_activity.job_id} - {old_activity.activity_name}",
+        'is_matched': payment.is_matched
+    }
+    
+    # Unlink payment
+    payment.job_activity = None
+    payment.is_matched = False
+    
+    # Update match notes
+    timestamp = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    unlink_note = f"[{timestamp}] Unlinked by {username} from Job #{old_activity.job_id}. Reason: {reason}"
+    
+    if payment.match_notes:
+        payment.match_notes += f"\n{unlink_note}"
+    else:
+        payment.match_notes = unlink_note
+    
+    payment.save()
+    
+    # ✅ Create Activity Log
+    ActivityLog.objects.create(
+        activity_type='payment_unlinked',  # ✅ Add this to ACTIVITY_TYPES choices
+        description=f"Farmer payment ₹{payment.booking_value} unlinked from {old_activity.activity_name}",
+        allocation=None,
+        job_id=old_activity.job_id,
+        mukkadam_id=0,
+        mukkadam_name=payment.farmer_name,
+        amount=payment.booking_value,
+        performed_by=user,
+        changes={
+            'job_activity': {
+                'old': old_values['job_activity'],
+                'new': None
+            },
+            'is_matched': {
+                'old': True,
+                'new': False
+            }
+        },
+        metadata={
+            'farmer_payment_id': payment.id,
+            'old_job_activity_id': old_activity.id,
+            'farmer_name': payment.farmer_name,
+            'reason': reason
+        }
+    )
+    
+    return Response({
+        'success': True,
+        'message': 'Payment unlinked successfully',
+        'payment': {
+            'id': payment.id,
+            'farmer_name': payment.farmer_name,
+            'booking_value': float(payment.booking_value),
+            'is_matched': False
+        }
+    })
+
+
+import requests
+from django.conf import settings
+
+# External API base URL
+EXTERNAL_API_BASE = "http://localhost:8000"  # Or use settings.EXTERNAL_API_BASE_URL
+
+def fetch_and_cache_mukkadam(mukkadam_id):
+    """
+    Fetch mukkadam details from external API and cache locally.
+    Returns: (mukkadam_name, mukkadam_contact) tuple
+    """
+    try:
+        # Check if already exists in local DB
+        mukkadam = ImportedMukkadam.objects.filter(external_mukkadam_id=mukkadam_id).first()
+        if mukkadam:
+            return (mukkadam.team_name, mukkadam.contact_no)
+        
+        # Fetch from external API
+        print(f"🔍 Fetching mukkadam #{mukkadam_id} from external API...")
+        response = requests.get(
+            f"{EXTERNAL_API_BASE}/api/mukkadam/minimal_list/",
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            mukkadams = response.json()
+            
+            # Find the specific mukkadam
+            for m in mukkadams:
+                if m.get('id') == mukkadam_id:
+                    # ✅ FIXED: Use correct field names from API
+                    name = m.get('mukkadam_name') or m.get('team_name') or m.get('name') or f"Mukkadam #{mukkadam_id}"
+                    contact = m.get('mobile_numbers') or m.get('contact_no') or m.get('phone') or ''
+                    
+                    # Cache it locally
+                    mukkadam, created = ImportedMukkadam.objects.update_or_create(
+                        external_mukkadam_id=mukkadam_id,
+                        defaults={
+                            'team_name': name,
+                            'contact_no': contact,
+                            'created_from_import': False
+                        }
+                    )
+                    
+                    print(f"✅ Cached mukkadam: {mukkadam.team_name} ({contact})")
+                    return (mukkadam.team_name, mukkadam.contact_no)
+        
+        # If not found in API, create placeholder
+        print(f"⚠️ Mukkadam #{mukkadam_id} not found in API, creating placeholder")
+        mukkadam, created = ImportedMukkadam.objects.get_or_create(
+            external_mukkadam_id=mukkadam_id,
+            defaults={
+                'team_name': f"Mukkadam #{mukkadam_id}",
+                'contact_no': '',
+                'created_from_import': False
+            }
+        )
+        return (mukkadam.team_name, mukkadam.contact_no)
+        
+    except Exception as e:
+        print(f"❌ Error fetching mukkadam #{mukkadam_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return (f"Mukkadam #{mukkadam_id}", None)
+
+def fetch_and_cache_transporter(transporter_id):
+    """
+    Fetch transporter details from external API and cache locally.
+    Returns: transporter_name (str) or None
+    """
+    try:
+        # Check if already exists in local DB
+        transporter = ImportedTransporter.objects.filter(external_transporter_id=transporter_id).first()
+        if transporter:
+            return transporter.name
+        
+        # Fetch from external API (adjust endpoint as needed)
+        print(f"🔍 Fetching transporter #{transporter_id} from external API...")
+        response = requests.get(
+            f"{EXTERNAL_API_BASE}/api/transporter/minimal_list/",  # Adjust endpoint
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            transporters = response.json()
+            
+            # Find the specific transporter
+            for t in transporters:
+                if t.get('id') == transporter_id or t.get('transporter_id') == transporter_id:
+                    # Cache it locally
+                    transporter, created = ImportedTransporter.objects.update_or_create(
+                        external_transporter_id=transporter_id,
+                        defaults={
+                            'name': t.get('name') or t.get('company_name') or f"Transporter #{transporter_id}",
+                            'contact_no': t.get('contact_no') or t.get('phone') or '',
+                            'created_from_import': False
+                        }
+                    )
+                    
+                    print(f"✅ Cached transporter: {transporter.name}")
+                    return transporter.name
+        
+        # If not found in API, create placeholder
+        transporter, created = ImportedTransporter.objects.get_or_create(
+            external_transporter_id=transporter_id,
+            defaults={
+                'name': f"Transporter #{transporter_id}",
+                'contact_no': '',
+                'created_from_import': False
+            }
+        )
+        return transporter.name
+        
+    except Exception as e:
+        print(f"❌ Error fetching transporter #{transporter_id}: {e}")
+        return f"Transporter #{transporter_id}"
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def get_job_details(request, job_id):
     """
     Get full breakdown of a specific job from LOCAL DB only (Fast).
-    Reconstructs the job object structure expected by the frontend.
+    Includes farmer info, allocations, mukkadam/transporter details, and payment status.
     """
-    # 1. Fetch all activities for this job from local DB
-    activities = JobActivity.objects.filter(job_id=job_id).prefetch_related(
-        Prefetch('allocations', queryset=Allocation.objects.select_related('payment_request'))
+    
+    # 1. Fetch all activities for this job with optimized prefetching
+    activities = JobActivity.objects.filter(
+        Q(job_id=job_id) | Q(farmer_work_id=job_id)
+    ).prefetch_related(
+        Prefetch(
+            'allocations',
+            queryset=Allocation.objects.select_related(
+                'imported_mukkadam',
+                'imported_transporter',
+                'imported_farmer',
+                'allocated_by'
+            ).prefetch_related(
+                Prefetch(
+                    'payment_request',
+                    queryset=PaymentRequest.objects.select_related('requested_by', 'paid_by')
+                ),
+                Prefetch(
+                    'transport_payment_request',
+                    queryset=TransportPaymentRequest.objects.select_related('requested_by', 'paid_by')
+                )
+            )
+        ),
+        Prefetch(
+            'farmer_payments',
+            queryset=FarmerPayment.objects.select_related('imported_farmer')
+        )
     )
 
     if not activities.exists():
         return Response({'error': 'Job not found locally'}, status=404)
 
-    # 2. Build the structure manually
-    activities_data = []
-    total_revenue = 0
+    # 2. Get farmer information from first activity
+    first_activity = activities.first()
+    farmer_info = None
+    farmer_id = None
+    
+    # Try to get farmer from allocation's imported_farmer
+    first_allocation = first_activity.allocations.first()
+    if first_allocation and first_allocation.imported_farmer:
+        farmer = first_allocation.imported_farmer
+        farmer_info = {
+            'farmer_id': farmer.external_farmer_id,
+            'farmer_name': farmer.name,
+            'contact_no': farmer.contact_no,
+            'location': farmer.location,
+            'is_dummy_id': farmer.is_dummy_id
+        }
+        farmer_id = farmer.external_farmer_id
+    elif first_allocation and first_allocation.farmer_name:
+        # Use farmer name/contact from allocation directly
+        farmer_info = {
+            'farmer_id': first_activity.farmer_work_id,
+            'farmer_name': first_allocation.farmer_name,
+            'contact_no': first_allocation.farmer_contact or '',
+            'location': first_activity.location or '',
+            'is_dummy_id': False
+        }
+        farmer_id = first_activity.farmer_work_id
+    else:
+        # Fallback: try to find farmer by external_farmer_id
+        try:
+            farmer = ImportedFarmer.objects.get(external_farmer_id=first_activity.farmer_work_id)
+            farmer_info = {
+                'farmer_id': farmer.external_farmer_id,
+                'farmer_name': farmer.name,
+                'contact_no': farmer.contact_no,
+                'location': farmer.location,
+                'is_dummy_id': farmer.is_dummy_id
+            }
+            farmer_id = farmer.external_farmer_id
+        except ImportedFarmer.DoesNotExist:
+            # Last resort: use job data
+            farmer_info = {
+                'farmer_id': first_activity.farmer_work_id,
+                'farmer_name': 'Unknown',
+                'contact_no': '',
+                'location': first_activity.location or '',
+                'is_dummy_id': False
+            }
+            farmer_id = first_activity.farmer_work_id
 
-    # We try to guess the job title/farmer from the first activity if possible,
-    # or leave it generic since we are avoiding the external API.
-    job_title = f"Job #{job_id}"
+    # 3. Build activities data
+    activities_data = []
+    total_revenue = Decimal('0')
+    total_allocated_cost = Decimal('0')
 
     for activity in activities:
-        # Sum allocations
+        # Build allocations data
         allocs_data = []
         allocated_area = Decimal('0')
+        activity_cost = Decimal('0')
 
         for alloc in activity.allocations.all():
             allocated_area += alloc.allocated_area
+            
+            # Calculate allocation cost
+            alloc_total_cost = alloc.mukkadam_price + (alloc.transport_price or 0)
+            activity_cost += alloc_total_cost
 
-            # Fetch mukkadam name (optional: could be optimized with a separate mukkadam cache if slow)
-            # For speed, we just return the ID, and let frontend fetch details if needed,
-            # OR we fetch it here if your Supply API is fast.
-            # Assuming we just send basic data:
+            # ✅ Get mukkadam name from ImportedMukkadam
+            # ✅ Get mukkadam name from ImportedMukkadam (with auto-fetch)
+            mukkadam_name = f"Mukkadam #{alloc.mukkadam_id}"
+            mukkadam_contact = None
 
+            if alloc.imported_mukkadam:
+                mukkadam_name = alloc.imported_mukkadam.team_name
+                mukkadam_contact = alloc.imported_mukkadam.contact_no
+            else:
+                # Try to fetch from ImportedMukkadam by external_mukkadam_id
+                mukkadam = ImportedMukkadam.objects.filter(
+                    external_mukkadam_id=alloc.mukkadam_id
+                ).first()
+                
+                if mukkadam:
+                    mukkadam_name = mukkadam.team_name
+                    mukkadam_contact = mukkadam.contact_no
+                else:
+                    # ✅ FETCH FROM EXTERNAL API AND CACHE
+                    mukkadam_name, mukkadam_contact = fetch_and_cache_mukkadam(alloc.mukkadam_id)
+
+            # ✅ Get transporter name from ImportedTransporter (with auto-fetch)
+            transporter_name = None
+            transporter_contact = None
+
+            if alloc.transport_type == 'provider' and alloc.transport_provider_id:
+                if alloc.imported_transporter:
+                    transporter_name = alloc.imported_transporter.name
+                    transporter_contact = alloc.imported_transporter.contact_no
+                else:
+                    # Try to fetch from ImportedTransporter by external_transporter_id
+                    transporter = ImportedTransporter.objects.filter(
+                        external_transporter_id=alloc.transport_provider_id
+                    ).first()
+                    
+                    
+            # Get payment statuses
+            mukkadam_payment_status = None
+            transport_payment_status = None
+            
+            try:
+                if hasattr(alloc, 'payment_request'):
+                    mukkadam_payment_status = {
+                        'status': alloc.payment_request.status,
+                        'requested_at': alloc.payment_request.requested_at.isoformat() if alloc.payment_request.requested_at else None,
+                        'paid_at': alloc.payment_request.paid_at.isoformat() if alloc.payment_request.paid_at else None,
+                        'requested_amount': float(alloc.payment_request.requested_amount),
+                        'requested_by': alloc.payment_request.requested_by.username if alloc.payment_request.requested_by else None,
+                        'paid_by': alloc.payment_request.paid_by.username if alloc.payment_request.paid_by else None
+                    }
+            except PaymentRequest.DoesNotExist:
+                pass
+
+            try:
+                if hasattr(alloc, 'transport_payment_request') and alloc.transport_type == 'provider':
+                    transport_payment_status = {
+                        'status': alloc.transport_payment_request.status,
+                        'requested_at': alloc.transport_payment_request.requested_at.isoformat() if alloc.transport_payment_request.requested_at else None,
+                        'paid_at': alloc.transport_payment_request.paid_at.isoformat() if alloc.transport_payment_request.paid_at else None,
+                        'requested_amount': float(alloc.transport_payment_request.requested_amount),
+                        'requested_by': alloc.transport_payment_request.requested_by.username if alloc.transport_payment_request.requested_by else None,
+                        'paid_by': alloc.transport_payment_request.paid_by.username if alloc.transport_payment_request.paid_by else None
+                    }
+            except TransportPaymentRequest.DoesNotExist:
+                pass
+
+            # Build allocation object
             allocs_data.append({
                 'allocation_id': alloc.id,
+                
+                # Mukkadam Details
                 'mukkadam_id': alloc.mukkadam_id,
-                'mukkadam_name': f"Mukkadam #{alloc.mukkadam_id}", # Frontend will enrich this if needed
+                'mukkadam_name': mukkadam_name,
+                'mukkadam_contact': mukkadam_contact,
+                
+                # Allocation Details
                 'allocated_area': float(alloc.allocated_area),
                 'crew_size': alloc.crew_size,
                 'mukkadam_price': float(alloc.mukkadam_price),
+                
+                # Transport Details
+                'transport_type': alloc.transport_type,
                 'transport_price': float(alloc.transport_price or 0),
+                'transport_provider_id': alloc.transport_provider_id,
+                'transporter_name': transporter_name,
+                'transporter_contact': transporter_contact,
+                
+                # Work Details
                 'work_date': str(alloc.work_date) if alloc.work_date else None,
-                'status': alloc.status
+                'status': alloc.status,
+                'allocated_by': alloc.allocated_by.username if alloc.allocated_by else None,
+                'allocated_at': alloc.allocated_at.isoformat() if alloc.allocated_at else None,
+                'total_cost': float(alloc_total_cost),
+                
+                # ✅ POC Information (from Allocation model)
+                'farmer_name': alloc.farmer_name,
+                'farmer_contact': alloc.farmer_contact,
+                'farmer_poc_id': alloc.farmer_poc_id,
+                'farmer_poc': alloc.farmer_poc,
+                'labour_poc_id': alloc.labour_poc_id,
+                'labour_poc': alloc.labour_poc,
+                'field_poc_id': alloc.field_poc_id,
+                'field_poc': alloc.field_poc,
+                
+                # Payment statuses
+                'mukkadam_payment': mukkadam_payment_status,
+                'transport_payment': transport_payment_status,
+                'notes': alloc.notes
             })
 
-        # Calculate pricing
-        # If rate_per_acre is 0, try to calc from totals
-        rate = float(activity.rate_per_acre)
-        revenue = float(activity.total_price)
-        total_revenue += revenue
+        total_allocated_cost += activity_cost
+        revenue = activity.total_price + activity.transport_cost + activity.other_cost
+        total_revenue += revenue # Include transport cost in revenue if exists 
 
+        # Get farmer payments for this activity
+        farmer_payments_data = []
+        total_farmer_paid = Decimal('0')
+        total_farmer_pending = Decimal('0')
+        last_payment_date = None
+        
+        for fp in activity.farmer_payments.all():
+            farmer_payments_data.append({
+                'payment_id': fp.id,
+                'booking_value': float(fp.booking_value),
+                'payment_status': fp.payment_status,
+                'payment_route': fp.payment_route,
+                'date_of_payment': str(fp.date_of_payment) if fp.date_of_payment else None,
+                'activity_date': str(fp.activity_date),
+                'reference_no': fp.reference_no,
+                'description': fp.description,
+                'village': fp.village,
+                'acres': fp.acres
+            })
+            
+            if fp.payment_status == 'paid':
+                total_farmer_paid += fp.booking_value
+                if fp.date_of_payment:
+                    if not last_payment_date or fp.date_of_payment > last_payment_date:
+                        last_payment_date = fp.date_of_payment
+            else:
+                total_farmer_pending += fp.booking_value
+
+        # Calculate farmer payment summary for this activity
+        total_expected = total_farmer_paid + total_farmer_pending
+        farmer_payment_summary = {
+            'total_expected': float(total_expected),
+            'total_paid': float(total_farmer_paid),
+            'total_pending': float(total_farmer_pending),
+            'payment_count': len(farmer_payments_data),
+            'paid_count': sum(1 for p in farmer_payments_data if p['payment_status'] == 'paid'),
+            'pending_count': sum(1 for p in farmer_payments_data if p['payment_status'] == 'pending'),
+            'last_payment_date': str(last_payment_date) if last_payment_date else None,
+            'completion_percentage': round(
+                (float(total_farmer_paid) / float(total_expected) * 100) 
+                if total_expected > 0 else 0, 
+                2
+            ),
+            'payments': farmer_payments_data
+        }
+
+        # Build activity object
         activities_data.append({
+            'id': activity.id,
             'activity_id': activity.activity_id,
             'activity_name': activity.activity_name,
+            'activity_type': activity.activity_type,
+            'scheduled_datetime': activity.scheduled_datetime.isoformat() if activity.scheduled_datetime else None,
             'total_area': float(activity.total_area),
             'allocated_area': float(allocated_area),
-            'remaining_area': float(activity.remaining_area),
-            'rate_per_acre': rate,
-            'total_price': revenue,
-            'allocations': allocs_data
+            'remaining_area': float(activity.total_area - allocated_area),
+            'rate_per_acre': float(activity.rate_per_acre),
+            'total_price': float(revenue),
+            'transport_cost': float(activity.transport_cost),
+            'others_cost': float(activity.other_cost),
+            'location': activity.location,
+            'is_fully_allocated': allocated_area >= activity.total_area,
+            'activity_cost': float(activity.total_price + activity.transport_cost +activity.other_cost), # Revenue minus other costs (excluding transport which is part of revenue),
+            'activity_profit': float(revenue - activity_cost),
+            'allocations': allocs_data,
+            'farmer_payments': farmer_payment_summary
         })
 
+    # 4. Calculate overall job financials
+    total_profit = total_revenue - total_allocated_cost
+    profit_margin = (float(total_profit) / float(total_revenue) * 100) if total_revenue > 0 else 0
+
+    # 5. Build response
     response_data = {
         'work_id': job_id,
-        'title': job_title,
+        'job_id': first_activity.job_id,
+        'farmer_work_id': first_activity.farmer_work_id,
+        'title': f"Job #{job_id}",
+        'farmer': farmer_info,
+        'farmer_id': farmer_id,
         'activities': activities_data,
-        'farmer_id': None, # We don't have this locally in JobActivity, frontend handles null gracefully
+        'summary': {
+            'total_activities': len(activities_data),
+            'total_allocations': sum(len(act['allocations']) for act in activities_data),
+            'total_revenue': float(total_revenue),
+            'total_cost': float(total_allocated_cost),
+            'total_profit': float(total_profit),
+            'profit_margin': round(profit_margin, 2)
+        }
     }
 
     return Response(response_data)
-
-
 
 # allocation/views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
-from datetime import datetime
+from datetime import datetime 
 
 
 from .recomm import process_mukkadam_recommendations,fetch_enriched_mukkadam_data
@@ -6486,18 +9272,14 @@ def serialize_for_log(value):
         return str(value)
 
     return value
-
-
 @api_view(['PATCH'])
 @permission_classes([AllowAny])
 def edit_activity(request):
     """
-    Edit activity - creates JobActivity if missing
+    Edit activity - with allocation area validation and auto-status update
     """
     try:
-        # -----------------------
-        # 🔐 AUTH CHECK
-        # -----------------------
+        # Auth checks...
         if not request.user.is_authenticated:
             return Response(
                 {'error': 'Authentication required'},
@@ -6510,9 +9292,7 @@ def edit_activity(request):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # -----------------------
-        # 📥 INPUT DATA
-        # -----------------------
+        # Input data...
         job_id = request.data.get('job_id')
         activity_id = request.data.get('activity_id')
         updates = request.data.get('updates', {})
@@ -6524,43 +9304,67 @@ def edit_activity(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # -----------------------
-        # 🕒 DATETIME
-        # -----------------------
-        scheduled_dt = updates.get('scheduled_datetime') or updates.get('scheduled_date')
-        scheduled_dt = parse_datetime(scheduled_dt) if scheduled_dt else timezone.now()
+        # Get activity name
+        activity_name = updates.get('activity_name')
+        
+        # ✅ Find existing JobActivity
+        existing_ja = None
+        
+        if activity_name:
+            existing_ja = JobActivity.objects.filter(
+                job_id=str(job_id),
+                activity_name__iexact=activity_name
+            ).first()
+        
+        if not existing_ja:
+            existing_ja = JobActivity.objects.filter(
+                job_id=str(job_id),
+                activity_id=str(activity_id)
+            ).first()
 
-        # ✅ CALCULATE SUBTOTAL FROM INDIVIDUAL COSTS
-        mukkadam_price = Decimal(str(updates.get('total_price', 0)))
-        transport_cost = Decimal(str(updates.get('transport_cost', 0)))
-        other_cost = Decimal(str(updates.get('other_cost', 0)))
+        if not existing_ja:
+            return Response(
+                {'error': 'Activity not found. Cannot edit non-existent activity.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        job_activity = existing_ja
+        print(f"✅ Found existing JobActivity #{job_activity.id}")
+        print(f"   Current total_area: {job_activity.total_area}")
+        print(f"   Current allocated_area: {job_activity.allocated_area}")
+
+        # ✅ VALIDATION: Check if new total_area is valid
+        new_total_area = updates.get('total_area') or updates.get('acres')
+        if new_total_area is not None:
+            new_total_area = Decimal(str(new_total_area))
+            current_allocated = job_activity.allocated_area or Decimal('0')
+            
+            print(f"   New total_area: {new_total_area}")
+            print(f"   Allocated area: {current_allocated}")
+            
+            # ❌ Prevent reducing area below allocated amount
+            if new_total_area < current_allocated:
+                return Response(
+                    {
+                        'error': f'Cannot reduce total area to {new_total_area} acres. '
+                                f'{current_allocated} acres already allocated. '
+                                f'Please remove allocations first.'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # Parse datetime
+        scheduled_dt = updates.get('scheduled_datetime') or updates.get('scheduled_date')
+        if scheduled_dt:
+            scheduled_dt = parse_datetime(scheduled_dt)
+
+        # Calculate costs
+        mukkadam_price = Decimal(str(updates.get('total_price', job_activity.total_price or 0)))
+        transport_cost = Decimal(str(updates.get('transport_cost', job_activity.transport_cost or 0)))
+        other_cost = Decimal(str(updates.get('other_cost', job_activity.other_cost or 0)))
         calculated_subtotal = mukkadam_price + transport_cost + other_cost
 
-        # -----------------------
-        # 🧱 GET OR CREATE
-        # -----------------------
-        job_activity, created = JobActivity.objects.get_or_create(
-            job_id=str(job_id),
-            activity_id=str(activity_id),
-            defaults={
-                'activity_name': updates.get('activity_name', 'Unknown'),
-                'activity_type': '',
-                'scheduled_datetime': scheduled_dt,
-                'total_area': Decimal(str(updates.get('total_area', 0))),
-                'total_price': mukkadam_price,
-                'transport_cost': transport_cost,
-                'other_cost': other_cost,
-                'subtotal': calculated_subtotal,
-                'location': '',
-                'estimated_workers': 10,
-                'rate_per_acre': Decimal(str(updates.get('rate_per_acre', 0))),
-                'is_manually_edited': True
-            }
-        )
-
-        # -----------------------
-        # 🔍 EXPANDED FIELD MAP
-        # -----------------------
+        # Field mapping
         field_mapping = {
             'activity_name': 'activity_name',
             'total_area': 'total_area',
@@ -6568,17 +9372,15 @@ def edit_activity(request):
             'scheduled_datetime': 'scheduled_datetime',
             'scheduled_date': 'scheduled_datetime',
             'date_time': 'scheduled_datetime',
-            'total_price': 'total_price',         # Mukkadam price
-            'transport_cost': 'transport_cost',   # ✅ NEW
-            'other_cost': 'other_cost',           # ✅ NEW
+            'total_price': 'total_price',
+            'transport_cost': 'transport_cost',
+            'other_cost': 'other_cost',
             'rate_per_acre': 'rate_per_acre',
         }
 
         changes = {}
 
-        # -----------------------
-        # 🔄 BUILD CHANGES
-        # -----------------------
+        # Build changes
         for api_field, db_field in field_mapping.items():
             if api_field not in updates:
                 continue
@@ -6586,20 +9388,19 @@ def edit_activity(request):
             new_value = updates[api_field]
             old_value = getattr(job_activity, db_field, None)
 
-            # ---- DECIMAL FIELDS ----
+            # Decimal fields
             if db_field in ['total_area', 'total_price', 'transport_cost', 'other_cost', 'rate_per_acre']:
                 old_comp = str(old_value) if old_value is not None else None
                 new_comp = str(new_value)
 
-            # ---- DATETIME FIELD ----
+            # Datetime field
             elif db_field == 'scheduled_datetime':
                 new_value = parse_datetime(new_value)
                 old_value = make_aware_if_needed(old_value)
-
                 old_comp = serialize_for_log(old_value)
                 new_comp = serialize_for_log(new_value)
 
-            # ---- OTHER FIELDS ----
+            # Other fields
             else:
                 old_comp = old_value
                 new_comp = new_value
@@ -6610,7 +9411,7 @@ def edit_activity(request):
                     'new_value': serialize_for_log(new_value)
                 }
 
-        # ✅ CHECK SUBTOTAL CHANGE
+        # Check subtotal change
         old_subtotal = job_activity.subtotal
         if str(old_subtotal) != str(calculated_subtotal):
             changes['subtotal'] = {
@@ -6618,31 +9419,18 @@ def edit_activity(request):
                 'new_value': str(calculated_subtotal)
             }
 
-        if not changes and not created:
+        if not changes:
             return Response(
                 {'message': 'No changes detected'},
                 status=status.HTTP_200_OK
             )
 
-        # -----------------------
-        # 🧾 EDIT HISTORY (JSON SAFE)
-        # -----------------------
-        ActivityEditHistory.objects.create(
-            job_activity=job_activity,
-            edited_by=request.user,
-            reason=reason,
-            changes=changes
-        )
-
-        # -----------------------
-        # 💾 APPLY UPDATES
-        # -----------------------
+        # Apply updates to job_activity
         for field, change in changes.items():
             value = change['new_value']
 
             if field == 'scheduled_datetime':
                 value = parse_datetime(value)
-
             elif field in ['total_area', 'total_price', 'transport_cost', 'other_cost', 'subtotal', 'rate_per_acre']:
                 value = Decimal(str(value))
 
@@ -6651,14 +9439,57 @@ def edit_activity(request):
         job_activity.is_manually_edited = True
         job_activity.save()
 
-        # -----------------------
-        # 🧠 ACTIVITY LOG
-        # -----------------------
+        # ✅ NEW: Update allocation statuses if total_area changed
+        if 'total_area' in changes:
+            print(f"\n🔄 Total area changed, updating allocation statuses...")
+            
+            new_total = job_activity.total_area
+            allocated = job_activity.allocated_area or Decimal('0')
+            
+            print(f"   New total: {new_total}, Allocated: {allocated}")
+            
+            # Update all allocations for this activity
+            allocations = job_activity.allocations.all()
+            
+            for alloc in allocations:
+                old_status = alloc.status
+                
+                # Calculate if this activity is now fully allocated
+                if allocated >= new_total:
+                    # Fully allocated
+                    if alloc.status in ['allocated', 'partially_allocated']:
+                        alloc.status = 'allocated'  # Full coverage
+                        print(f"   📊 Allocation #{alloc.id}: {old_status} → allocated (full coverage)")
+                else:
+                    # Partially allocated
+                    if alloc.status == 'allocated':
+                        alloc.status = 'partially_allocated'
+                        print(f"   📊 Allocation #{alloc.id}: {old_status} → partially_allocated")
+                
+                alloc.save()
+            
+            print(f"   ✅ Updated {allocations.count()} allocation(s)")
+
+        # Create edit history
+        ActivityEditHistory.objects.create(
+            job_activity=job_activity,
+            edited_by=request.user,
+            reason=reason,
+            changes=changes
+        )
+
+        # Update ImportedJobSheet link
+        ImportedJobSheet.objects.filter(
+            generated_job_id=str(job_id),
+            activity_name__iexact=job_activity.activity_name
+        ).update(job_activity=job_activity)
+
+        # Activity log
         ActivityLog.objects.create(
             allocation=None,
             activity_type='activity_marked_edited',
             performed_by=request.user,
-            description=f"Activity '{job_activity.activity_name}' edited. ",
+            description=f"Activity '{job_activity.activity_name}' edited.",
             job_id=job_id,
             mukkadam_id=0,
             mukkadam_name='N/A (Job-level)',
@@ -6675,15 +9506,26 @@ def edit_activity(request):
                     'transport_cost': str(transport_cost),
                     'other_cost': str(other_cost),
                     'subtotal': str(calculated_subtotal)
-                }
+                },
+                'allocation_status_updated': 'total_area' in changes
             }
         )
+
+        # Refresh to get latest data
+        job_activity.refresh_from_db()
 
         return Response(
             {
                 'success': True,
                 'message': 'Activity updated successfully',
-                'activity': JobActivitySerializer(job_activity).data
+                'activity': JobActivitySerializer(job_activity).data,
+                'allocation_status_updated': 'total_area' in changes,
+                'current_status': {
+                    'total_area': float(job_activity.total_area),
+                    'allocated_area': float(job_activity.allocated_area),
+                    'remaining_area': float(job_activity.remaining_area),
+                    'is_fully_allocated': job_activity.allocated_area >= job_activity.total_area
+                }
             },
             status=status.HTTP_200_OK
         )

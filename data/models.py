@@ -2,12 +2,16 @@
 
 from django.db import models
 from django.contrib.auth.models import User
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.db import models
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 class UserProfile(models.Model):
     """
@@ -167,13 +171,38 @@ class JobActivity(models.Model):
         indexes = [
             models.Index(fields=['job_id', 'activity_id']),
             models.Index(fields=['job_id']),
+            models.Index(fields=['farmer_work_id']),  # ✅ Add this
+            models.Index(fields=['farmer_work_id', 'scheduled_datetime']),  # ✅ For farmer queries
         ]
     
     @property
     def remaining_area(self):
         """Calculate remaining area"""
         return self.total_area - self.allocated_area
+    @property
+    def allocation_status(self):
+        """Calculate allocation status based on allocated vs total area"""
+        if self.total_area == 0:
+            return 'no_area'
+        
+        allocated = self.allocated_area or Decimal('0')
+        
+        if allocated == 0:
+            return 'pending'
+        elif allocated < self.total_area:
+            return 'partially_allocated'
+        else:
+            return 'fully_allocated'
     
+    @property
+    def allocation_percentage(self):
+        """Calculate percentage of area allocated"""
+        if self.total_area == 0:
+            return 0
+        
+        allocated = self.allocated_area or Decimal('0')
+        return round((allocated / self.total_area) * 100, 2)
+
     @property
     def is_fully_allocated(self):
         """Check if activity is fully allocated"""
@@ -189,6 +218,186 @@ class JobActivity(models.Model):
     def __str__(self):
         return f"{self.job_id} - {self.activity_name} ({self.total_area} acres)"
 
+# 1. Master Farmer Lookup (for sheet import)
+
+# ========================================
+# EXISTING MODEL (Updated)
+# ========================================
+class ImportedFarmer(models.Model):
+    name = models.CharField(max_length=255)
+    contact_no = models.CharField(max_length=20, blank=True)
+    external_farmer_id = models.CharField(max_length=100, unique=True, db_index=True,null = True) # ✅ Make unique
+    location = models.CharField(max_length=255, blank=True)
+    created_from_import = models.BooleanField(default=True)
+    is_dummy_id = models.BooleanField(default=False)
+    dummy_id_number = models.IntegerField(null=True, blank=True)
+    
+    # ✅ NEW: Additional fields from external API
+    village = models.CharField(max_length=100, blank=True,null = True)
+    taluka = models.CharField(max_length=100, blank=True,null = True)
+    district = models.CharField(max_length=100, blank=True,null = True)
+    state = models.CharField(max_length=100, blank=True,null = True)
+    
+    created_at = models.DateTimeField(auto_now_add=True,null = True)
+    updated_at = models.DateTimeField(auto_now=True,null = True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['external_farmer_id']),
+            models.Index(fields=['name']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} ({self.external_farmer_id})"
+
+
+# models.py
+
+class ImportedPayment(models.Model):
+    """
+    Track customer/booking payments from webhook (INCOMING payments)
+    """
+    
+    PAYMENT_MODE_CHOICES = [
+        ('UPI', 'UPI'),
+        ('CASH', 'Cash'),
+        ('BANK_TRANSFER', 'Bank Transfer'),
+        ('CARD', 'Card'),
+        ('CHEQUE', 'Cheque'),
+        ('WILL_PAY_LATER', 'Will Pay Later'),  # ✅ Add this
+        ('CREDIT', 'Credit'),
+        ('OTHER', 'Other'),
+    ]
+    
+    # Link to job
+    imported_job = models.ForeignKey(
+        'ImportedJob',
+        on_delete=models.CASCADE,
+        related_name='booking_payments',
+        help_text="Job this payment is for"
+    )
+    
+    # Link to farmer (who made the payment)
+    imported_farmer = models.ForeignKey(
+        'ImportedFarmer',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='booking_payments_made',
+        help_text="Farmer who made this payment"
+    )
+    
+    # Payment identification
+    external_payment_id = models.IntegerField(
+        unique=True, 
+        db_index=True,
+        help_text="Payment ID from external system"
+    )
+    
+    # Payment details
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    mode = models.CharField(max_length=50)  # ✅ Remove choices to accept any value
+    paid_at = models.DateTimeField()
+    notes = models.TextField(blank=True)
+    paid_status = models.BooleanField(default=False)
+    
+    # Tracking
+    created_at = models.DateTimeField(auto_now_add=True)
+    synced_from_webhook_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-paid_at']
+        indexes = [
+            models.Index(fields=['external_payment_id']),
+            models.Index(fields=['imported_job']),
+            models.Index(fields=['imported_farmer']),
+            models.Index(fields=['paid_at']),
+        ]
+        verbose_name = "Customer Booking Payment"
+        verbose_name_plural = "Customer Booking Payments"
+    
+    def __str__(self):
+        return f"Booking Payment #{self.external_payment_id} - ₹{self.amount} ({self.mode})"
+
+# ========================================
+# NEW MODEL: Visit Records
+# ========================================
+class ImportedVisit(models.Model):
+    """Store visit records from webhook"""
+    imported_job = models.ForeignKey(
+        'ImportedJob',
+        on_delete=models.CASCADE,
+        related_name='visits'
+    )
+    
+    # Visit identification
+    external_visit_id = models.IntegerField(unique=True, db_index=True)
+    
+    # Visit details
+    status = models.CharField(max_length=50)  # booked, completed, cancelled
+    assigned_to = models.CharField(max_length=255, blank=True)
+    
+    # Store raw media_locations JSON
+    media_locations = models.JSONField(default=list)
+    
+    # Tracking
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['external_visit_id']),
+            models.Index(fields=['imported_job']),
+        ]
+    
+    def __str__(self):
+        return f"Visit #{self.external_visit_id} - {self.status}"
+
+
+# ========================================
+# NEW MODEL: Media/Location Records
+# ========================================
+class ImportedMedia(models.Model):
+    """Store media location data from visits"""
+    visit = models.ForeignKey(
+        'ImportedVisit',
+        on_delete=models.CASCADE,
+        related_name='media_records'
+    )
+    
+    external_media_id = models.IntegerField(db_index=True)
+    media_type = models.CharField(max_length=50)  # image, video
+    
+    # Location data
+    latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    address = models.TextField(blank=True)
+    is_field_location = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['external_media_id']),
+        ]
+    
+    def __str__(self):
+        return f"Media #{self.external_media_id} - {self.media_type}"
+ 
+# 2. Master Mukkadam/Labour Team Lookup
+class ImportedMukkadam(models.Model):
+    team_name = models.CharField(max_length=255, unique=True)
+    external_mukkadam_id = models.IntegerField(blank=True, null=True)  # Maps to supply API
+    contact_no = models.CharField(max_length=20, blank=True)
+    created_from_import = models.BooleanField(default=True)
+    
+# 3. Master Transporter Lookup
+class ImportedTransporter(models.Model):
+    name = models.CharField(max_length=255, unique=True)
+    external_transporter_id = models.IntegerField(blank=True, null=True)  # Maps to transport API
+    contact_no = models.CharField(max_length=20, blank=True)
+    created_from_import = models.BooleanField(default=True)
+
 
 class Allocation(models.Model):
     """Allocation of activity to mukkadam"""
@@ -198,26 +407,62 @@ class Allocation(models.Model):
         ('none', 'No Transport Needed'),
     ]
     
+    # ✅ UPDATED STATUS CHOICES
     STATUS_CHOICES = [
-        ('allocated', 'Allocated'),
-        ('in_progress', 'In Progress'),
-        ('completed', 'Completed'),
-        ('cancelled', 'Cancelled')
-    ]
+            ('fully_allocated', 'Fully Allocated'),      # ✅
+            ('partially_allocated', 'Partially Allocated'),
+            ('in_progress', 'In Progress'),
+            ('completed', 'Completed'),
+            ('cancelled', 'Cancelled')
+        ]
     
-    # Link to job activity
+    # ... all your existing fields ...
+    
+    imported_farmer = models.ForeignKey(
+        'ImportedFarmer',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='allocations'
+    )
+    
     job_activity = models.ForeignKey(
         JobActivity, 
         on_delete=models.CASCADE, 
         related_name='allocations'
     )
+
+    farmer_poc_id = models.IntegerField(null=True, blank=True)
+    farmer_poc = models.CharField(max_length=100, blank=True, null=True)
     
-    # Mukkadam (from external service)
+    labour_poc_id = models.IntegerField(null=True, blank=True)
+    labour_poc = models.CharField(max_length=100, blank=True, null=True)
+    
+    field_poc_id = models.IntegerField(null=True, blank=True)
+    field_poc = models.CharField(max_length=100, blank=True, null=True)
+    
+    farmer_name = models.CharField(max_length=255, blank=True, null=True)
+    farmer_contact = models.CharField(max_length=20, blank=True, null=True)
+    
     mukkadam_id = models.IntegerField(
         help_text="Mukkadam ID from external service"
     )
+    imported_mukkadam = models.ForeignKey(
+        'ImportedMukkadam',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='allocations'
+    )
     
-    # Area allocation
+    imported_transporter = models.ForeignKey(
+        'ImportedTransporter',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='allocations'
+    )
+    
     allocated_area = models.DecimalField(
         max_digits=10, 
         decimal_places=2, 
@@ -234,13 +479,11 @@ class Allocation(models.Model):
         help_text="Number of workers for this specific allocation"
     )
     
-    # Pricing
     mukkadam_price = models.DecimalField(
         max_digits=10, 
         decimal_places=2
     )
     
-    # Transport handling
     transport_type = models.CharField(
         max_length=20, 
         choices=TRANSPORT_TYPES, 
@@ -264,7 +507,6 @@ class Allocation(models.Model):
         default=0
     )
     
-    # Tracking
     allocated_at = models.DateTimeField(auto_now_add=True)
     allocated_by = models.ForeignKey(
         User, 
@@ -274,7 +516,7 @@ class Allocation(models.Model):
     )
     completed_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
-        max_length=20,
+        max_length=25,  # ✅ Increased to fit 'partially_allocated'
         choices=STATUS_CHOICES,
         default='allocated'
     )
@@ -286,6 +528,7 @@ class Allocation(models.Model):
             models.Index(fields=['mukkadam_id']),
             models.Index(fields=['work_date']),
             models.Index(fields=['allocated_at']),
+            models.Index(fields=['farmer_name']),
         ]
     
     @property
@@ -296,32 +539,564 @@ class Allocation(models.Model):
     
     @property
     def farmer_work_id(self):
-        """Get farmer_work_id from job_activity"""
-        # ✅ Use the new field if it exists, otherwise fall back to job_id
         return self.job_activity.farmer_work_id or self.job_activity.job_id
     
     @property
     def created_by(self):
-        """Backward compatibility - return allocated_by as created_by"""
         return self.allocated_by
     
     def __str__(self):
         return f"{self.job_activity.job_id} - {self.job_activity.activity_name} - Mukkadam #{self.mukkadam_id}"
     
     def save(self, *args, **kwargs):
-        # ✅ SYNC transport_price based on transport_type
+        # Sync transport_price
         if self.transport_type == 'own':
-            # For own transport, use own_transport_price
             self.transport_price = self.own_transport_price or 0
-        elif self.transport_type == 'provider':
-            # For provider transport, transport_price is already set
-            # (no change needed)
-            pass
         elif self.transport_type == 'none':
-            # No transport needed
             self.transport_price = 0
         
+        # ✅ AUTO-UPDATE status based on activity allocation coverage
+        job_activity = self.job_activity
+        total_area = job_activity.total_area
+        
+        from django.db.models import Sum
+        from decimal import Decimal
+        
+        # Calculate total allocated area for this activity (including this allocation)
+        other_allocations_area = Allocation.objects.filter(
+            job_activity=job_activity
+        ).exclude(
+            id=self.id
+        ).aggregate(
+            total=Sum('allocated_area')
+        )['total'] or Decimal('0')
+        
+        total_allocated = other_allocations_area + (self.allocated_area or Decimal('0'))
+        
+        # ✅ Set status based on total coverage
+        if self.status in ['allocated', 'partially_allocated', 'fully_allocated']:  # Only auto-update these statuses
+            if total_allocated >= total_area:
+                self.status = 'fully_allocated'
+            else:
+                self.status = 'partially_allocated'
+        
         super().save(*args, **kwargs)
+        
+        # ✅ AFTER SAVE: Update ALL other allocations for the same activity
+        if self.status == 'fully_allocated':
+            # If this activity is now fully allocated, update ALL allocations
+            Allocation.objects.filter(
+                job_activity=job_activity
+            ).exclude(
+                id=self.id
+            ).exclude(
+                status__in=['completed', 'in_progress', 'cancelled']  # Don't override these
+            ).update(
+                status='fully_allocated'
+            )
+
+
+class ImportBatch(models.Model):
+    """Track import operations"""
+    batch_id = models.CharField(max_length=50, unique=True)
+    filename = models.CharField(max_length=255)
+    imported_at = models.DateTimeField(auto_now_add=True)
+    imported_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    total_records = models.IntegerField(default=0)
+    successful_imports = models.IntegerField(default=0)
+    failed_imports = models.IntegerField(default=0)
+    status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed')
+    ])
+
+# models.py - UPDATED ImportedJobSheet
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from decimal import Decimal
+
+@receiver(post_save, sender=Allocation)
+def update_allocation_relationships(sender, instance, created, **kwargs):
+    """
+    Auto-link Allocation to ImportedMukkadam and ImportedTransporter
+    This runs AFTER allocation is saved
+    """
+    if created:  # Only run on creation
+        print(f"🔗 Signal triggered for Allocation #{instance.id}")
+        
+        # ✅ Link to ImportedMukkadam if not already linked
+        if not instance.imported_mukkadam and instance.mukkadam_id:
+            try:
+                mukkadam = ImportedMukkadam.objects.filter(
+                    external_mukkadam_id=instance.mukkadam_id
+                ).first()
+                
+                if mukkadam:
+                    instance.imported_mukkadam = mukkadam
+                    print(f"   ✅ Linked to mukkadam: {mukkadam.team_name}")
+                else:
+                    print(f"   ⚠️ Mukkadam {instance.mukkadam_id} not found in ImportedMukkadam")
+            except Exception as e:
+                print(f"   ❌ Error linking mukkadam: {str(e)}")
+        
+        # ✅ Link to ImportedTransporter if provider type
+        if (instance.transport_type == 'provider' and 
+            not instance.imported_transporter and 
+            instance.transport_provider_id):
+            try:
+                transporter = ImportedTransporter.objects.filter(
+                    external_transporter_id=instance.transport_provider_id
+                ).first()
+                
+                if transporter:
+                    instance.imported_transporter = transporter
+                    print(f"   ✅ Linked to transporter: {transporter.name}")
+                else:
+                    print(f"   ⚠️ Transporter {instance.transport_provider_id} not found")
+            except Exception as e:
+                print(f"   ❌ Error linking transporter: {str(e)}")
+        
+        # ✅ Link to ImportedFarmer
+        if not instance.imported_farmer and instance.job_activity:
+            farmer_id = instance.job_activity.farmer_work_id
+            if farmer_id:
+                try:
+                    farmer = ImportedFarmer.objects.filter(
+                        external_farmer_id=farmer_id
+                    ).first()
+                    
+                    if farmer:
+                        instance.imported_farmer = farmer
+                        instance.farmer_name = farmer.name
+                        instance.farmer_contact = farmer.contact_no
+                        print(f"   ✅ Linked to farmer: {farmer.name}")
+                except Exception as e:
+                    print(f"   ❌ Error linking farmer: {str(e)}")
+        
+        # Save if any relationships were updated
+        if (instance.imported_mukkadam or 
+            instance.imported_transporter or 
+            instance.imported_farmer):
+            instance.save(update_fields=[
+                'imported_mukkadam', 
+                'imported_transporter', 
+                'imported_farmer',
+                'farmer_name',
+                'farmer_contact'
+            ])
+            print(f"   💾 Relationships saved")
+class ImportedJob(models.Model):
+    """
+    Parent model: One Job (from webhook)
+    Stores job-level data
+    """
+    # ========================================
+    # JOB IDENTIFICATION
+    # ========================================
+    external_job_id = models.IntegerField(
+        unique=True, 
+        db_index=True,
+        null = True,
+        blank=True,
+        help_text="Job ID from external OPS API"
+    )
+
+    BOOKING_TYPE_CHOICES = [
+        ('TENDER', 'Tender'),
+        ('ON_DEMAND', 'On Demand'),
+    ]
+    booking_type = models.CharField(
+        max_length=20,
+        choices=BOOKING_TYPE_CHOICES,
+        default='ON_DEMAND',
+        help_text="Tender vs On-demand booking type",null=True,blank = True
+    )
+
+    generated_job_id = models.CharField(
+        max_length=100, 
+        unique=True,
+        db_index=True,
+        help_text="Internal job ID (e.g., JOB-637)"
+    )
+    
+    # ========================================
+    # JOB-LEVEL DATA
+    # ========================================
+    farmer_id = models.CharField(max_length=100, db_index=True)
+    plot_id = models.CharField(max_length=100, blank=True)
+    status = models.CharField(max_length=50, help_text="PENDING, BOOKED, etc")
+    priority = models.CharField(max_length=20, help_text="HIGH, MEDIUM, LOW")
+    scheduled_date = models.DateField(null=True, blank=True)
+    is_field_verified = models.BooleanField(default=False)
+    
+    # Notes
+    activity_notes = models.TextField(blank=True,null = True)
+    internal_notes = models.TextField(blank=True,null = True)
+    
+    # Total job amount (sum of all activities)
+    total_activities_amount = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        null=True, 
+        blank=True
+    )
+    
+    # ========================================
+    # BOOKING DATA
+    # ========================================
+    booking_id = models.IntegerField(null=True, blank=True, db_index=True)
+    booking_status = models.CharField(max_length=50, blank=True)
+    booking_total_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    booking_advance_paid = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    booking_balance = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    assignee_number = models.CharField(max_length=20, blank=True)
+    
+    # ========================================
+    # FARMER INFO (Cache from ImportedFarmer)
+    # ========================================
+    farmer_name = models.CharField(max_length=255, blank=True)
+    farmer_contact = models.CharField(max_length=20, blank=True)
+    location = models.CharField(max_length=255, blank=True)
+    
+    # Link to ImportedFarmer
+    # ✅ Add ForeignKey to ImportedFarmer
+    imported_farmer = models.ForeignKey(
+        ImportedFarmer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='jobs'
+    )
+    # ========================================
+    # RAW DATA STORAGE
+    # ========================================
+    raw_booking_data = models.JSONField(null=True, blank=True)
+    raw_visits_data = models.JSONField(null=True, blank=True)
+    raw_payments_data = models.JSONField(null=True, blank=True)
+    raw_full_payload = models.JSONField(null=True, blank=True)
+    
+    # ========================================
+    # TRACKING
+    # ========================================
+    created_at = models.DateTimeField()
+    last_webhook_sync = models.DateTimeField(auto_now=True)
+    webhook_update_count = models.IntegerField(default=0)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['external_job_id']),
+            models.Index(fields=['generated_job_id']),
+            models.Index(fields=['farmer_id']),
+            models.Index(fields=['status']),
+            models.Index(fields=['booking_id']),
+        ]
+    
+    def __str__(self):
+        return f"Job #{self.generated_job_id} - Farmer {self.farmer_id}"
+    
+    @property
+    def activity_count(self):
+        """Count of activities in this job"""
+        return self.activities.count()
+
+
+class ImportedJobSheet(models.Model):
+    """
+    Child model: One Activity (belongs to ImportedJob)
+    Stores activity-specific data
+    """
+    total_booking_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)  # ✅ ADD THIS
+    # ========================================
+    # LINK TO PARENT JOB (ONE-TO-MANY)
+    # ========================================
+    imported_job = models.ForeignKey(
+        ImportedJob,
+        on_delete=models.CASCADE,
+        related_name='activities',
+        help_text="Parent job this activity belongs to",
+        null = True,blank = True
+    )
+    
+    # ========================================
+    # SOURCE TRACKING
+    # ========================================
+    SOURCE_CHOICES = [
+        ('sheet_import', 'Sheet Import'),
+        ('external_api', 'External API'),
+        ('manual', 'Manual Entry')
+    ]
+    data_source = models.CharField(
+        max_length=20, 
+        choices=SOURCE_CHOICES, 
+        default='sheet_import',
+        db_index=True
+    )
+    BOOKING_TYPE_CHOICES = [
+        ('TENDER', 'Tender'),
+        ('ON_DEMAND', 'On Demand'),
+    ]
+    booking_type = models.CharField(
+        max_length=20,
+        choices=BOOKING_TYPE_CHOICES,
+        default='ON_DEMAND',
+        help_text="Tender vs On-demand booking type",null=True,blank = True
+    )
+    # ========================================
+    # ACTIVITY IDENTIFICATION
+    # ========================================
+    external_activity_id = models.IntegerField(
+        unique=True,
+        db_index=True,
+        null = True,
+        blank=True,
+        help_text="Activity ID from external OPS API"
+    )
+    
+    # ========================================
+    # ACTIVITY DATA
+    # ========================================
+    activity_name = models.CharField(max_length=255)
+    activity_datetime = models.DateTimeField(null=True, blank=True)
+    activity_start_date = models.DateField(null=True, blank=True)
+    
+    acres = models.CharField(max_length=255)
+    
+    # Activity pricing breakdown
+    total_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    transport_cost = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    other_cost = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    
+    activity_note = models.TextField(blank=True)
+    crop_bundles = models.JSONField(null=True, blank=True)
+    
+    # ========================================
+    # SHEET IMPORT FIELDS (for backward compatibility)
+    # ========================================
+    import_batch = models.ForeignKey(
+        ImportBatch, 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True
+    )
+    
+    # Legacy fields for sheet imports
+    farmer_name = models.CharField(max_length=255, blank=True)
+    farmer_contact = models.CharField(max_length=20, blank=True)
+    finalised_rate_per_acre = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    booking_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    variety = models.CharField(max_length=100, blank=True)
+    location = models.CharField(max_length=255, blank=True)
+    google_maps_link = models.URLField(blank=True)
+    
+    # Allocation data from sheet
+    labour_team_name = models.CharField(max_length=255, blank=True)
+    team_count = models.IntegerField(null=True, blank=True)
+    allocation_status = models.CharField(max_length=100, blank=True)
+    labour_rates = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    transporter_name = models.CharField(max_length=255, blank=True)
+    transport_rates = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    
+    # POC fields
+    farmer_poc = models.CharField(max_length=100, blank=True)
+    labour_poc = models.CharField(max_length=100, blank=True)
+    field_poc = models.CharField(max_length=100, blank=True)
+    bi_poc_assigned = models.CharField(max_length=100, blank=True)
+    
+    # Remarks
+    allocation_team_remarks = models.TextField(blank=True)
+    field_team_remarks = models.TextField(blank=True)
+    
+    # ========================================
+    # GENERATED IDs
+    # ========================================
+    generated_job_id = models.CharField(max_length=100, db_index=True, blank=True)
+    generated_farmer_id = models.CharField(max_length=100, blank=True)
+    generated_mukkadam_id = models.IntegerField(null=True, blank=True)
+    generated_transporter_id = models.IntegerField(null=True, blank=True)
+    
+    # ========================================
+    # RELATIONSHIPS
+    # ========================================
+    job_activity = models.ForeignKey(
+        JobActivity, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='imported_sheet_record'
+    )
+    
+    allocation = models.ForeignKey(
+        Allocation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='imported_sheet_record'
+    )
+    
+    # ========================================
+    # IMPORT TRACKING
+    # ========================================
+    import_status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('imported', 'Imported'),
+        ('failed', 'Failed'),
+        ('skipped', 'Skipped')
+    ], default='pending')
+    import_error = models.TextField(blank=True)
+    imported_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-activity_start_date']
+        indexes = [
+            models.Index(fields=['external_activity_id']),
+            models.Index(fields=['generated_job_id']),
+            models.Index(fields=['data_source']),
+            models.Index(fields=['activity_start_date']),
+        ]
+    
+    def __str__(self):
+        if self.data_source == 'external_api':
+            return f"Activity #{self.external_activity_id} - {self.activity_name} (Job {self.imported_job.generated_job_id})"
+        else:
+            return f"Sheet: {self.generated_job_id} - {self.activity_name}"
+    
+    def save(self, *args, **kwargs):
+        # Auto-populate generated_job_id from parent job
+        if self.imported_job:
+            self.generated_job_id = self.imported_job.generated_job_id
+        super().save(*args, **kwargs)
+
+    @property
+    def acres_numeric(self):
+        """
+        Try to extract numeric value from acres field
+        Returns decimal or 0 if can't parse
+        """
+        try:
+            # Extract first number from string like "7 Labours" or "1.5"
+            import re
+            match = re.search(r'[\d.]+', self.acres)
+            if match:
+                return Decimal(match.group())
+            return Decimal(0)
+        except:
+            return Decimal(0)
+        
+    from decimal import Decimal, InvalidOperation
+
+    def save(self, *args, **kwargs):
+        if self.imported_job:
+            self.generated_job_id = self.imported_job.generated_job_id
+
+        def to_decimal(value):
+            if value in (None, '', 'null'):
+                return Decimal('0')
+            if isinstance(value, Decimal):
+                return value
+            try:
+                return Decimal(str(value))
+            except (InvalidOperation, TypeError):
+                return Decimal('0')
+
+        labour = to_decimal(self.labour_rates)
+        transport = to_decimal(self.transport_rates)
+        other = to_decimal(self.other_cost)
+
+        self.subtotal = labour + transport + other
+        self.total_price = self.subtotal
+
+        super().save(*args, **kwargs)
+
+
+# models.py
+from django.db import models
+from decimal import Decimal
+
+class FarmerPayment(models.Model):
+    """Track all payments made to farmers from demand sheet"""
+    
+    PAYMENT_STATUS_CHOICES = [
+        ('paid', 'Paid'),
+        ('pending', 'Pending'),
+    ]
+    
+    PAYMENT_ROUTE_CHOICES = [
+        ('cheque', 'Cheque'),
+        ('upi', 'UPI'),
+        ('cash', 'Cash'),
+        ('bank_transfer', 'Bank Transfer'),
+        ('zoho', 'Zoho'),
+        ('other', 'Other'),
+    ]
+    
+    # Link to ImportedFarmer
+    imported_farmer = models.ForeignKey(
+        'ImportedFarmer',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='farmer_payments'
+    )
+    
+    # Link to JobActivity (matched by date, farmer, activity, booking value)
+    job_activity = models.ForeignKey(
+        'JobActivity',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='farmer_payments'
+    )
+    
+    # Original data from demand sheet
+    activity_date = models.DateField()
+    village = models.CharField(max_length=255, blank=True)
+    farmer_name = models.CharField(max_length=255)
+    activity_name = models.CharField(max_length=255)
+    acres = models.CharField(max_length=50, blank=True)
+    booking_rate_per_acre = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    exact_bundles_used = models.CharField(max_length=100, blank=True)
+    
+    # Payment amounts
+    booking_value = models.DecimalField(max_digits=10, decimal_places=2)
+    transportation_cost = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, default=0)
+    total_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    
+    # Payment details
+    payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES)
+    payment_route = models.CharField(max_length=50, choices=PAYMENT_ROUTE_CHOICES, blank=True)
+    date_of_payment = models.DateField(null=True, blank=True)
+    description = models.TextField(blank=True)
+    reference_no = models.CharField(max_length=255, blank=True)
+    
+    # Tracking
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    # Matching status
+    is_matched = models.BooleanField(default=False, help_text="Matched with JobActivity")
+    match_notes = models.TextField(blank=True)
+    
+    class Meta:
+        ordering = ['-activity_date']
+        indexes = [
+            models.Index(fields=['farmer_name']),
+            models.Index(fields=['activity_date']),
+            models.Index(fields=['payment_status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.farmer_name} - {self.activity_date} - ₹{self.booking_value}"
+    
+    @property
+    def calculated_total(self):
+        """Calculate total value"""
+        booking = self.booking_value or Decimal('0')
+        transport = self.transportation_cost or Decimal('0')
+        return booking + transport
 
 class AllocationStats(models.Model):
     """Daily statistics for allocations"""
@@ -663,6 +1438,7 @@ class FarmerCall(models.Model):
         ('verification', 'Verification'),
         ('follow_up', 'Follow Up'),
         ('general', 'General'),
+        ('web_dialpad','Web')
     ]
     
     # Primary identifiers
@@ -738,6 +1514,41 @@ class FarmerCall(models.Model):
         if self.recording_urls and len(self.recording_urls) > 0:
             return self.recording_urls[0]
         return None
+    
+    def _get_presigned_url(self, s3_key):
+        """Internal helper to fetch presigned URL from external service"""
+        if not s3_key:
+            return None
+        
+        try:
+            presign_url = 'https://demand.bharatintelligence.ai/chat/presign_obj_api/'
+            response = requests.get(
+                presign_url,
+                params={'key': s3_key},
+                # Note: Consider moving this token to settings.py for security
+                headers={'Authorization': 'Token c432208626a204d2d8de3d00b29f948eae61ebdb'},
+                timeout=10 # Reduced timeout for better UX
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Handle both dictionary response or direct string
+                return data.get('url') if isinstance(data, dict) else data
+            return None
+                
+        except Exception as e:
+            logger.error(f"Error getting presigned URL for {s3_key}: {e}")
+            return None
+
+    @property
+    def audio_url(self):
+        """
+        The dynamic property for the frontend.
+        Priority: 1. Presigned S3 Link, 2. Direct Recording URL
+        """
+        if self.s3_key:
+            return self._get_presigned_url(self.s3_key)
+        return self.primary_recording_url
 # allocation_app/models.py
 
 class ActivityEditHistory(models.Model):

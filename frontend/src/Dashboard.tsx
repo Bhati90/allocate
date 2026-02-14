@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus,MapPin, List,Truck, Calendar, UserCog, LogOut } from 'lucide-react';
+import { UserPlus,MapPin, List,Truck, Calendar, UserCog, LogOut, FileText } from 'lucide-react';
 
 import { useAuth } from './context/auth';
 const Dashboard = () => {
@@ -40,6 +40,19 @@ const { isAdmin, userData, logout: authLogout, isLoading } = useAuth();
               <MapPin size={48} className="mb-4" />
               <span className="text-2xl font-bold">analytics</span>
               <span className="text-sm mt-2 opacity-90">Track analytics</span>
+            </button>
+          )}
+
+
+
+          {isAdmin && (
+            <button 
+              onClick={() => navigate('/calls')} 
+              className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white p-8 rounded-xl shadow-lg flex flex-col items-center hover:from-emerald-600 hover:to-emerald-700 transition transform hover:scale-105"
+            >
+              <MapPin size={48} className="mb-4" />
+              <span className="text-2xl font-bold">calls</span>
+              <span className="text-sm mt-2 opacity-90">Track calls</span>
             </button>
           )}
       </div>
