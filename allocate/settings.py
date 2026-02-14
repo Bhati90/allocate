@@ -82,7 +82,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'data',
+    
     'tender',
     'storages',
     'rest_framework',
