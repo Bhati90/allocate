@@ -1,0 +1,76 @@
+// config.ts
+export const API_BASE_URL = 'http://localhost:8001/tender';
+
+export const ACTIVITIES = [
+  'Pruning',
+  'Pasting',
+  'Subcane',
+  'Shenda topping',
+  'Shoot selection',
+  'Bagal Bali',
+  'Cane tying',
+  '2nd lateral',
+  'Stem washing',
+  'Lateral Removal & Tendrils Removal',
+  '1st Subcane',
+  '2nd Subcane',
+  '3rd Subcane',
+  'Shenda Topping',
+  '2nd Laterals Removal',
+  'Cane Selection',
+  'Leaf removal',
+  'Cane Tying (Strings)',
+  'Cane Tying (Clips)',
+  'Stem Tying',
+  'Paper Wrapping',
+  'Harvesting',
+  'Fertilizing',
+  'Weeding',
+  'Spraying'
+];
+
+export const ACTIVITY_RATES: Record<string, number> = {
+  'Pruning': 4000,
+  'Pasting': 2000,
+  'Subcane': 1500,
+  '1st Subcane': 1500,
+  '2nd Subcane': 1500,
+  'Shenda topping': 2000,
+  'Shenda Topping': 2000,
+  'Shoot selection': 3000,
+  'Shoot Selection': 3000,
+  'Cane tying': 7500,
+  'Cane Tying': 7500,
+  'Cane Tying (Strings)': 7500,
+  'Cane Tying (Clips)': 7500,
+  '2nd lateral': 2000,
+  '2nd Laterals Removal': 2000,
+  'Lateral Removal & Tendrils Removal': 2000,
+  'Paper Wrapping': 1000,
+  'Harvesting': 1500,
+  'Fertilizing': 800,
+  'Weeding': 900,
+  'Spraying': 600
+};
+
+export const DEFAULT_PRODUCTIVITY: Record<string, number> = {
+  'Pruning': 0.12,
+  'Pasting': 0.14,
+  'Subcane': 0.13,
+  'Shenda topping': 0.15,
+  'Shenda Topping': 0.15,
+  'Shoot selection': 0.09,
+  'Shoot Selection': 0.09,
+  'Bagal Bali': 0.09,
+  'Cane tying': 0.10,
+  'Cane Tying': 0.10,
+  'Cane Tying (Strings)': 0.10,
+  'Cane Tying (Clips)': 0.10,
+  '2nd lateral': 0.11,
+  '2nd Laterals Removal': 0.11,
+  'Paper Wrapping': 0.15,
+  'Harvesting': 0.10,
+  'Fertilizing': 0.20,
+  'Weeding': 0.18,
+  'Spraying': 0.25
+};

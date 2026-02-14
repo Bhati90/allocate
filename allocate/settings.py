@@ -79,11 +79,13 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'data',
+    'tender',
     'storages',
     'rest_framework',
     'rest_framework.authtoken',
 ]
 
+BASE_DIR = Path(__file__).resolve().parent.parent
 # REST Framework Configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -176,12 +178,12 @@ DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
 
 # # allocate/settings.py
-# SUPPLY_API_URL = 'http://localhost:8000'
-# ALLOCATION_API_URL = 'http://localhost:8001'
+SUPPLY_API_URL = 'http://localhost:8000'
+ALLOCATION_API_URL = 'http://localhost:8001'
 
 # allocate/settings.py
-SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'
-ALLOCATION_API_URL = 'https://allocation.bharatintelligence.ai'
+# SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'
+# ALLOCATION_API_URL = 'https://allocation.bharatintelligence.ai'
 # Tell Celery to use Redis, not RabbitMQ
 CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
 CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'

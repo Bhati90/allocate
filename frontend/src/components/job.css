@@ -1,0 +1,742 @@
+/* Add to Farm.css */
+
+/* Job Detail Panel Styles */
+.job-detail-info {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.status-badge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-scheduled {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.status-in_progress {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.status-completed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.priority-badge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.priority-HIGH,
+.priority-URGENT {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.priority-MEDIUM {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.priority-LOW {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+/* Activity Card */
+.activity-card {
+  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  padding: 0.875rem;
+  margin-bottom: 0.75rem;
+  transition: all 0.2s;
+}
+
+.activity-card:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+.activity-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.activity-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  margin-right: 0.5rem;
+}
+
+.strict-badge {
+  background: #fef3c7;
+  color: #92400e;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  margin-left: 0.5rem;
+}
+
+.activity-details {
+  margin-top: 0.75rem;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.detail-item label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.detail-item span {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.remaining-value {
+  color: var(--primary-color);
+}
+
+.scheduled-date {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+/* Progress Bar */
+.progress-bar {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 9999px;
+  overflow: hidden;
+  margin-top: 0.5rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--success-color);
+  transition: width 0.3s ease;
+  border-radius: 9999px;
+}
+
+/* Section Header */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.btn-sm {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+/* Form Styles */
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+.form-divider {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  padding: 0.75rem 0 0.5rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.radio-group {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 0.5rem;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.radio-label input[type="radio"] {
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}
+
+/* Left Panel Split */
+.panel-left-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.left-top {
+  flex: 0 0 35%;
+  overflow-y: auto;
+  border-bottom: 2px solid var(--border-color);
+}
+
+.left-bottom {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Utilities */
+.flex {
+  display: flex;
+}
+
+.gap-2 {
+  gap: 0.5rem;
+}
+
+.mt-4 {
+  margin-top: 1rem;
+}
+
+.jobs-section-title {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.85rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.job-card.completed {
+  opacity: 0.5;
+}
+.scheduler-layout {
+  display: flex;
+  height: 100%;
+}
+
+.jobs-panel {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid #e2e8f0;
+}
+
+.job-detail-panel {
+  flex: 1;
+  overflow-y: auto;
+}
+
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+
+.jobs-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;          /* important when inside flex parent */
+}
+
+.jobs-panel .panel-header {
+  flex: 0 0 auto;         /* only as tall as content */
+}
+
+.jobs-panel .panel-content {
+  flex: 1 1 auto;         /* takes remaining height */
+  min-height: 0;
+  overflow-y: auto;       /* scroll only body, header stays fixed */
+}
+
+
+.modal-xl {
+  max-width: 1200px;
+  width: 95%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.location-info {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+  font-size: 14px;
+  color: #1e40af;
+}
+
+.activity-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.activity-check-row {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  background: white;
+  transition: all 0.2s;
+}
+
+.activity-check-row.disabled {
+  opacity: 0.5;
+  background: #f9fafb;
+}
+
+.activity-check-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.activity-check-name {
+  font-weight: 500;
+  font-size: 14px;
+  color: #1f2937;
+  margin-left: 8px;
+}
+
+.strict-badge-sm {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.activity-check-details {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.form-group-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-group-inline label {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.form-input-sm {
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+}
+
+.form-help {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+  display: block;
+}
+
+.booking-summary {
+  background: #f9fafb;
+  border: 2px solid #3b82f6;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 16px;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.summary-row:last-child {
+  margin-bottom: 0;
+}
+
+.summary-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.summary-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #3b82f6;
+}
+
+.form-select-sm {
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  min-width: 150px;
+}
+.plot-selector {
+  padding: 20px;
+}
+
+.selector-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+.selector-subtitle {
+  font-size: 14px;
+  color: #6b7280;
+  margin-bottom: 24px;
+}
+
+.plot-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.plot-card {
+  background: white;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.plot-card:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+  transform: translateY(-2px);
+}
+
+.plot-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.plot-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.plot-area {
+  font-size: 14px;
+  font-weight: 500;
+  color: #3b82f6;
+  background: #eff6ff;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.plot-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.plot-farmer {
+  font-weight: 500;
+}
+
+.plot-code {
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.btn-back {
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  margin-bottom: 16px;
+  transition: all 0.2s;
+}
+
+.btn-back:hover {
+  background: #e5e7eb;
+}
+
+.selected-plot-info {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.selected-plot-info h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e40af;
+  margin: 0 0 4px 0;
+}
+
+.selected-plot-info p {
+  font-size: 14px;
+  color: #1e40af;
+  margin: 0;
+}
+.revenue-strip {
+  margin: 8px 0 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.revenue-label {
+  font-weight: 600;
+}
+
+.revenue-value {
+  font-weight: 500;
+}
+
+.revenue-missed {
+  font-weight: 500;
+}
+
+.revenue-date {
+  opacity: 0.85;
+}
+
+/* colors */
+.revenue-green {
+  background: #ecfdf3;
+  border: 1px solid #22c55e33;
+  color: #166534;
+}
+
+.revenue-yellow {
+  background: #fffbeb;
+  border: 1px solid #facc1533;
+  color: #92400e;
+}
+
+.revenue-red {
+  background: #fef2f2;
+  border: 1px solid #ef444433;
+  color: #b91c1c;
+}
+.mukkadam-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 550;
+
+  display: flex;
+  justify-content: center;
+  align-items: center;   /* center vertically */
+  padding: 24px;         /* space from edges */
+}
+
+.mukkadam-modal {
+  background: #ffffff;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 900px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+
+.checklist-group-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #6b7280;
+  margin: 1rem 0 0.5rem 0;
+  letter-spacing: 0.05em;
+}
+
+.booked-label {
+  color: #059669; /* Greenish to show it's active */
+}
+
+.activity-check-row.booked {
+  background-color: #f0fdf4;
+  border-left: 3px solid #10b981;
+  opacity: 0.8;
+}
+
+.booked-badge {
+  font-size: 0.7rem;
+  background: #d1fae5;
+  color: #065f46;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+/* Booked Activities (Read-only) */
+.booked-activities-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.booked-activity-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 6px;
+}
+
+.booked-activity-row .activity-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.booked-activity-row .activity-name {
+  font-weight: 600;
+  color: #0c4a6e;
+}
+
+.booked-activity-row .activity-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 14px;
+  color: #475569;
+}
+
+/* Not-Booked Activities (Selectable) */
+.not-booked-activities-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.not-booked-activity-row {
+  padding: 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+}
+
+.activity-checkbox-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.activity-edit-fields {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #fecaca;
+}
+
+.strict-badge-sm {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.info-message {
+  padding: 12px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  color: #1e40af;
+  font-size: 14px;
+}
+
+.form-input:read-only {
+  background: #f1f5f9;
+  cursor: not-allowed;
+}

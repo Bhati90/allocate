@@ -5,6 +5,35 @@
 /* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
 All colors MUST be HSL.
 */
+.activity-chip {
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid #d1d5db;
+  margin: 0.125rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  background: #f9fafb;
+}
+
+.activity-chip.booked {
+  border-color: #ef4444;
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+.activity-chip.selected {
+  box-shadow: 0 0 0 2px #3b82f6;
+}
+
+@layer components {
+  /* In your global CSS file */
+.hexagon {
+  clip-path: polygon(30% 0%, 70% 0%, 100% 50%, 70% 100%, 30% 100%, 0% 50%);
+}
+  .hexagon:hover {
+    transform: scale(1.05);
+  }
+}
 
 @layer base {
   :root {

@@ -1,0 +1,180 @@
+.map-view {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.map-view h2 {
+  margin-bottom: 1.5rem;
+}
+
+.map-container {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 2rem;
+}
+
+.map-placeholder {
+  background: white;
+  padding: 2rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  min-height: 500px;
+}
+
+.hex-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+  justify-content: center;
+  margin-bottom: 2rem;
+}
+
+.hexagon {
+  width: 120px;
+  height: 140px;
+  background: #e9ecef;
+  clip-path: polygon(30% 0%, 70% 0%, 100% 50%, 70% 100%, 30% 100%, 0% 50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  border: 3px solid transparent;
+}
+
+.hexagon:hover {
+  transform: scale(1.05);
+}
+
+.hexagon.selected {
+  border-color: #667eea;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.hexagon.low {
+  background: #d4edda;
+}
+
+.hexagon.medium {
+  background: #fff3cd;
+}
+
+.hexagon.high {
+  background: #f8d7da;
+}
+
+.hex-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #212529;
+}
+
+.hex-penetration {
+  font-size: 0.9rem;
+  color: #495057;
+  margin-top: 0.5rem;
+}
+
+.map-legend {
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: 6px;
+}
+
+.map-legend h4 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.legend-color {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.legend-color.low {
+  background: #d4edda;
+}
+
+.legend-color.medium {
+  background: #fff3cd;
+}
+
+.legend-color.high {
+  background: #f8d7da;
+}
+
+.hexagon-details {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.hexagon-details h3 {
+  margin: 0 0 1.5rem 0;
+  font-size: 1.25rem;
+  color: #212529;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.detail-label {
+  font-weight: 500;
+  color: #6c757d;
+  font-size: 0.9rem;
+}
+
+.detail-value {
+  font-weight: 600;
+  color: #212529;
+  font-size: 0.9rem;
+}
+
+.opportunity-analysis {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: #f8f9fa;
+  border-radius: 6px;
+}
+
+.opportunity-analysis h4 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1rem;
+}
+
+.opportunity-analysis ul {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.85rem;
+  color: #495057;
+}
+
+.opportunity-analysis li {
+  margin-bottom: 0.5rem;
+}
+
+.hex-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.hex-actions button {
+  flex: 1;
+}

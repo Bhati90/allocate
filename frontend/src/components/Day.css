@@ -1,0 +1,432 @@
+.day-detail-modal {
+  max-width: 700px;
+}
+.day-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.day-summary-row {
+  display: flex;
+  justify-content: space-between;
+}
+.section {
+  border-top: 1px solid #eee;
+  padding-top: 8px;
+}
+.allocation-list {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+
+/* Modal Refinement */
+.day-detail-modal {
+  max-width: 600px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* Stats Dashboard Bar */
+.day-summary-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  background: #f8fafc;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  border: 1px solid #e2e8f0;
+}
+
+.summary-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.summary-value {
+  font-weight: 700;
+  color: #1e293b;
+  font-size: 1.1rem;
+}
+
+/* Section Styling */
+.section h4 {
+  font-size: 0.9rem;
+  color: #1e293b;
+  border-bottom: 2px solid #f1f5f9;
+  padding-bottom: 8px;
+  margin: 24px 0 12px 0;
+}
+
+/* Allocation Cards */
+.allocation-row {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  transition: transform 0.1s;
+}
+
+.allocation-row:hover {
+  border-color: #3b82f6;
+  background: #f0f7ff;
+}
+
+.allocation-main {
+  flex-grow: 1;
+}
+
+.allocation-activity {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.allocation-meta {
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+/* Action Buttons */
+.btn-link {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-weight: 500;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
+}
+
+.btn-link.delete {
+  color: #ef4444;
+}
+
+/* Conflict Alerts */
+.conflict-row {
+  background: #fff1f2;
+  border-left: 4px solid #f43f5e;
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.day-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.section-label {
+  font-size: 0.85rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 5px;
+}
+
+/* Job Cards in the Modal */
+.job-activity-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* Two columns for jobs */
+  gap: 10px;
+}
+
+.day-job-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.job-farmer-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 8px;
+  color: #1e293b;
+}
+
+.day-act-item {
+  margin-bottom: 8px;
+}
+
+.day-act-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  margin-bottom: 4px;
+}
+
+/* Progress Bars */
+.progress-bar {
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #22c55e; /* Green */
+  transition: width 0.3s ease;
+}
+
+/* Capacity Mini Bar */
+.mini-progress-bg {
+  height: 4px;
+  background: #e2e8f0;
+  margin-top: 8px;
+  border-radius: 2px;
+}
+
+.mini-progress-fill {
+  height: 100%;
+  background: #3b82f6;
+}
+
+.mini-progress-fill.overload {
+  background: #ef4444;
+}
+
+/* Conflict Box */
+.conflict-alert-box {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  padding: 10px;
+  border-radius: 8px;
+  color: #991b1b;
+}
+
+.conflict-mini-row {
+  font-size: 0.75rem;
+  margin-top: 4px;
+}
+
+.day-detail-modal {
+    max-width: 550px;
+    border-radius: 12px;
+}
+
+/* Tab Styles */
+.modal-tabs {
+    display: flex;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 0 20px;
+    background: #f8fafc;
+}
+
+.modal-tab {
+    padding: 12px 16px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #64748b;
+    border-bottom: 2px solid transparent;
+}
+
+.modal-tab.active {
+    color: #1a4b70;
+    border-bottom-color: #1a4b70;
+}
+
+/* Card Styles */
+.card-style {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 10px;
+}
+
+.job-card-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #f1f5f9;
+    padding-bottom: 5px;
+}
+
+.farmer-name {
+    font-weight: 600;
+    color: #334155;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.job-id {
+    font-size: 0.7rem;
+    color: #94a3b8;
+}
+
+/* Progress Bar */
+.job-activity-item {
+    margin-top: 8px;
+}
+
+.activity-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    margin-bottom: 4px;
+}
+
+.progress-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.progress-bar-bg {
+    flex-grow: 1;
+    height: 8px;
+    background: #e2e8f0;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: #22c55e;
+}
+
+.progress-text {
+    font-size: 0.75rem;
+    color: #64748b;
+    min-width: 30px;
+}
+
+/* Icons and UI Helpers */
+.item-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.item-meta { font-size: 0.85rem; color: #475569; margin: 2px 0; }
+.item-sub { font-size: 0.75rem; color: #94a3b8; }
+
+.potential-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.potential-card {
+  border-radius: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle, #e3e4e8);
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.potential-card.status-red {
+  border-left: 3px solid #ef4444;
+}
+
+.potential-card.status-yellow {
+  border-left: 3px solid #f59e0b;
+}
+
+.potential-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.activity-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.status-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.potential-card.status-yellow .status-pill {
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.potential-meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.meta-item {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+}
+
+.meta-label {
+  color: #6b7280;
+}
+
+.meta-value {
+  font-weight: 500;
+}
+
+.potential-stats {
+  display: flex;
+  gap: 16px;
+  margin: 6px 0 8px;
+  flex-wrap: wrap;
+}
+
+.stat {
+  min-width: 90px;
+}
+
+.stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9ca3af;
+}
+
+.stat-value {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.stat-unit {
+  font-size: 11px;
+  color: #6b7280;
+  margin-left: 2px;
+}
+
+.stat-value.highlight {
+  color: #047857;
+}
+
+.potential-footer {
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 4px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.job-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}

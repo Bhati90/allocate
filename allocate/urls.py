@@ -26,6 +26,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('ap/', include('data.urls')),  # API must come FIRST
     path('', about, name='about'),
+    path('tender/', include('tender.urls')),  # API must come FIRST
     
     # ONLY if you need SPA routing, and ONLY at the very end
     re_path(r'^(?!ap/).*$', about),  # ← Negative lookahead: exclude 'ap/'

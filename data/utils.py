@@ -1,11 +1,14 @@
 # allocation_app/utils.py
 
 import requests
+from functools import lru_cache
 from django.core.cache import cache
 from django.conf import settings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 import time
+
+from .models import ImportedMukkadam,ImportedTransporter
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from django.conf import settings
@@ -53,82 +56,6 @@ def get_requests_session():
 # ============================================
 # CACHING FUNCTIONS WITH RETRY
 # ============================================
-
-def get_mukkadam_cached(mukkadam_id: int) -> Optional[Dict]:
-    """Get mukkadam details with caching and retry logic"""
-    cache_key = f'mukkadam_{mukkadam_id}'
-    
-    # Try cache first
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        return cached_data
-    
-    # Fetch from API with retry
-    session = get_requests_session()
-    
-    try:
-        response = session.get(
-            f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
-            timeout=60  # ✅ Increased from 3 to 10 seconds
-        )
-        
-        if response.status_code == 200:
-            mukkadam_data = response.json()
-            result = {
-                'mukkadam_id': mukkadam_id,
-                'mukkadam_name': mukkadam_data.get('mukkadam_name', 'Unknown'),
-                'mobile_numbers': mukkadam_data.get('mobile_numbers', 'N/A'),
-                'village': mukkadam_data.get('village', 'N/A'),
-                'crew_size': mukkadam_data.get('crew_size', 'N/A'),
-                'has_smartphone': mukkadam_data.get('has_smartphone', 'no'),
-                'transport_mode': mukkadam_data.get('transport_mode', 'N/A')
-            }
-            
-            # Cache for 1 hour
-            cache.set(cache_key, result, MUKKADAM_CACHE_TIMEOUT)
-            return result
-        else:
-            # Cache negative result for 5 minutes
-            result = {
-                'mukkadam_id': mukkadam_id,
-                'mukkadam_name': f'Mukkadam #{mukkadam_id}',
-                'mobile_numbers': 'N/A',
-                'village': 'N/A',
-                'crew_size': 'N/A',
-                'has_smartphone': 'no',
-                'transport_mode': 'N/A'
-            }
-            cache.set(cache_key, result, 300)  # 5 min
-            return result
-            
-    except requests.exceptions.Timeout:
-        print(f"⏱️ Timeout fetching mukkadam {mukkadam_id} - using fallback")
-        result = {
-            'mukkadam_id': mukkadam_id,
-            'mukkadam_name': f'Mukkadam #{mukkadam_id}',
-            'mobile_numbers': 'N/A',
-            'village': 'N/A',
-            'crew_size': 'N/A',
-            'has_smartphone': 'no',
-            'transport_mode': 'N/A'
-        }
-        # Cache timeout fallback for 2 minutes
-        cache.set(cache_key, result, 120)
-        return result
-        
-    except Exception as e:
-        print(f"❌ Error fetching mukkadam {mukkadam_id}: {str(e)}")
-        return {
-            'mukkadam_id': mukkadam_id,
-            'mukkadam_name': f'Mukkadam #{mukkadam_id}',
-            'mobile_numbers': 'N/A',
-            'village': 'N/A',
-            'crew_size': 'N/A',
-            'has_smartphone': 'no',
-            'transport_mode': 'N/A'
-        }
-    finally:
-        session.close()
 
 
 def get_farmer_cached(farmer_id: str) -> Optional[Dict]:
@@ -179,87 +106,104 @@ def get_farmer_cached(farmer_id: str) -> Optional[Dict]:
     finally:
         session.close()
 
-
-def get_transport_provider_cached(provider_id: int) -> Optional[Dict]:
-    """Get transport provider details with caching and retry logic"""
-    cache_key = f'transport_provider_{provider_id}'
+@lru_cache(maxsize=1000)
+def get_mukkadam_cached(mukkadam_id: int):
+    """
+    Fetch mukkadam with fallback to imported data
+    ✅ Handles both external API IDs and imported IDs (10000+)
+    """
+    # Check if it's an imported mukkadam (ID >= 10000)
+    if mukkadam_id >= 10000:
+        try:
+            imported_mukkadam = ImportedMukkadam.objects.get(
+                external_mukkadam_id=mukkadam_id
+            )
+            return {
+                'mukkadam_id': mukkadam_id,
+                'mukkadam_name': imported_mukkadam.team_name,
+                'mobile_numbers': imported_mukkadam.contact_no or 'N/A',
+                'is_imported': True
+            }
+        except ImportedMukkadam.DoesNotExist:
+            return {
+                'mukkadam_id': mukkadam_id,
+                'mukkadam_name': f'Mukkadam #{mukkadam_id}',
+                'mobile_numbers': 'N/A',
+                'is_imported': True
+            }
     
-    # Try cache first
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        return cached_data
-    
-    # Fetch from API with retry
-    session = get_requests_session()
-    
+    # Fetch from external Supply API (original logic)
     try:
-        response = session.get(
-            f'{SUPPLY_API_URL}/api/transport-provider/{provider_id}/',
-            timeout=60  # ✅ Increased from 3 to 10 seconds
+        response = requests.get(
+            f'{SUPPLY_API_URL}/api/mukkadam/{mukkadam_id}/',
+            timeout=500
         )
         
         if response.status_code == 200:
-            provider_json = response.json()
-            
-            if provider_json.get('found'):
-                provider_data = provider_json.get('provider', {})
-                result = {
-                    'id': provider_data.get('id'),
-                    'name': provider_data.get('name', 'Unknown'),
-                    'contact_number': provider_data.get('contact_number', 'N/A'),
-                    'base_location': provider_data.get('base_location', 'N/A'),
-                    'district': provider_data.get('district', 'N/A'),
-                    'taluka': provider_data.get('taluka', 'N/A'),
-                    'village': provider_data.get('village', 'N/A'),
-                    'max_distance': provider_data.get('max_distance'),
-                    'vehicle_type': provider_data.get('vehicle_type', 'N/A'),
-                    'is_active': provider_data.get('is_active', True),
-                    'capacity': provider_data.get('capacity'),
-                }
-                
-                # Cache for 6 hours
-                cache.set(cache_key, result, TRANSPORT_CACHE_TIMEOUT)
-                return result
-            else:
-                result = {
-                    'id': provider_id,
-                    'name': f'Provider #{provider_id}',
-                    'contact_number': 'N/A',
-                    'base_location': 'N/A',
-                    'vehicle_type': 'N/A',
-                }
-                cache.set(cache_key, result, 300)  # 5 min
-                return result
-                
-    except requests.exceptions.Timeout:
-        print(f"⏱️ Timeout fetching transport provider {provider_id} - using fallback")
-        result = {
-            'id': provider_id,
-            'name': f'Provider #{provider_id}',
-            'contact_number': 'N/A',
-            'base_location': 'N/A',
-            'vehicle_type': 'N/A',
-        }
-        cache.set(cache_key, result, 120)  # Cache for 2 min
-        return result
-        
+            data = response.json()
+            return {
+                'mukkadam_id': mukkadam_id,
+                'mukkadam_name': data.get('mukkadam_name') or data.get('name', f'Mukkadam #{mukkadam_id}'),
+                'mobile_numbers': data.get('mobile_numbers', 'N/A'),
+                'is_imported': False
+            }
+        else:
+            print(f"Error fetching Mukkadam: Status {response.status_code}")
+            return None
+    
     except Exception as e:
-        print(f"❌ Error fetching transport provider {provider_id}: {str(e)}")
-        return {
-            'id': provider_id,
-            'name': f'Provider #{provider_id}',
-            'contact_number': 'N/A',
-            'base_location': 'N/A',
-            'vehicle_type': 'N/A',
-        }
-    finally:
-        session.close()
-
-
+        print(f"Error fetching Mukkadam {mukkadam_id}: {str(e)}")
+        return None
 # ============================================
 # ASYNC BATCH FETCHING WITH ADAPTIVE WORKERS
 # ============================================
-
+@lru_cache(maxsize=1000)
+def get_transport_provider_cached(provider_id: int):
+    """
+    Fetch transport provider with fallback to imported data
+    ✅ Handles both external API IDs and imported IDs (20000+)
+    """
+    # Check if it's an imported transporter (ID >= 20000)
+    if provider_id >= 20000:
+        try:
+            imported_transporter = ImportedTransporter.objects.get(
+                external_transporter_id=provider_id
+            )
+            return {
+                'id': provider_id,
+                'name': imported_transporter.name,
+                'contact_no': imported_transporter.contact_no or 'N/A',
+                'is_imported': True
+            }
+        except ImportedTransporter.DoesNotExist:
+            return {
+                'id': provider_id,
+                'name': f'Transporter #{provider_id}',
+                'contact_no': 'N/A',
+                'is_imported': True
+            }
+    
+    # Fetch from external Transport API (original logic)
+    try:
+        response = requests.get(
+            f'{SUPPLY_API_URL}/api/transport-providers/{provider_id}/',
+            timeout=500
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                'id': provider_id,
+                'name': data.get('name', f'Transporter #{provider_id}'),
+                'contact_no': data.get('contact_no', 'N/A'),
+                'is_imported': False
+            }
+        else:
+            return None
+    
+    except Exception as e:
+        print(f"Error fetching Transport Provider {provider_id}: {str(e)}")
+        return None
 def batch_fetch_mukkadams(mukkadam_ids: List[int], max_workers: int = 5) -> Dict[int, Dict]:
     """
     Fetch multiple mukkadams in parallel
@@ -414,7 +358,7 @@ def get_all_mukkadams_from_api() -> List[Dict]:
         print("📡 Fetching all mukkadams from Supply API...")
         response = session.get(
             f'{SUPPLY_API_URL}/api/mukkadam/',
-            timeout=60
+            timeout=600
         )
         
         if response.status_code == 200:
@@ -470,7 +414,7 @@ def get_all_transport_providers_from_api() -> List[Dict]:
         print("📡 Fetching all transport providers from Supply API...")
         response = session.get(
             f'{SUPPLY_API_URL}/api/transport-providers/',
-            timeout=60
+            timeout=600
         )
         
         if response.status_code == 200:

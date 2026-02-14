@@ -4,13 +4,13 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
 
-from .views import (DetailedRecommendationView, MakeCallView, UserProfileView,
-   mukkadam_scorecard_details,UserListAPIView,edit_activity,mark_activity_lost,unmark_activity_lost,
-    mukkadam_scorecard_summary,update_activity,completed_allocations_list,pending_jobs_list,
-    JobActivityViewSet, get_job_details,get_user_calls,get_call_details,MakeCallViews,
-    AllocationViewSet,transporter_work_history,ExotelWebhookView,partially_allocated_jobs_list,
-    jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,lost_jobs_list,
-    activity_logs_list,allocations_list,mukkadam_work_history,allocated_jobs_list,
+from .views import (DetailedRecommendationView, MakeCallView, UserProfileView,FarmerPaymentViewSet,
+   mukkadam_scorecard_details,UserListAPIView,edit_activity,mark_activity_lost,unmark_activity_lost,financial_breakdown_detail,
+    mukkadam_scorecard_summary,update_activity,completed_allocations_list,pending_jobs_list,ops_webhook_receiver,
+    JobActivityViewSet,get_user_calls,get_call_details,MakeCallViews,FarmerCallViewSet,get_job_details,
+    AllocationViewSet,transporter_work_history,ExotelWebhookView,partially_allocated_jobs_list,get_unmatched_farmer_payments,link_farmer_payment,unlink_farmer_payment,
+    jobs_list,PaymentRequestViewSet,TransportPaymentRequestViewSet,lost_jobs_list,farmer_payment_summary,
+    activity_logs_list,allocations_list,mukkadam_work_history,allocated_jobs_list,total_jobs_view,
     allocations_by_mobile # ✅ Already imported
 )
 from django.views.decorators.csrf import csrf_exempt
@@ -25,12 +25,18 @@ router.register(r'allocations', AllocationViewSet, basename='allocation')
 router.register(r'payment-requests', PaymentRequestViewSet, basename='payment-request')
 router.register(r'transport-payment-requests', TransportPaymentRequestViewSet, basename='transport-payment-request')
 
-
-
+router.register(r'farmer-calls', FarmerCallViewSet, basename='farmer-call')
+router.register(r'farmer-payments', FarmerPaymentViewSet, basename='farmer-payment')
 urlpatterns = [
     # ========================================
     # AUTHENTICATION ENDPOINTS
     # ========================================
+    path('farmer-payment-summary/', farmer_payment_summary, name='farmer-payment-summary'),
+    path('allocation/',allocations_list,name= 'allocation-list'),
+    path('unmatched-farmer-payments/', get_unmatched_farmer_payments, name='unmatched_farmer_payments'),
+    path('link-farmer-payment/', link_farmer_payment, name='link_farmer_payment'),
+    path('unlink-farmer-payment/', unlink_farmer_payment, name='unlink_farmer_payment'),
+
     # path('allocation-analytics/', comprehensive_analytics, name='allocation-analytics'),
     # path('supply-health/', supply_health_dashboard, name='supply-health'),
     # path('calls/user/', get_user_calls, name='user-calls'),
@@ -40,7 +46,9 @@ urlpatterns = [
     path('calls/<int:call_id>/', get_call_details, name='call-details'),
     path('calls/webhook/', ExotelWebhookView.as_view(), name='exotel-webhook'),
     path('calls/make/', MakeCallView.as_view(), name='make-call'),
-
+path('webhook/ops/', ops_webhook_receiver, name='ops_webhook'),
+path('total-jobs/', total_jobs_view, name='total-jobs'),
+path('financial-breakdown-detail/', financial_breakdown_detail, name='financial-breakdown-detail'),
     path('lost-jobs/', lost_jobs_list, name='lost-jobs-list'),
     # path('api/calls/status/<str:call_sid>/', CallStatusView.as_view(), name='call-status'),
     # path('api/calls/update/<str:call_sid>/', UpdateCallDetailsView.as_view(), name='update-call'),
