@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 .env
 venv/
-
+tender/migrations/
 data/migrations/
 
 # Django
