@@ -11,6 +11,11 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server:{
+     allowedHosts: [
+      "furtive-chrissy-reparably.ngrok-free.dev"
+    ]
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
