@@ -18,13 +18,13 @@ from django.contrib import admin
 # from django.urls import path, include
 from django.urls import path, include, re_path
 from django.conf import settings
-# from data.views import about
+
 from django.conf.urls.static import static
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('ap/', include('data.urls')),  # API must come FIRST
+  # API must come FIRST
     # path('', about, name='about'),
     path('tender/', include('tender.urls')),  # API must come FIRST
     
