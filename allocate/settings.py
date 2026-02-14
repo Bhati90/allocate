@@ -157,10 +157,7 @@ GEMINI_API_KEY = GEMINI_API_KEY_1
 # AWS_STORAGE_BUCKET_NAME = config('AWS_STORAGE_BUCKET_NAME')
 # AWS_S3_REGION_NAME = config('AWS_S3_REGION_NAME', default='ap-south-1')
 
-AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
-AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME')
-AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'ap-south-1')
+
 # --- 2. ENABLE SIGNING ---
 AWS_QUERYSTRING_AUTH = True  # <--- This generates the '?Signature=...'
 AWS_QUERYSTRING_EXPIRE = 3600  # Link expires in 1 hour (adjust as needed)
