@@ -84,7 +84,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
+    'data',
     'tender',
     'storages',
     'rest_framework',
@@ -220,34 +220,34 @@ CACHE_MUKKADAM_TIMEOUT = 3600  # 1 hour
 CACHE_FARMER_TIMEOUT = 3600    # 1 hour
 CACHE_TRANSPORT_TIMEOUT = 21600  # 6 hours
 CACHE_JOB_TIMEOUT = 1800  # 30 minutes
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'registration_db',
-#         'USER': 'postgres',
-#         'PASSWORD': 'new_password',
-#         'HOST': 'localhost',
-#         'PORT': '5432',
-#         'OPTIONS': {
-#             'client_encoding': 'UTF8',
-#         },
-#     }
-# }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'registration_db',
+        'USER': 'postgres',
+        'PASSWORD': 'new_password',
+        'HOST': 'localhost',
+        'PORT': '5432',
+        'OPTIONS': {
+            'client_encoding': 'UTF8',
+        },
+    }
+}
 
 # Static files
 
 
-DATABASES = {
-    'default': dj_database_url.config(
-        default=os.environ.get("DATABASE_URL")
-    )
-}
-STATIC_URL = '/static/'
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-
+# DATABASES = {
+#     'default': dj_database_url.config(
+#         default=os.environ.get("DATABASE_URL")
+#     )
+# }
 # STATIC_URL = '/static/'
-# STATICFILES_DIRS = [BASE_DIR / 'static']
-# STATIC_ROOT = BASE_DIR / 'staticfiles'
+# STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+STATIC_URL = '/static/'
+STATICFILES_DIRS = [BASE_DIR / 'static']
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
