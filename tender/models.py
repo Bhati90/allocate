@@ -51,24 +51,38 @@ class ActivityCatalog(models.Model):
     def __str__(self):
         return f"{self.name} {'(Strict)' if self.is_strict else ''}"
 
-# models.py
 class Cluster(models.Model):
     name = models.CharField(max_length=100, unique=True)
 
     state_code = models.CharField(max_length=10, blank=True, null=True)
-    district_code = models.CharField(max_length=20, blank=True, null=True)
-    taluka_code = models.CharField(max_length=20, blank=True, null=True)
-    village_code = models.CharField(max_length=20, blank=True, null=True)
+    
+    # Change to JSONField for multiple selections
+    district_codes = models.JSONField(default=list, blank=True)  # List of district codes
+    taluka_codes = models.JSONField(default=list, blank=True)    # List of taluka codes
+    village_codes = models.JSONField(default=list, blank=True)   # List of village codes
 
-    district = models.CharField(max_length=100, blank=True, null=True)
-    taluka = models.CharField(max_length=100, blank=True, null=True)
-    village = models.CharField(max_length=100, blank=True, null=True)
+    # Store names for display
+    districts = models.JSONField(default=list, blank=True)  # List of district names
+    talukas = models.JSONField(default=list, blank=True)    # List of taluka names
+    villages = models.JSONField(default=list, blank=True)   # List of village names
 
     note = models.TextField(blank=True, null=True)
 
     def __str__(self):
         return self.name
-
+    
+    # Helper properties for backward compatibility
+    @property
+    def district(self):
+        return ', '.join(self.districts) if self.districts else ''
+    
+    @property
+    def taluka(self):
+        return ', '.join(self.talukas) if self.talukas else ''
+    
+    @property
+    def village(self):
+        return ', '.join(self.villages) if self.villages else ''
 # ============================================================================
 # JOB/BOOKING MODELS
 # ============================================================================

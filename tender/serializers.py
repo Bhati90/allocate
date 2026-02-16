@@ -436,23 +436,38 @@ from rest_framework import serializers
 from .models import Cluster
 
 class ClusterSerializer(serializers.ModelSerializer):
+    # Add computed fields for backward compatibility
+    district = serializers.SerializerMethodField()
+    taluka = serializers.SerializerMethodField()
+    village = serializers.SerializerMethodField()
+    
     class Meta:
         model = Cluster
         fields = [
             'id',
             'name',
-            
             'state_code',
-            'district_code',
-            'taluka_code',
-            'village_code',
-            'district',
-            'taluka',
-            'village',
+            'district_codes',
+            'taluka_codes',
+            'village_codes',
+            'districts',
+            'talukas',
+            'villages',
+            'district',  # computed
+            'taluka',    # computed
+            'village',   # computed
             'note',
         ]
         read_only_fields = ['id']
-# serializers.py
+    
+    def get_district(self, obj):
+        return ', '.join(obj.districts) if obj.districts else ''
+    
+    def get_taluka(self, obj):
+        return ', '.join(obj.talukas) if obj.talukas else ''
+    
+    def get_village(self, obj):
+        return ', '.join(obj.villages) if obj.villages else ''
 class PlotSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plot

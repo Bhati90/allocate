@@ -1,7 +1,6 @@
 // App.tsx (TenderFront)
 import React, { useEffect, useState } from 'react';
 import FarmScheduler from './Farm';
-// import ClusterActivityCalendar from './ClusterCalendar';
 import ClusterActivityCalendar from './ClusterCalender';
 import { API_BASE_URL } from './types/config';
 import './Farm.css';
@@ -12,6 +11,9 @@ interface Cluster {
   district?: string;
   taluka?: string;
   village?: string;
+  districts?: string[];
+  talukas?: string[];
+  villages?: string[];
 }
 
 interface StateOption {
@@ -51,9 +53,11 @@ const TenderFront: React.FC = () => {
   const [villages, setVillages] = useState<VillageOption[]>([]);
 
   const [selectedState, setSelectedState] = useState<string>('MH');
-  const [selectedDistrict, setSelectedDistrict] = useState<string>('');
-  const [selectedTaluka, setSelectedTaluka] = useState<string>('');
-  const [selectedVillage, setSelectedVillage] = useState<string>('');
+  
+  // Change to arrays for multi-select
+  const [selectedDistricts, setSelectedDistricts] = useState<string[]>([]);
+  const [selectedTalukas, setSelectedTalukas] = useState<string[]>([]);
+  const [selectedVillages, setSelectedVillages] = useState<string[]>([]);
 
   // Calendar modal state
   const [showCalendar, setShowCalendar] = useState(false);
@@ -87,11 +91,11 @@ const TenderFront: React.FC = () => {
   useEffect(() => {
     if (!selectedState) {
       setDistricts([]);
-      setSelectedDistrict('');
+      setSelectedDistricts([]);
       setTalukas([]);
       setVillages([]);
-      setSelectedTaluka('');
-      setSelectedVillage('');
+      setSelectedTalukas([]);
+      setSelectedVillages([]);
       return;
     }
 
@@ -101,67 +105,129 @@ const TenderFront: React.FC = () => {
       );
       const data = await res.json();
       setDistricts(data);
-      setSelectedDistrict('');
+      setSelectedDistricts([]);
       setTalukas([]);
       setVillages([]);
-      setSelectedTaluka('');
-      setSelectedVillage('');
+      setSelectedTalukas([]);
+      setSelectedVillages([]);
     };
 
     loadDistricts();
   }, [selectedState]);
 
-  // load talukas when district changes
+  // load talukas when districts change
   useEffect(() => {
-    if (!selectedState || !selectedDistrict) {
+    if (!selectedState || selectedDistricts.length === 0) {
       setTalukas([]);
-      setSelectedTaluka('');
+      setSelectedTalukas([]);
       setVillages([]);
-      setSelectedVillage('');
+      setSelectedVillages([]);
       return;
     }
 
     const loadTalukas = async () => {
-      const res = await fetch(
-        `${API_BASE_URL}/locations/talukas/?state_code=${selectedState}&district_code=${selectedDistrict}`
+      // Fetch talukas for all selected districts
+      const allTalukas: TalukaOption[] = [];
+      
+      for (const districtCode of selectedDistricts) {
+        const res = await fetch(
+          `${API_BASE_URL}/locations/talukas/?state_code=${selectedState}&district_code=${districtCode}`
+        );
+        const data = await res.json();
+        allTalukas.push(...data);
+      }
+      
+      // Remove duplicates based on subdistrictcode
+      const uniqueTalukas = Array.from(
+        new Map(allTalukas.map(t => [t.subdistrictcode, t])).values()
       );
-      const data = await res.json();
-      setTalukas(data);
-      setSelectedTaluka('');
+      
+      setTalukas(uniqueTalukas);
+      setSelectedTalukas([]);
       setVillages([]);
-      setSelectedVillage('');
+      setSelectedVillages([]);
     };
 
     loadTalukas();
-  }, [selectedState, selectedDistrict]);
+  }, [selectedState, selectedDistricts]);
 
-  // load villages when taluka changes
+  // load villages when talukas change
   useEffect(() => {
-    if (!selectedState || !selectedTaluka) {
+    if (!selectedState || selectedTalukas.length === 0) {
       setVillages([]);
-      setSelectedVillage('');
+      setSelectedVillages([]);
       return;
     }
 
     const loadVillages = async () => {
-      const res = await fetch(
-        `${API_BASE_URL}/locations/villages/?state_code=${selectedState}&taluka_code=${selectedTaluka}`
+      // Fetch villages for all selected talukas
+      const allVillages: VillageOption[] = [];
+      
+      for (const talukaCode of selectedTalukas) {
+        const res = await fetch(
+          `${API_BASE_URL}/locations/villages/?state_code=${selectedState}&taluka_code=${talukaCode}`
+        );
+        const data = await res.json();
+        allVillages.push(...data);
+      }
+      
+      // Remove duplicates based on villagecode
+      const uniqueVillages = Array.from(
+        new Map(allVillages.map(v => [v.villagecode, v])).values()
       );
-      const data = await res.json();
-      setVillages(data);
-      setSelectedVillage('');
+      
+      setVillages(uniqueVillages);
+      setSelectedVillages([]);
     };
 
     loadVillages();
-  }, [selectedState, selectedTaluka]);
+  }, [selectedState, selectedTalukas]);
+
+  const handleDistrictChange = (districtCode: string) => {
+    setSelectedDistricts(prev => {
+      if (prev.includes(districtCode)) {
+        return prev.filter(d => d !== districtCode);
+      } else {
+        return [...prev, districtCode];
+      }
+    });
+  };
+
+  const handleTalukaChange = (talukaCode: string) => {
+    setSelectedTalukas(prev => {
+      if (prev.includes(talukaCode)) {
+        return prev.filter(t => t !== talukaCode);
+      } else {
+        return [...prev, talukaCode];
+      }
+    });
+  };
+
+  const handleVillageChange = (villageCode: string) => {
+    setSelectedVillages(prev => {
+      if (prev.includes(villageCode)) {
+        return prev.filter(v => v !== villageCode);
+      } else {
+        return [...prev, villageCode];
+      }
+    });
+  };
 
   const handleCreateCluster = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const districtObj = districts.find((d) => d.districtcode === selectedDistrict);
-      const talukaObj = talukas.find((t) => t.subdistrictcode === selectedTaluka);
-      const villageObj = villages.find((v) => v.villagecode === selectedVillage);
+      const districtNames = selectedDistricts
+        .map(code => districts.find(d => d.districtcode === code)?.districtnameenglish)
+        .filter(Boolean) as string[];
+      
+      const talukaNames = selectedTalukas
+        .map(code => talukas.find(t => t.subdistrictcode === code)?.subdistrictnameenglish)
+        .filter(Boolean) as string[];
+      
+      const villageNames = selectedVillages
+        .map(code => villages.find(v => v.villagecode === code)?.villagenameenglish)
+        .filter(Boolean) as string[];
 
       const res = await fetch(`${API_BASE_URL}/api/clusters/`, {
         method: 'POST',
@@ -169,12 +235,12 @@ const TenderFront: React.FC = () => {
         body: JSON.stringify({
           name: newName,
           state_code: selectedState,
-          district_code: selectedDistrict,
-          taluka_code: selectedTaluka,
-          village_code: selectedVillage,
-          district: districtObj?.districtnameenglish ?? '',
-          taluka: talukaObj?.subdistrictnameenglish ?? '',
-          village: villageObj?.villagenameenglish ?? '',
+          district_codes: selectedDistricts,
+          taluka_codes: selectedTalukas,
+          village_codes: selectedVillages,
+          districts: districtNames,
+          talukas: talukaNames,
+          villages: villageNames,
         }),
       });
 
@@ -261,61 +327,73 @@ const TenderFront: React.FC = () => {
                 </select>
               </label>
 
+              {/* Multi-select Districts */}
               <label className="form-label">
-                District
-                <select
-                  className="form-input"
-                  value={selectedDistrict}
-                  onChange={(e) => setSelectedDistrict(e.target.value)}
-                  disabled={!selectedState || districts.length === 0}
-                >
-                  <option value="">Select district</option>
+                Districts ({selectedDistricts.length} selected)
+                <div className="multi-select-container">
                   {districts.map((d) => (
-                    <option key={d.districtcode} value={d.districtcode}>
-                      {d.districtnameenglish}
-                    </option>
+                    <label key={d.districtcode} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={selectedDistricts.includes(d.districtcode)}
+                        onChange={() => handleDistrictChange(d.districtcode)}
+                        disabled={!selectedState}
+                      />
+                      <span>{d.districtnameenglish}</span>
+                    </label>
                   ))}
-                </select>
+                  {districts.length === 0 && selectedState && (
+                    <p className="empty-message">No districts available</p>
+                  )}
+                </div>
               </label>
 
+              {/* Multi-select Talukas */}
               <label className="form-label">
-                Taluka
-                <select
-                  className="form-input"
-                  value={selectedTaluka}
-                  onChange={(e) => setSelectedTaluka(e.target.value)}
-                  disabled={!selectedDistrict || talukas.length === 0}
-                >
-                  <option value="">Select taluka</option>
+                Talukas ({selectedTalukas.length} selected)
+                <div className="multi-select-container">
                   {talukas.map((t) => (
-                    <option key={t.subdistrictcode} value={t.subdistrictcode}>
-                      {t.subdistrictnameenglish}
-                    </option>
+                    <label key={t.subdistrictcode} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={selectedTalukas.includes(t.subdistrictcode)}
+                        onChange={() => handleTalukaChange(t.subdistrictcode)}
+                        disabled={selectedDistricts.length === 0}
+                      />
+                      <span>{t.subdistrictnameenglish}</span>
+                    </label>
                   ))}
-                </select>
+                  {talukas.length === 0 && selectedDistricts.length > 0 && (
+                    <p className="empty-message">No talukas available</p>
+                  )}
+                </div>
               </label>
 
+              {/* Multi-select Villages */}
               <label className="form-label">
-                Village
-                <select
-                  className="form-input"
-                  value={selectedVillage}
-                  onChange={(e) => setSelectedVillage(e.target.value)}
-                  disabled={!selectedTaluka || villages.length === 0}
-                >
-                  <option value="">Select village</option>
+                Villages ({selectedVillages.length} selected)
+                <div className="multi-select-container">
                   {villages.map((v) => (
-                    <option key={v.villagecode} value={v.villagecode}>
-                      {v.villagelocalname || v.villagenameenglish}
-                    </option>
+                    <label key={v.villagecode} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={selectedVillages.includes(v.villagecode)}
+                        onChange={() => handleVillageChange(v.villagecode)}
+                        disabled={selectedTalukas.length === 0}
+                      />
+                      <span>{v.villagelocalname || v.villagenameenglish}</span>
+                    </label>
                   ))}
-                </select>
+                  {villages.length === 0 && selectedTalukas.length > 0 && (
+                    <p className="empty-message">No villages available</p>
+                  )}
+                </div>
               </label>
 
               <button
                 className="btn-primary full-width"
                 type="submit"
-                disabled={loading || !newName || !selectedVillage}
+                disabled={loading || !newName || selectedVillages.length === 0}
               >
                 + Create & open
               </button>

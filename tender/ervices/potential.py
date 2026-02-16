@@ -69,41 +69,126 @@ def compute_cluster_potential(cluster: Cluster) -> Dict[str, List[PotentialJobDT
         if not plot_jobs:
             continue
 
-        # all activities already booked on this plot (any job)
-        booked_ids = {
-            act.activity_id
-            for job in plot_jobs
-            for act in job.activities.all()
-            if act.plot_id == plot.id
-        }
+        # Collect all JobActivities on this plot
+        from tender.models import JobActivity
+        
+        acts_on_plot = (
+            JobActivity.objects.filter(job__in=plot_jobs, plot=plot)
+            .select_related("activity", "job")
+        )
 
-        # choose base date: earliest existing activity on this plot
-        booked_dates = [
-            act.scheduled_date
-            for job in plot_jobs
-            for act in job.activities.all()
-            if act.plot_id == plot.id and act.scheduled_date
-        ]
-        base_date = min(booked_dates) if booked_dates else today
+        # Build per_activity info with booked area, rate, earliest date
+        per_activity = {}  # activity_id -> dict(booked_area, rate, job, farmer, activity, earliest_date)
+        for ja in acts_on_plot:
+            aid = ja.activity_id
+            total = float(ja.total_area or 0)
+            if aid not in per_activity:
+                per_activity[aid] = {
+                    "booked": 0.0,
+                    "rate": float(ja.rate_per_acre or 0),
+                    "job": ja.job,
+                    "farmer": ja.job.farmer,
+                    "activity": ja.activity,
+                    "date": ja.scheduled_date,
+                }
+            else:
+                per_activity[aid]["booked"] += total
+                # keep earliest scheduled_date
+                if ja.scheduled_date and (
+                    per_activity[aid]["date"] is None
+                    or ja.scheduled_date < per_activity[aid]["date"]
+                ):
+                    per_activity[aid]["date"] = ja.scheduled_date
 
+        # All activities already booked on this plot (any amount)
+        booked_ids = set(per_activity.keys())
 
+        # Build a map of activity_id -> lifecycle_index for ordering
+        activity_lifecycle_index = {act.id: idx for idx, act in enumerate(catalog_acts)}
 
-    # 1) Existing code: missing catalog activities => status NONE, full plot area
-        cumulative_days = 0
-        for act in catalog_acts:
+        # Find the latest booked activity in the lifecycle sequence
+        latest_booked_date = None
+        latest_booked_index = -1
+        
+        for aid in booked_ids:
+            if aid in activity_lifecycle_index and per_activity[aid]["date"]:
+                idx = activity_lifecycle_index[aid]
+                if idx > latest_booked_index:
+                    latest_booked_index = idx
+                    latest_booked_date = per_activity[aid]["date"]
+
+        # If no booked activities have dates, use today
+        if latest_booked_date is None:
+            latest_booked_date = today
+
+        # 1) Process PARTIAL activities (partially booked on this plot)
+        for aid, info in per_activity.items():
+            booked_area = info["booked"]
+            if booked_area >= plot_area:
+                continue  # fully booked, no yellow
+
+            # remaining area on this plot for this activity
+            remaining_area = max(plot_area - booked_area, 0.0)
+            if remaining_area <= 0:
+                continue
+
+            booked_rate = info["rate"] or cluster_rates.get(aid, 0.0)
+            if booked_rate <= 0:
+                continue
+
+            potential_revenue = remaining_area * booked_rate
+
+            # CRITICAL: Use the actual scheduled date from the booked activity
+            actual_date = info["date"] or today
+            potential_date_str = actual_date.isoformat()
+
+            activity_obj = info["activity"]
+            job = info["job"]
+            farmer = info["farmer"]
+
+            result[potential_date_str].append(
+                PotentialJobDTO(
+                    date=potential_date_str,
+                    activity_id=aid,
+                    activity_name=activity_obj.name,
+                    status="PARTIAL",
+                    area=remaining_area,
+                    cluster_rate=booked_rate,
+                    potential_revenue=potential_revenue,
+                    farmer_id=farmer.farmer_id,
+                    crop_name=job.crop_name,
+                    variety=job.variety,
+                    farmer_name=farmer.farmer_name,
+                    plot_id=plot.id,
+                    plot_name=plot.name,
+                    job_id=job.job_id,
+                )
+            )
+
+        # 2) Process NONE activities (not booked at all)
+        # Calculate dates based on the latest booked activity + gaps
+        current_date = latest_booked_date
+        
+        for idx, act in enumerate(catalog_acts):
             if act.id in booked_ids:
-                cumulative_days += effective_gap_days(cluster, act)
+                # Update current_date to this activity's actual date if it's later
+                if act.id in per_activity and per_activity[act.id]["date"]:
+                    act_date = per_activity[act.id]["date"]
+                    if act_date > current_date:
+                        current_date = act_date
                 continue
 
             cluster_rate = cluster_rates.get(act.id, 0.0)
             if cluster_rate <= 0:
-                cumulative_days += effective_gap_days(cluster, act)
                 continue
 
+            # Add gap from the last booked/processed activity
             gap_days = effective_gap_days(cluster, act)
-            potential_date = base_date + datetime.timedelta(days=cumulative_days)
+            potential_date = current_date + datetime.timedelta(days=gap_days)
             potential_date_str = potential_date.isoformat()
-            cumulative_days += gap_days
+            
+            # Update current_date for next unbooked activity
+            current_date = potential_date
 
             unbooked_area = plot_area
             potential_revenue = unbooked_area * cluster_rate
@@ -127,79 +212,6 @@ def compute_cluster_potential(cluster: Cluster) -> Dict[str, List[PotentialJobDT
                     job_id=job.job_id,
                     crop_name=job.crop_name,
                     variety=job.variety,
-                )
-            )
-
-        # 2) NEW: partially booked activities on this plot => status PARTIAL, remaining area
-        #    Collect per activity_id the total booked area and booked rate.
-        from tender.models import JobActivity  # if not already imported
-
-        acts_on_plot = (
-            JobActivity.objects.filter(job__in=plot_jobs, plot=plot)
-            .select_related("activity", "job")
-        )
-
-        per_activity = {}  # activity_id -> dict(total_booked_area, rate_per_acre, job, farmer, earliest_date)
-        for ja in acts_on_plot:
-            aid = ja.activity_id
-            total = float(ja.total_area or 0)
-            if aid not in per_activity:
-                per_activity[aid] = {
-                    "booked": 0.0,
-                    "rate": float(ja.rate_per_acre or 0),
-                    "job": ja.job,
-                    "farmer": ja.job.farmer,
-                    "activity": ja.activity,
-                    "date": ja.scheduled_date,
-                }
-            per_activity[aid]["booked"] += total
-            # keep earliest scheduled_date
-            if ja.scheduled_date and (
-                per_activity[aid]["date"] is None
-                or ja.scheduled_date < per_activity[aid]["date"]
-            ):
-                per_activity[aid]["date"] = ja.scheduled_date
-
-        for aid, info in per_activity.items():
-            booked_area = info["booked"]
-            if booked_area >= plot_area:
-                continue  # fully booked, no yellow
-
-            # remaining area on this plot for this activity
-            remaining_area = max(plot_area - booked_area, 0.0)
-            if remaining_area <= 0:
-                continue
-
-            booked_rate = info["rate"] or cluster_rates.get(aid, 0.0)
-            if booked_rate <= 0:
-                continue
-
-            potential_revenue = remaining_area * booked_rate
-
-            # date: use earliest booked date for that activity on this plot
-            base_date_act = info["date"] or base_date
-            potential_date_str = base_date_act.isoformat()
-
-            activity_obj = info["activity"]
-            job = info["job"]
-            farmer = info["farmer"]
-
-            result[potential_date_str].append(
-                PotentialJobDTO(
-                    date=potential_date_str,
-                    activity_id=aid,
-                    activity_name=activity_obj.name,
-                    status="PARTIAL",
-                    area=remaining_area,
-                    cluster_rate=booked_rate,          # use booked rate
-                    potential_revenue=potential_revenue,
-                    farmer_id=farmer.farmer_id,
-                    crop_name=job.crop_name,
-                    variety=job.variety,
-                    farmer_name=farmer.farmer_name,
-                    plot_id=plot.id,
-                    plot_name=plot.name,
-                    job_id=job.job_id,
                 )
             )
 
