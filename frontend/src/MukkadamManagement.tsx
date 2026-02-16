@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, X, Edit2, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { API_BASE_URL } from './types/config';
 
 interface Activity {
   id: number;
@@ -51,7 +52,7 @@ const MukkadamManagement: React.FC = () => {
 
   const loadMukkadams = async () => {
     try {
-      const response = await fetch('http://localhost:8001/tender/api/mukkadams/');
+      const response = await fetch(`${API_BASE_URL}/api/mukkadams/`);
       const data = await response.json();
       setMukkadams(data);
     } catch (error) {
@@ -61,7 +62,7 @@ const MukkadamManagement: React.FC = () => {
 
   const loadActivities = async () => {
     try {
-      const response = await fetch('http://localhost:8001/tender/api/activities/');
+      const response = await fetch(`${API_BASE_URL}/api/activities/`);
       const data = await response.json();
       setActivities(data);
     } catch (error) {
@@ -92,7 +93,7 @@ const MukkadamManagement: React.FC = () => {
 
     try {
       // Create mukkadam
-      const mukkadamResponse = await fetch('http://localhost:8001/tender/api/mukkadams/', {
+      const mukkadamResponse = await fetch(`${API_BASE_URL}/api/mukkadams/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -108,7 +109,7 @@ const MukkadamManagement: React.FC = () => {
       // Add activity rates
       for (const activity of selectedActivities) {
         if (activity.activity_id > 0) {
-          await fetch(`http://localhost:8001/tender/api/mukkadams/${mukkadam.mukkadam_id}/add_activity_rate/`, {
+          await fetch(`${API_BASE_URL}/api/mukkadams/${mukkadam.mukkadam_id}/add_activity_rate/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(activity)
@@ -131,7 +132,7 @@ const MukkadamManagement: React.FC = () => {
     if (!confirm('Are you sure you want to delete this mukkadam?')) return;
 
     try {
-      await fetch(`http://localhost:8001/tender/api/mukkadams/${mukkadamId}/`, {
+      await fetch(`${API_BASE_URL}/api/mukkadams/${mukkadamId}/`, {
         method: 'DELETE'
       });
       toast.success('Mukkadam deleted');

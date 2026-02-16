@@ -69,6 +69,40 @@ class CreateActivitySerializer(serializers.Serializer):
     # Common
     is_strict = serializers.BooleanField(default=False)
     estimated_workers_per_acre = serializers.IntegerField(default=10)
+class InsertActivitySerializer(serializers.Serializer):
+    """Serializer for inserting activity between existing ones"""
+    name = serializers.CharField(max_length=200)
+    activity_type = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    
+    # Rates
+    default_rate_per_acre = serializers.DecimalField(max_digits=10, decimal_places=2, default=0)
+    
+    # Position in lifecycle
+    insert_after_activity_id = serializers.IntegerField(
+        help_text="Insert this activity after which activity? (activity ID)"
+    )
+    gap_days_from_previous = serializers.IntegerField(
+        default=3,
+        help_text="How many days after the previous activity?"
+    )
+    
+    # Mukkadam defaults (optional)
+    mukkadam_rate_per_acre = serializers.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=0,
+        required=False
+    )
+    mukkadam_productivity_per_worker = serializers.DecimalField(
+        max_digits=5, 
+        decimal_places=3, 
+        default=0.150,
+        required=False
+    )
+    
+    # Common
+    is_strict = serializers.BooleanField(default=False)
+    estimated_workers_per_acre = serializers.IntegerField(default=10)
 
 class AddClusterActivitySerializer(serializers.Serializer):
     """Serializer for adding activity to a specific cluster"""

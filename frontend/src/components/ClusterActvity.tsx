@@ -124,6 +124,7 @@ const ClusterActivityAdder: React.FC<ClusterActivityAdderProps> = ({
             <X size={24} />
           </button>
         </div>
+        
 
         <form onSubmit={handleSubmit} className="activity-form">
           <div className="form-section">
