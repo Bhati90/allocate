@@ -6,6 +6,7 @@ import { Mukkadam } from '../types/types';
 
 import './detail.css'
 import { API_BASE_URL } from '@/types/config';
+
 interface Props {
   mukkadam: Mukkadam | null;
   onRefresh: () => void;
@@ -16,6 +17,17 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingActivity, setEditingActivity] = useState<number | null>(null);
   const [editValues, setEditValues] = useState<any>({});
+
+  // ✅ NEW: State for editing mukkadam details
+  const [editingMukkadam, setEditingMukkadam] = useState(false);
+  const [mukkadamEditValues, setMukkadamEditValues] = useState({
+    mukkadam_name: '',
+    crew_size: 0,
+    mobile_numbers: '',
+    village: '',
+    taluka: '',
+    district: ''
+  });
 
   // Form for adding new activity
   const [newActivity, setNewActivity] = useState({
@@ -28,6 +40,20 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
     loadActivities();
   }, []);
 
+  // ✅ NEW: Initialize mukkadam edit values when mukkadam changes
+  useEffect(() => {
+    if (mukkadam) {
+      setMukkadamEditValues({
+        mukkadam_name: mukkadam.mukkadam_name,
+        crew_size: mukkadam.crew_size,
+        mobile_numbers: mukkadam.mobile_numbers || '',
+        village: mukkadam.village || '',
+        taluka: mukkadam.taluka || '',
+        district: mukkadam.district || ''
+      });
+    }
+  }, [mukkadam]);
+
   const loadActivities = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/activities/`);
@@ -35,6 +61,52 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
       setActivities(data);
     } catch (error) {
       console.error('Failed to load activities');
+    }
+  };
+
+  // ✅ NEW: Handle mukkadam details edit
+  const handleEditMukkadamStart = () => {
+    setEditingMukkadam(true);
+  };
+
+  const handleEditMukkadamCancel = () => {
+    setEditingMukkadam(false);
+    if (mukkadam) {
+      setMukkadamEditValues({
+        mukkadam_name: mukkadam.mukkadam_name,
+        crew_size: mukkadam.crew_size,
+        mobile_numbers: mukkadam.mobile_numbers || '',
+        village: mukkadam.village || '',
+        taluka: mukkadam.taluka || '',
+        district: mukkadam.district || ''
+      });
+    }
+  };
+
+  const handleEditMukkadamSave = async () => {
+    if (!mukkadam) return;
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/mukkadams/${mukkadam.mukkadam_id}/`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(mukkadamEditValues)
+        }
+      );
+
+      if (response.ok) {
+        toast.success('Mukkadam details updated!');
+        setEditingMukkadam(false);
+        onRefresh();
+      } else {
+        const error = await response.json();
+        toast.error(error.error || 'Failed to update');
+      }
+    } catch (error) {
+      toast.error('Failed to update');
+      console.error(error);
     }
   };
 
@@ -71,13 +143,10 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
         toast.error('Failed to update');
       }
     } catch (error) {
-    //   toast.error('Failed to update');
       console.error(error);
     }
   };
 
-
-  
   const handleDeleteActivity = async (activityRateId: number) => {
     if (!confirm('Delete this activity rate?')) return;
 
@@ -150,36 +219,187 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
       {/* Header */}
       <div className="panel-header">
         <h2 className="panel-title">{mukkadam.mukkadam_name}</h2>
-        <button
-          className="btn-secondary"
-          onClick={() => setShowAddModal(true)}
-          title="Add Activity"
-        >
-          <Plus size={16} />
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {/* ✅ NEW: Edit button for mukkadam details */}
+          {editingMukkadam ? (
+            <>
+              <button
+                className="btn-success"
+                onClick={handleEditMukkadamSave}
+                title="Save"
+              >
+                <Save size={16} />
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={handleEditMukkadamCancel}
+                title="Cancel"
+              >
+                <X size={16} />
+              </button>
+            </>
+          ) : (
+            <button
+              className="btn-secondary"
+              onClick={handleEditMukkadamStart}
+              title="Edit Details"
+            >
+              <Edit2 size={16} />
+            </button>
+          )}
+          <button
+            className="btn-secondary"
+            onClick={() => setShowAddModal(true)}
+            title="Add Activity"
+          >
+            <Plus size={16} />
+          </button>
+        </div>
       </div>
 
       {/* Content */}
       <div className="panel-content">
-        {/* Basic Info */}
+        {/* ✅ UPDATED: Basic Info with Edit Mode */}
         <div className="mukkadam-detail-info">
-          <div className="info-row">
-  <span className="info-label">Crew Size:</span>
-  <span className="info-value">
-    {(mukkadam as any).available_crew_size ?? mukkadam.crew_size} workers
-  </span>
-</div>
-
-          <div className="info-row">
-            <span className="info-label">Location:</span>
-            <span className="info-value">
-              📍 {mukkadam.village}, {mukkadam.taluka}, {mukkadam.district}
-            </span>
-          </div>
-          {mukkadam.mobile_numbers && (
+          {/* Name */}
+          {editingMukkadam ? (
             <div className="info-row">
-              <span className="info-label">Mobile:</span>
-              <span className="info-value">📞 {mukkadam.mobile_numbers}</span>
+              <span className="info-label">Name:</span>
+              <input
+                type="text"
+                value={mukkadamEditValues.mukkadam_name}
+                onChange={(e) =>
+                  setMukkadamEditValues({
+                    ...mukkadamEditValues,
+                    mukkadam_name: e.target.value
+                  })
+                }
+                className="form-input"
+                style={{ flex: 1 }}
+              />
+            </div>
+          ) : null}
+
+          {/* Crew Size */}
+          <div className="info-row">
+            <span className="info-label">Crew Size:</span>
+            {editingMukkadam ? (
+              <input
+                type="number"
+                value={mukkadamEditValues.crew_size}
+                onChange={(e) =>
+                  setMukkadamEditValues({
+                    ...mukkadamEditValues,
+                    crew_size: parseInt(e.target.value) || 0
+                  })
+                }
+                className="form-input"
+                style={{ flex: 1 }}
+              />
+            ) : (
+              <span className="info-value">
+                {(mukkadam as any).available_crew_size ?? mukkadam.crew_size} workers
+              </span>
+            )}
+          </div>
+
+          {/* Mobile */}
+          <div className="info-row">
+            <span className="info-label">Mobile:</span>
+            {editingMukkadam ? (
+              <input
+                type="text"
+                value={mukkadamEditValues.mobile_numbers}
+                onChange={(e) =>
+                  setMukkadamEditValues({
+                    ...mukkadamEditValues,
+                    mobile_numbers: e.target.value
+                  })
+                }
+                className="form-input"
+                placeholder="Phone numbers"
+                style={{ flex: 1 }}
+              />
+            ) : (
+              <span className="info-value">
+                {mukkadam.mobile_numbers ? `📞 ${mukkadam.mobile_numbers}` : 'Not set'}
+              </span>
+            )}
+          </div>
+
+          {/* Village */}
+          <div className="info-row">
+            <span className="info-label">Village:</span>
+            {editingMukkadam ? (
+              <input
+                type="text"
+                value={mukkadamEditValues.village}
+                onChange={(e) =>
+                  setMukkadamEditValues({
+                    ...mukkadamEditValues,
+                    village: e.target.value
+                  })
+                }
+                className="form-input"
+                placeholder="Village"
+                style={{ flex: 1 }}
+              />
+            ) : (
+              <span className="info-value">{mukkadam.village || 'Not set'}</span>
+            )}
+          </div>
+
+          {/* Taluka */}
+          <div className="info-row">
+            <span className="info-label">Taluka:</span>
+            {editingMukkadam ? (
+              <input
+                type="text"
+                value={mukkadamEditValues.taluka}
+                onChange={(e) =>
+                  setMukkadamEditValues({
+                    ...mukkadamEditValues,
+                    taluka: e.target.value
+                  })
+                }
+                className="form-input"
+                placeholder="Taluka"
+                style={{ flex: 1 }}
+              />
+            ) : (
+              <span className="info-value">{mukkadam.taluka || 'Not set'}</span>
+            )}
+          </div>
+
+          {/* District */}
+          <div className="info-row">
+            <span className="info-label">District:</span>
+            {editingMukkadam ? (
+              <input
+                type="text"
+                value={mukkadamEditValues.district}
+                onChange={(e) =>
+                  setMukkadamEditValues({
+                    ...mukkadamEditValues,
+                    district: e.target.value
+                  })
+                }
+                className="form-input"
+                placeholder="District"
+                style={{ flex: 1 }}
+              />
+            ) : (
+              <span className="info-value">{mukkadam.district || 'Not set'}</span>
+            )}
+          </div>
+
+          {/* Full Location (only in view mode) */}
+          {!editingMukkadam && mukkadam.village && (
+            <div className="info-row">
+              <span className="info-label">Location:</span>
+              <span className="info-value">
+                📍 {mukkadam.village}, {mukkadam.taluka}, {mukkadam.district}
+              </span>
             </div>
           )}
         </div>
@@ -193,14 +413,13 @@ const MukkadamDetailPanel: React.FC<Props> = ({ mukkadam, onRefresh }) => {
               {mukkadam.activity_rates.map((activityRate: any) => {
                 const isEditing = editingActivity === activityRate.id;
                 const effectiveCrew =
-  (mukkadam as any).available_crew_size ?? mukkadam.crew_size;
+                  (mukkadam as any).available_crew_size ?? mukkadam.crew_size;
 
-const dailyCapacity = effectiveCrew *
-  (isEditing ? editValues.productivity_per_worker : activityRate.productivity_per_worker);
+                const dailyCapacity = effectiveCrew *
+                  (isEditing ? editValues.productivity_per_worker : activityRate.productivity_per_worker);
 
                 return (
                   <div key={activityRate.id} className="activity-rate-card">
-                    {/* Activity Name */}
                     <div className="activity-rate-header">
                       <span className="activity-name">
                         {activityRate.activity_name}
@@ -244,7 +463,6 @@ const dailyCapacity = effectiveCrew *
                       </div>
                     </div>
 
-                    {/* Rate & Productivity */}
                     <div className="activity-rate-details">
                       <div className="detail-item">
                         <label>Rate (₹/acre)</label>
@@ -289,7 +507,6 @@ const dailyCapacity = effectiveCrew *
                       </div>
                     </div>
 
-                    {/* Daily Capacity */}
                     <div className="daily-capacity">
                       Daily Capacity: <strong>{dailyCapacity.toFixed(2)} acres</strong>
                     </div>
@@ -370,12 +587,11 @@ const dailyCapacity = effectiveCrew *
                   className="form-input"
                 />
                 <span className="form-hint">
-  Daily capacity:{' '}
-  {( ((mukkadam as any).available_crew_size ?? mukkadam.crew_size) *
-     newActivity.productivity_per_worker
-   ).toFixed(2)} acres
-</span>
-
+                  Daily capacity:{' '}
+                  {(((mukkadam as any).available_crew_size ?? mukkadam.crew_size) *
+                    newActivity.productivity_per_worker
+                  ).toFixed(2)} acres
+                </span>
               </div>
             </div>
 
