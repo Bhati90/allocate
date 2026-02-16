@@ -430,3 +430,55 @@
 .job-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
+
+
+.maxwork-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.maxwork-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  font-size: 12px;
+}
+
+.maxwork-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.maxwork-header .team-name {
+  color: #111827;
+}
+
+.maxwork-header .activity-name {
+  color: #2563eb;
+}
+
+.maxwork-body div {
+  color: #4b5563;
+}
+
+.maxwork-filters {
+  margin: 6px 0 8px;
+  font-size: 12px;
+}
+
+.maxwork-filters select {
+  margin-left: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.maxwork-summary {
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: #111827;
+}

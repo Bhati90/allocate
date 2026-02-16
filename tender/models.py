@@ -150,6 +150,7 @@ class Plot(models.Model):
 
     def __str__(self):
         return f"{self.farmer.farmer_name} - {self.name}"
+
 class ClusterActivityRate(models.Model):
     """
     Cluster-specific default rate for activities
@@ -1008,7 +1009,46 @@ class PaymentChangeLog(models.Model):
     def __str__(self):
         return f"{self.payment_type} {self.change_type} at {self.changed_at}"
 
+# models.py
 
+class WebhookLog(models.Model):
+    """Log all webhook attempts for debugging"""
+    
+    STATUS_CHOICES = [
+        ('success', 'Success'),
+        ('partial', 'Partial Success'),
+        ('failed', 'Failed'),
+    ]
+    
+    webhook_data = models.JSONField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    error_type = models.CharField(max_length=100, blank=True, null=True)
+    error_message = models.TextField(blank=True, null=True)
+    
+    # What was processed
+    farmer_id = models.CharField(max_length=50, blank=True, null=True)
+    job_id = models.CharField(max_length=100, blank=True, null=True)
+    cluster_matched = models.BooleanField(default=False)
+    cluster_id = models.IntegerField(blank=True, null=True)
+    
+    # Processing details
+    activities_processed = models.IntegerField(default=0)
+    activities_failed = models.IntegerField(default=0)
+    plots_created = models.IntegerField(default=0)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'webhook_log'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['farmer_id']),
+            models.Index(fields=['job_id']),
+        ]
+    
+    def __str__(self):
+        return f"Webhook {self.status} - {self.created_at.strftime('%Y-%m-%d %H:%M')}"
 # ============================================================================
 # HELPER/UTILITY MODELS
 # ============================================================================

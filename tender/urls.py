@@ -16,6 +16,8 @@ from .views import (
     suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs
 )
 
+from .webhook import booking_webhook
+
 # Create router
 router = DefaultRouter()
 
@@ -55,6 +57,9 @@ path('api/clusters/<int:cluster_id>/activity-calendar/', cluster_activity_calend
     path('api/clusters/<int:cluster_id>/plots/', get_cluster_plots, name='cluster-plots'),
         path( "api/clusters/<int:cluster_id>/potential_jobs/",
   cluster_potential_jobs,
-  name="cluster-potential-jobs")
+  name="cluster-potential-jobs"),
+
+
+  path('webhook/booking/', booking_webhook, name='booking_webhook'),
   
   ]

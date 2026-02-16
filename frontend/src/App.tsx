@@ -37,16 +37,16 @@ const App = () => (
       <Sonner />
       <BrowserRouter basename="/">
         <Routes>
-          <Route path="/loginf" element={<Login />} />
+          {/* <Route path="/loginf" element={<Login />} />
           
           <Route path="/analyatics" element={
             <AdminRoute><MukkadamScorecard /></AdminRoute>
-          } />
+          } /> */}
 
-          <Route path="/tender" element={
+          <Route path="/" element={
            <TenderFront />
           } />
-
+{/* 
           <Route path="/mukkadam" element={
             <AdminRoute><MukkadamManagement /></AdminRoute>
           } />
@@ -59,17 +59,17 @@ const App = () => (
 
           <Route path="/mukkadam-details/:mukkadamId" element={<AdminRoute><MukkadamDetails /></AdminRoute>} /> {/* ← Add this */}
         
-          <Route path="/allocations/new" element={<ProtectedRoute><AllocationDashboard /></ProtectedRoute>} />
-          {/* <Route path="/allocations/new" element={<ComplexAllocationDashboard />} /> */}
+          {/* <Route path="/allocations/new" element={<ProtectedRoute><AllocationDashboard /></ProtectedRoute>} />
+           <Route path="/allocations/new" element={<ComplexAllocationDashboard />} />
           <Route path="/allocations/:id" element={<AllocationView />} />
           <Route path = '/health' element= {<SupplyHealthDashboard/>} />
           <Route path="/dashboard" element={
             <ProtectedRoute><Dashboard /></ProtectedRoute>
-          } />
+          } />  */}
           
           
 
-          <Route path="*" element={<Navigate to="/dashboard" />} />
+          {/* <Route path="*" element={<Navigate to="/dashboard" />} /> */}
         </Routes>
       </BrowserRouter>
       </AuthProvider>
