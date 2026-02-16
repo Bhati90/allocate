@@ -30,6 +30,7 @@ ALLOWED_HOSTS = ['*']
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "https://allocate-1.onrender.com",
+    "https://tender.bharatintelligence.ai",
     "http://localhost:5173",
     "http://127.0.0.1:3000",
     "http://localhost:5174",
@@ -59,6 +60,7 @@ CORS_ALLOW_HEADERS = [
 # CSRF Settings
 CSRF_TRUSTED_ORIGINS = [
     "https://allocate-1.onrender.com",
+    "https://tender.bharatintelligence.ai",
     "https://supply.bharatintelligence.ai",
     "https://demand.bharatintelligence.ai",
     "https://payment.bharatintelligence.ai",
@@ -220,28 +222,28 @@ CACHE_MUKKADAM_TIMEOUT = 3600  # 1 hour
 CACHE_FARMER_TIMEOUT = 3600    # 1 hour
 CACHE_TRANSPORT_TIMEOUT = 21600  # 6 hours
 CACHE_JOB_TIMEOUT = 1800  # 30 minutes
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'registration_db',
-#         'USER': 'postgres',
-#         'PASSWORD': 'new_password',
-#         'HOST': 'localhost',
-#         'PORT': '5432',
-#         'OPTIONS': {
-#             'client_encoding': 'UTF8',
-#         },
-#     }
-# }
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'registration_db',
+        'USER': 'postgres',
+        'PASSWORD': 'new_password',
+        'HOST': 'localhost',
+        'PORT': '5432',
+        'OPTIONS': {
+            'client_encoding': 'UTF8',
+        },
+    }
+}
 
 # Static files
 
 
-DATABASES = {
-    'default': dj_database_url.config(
-        default=os.environ.get("DATABASE_URL")
-    )
-}
+# DATABASES = {
+#     'default': dj_database_url.config(
+#         default=os.environ.get("DATABASE_URL")
+#     )
+# }
 # STATIC_URL = '/static/'
 # STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 

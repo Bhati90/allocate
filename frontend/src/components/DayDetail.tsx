@@ -39,6 +39,17 @@ interface PotentialJob {
   jobId: string;
 }
 
+type MaxWorkRow = {
+  mukkadamId: number;
+  mukkadamName: string;
+  activityId: number;
+  activityName: string;
+  productivity: number;
+  availableWorkers: number;
+  maxArea: number;
+};
+
+const maxWorkRows: MaxWorkRow[] = [];
 
 interface DayDetailModalProps {
   date: Date;
@@ -78,13 +89,17 @@ onAllocationDateChange,
   onAllocationDelete,
   jobs,onStartAllocation,clusterId
 }) => {
-  const [activeTab, setActiveTab] = useState<'allocations' | 'jobs' | 'conflicts' |  'potential'>('allocations');
+const [activeTab, setActiveTab] =
+  useState<'allocations' | 'jobs' | 'conflicts' | 'potential' | 'maxwork'>(
+    'allocations'
+  );
 
   const dateStr = date.toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'short',
     day: 'numeric',
   });
+const [selectedMaxWorkActivity, setSelectedMaxWorkActivity] = useState<number | null>(null);
 
   const isoDate = date.toLocaleDateString('en-CA'); 
 
@@ -226,6 +241,61 @@ const handleEditAllocation = async () => {
 };
 
 
+// workers already allocated on this day, per mukkadam
+const usedWorkersByMukkadam = new Map<number, number>();
+
+allocations.forEach(a => {
+  const current = usedWorkersByMukkadam.get(a.mukkadam) || 0;
+  usedWorkersByMukkadam.set(a.mukkadam, current + (a.allocated_workers || 0));
+});
+
+const maxWorkMap = new Map<string, MaxWorkRow>();
+
+mukkadams.forEach((m) => {
+  const baseCrew =
+    (m as any).available_crew_size ?? m.crew_size ?? 0; // total for the day (after leaves/extra)
+  const used = usedWorkersByMukkadam.get(m.mukkadam_id) || 0;
+  const remainingWorkers = Math.max(baseCrew - used, 0);
+  if (remainingWorkers <= 0) return;
+
+  (m.activity_rates || []).forEach((rate: any) => {
+    const productivity = Number(rate.productivity_per_worker || 0);
+    if (!productivity) return;
+
+    const maxArea = remainingWorkers * productivity;
+    const key = `${m.mukkadam_id}-${rate.activity_id}`;
+
+    if (!maxWorkMap.has(key)) {
+      maxWorkMap.set(key, {
+        mukkadamId: m.mukkadam_id,
+        mukkadamName: m.mukkadam_name,
+        activityId: rate.activity_id,
+        activityName: rate.activity_name,
+        productivity,
+        availableWorkers: remainingWorkers,   // 👈 use remaining
+        maxArea,
+      });
+    }
+  });
+});
+
+const maxWorkRows = Array.from(maxWorkMap.values());
+
+// unique activities for the dropdown
+const maxWorkActivities = [
+  ...new Map(
+    maxWorkRows.map(r => [r.activityId, { id: r.activityId, name: r.activityName }])
+  ).values(),
+];
+
+// filter rows by selected activity
+const visibleMaxWorkRows = selectedMaxWorkActivity
+  ? maxWorkRows.filter(r => r.activityId === selectedMaxWorkActivity)
+  : maxWorkRows;
+
+// total capacity for the selected activity
+const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
+
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -268,6 +338,12 @@ const handleEditAllocation = async () => {
     onClick={() => setActiveTab('potential')}
   >
     Potential ({potentialJobs ? potentialJobs.length : 0})
+  </button>
+  <button
+    className={`modal-tab ${activeTab === 'maxwork' ? 'active' : ''}`}
+    onClick={() => setActiveTab('maxwork')}
+  >
+    Max work
   </button>
 </div>
 
@@ -692,6 +768,64 @@ const handleEditAllocation = async () => {
       )}
     </div>
   )}
+
+
+{activeTab === 'maxwork' && (
+  <div className="tab-content">
+    <h3 className="section-title">Max work for this day</h3>
+
+    <div className="maxwork-filters">
+      <label>
+        Activity:{' '}
+        <select
+          value={selectedMaxWorkActivity ?? ''}
+          onChange={(e) =>
+            setSelectedMaxWorkActivity(
+              e.target.value ? Number(e.target.value) : null
+            )
+          }
+        >
+          <option value="">All activities</option>
+          {maxWorkActivities.map(a => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+
+    {visibleMaxWorkRows.length === 0 ? (
+      <p className="empty-text">No capacity for this selection.</p>
+    ) : (
+      <>
+        <div className="maxwork-summary">
+          Total possible area:{' '}
+          <strong>{totalMaxArea.toFixed(2)} ac</strong>
+        </div>
+
+        <div className="maxwork-grid">
+          {visibleMaxWorkRows.map((row, idx) => (
+            <div key={idx} className="maxwork-card">
+              <div className="maxwork-header">
+                <span className="team-name">{row.mukkadamName}</span>
+                <span className="activity-name">{row.activityName}</span>
+              </div>
+              <div className="maxwork-body">
+                <div>{row.availableWorkers} workers available</div>
+                <div>
+                  {row.productivity.toFixed(2)} ac/worker/day →{' '}
+                  <strong>{row.maxArea.toFixed(2)} ac</strong>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </>
+    )}
+  </div>
+)}
+
 </div>
       </div>
     </div>
