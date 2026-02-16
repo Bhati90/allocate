@@ -1,10 +1,12 @@
 // ClusterCalendar.tsx - Add Mukkadam Rate Editing
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, Edit2 } from 'lucide-react';
+import { X, Save, Edit2, Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { API_BASE_URL } from './types/config';
 import './Cluster.css';
+import GlobalActivityManager from './components/Global';
+import ClusterActivityAdder from './components/ClusterActvity';
 
 interface ClusterActivityCalendarProps {
   clusterId: number;
@@ -55,7 +57,9 @@ const ClusterActivityCalendar: React.FC<ClusterActivityCalendarProps> = ({
 }) => {
   const [activities, setActivities] = useState<ActivityCalendarItem[]>([]);
   const [loading, setLoading] = useState(false);
-  
+  const [showGlobalActivityManager, setShowGlobalActivityManager] = useState(false);
+const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
+
   // Farmer editing states
   const [editingFarmerActivityId, setEditingFarmerActivityId] = useState<number | null>(null);
   const [editFarmerValues, setEditFarmerValues] = useState<{
@@ -198,10 +202,32 @@ const ClusterActivityCalendar: React.FC<ClusterActivityCalendarProps> = ({
     <div className="calendar-modal-overlay" onClick={onClose}>
       <div className="calendar-modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="calendar-modal-header">
-          <h2>{clusterName} - Activity Calendar & Rates</h2>
-          <button onClick={onClose} className="modal-close">
+          {/* <h2>{clusterName} - Activity Calendar & Rates</h2> */}
+          {/* <button onClick={onClose} className="modal-close">
             <X size={24} />
-          </button>
+          </button> */}
+          <div className="calendar-modal-header">
+  <h2>{clusterName} - Activity Calendar & Rates</h2>
+  <div className="header-actions">
+    <button
+      onClick={() => setShowGlobalActivityManager(true)}
+      className="btn-secondary"
+    >
+      <Plus size={16} />
+      New Global Activity
+    </button>
+    <button
+      onClick={() => setShowClusterActivityAdder(true)}
+      className="btn-primary"
+    >
+      <Plus size={16} />
+      Add to Cluster
+    </button>
+    <button onClick={onClose} className="modal-close">
+      <X size={24} />
+    </button>
+  </div>
+</div>
         </div>
 
         {/* Tabs */}
@@ -328,6 +354,23 @@ const ClusterActivityCalendar: React.FC<ClusterActivityCalendarProps> = ({
               </table>
             </div>
           )}
+
+          {showGlobalActivityManager && (
+  <GlobalActivityManager
+    onClose={() => setShowGlobalActivityManager(false)}
+    onSuccess={loadActivities}
+  />
+)}
+
+{showClusterActivityAdder && (
+  <ClusterActivityAdder
+    clusterId={clusterId}
+    clusterName={clusterName}
+    onClose={() => setShowClusterActivityAdder(false)}
+    onSuccess={loadActivities}
+  />
+)}
+
 
           {/* Mukkadam Tab */}
           {activeTab === 'mukkadam' && (
