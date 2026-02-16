@@ -19,17 +19,21 @@ from django.contrib import admin
 from django.urls import path, include, re_path
 from django.conf import settings
 from tender.views import about
+# from data.views import about as data_about
 from django.conf.urls.static import static
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
   # API must come FIRST
+
+    path('ap/', include('data.urls')),
     path('', about, name='about'),
-    path('tender/', include('tender.urls')),  # API must come FIRST
+    path('tender/', include('tender.urls')),
+      # API must come FIRST
     
     # ONLY if you need SPA routing, and ONLY at the very end
-    # re_path(r'^(?!ap/).*$', about),  # ← Negative lookahead: exclude 'ap/'
+    re_path(r'^(?!ap/).*$', about),  # ← Negative lookahead: exclude 'ap/'
 ]
 if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
