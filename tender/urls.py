@@ -30,6 +30,13 @@ router.register(r'mukkadams', MukkadamViewSet, basename='mukkadam')
 router.register(r'allocations', AllocationViewSet, basename='allocation')
 router.register(r'mukkadam-rates', MukkadamActivityRateViewSet, basename='mukkadam-rate')
 router.register(r'farmers', FarmerViewSet, basename='farmer')
+
+
+# urls.py
+
+router.register(r'mukkadam-rates', MukkadamActivityRateViewSet, basename='mukkadam-rates')
+
+
 router.register(r'clusters', ClusterViewSet, basename='cluster')
 router.register(r'leaves', LeaveViewSet, basename='leave')
 router.register(r'planning', PlanningViewSet, basename='planning')
