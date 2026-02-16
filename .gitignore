@@ -4,7 +4,7 @@ __pycache__/
 .env
 venv/
 tender/migrations/
-data/migrations/
+# data/migrations/
 
 # Django
 db.sqlite3
