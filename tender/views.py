@@ -606,6 +606,8 @@ def get_villages(request):
 # ACTIVITY CATALOG VIEWSET
 # =============================================================================
 
+# views.py
+
 class ActivityCatalogViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing activity catalog
@@ -635,6 +637,70 @@ class ActivityCatalogViewSet(viewsets.ModelViewSet):
         
         return queryset.order_by('name')
     
+    @action(detail=False, methods=['post'])
+    def create_global_activity(self, request):
+        """
+        Create a new global activity with farmer and mukkadam defaults
+        
+        POST /api/activities/create_global_activity/
+        Body: {
+            "name": "New Activity",
+            "activity_type": "pruning",
+            "default_rate_per_acre": 1000,
+            "default_gap_days": 7,
+            "mukkadam_rate_per_acre": 800,
+            "mukkadam_productivity_per_worker": 0.150,
+            "is_strict": false,
+            "estimated_workers_per_acre": 10
+        }
+        """
+        serializer = CreateActivitySerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        data = serializer.validated_data
+        
+        # Check if activity already exists
+        if ActivityCatalog.objects.filter(name__iexact=data['name']).exists():
+            return Response(
+                {'error': f'Activity "{data["name"]}" already exists'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Create activity in catalog
+        activity = ActivityCatalog.objects.create(
+            name=data['name'],
+            activity_type=data.get('activity_type', ''),
+            default_rate_per_acre=data['default_rate_per_acre'],
+            is_strict=data['is_strict'],
+            estimated_workers_per_acre=data['estimated_workers_per_acre'],
+            default_gap_days=data['default_gap_days'],
+            source='custom'
+        )
+        
+        # Create global schedule rule
+        ActivityScheduleRule.objects.create(
+            activity=activity,
+            gap_days=data['default_gap_days'],
+            phase_order=ActivityScheduleRule.objects.count() + 1
+        )
+        
+        # Note: Mukkadam defaults are stored per cluster, not globally
+        # They will be used when clusters are created or when adding to clusters
+        
+        return Response(
+            {
+                'success': True,
+                'message': f'Activity "{data["name"]}" created successfully',
+                'activity': ActivityCatalogDetailSerializer(activity).data,
+                'mukkadam_defaults': {
+                    'rate_per_acre': data['mukkadam_rate_per_acre'],
+                    'productivity_per_worker': data['mukkadam_productivity_per_worker']
+                }
+            },
+            status=status.HTTP_201_CREATED
+        )
     @action(detail=False, methods=['post'])
     def add_custom_activity(self, request):
         """
@@ -1672,6 +1738,125 @@ class ClusterViewSet(viewsets.ModelViewSet):
         if district_code:
             qs = qs.filter(district_code=district_code)
         return qs
+    
+    @action(detail=True, methods=['post'])
+    def add_activity(self, request, pk=None):
+        """
+        Add an activity to this cluster with custom rates
+        Can either use existing activity_id or create new one with activity_name
+        
+        POST /api/clusters/{id}/add_activity/
+        Body: {
+            "activity_id": 5,  // OR "activity_name": "New Activity"
+            "farmer_rate_per_acre": 1000,
+            "gap_days": 7,
+            "mukkadam_rate_per_acre": 800,
+            "mukkadam_productivity_per_worker": 0.150
+        }
+        """
+        cluster = self.get_object()
+        serializer = AddClusterActivitySerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        data = serializer.validated_data
+        
+        # Get or create activity
+        if 'activity_id' in data:
+            try:
+                activity = ActivityCatalog.objects.get(id=data['activity_id'])
+            except ActivityCatalog.DoesNotExist:
+                return Response(
+                    {'error': 'Activity not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        elif 'activity_name' in data:
+            # Create new activity if doesn't exist
+            activity, created = ActivityCatalog.objects.get_or_create(
+                name=data['activity_name'],
+                defaults={
+                    'source': 'custom',
+                    'default_rate_per_acre': data['farmer_rate_per_acre'],
+                    'default_gap_days': data['gap_days'],
+                    'estimated_workers_per_acre': 10,
+                }
+            )
+            
+            if created:
+                # Create global schedule rule
+                ActivityScheduleRule.objects.create(
+                    activity=activity,
+                    gap_days=data['gap_days'],
+                    phase_order=ActivityScheduleRule.objects.count() + 1
+                )
+        else:
+            return Response(
+                {'error': 'Either activity_id or activity_name is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Add/Update farmer rate for cluster
+        farmer_rate, created = ClusterActivityRate.objects.update_or_create(
+            cluster=cluster,
+            activity=activity,
+            defaults={'rate_per_acre': data['farmer_rate_per_acre']}
+        )
+        
+        # Add/Update schedule rule for cluster
+        schedule_rule, _ = ClusterActivityScheduleRule.objects.update_or_create(
+            cluster=cluster,
+            activity=activity,
+            defaults={'gap_days': data['gap_days']}
+        )
+        
+        # Add/Update mukkadam default rate for cluster
+        mukkadam_rate, _ = ClusterMukkadamActivityRate.objects.update_or_create(
+            cluster=cluster,
+            activity=activity,
+            defaults={
+                'rate_per_acre': data['mukkadam_rate_per_acre'],
+                'productivity_per_worker': data['mukkadam_productivity_per_worker']
+            }
+        )
+        
+        return Response({
+            'success': True,
+            'message': f'Activity "{activity.name}" {"created and " if created else ""}added to cluster "{cluster.name}"',
+            'activity': {
+                'id': activity.id,
+                'name': activity.name,
+                'farmer_rate': float(farmer_rate.rate_per_acre),
+                'gap_days': schedule_rule.gap_days,
+                'mukkadam_rate': float(mukkadam_rate.rate_per_acre),
+                'mukkadam_productivity': float(mukkadam_rate.productivity_per_worker),
+            }
+        }, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['get'])
+    def available_activities(self, request, pk=None):
+        """
+        Get all activities that can be added to this cluster
+        
+        GET /api/clusters/{id}/available_activities/
+        """
+        cluster = self.get_object()
+        
+        # Get activities already in cluster
+        existing_activity_ids = ClusterActivityRate.objects.filter(
+            cluster=cluster
+        ).values_list('activity_id', flat=True)
+        
+        # Get all activities not yet in cluster
+        available = ActivityCatalog.objects.exclude(
+            id__in=existing_activity_ids
+        ).values('id', 'name', 'activity_type', 'default_rate_per_acre', 'default_gap_days')
+        
+        return Response({
+            'cluster_id': cluster.id,
+            'cluster_name': cluster.name,
+            'available_activities': list(available)
+        })
 
 class AllocationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
@@ -2250,7 +2435,6 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import Cluster
 from .ervices.potential import compute_cluster_potential
-
 @api_view(["GET"])
 def cluster_potential_jobs(request, cluster_id: int):
     cluster = Cluster.objects.get(id=cluster_id)
@@ -2278,6 +2462,7 @@ def cluster_potential_jobs(request, cluster_id: int):
             for p in items
         ]
     return Response(out)
+
 
 # Example usage in views
 def example_allocation_flow(request):

@@ -19,13 +19,17 @@ logger = logging.getLogger(__name__)
 
 # Configure your farmer API base URL
 FARMER_API_BASE_URL = "https://demand.bharatintelligence.ai/fir"  # UPDATE THIS
+FARMER_API_TOKEN = "e8fa8310c9af344ca22ec6bd23960d609b09c704"
+# webhook.py
+
 
 
 def fetch_farmer_details(farmer_id: str):
     """Fetch farmer details from external API"""
     try:
         response = requests.get(
-            f"{FARMER_API_BASE_URL}/api/farmers/{farmer_id}/",
+            f"{FARMER_API_BASE_URL}/api/get_farmer_details/{farmer_id}/",
+            headers={"Authorization": f"Token {FARMER_API_TOKEN}"},
             timeout=10
         )
         response.raise_for_status()
@@ -71,6 +75,91 @@ def get_or_create_activity(activity_name: str):
     return activity, created
 
 
+def safe_update_farmer(farmer_id: str, webhook_data: dict, farmer_details: dict, matched_cluster):
+    """
+    Safely update farmer with only valid fields
+    """
+    # Get all valid field names from Farmer model
+    valid_fields = {f.name for f in Farmer._meta.get_fields() if not f.many_to_many and not f.one_to_many}
+    
+    # Build defaults with only valid fields
+    farmer_defaults = {
+        'cluster': matched_cluster,
+    }
+    
+    # Try to add farmer_name
+    if 'farmer_name' in valid_fields:
+        farmer_defaults['farmer_name'] = webhook_data.get('farmer_name', f"Farmer {farmer_id}")
+    
+    # If farmer API returned data, use it
+    if farmer_details:
+        # Map common field names (only if they exist in model)
+        field_mapping = {
+            'name': 'farmer_name',
+            'village': 'village',
+            'taluka': 'taluka', 
+            'district': 'district',
+            'state': 'state',
+            'phone': 'phone',
+            'mobile': 'phone',
+            'latitude': 'latitude',
+            'longitude': 'longitude',
+        }
+        
+        for api_field, model_field in field_mapping.items():
+            if model_field in valid_fields and api_field in farmer_details:
+                value = farmer_details[api_field]
+                if value:  # Only set non-empty values
+                    farmer_defaults[model_field] = value
+    
+    return Farmer.objects.update_or_create(
+        farmer_id=farmer_id,
+        defaults=farmer_defaults
+    )
+
+def safe_update_plot(plot_code: str, farmer, matched_cluster, plot_data: dict):
+    """
+    Safely update plot with only valid fields
+    """
+    # Get all valid field names from Plot model
+    valid_fields = {f.name for f in Plot._meta.get_fields() if not f.many_to_many and not f.one_to_many}
+    
+    plot_defaults = {
+        'farmer': farmer,
+        'cluster': matched_cluster,
+    }
+    
+    # Map common field names (only if they exist in model)
+    field_mapping = {
+        'name': 'name',
+        'plot_name': 'name',
+        'area_acres': 'area_acres',
+        'area': 'area_acres',
+        'latitude': 'latitude',
+        'longitude': 'longitude',
+        'village': 'village',
+        'crop_name': 'crop_name',
+        'variety': 'variety',
+    }
+    
+    for api_field, model_field in field_mapping.items():
+        if model_field in valid_fields and api_field in plot_data:
+            value = plot_data[api_field]
+            if value is not None:  # Allow 0 but not None
+                plot_defaults[model_field] = value
+    
+    # CRITICAL: Ensure area_acres has a default value if required
+    if 'area_acres' in valid_fields and 'area_acres' not in plot_defaults:
+        plot_defaults['area_acres'] = 0.0  # Default to 0 if not provided
+    
+    # Default name if not provided
+    if 'name' in valid_fields and 'name' not in plot_defaults:
+        plot_defaults['name'] = f"Plot {plot_code}"
+    
+    return Plot.objects.update_or_create(
+        plot_code=plot_code,
+        defaults=plot_defaults
+    )
 @csrf_exempt
 @require_http_methods(["POST"])
 @api_view(['POST'])
@@ -138,48 +227,30 @@ def booking_webhook(request):
                 log_data['cluster_id'] = matched_cluster.id
         
         with transaction.atomic():
-            # 1. Create or update Farmer
-            farmer_defaults = {
-                'farmer_name': webhook_data.get('farmer_name', f"Farmer {farmer_id}"),
-                'phone': webhook_data.get('phone', ''),
-                'cluster': matched_cluster,
-            }
-            
-            # Add additional fields from farmer API if available
-            if farmer_details:
-                farmer_defaults.update({
-                    'farmer_name': farmer_details.get('name', farmer_defaults['farmer_name']),
-                    'phone': farmer_details.get('phone', farmer_defaults['phone']),
-                    'village': village,
-                    'taluka': taluka,
-                    'district': district,
-                    'state': farmer_details.get('state'),
-                    # Add any other fields from your Farmer model
-                })
-            
-            farmer, farmer_created = Farmer.objects.update_or_create(
-                farmer_id=farmer_id,
-                defaults=farmer_defaults
+            # 1. Create or update Farmer (safely)
+            farmer, farmer_created = safe_update_farmer(
+                farmer_id, 
+                webhook_data, 
+                farmer_details, 
+                matched_cluster
             )
             
             # 2. Create or update Plots from farmer API
             if farmer_details and 'plots' in farmer_details:
                 for plot_data in farmer_details['plots']:
                     plot_code = plot_data.get('plot_id') or plot_data.get('id')
+                    if not plot_code:
+                        continue
                     
-                    Plot.objects.update_or_create(
-                        plot_code=plot_code,
-                        defaults={
-                            'farmer': farmer,
-                            'cluster': matched_cluster,
-                            'name': plot_data.get('name', f"Plot {plot_code}"),
-                            'area_acres': plot_data.get('area_acres', 0),
-                            'latitude': plot_data.get('latitude'),
-                            'longitude': plot_data.get('longitude'),
-                            # Add other plot fields
-                        }
+                    plot, plot_created = safe_update_plot(
+                        plot_code,
+                        farmer,
+                        matched_cluster,
+                        plot_data
                     )
-                    log_data['plots_created'] += 1
+                    
+                    if plot_created:
+                        log_data['plots_created'] += 1
             
             # 3. Create or update Job
             job_defaults = {
@@ -197,6 +268,7 @@ def booking_webhook(request):
                 defaults=job_defaults
             )
             
+            # Around line 235-250 in your webhook.py
             # 4. Process Activities
             for activity_data in activities_data:
                 try:
@@ -215,30 +287,17 @@ def booking_webhook(request):
                         plot = Plot.objects.get(plot_code=plot_code)
                     except Plot.DoesNotExist:
                         # Create plot if not found
-                        plot = Plot.objects.create(
-                            plot_code=plot_code,
-                            farmer=farmer,
-                            cluster=matched_cluster,
-                            name=f"Plot {plot_code}",
-                            area_acres=activity_data.get('area', 0),
+                        plot_data = {
+                            'area': activity_data.get('area', 0),  # Get area from activity
+                            'area_acres': activity_data.get('area', 0),  # ADD THIS LINE
+                        }
+                        plot, _ = safe_update_plot(
+                            plot_code,
+                            farmer,
+                            matched_cluster,
+                            plot_data
                         )
                         log_data['plots_created'] += 1
-                    
-                    # Create or update JobActivity
-                    JobActivity.objects.update_or_create(
-                        job=job,
-                        activity=activity,
-                        plot=plot,
-                        defaults={
-                            'scheduled_date': activity_data.get('scheduled_date'),
-                            'total_area': activity_data.get('area', 0),
-                            'rate_per_acre': activity_data.get('rate_per_acre', 0),
-                            'total_amount': activity_data.get('total_amount', 0),
-                            'status': activity_data.get('status', 'pending'),
-                        }
-                    )
-                    
-                    log_data['activities_processed'] += 1
                     
                 except Exception as e:
                     logger.error(f"Failed to process activity: {str(e)}")
@@ -258,7 +317,7 @@ def booking_webhook(request):
             'farmer_id': farmer_id,
             'job_id': job_id,
             'cluster_matched': log_data['cluster_matched'],
-            'cluster_id': log_data['cluster_id'],
+            'cluster_id': log_data.get('cluster_id'),
             'activities_processed': log_data['activities_processed'],
             'activities_failed': log_data['activities_failed'],
         }, status=200)

@@ -22,7 +22,70 @@ class ActivityCatalogSerializer(serializers.ModelSerializer):
             'estimated_workers_per_acre',
             'default_gap_days',
         ]
+# serializers.py
 
+class ActivityCatalogDetailSerializer(serializers.ModelSerializer):
+    """Detailed activity with all default values"""
+    class Meta:
+        model = ActivityCatalog
+        fields = [
+            'id',
+            'name',
+            'activity_type',
+            'default_rate_per_acre',
+            'is_strict',
+            'estimated_workers_per_acre',
+            'default_gap_days',
+            'source',
+            'created_at',
+            'updated_at',
+        ]
+
+class CreateActivitySerializer(serializers.Serializer):
+    """Serializer for creating a new global activity"""
+    name = serializers.CharField(max_length=200)
+    activity_type = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    
+    # Farmer defaults
+    default_rate_per_acre = serializers.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=0
+    )
+    default_gap_days = serializers.IntegerField(default=3)
+    
+    # Mukkadam defaults
+    mukkadam_rate_per_acre = serializers.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=0
+    )
+    mukkadam_productivity_per_worker = serializers.DecimalField(
+        max_digits=5, 
+        decimal_places=3, 
+        default=0.150
+    )
+    
+    # Common
+    is_strict = serializers.BooleanField(default=False)
+    estimated_workers_per_acre = serializers.IntegerField(default=10)
+
+class AddClusterActivitySerializer(serializers.Serializer):
+    """Serializer for adding activity to a specific cluster"""
+    activity_id = serializers.IntegerField(required=False)
+    activity_name = serializers.CharField(max_length=200, required=False)
+    
+    # Farmer rates
+    farmer_rate_per_acre = serializers.DecimalField(max_digits=10, decimal_places=2)
+    gap_days = serializers.IntegerField()
+    
+    # Mukkadam rates
+    mukkadam_rate_per_acre = serializers.DecimalField(max_digits=10, decimal_places=2)
+    mukkadam_productivity_per_worker = serializers.DecimalField(
+        max_digits=5, 
+        decimal_places=3, 
+        default=0.150
+    )
 # =============================================================================
 # FARMER & JOB SERIALIZERS
 # =============================================================================
