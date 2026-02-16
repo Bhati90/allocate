@@ -12,6 +12,7 @@ from .views import (
     PlanningViewSet,
     PlotViewSet,
     get_cluster_plots,get_districts,get_states,get_talukas,get_villages,
+    insert_activity_between,
     reset_cluster_activity_rate,get_cluster_info,
     suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs
 )
@@ -44,6 +45,7 @@ router.register(r'leaves', LeaveViewSet, basename='leave')
 router.register(r'planning', PlanningViewSet, basename='planning')
 urlpatterns = [
     path('api/', include(router.urls)),
+# path('api/activities/insert_between/', insert_activity_between, name='insert_activity_between'),
 
     path('locations/states/', get_states, name='get-states'),
     path('locations/districts/', get_districts, name='get-districts'),

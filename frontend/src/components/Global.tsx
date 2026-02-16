@@ -5,16 +5,56 @@ import { Plus, Save, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { API_BASE_URL } from '../types/config';
 import './Global.css';
+import InsertActivityModal from './Insert';
 
 interface GlobalActivityManagerProps {
   onClose: () => void;
   onSuccess: () => void;
+  clusterId: number;
+}
+
+
+interface ActivityCalendarItem {
+  activity_id: number;
+  activity_name: string;
+  activity_type: string;
+  // Farmer rates
+  rate_per_acre: number;
+  rate_overridden: boolean;
+  gap_days: number;
+  gap_overridden: boolean;
+  // Mukkadam rates
+  mukkadam_rate_per_acre: number;
+  mukkadam_productivity: number;
+  mukkadam_rate_overridden: boolean;
+  // Common
+  is_strict: boolean;
+  phase_order: number;
 }
 
 const GlobalActivityManager: React.FC<GlobalActivityManagerProps> = ({
   onClose,
   onSuccess,
+  clusterId,
 }) => {
+
+
+const [showInsertActivityModal, setShowInsertActivityModal] = useState(false);
+  const [activities, setActivities] = useState<ActivityCalendarItem[]>([]);
+  const loadActivities = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/clusters/${clusterId}/activity-calendar/`
+      );
+      const data = await res.json();
+      setActivities(data.activities || []);
+    } catch (error) {
+      toast.error('Failed to load activities');
+    } finally {
+      setLoading(false);
+    }
+  };
   const [formData, setFormData] = useState({
     name: '',
     activity_type: '',
@@ -71,6 +111,13 @@ const GlobalActivityManager: React.FC<GlobalActivityManagerProps> = ({
             <X size={24} />
           </button>
         </div>
+{/* <button
+  className="btn-primary"
+  onClick={() => setShowInsertActivityModal(true)}
+>
+  + Insert Activity Between
+</button> */}
+        
 
         <form onSubmit={handleSubmit} className="activity-form">
           <div className="form-section">
@@ -217,6 +264,17 @@ const GlobalActivityManager: React.FC<GlobalActivityManagerProps> = ({
             </button>
           </div>
         </form>
+
+        {showInsertActivityModal && (
+  <InsertActivityModal
+    clusterId={clusterId}
+    onClose={() => setShowInsertActivityModal(false)}
+    onSuccess={() => {
+      // Refresh your activities list
+      loadActivities();
+    }}
+  />
+)}
       </div>
     </div>
   );

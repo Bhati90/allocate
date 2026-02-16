@@ -779,6 +779,95 @@ class ActivityCatalogViewSet(viewsets.ModelViewSet):
             'message': f'Activity strict status updated',
             'activity': serializer.data
         })
+    
+# views.py - Inside ActivityCatalogViewSet class
+
+    @action(detail=False, methods=['post'])
+    def insert_between(self, request):  # ✅ Changed name and added 'self'
+        """
+        Insert a new activity between two existing activities in the lifecycle
+        
+        POST /api/activities/insert_between/
+        Body: {
+            "name": "New Activity Name",
+            "activity_type": "pruning",
+            "default_rate_per_acre": 1000,
+            "gap_days_from_previous": 5,
+            "insert_after_activity_id": 7,
+            "mukkadam_rate_per_acre": 800,
+            "mukkadam_productivity_per_worker": 0.150,
+            "is_strict": false,
+            "estimated_workers_per_acre": 10
+        }
+        """
+        serializer = InsertActivitySerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        data = serializer.validated_data
+        
+        # Check if activity already exists
+        if ActivityCatalog.objects.filter(name__iexact=data['name']).exists():
+            return Response(
+                {'error': f'Activity "{data["name"]}" already exists'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get the activity we're inserting after
+        try:
+            previous_activity = ActivityCatalog.objects.get(id=data['insert_after_activity_id'])
+        except ActivityCatalog.DoesNotExist:
+            return Response(
+                {'error': 'Previous activity not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get the previous activity's schedule rule
+        try:
+            previous_rule = ActivityScheduleRule.objects.get(activity=previous_activity)
+            new_phase_order = previous_rule.phase_order + 1
+        except ActivityScheduleRule.DoesNotExist:
+            return Response(
+                {'error': 'Previous activity has no schedule rule'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        with transaction.atomic():
+            # Create the new activity
+            new_activity = ActivityCatalog.objects.create(
+                name=data['name'],
+                activity_type=data.get('activity_type', ''),
+                default_rate_per_acre=data['default_rate_per_acre'],
+                is_strict=data['is_strict'],
+                estimated_workers_per_acre=data['estimated_workers_per_acre'],
+                default_gap_days=data['gap_days_from_previous'],
+                source='custom'
+            )
+            
+            # Shift all activities after this one by +1 in phase_order
+            ActivityScheduleRule.objects.filter(
+                phase_order__gte=new_phase_order
+            ).update(phase_order=models.F('phase_order') + 1)
+            
+            # Create schedule rule for new activity
+            ActivityScheduleRule.objects.create(
+                activity=new_activity,
+                gap_days=data['gap_days_from_previous'],
+                phase_order=new_phase_order
+            )
+            
+            return Response({
+                'success': True,
+                'message': f'Activity "{data["name"]}" inserted after "{previous_activity.name}"',
+                'activity': {
+                    'id': new_activity.id,
+                    'name': new_activity.name,
+                    'phase_order': new_phase_order,
+                    'gap_days': data['gap_days_from_previous'],
+                    'inserted_after': previous_activity.name
+                }
+            }, status=status.HTTP_201_CREATED)
 
 
 # =============================================================================
@@ -1673,6 +1762,93 @@ class PlanningViewSet(viewsets.ViewSet):
 
 
         return Response(results)
+
+@api_view(['POST'])
+def insert_activity_between(request):
+    """
+    Insert a new activity between two existing activities in the lifecycle
+    
+    POST /api/activities/insert_between/
+    Body: {
+        "name": "New Activity Name",
+        "activity_type": "pruning",
+        "default_rate_per_acre": 1000,
+        "gap_days_from_previous": 5,
+        "insert_after_activity_id": 7,  // Insert after this activity (e.g., after Pruning)
+        "mukkadam_rate_per_acre": 800,
+        "mukkadam_productivity_per_worker": 0.150,
+        "is_strict": false,
+        "estimated_workers_per_acre": 10
+    }
+    """
+    serializer = InsertActivitySerializer(data=request.data)
+    
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    data = serializer.validated_data
+    
+    # Check if activity already exists
+    if ActivityCatalog.objects.filter(name__iexact=data['name']).exists():
+        return Response(
+            {'error': f'Activity "{data["name"]}" already exists'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Get the activity we're inserting after
+    try:
+        previous_activity = ActivityCatalog.objects.get(id=data['insert_after_activity_id'])
+    except ActivityCatalog.DoesNotExist:
+        return Response(
+            {'error': 'Previous activity not found'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+    
+    # Get the previous activity's schedule rule to find its phase_order
+    try:
+        previous_rule = ActivityScheduleRule.objects.get(activity=previous_activity)
+        new_phase_order = previous_rule.phase_order + 1
+    except ActivityScheduleRule.DoesNotExist:
+        return Response(
+            {'error': 'Previous activity has no schedule rule'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    with transaction.atomic():
+        # Create the new activity
+        new_activity = ActivityCatalog.objects.create(
+            name=data['name'],
+            activity_type=data.get('activity_type', ''),
+            default_rate_per_acre=data['default_rate_per_acre'],
+            is_strict=data['is_strict'],
+            estimated_workers_per_acre=data['estimated_workers_per_acre'],
+            default_gap_days=data['gap_days_from_previous'],
+            source='custom'
+        )
+        
+        # Shift all activities after this one by +1 in phase_order
+        ActivityScheduleRule.objects.filter(
+            phase_order__gte=new_phase_order
+        ).update(phase_order=models.F('phase_order') + 1)
+        
+        # Create schedule rule for new activity
+        ActivityScheduleRule.objects.create(
+            activity=new_activity,
+            gap_days=data['gap_days_from_previous'],
+            phase_order=new_phase_order
+        )
+        
+        return Response({
+            'success': True,
+            'message': f'Activity "{data["name"]}" inserted after "{previous_activity.name}"',
+            'activity': {
+                'id': new_activity.id,
+                'name': new_activity.name,
+                'phase_order': new_phase_order,
+                'gap_days': data['gap_days_from_previous'],
+                'inserted_after': previous_activity.name
+            }
+        }, status=status.HTTP_201_CREATED)
 
 
 # views.py

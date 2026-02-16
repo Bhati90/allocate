@@ -171,7 +171,7 @@ const visibleMukkadams = mukkadams.filter(m =>
     try {
       // create mukkadam
       const mukkadamRes = await fetch(
-        'http://localhost:8001/tender/api/mukkadams/',
+        `${API_BASE_URL}/api/mukkadams/`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -190,7 +190,7 @@ const visibleMukkadams = mukkadams.filter(m =>
       for (const a of selectedActivities) {
         if (a.activity_id > 0) {
           await fetch(
-            `http://localhost:8001/tender/api/mukkadams/${mukkadam.mukkadam_id}/add_activity_rate/`,
+            `${API_BASE_URL}/api/mukkadams/${mukkadam.mukkadam_id}/add_activity_rate/`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -234,7 +234,7 @@ const visibleMukkadams = mukkadams.filter(m =>
     // ✅ Load cluster mukkadam rates (not farmer rates)
     try {
       const res = await fetch(
-        `http://localhost:8001/tender/api/clusters/${clusterId}/activity-calendar/`
+        `${API_BASE_URL}/api/clusters/${clusterId}/activity-calendar/`
       );
       const data = await res.json();
       

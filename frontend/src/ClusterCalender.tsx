@@ -357,6 +357,7 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
 
           {showGlobalActivityManager && (
   <GlobalActivityManager
+  clusterId={clusterId}
     onClose={() => setShowGlobalActivityManager(false)}
     onSuccess={loadActivities}
   />
