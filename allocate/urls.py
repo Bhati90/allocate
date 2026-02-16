@@ -27,13 +27,12 @@ urlpatterns = [
     path('admin/', admin.site.urls),
   # API must come FIRST
 
-    path('ap/', include('data.urls')),
     path('', about, name='about'),
     path('tender/', include('tender.urls')),
       # API must come FIRST
     
     # ONLY if you need SPA routing, and ONLY at the very end
-    re_path(r'^(?!ap/).*$', about),  # ← Negative lookahead: exclude 'ap/'
+    re_path(r'^(?!tender/).*$', about),  # ← Negative lookahead: exclude 'tender/'
 ]
 if settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

@@ -40,7 +40,7 @@ class CsrfExemptSessionAuthentication(SessionAuthentication):
         return  # disable CSRF check
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 def about(request):
-    return render(request,'data/index.html')
+    return render(request,'tender/index.html')
 
 
 # views.py - Update cluster_activity_calendar
