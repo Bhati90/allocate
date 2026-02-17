@@ -6,6 +6,7 @@ import LeaveModal from './leave';
 import './calender.css';
 import DayDetailModal from './DayDetail';
 import { API_BASE_URL } from '../types/config';
+import { toast } from './ui/sonner';
 type PotentialStatus = 'PARTIAL' | 'NONE';
 
 interface PotentialJob {
@@ -108,7 +109,7 @@ setFilters,
 
     return days;
   };
-const handleAllocationDateChange = async (allocation: Allocation) => {
+     const handleAllocationDateChange = async (allocation: Allocation) => {
   const newDateStr = window.prompt(
     'Move this allocation to date (YYYY-MM-DD):',
     allocation.allocated_date,
@@ -170,7 +171,25 @@ const handleAllocationDateChange = async (allocation: Allocation) => {
     alert('Network error: Failed to change allocation date');
   }
 };
+const handleAllocationDelete = async (allocation: Allocation) => {
+  if (!window.confirm('Delete this allocation?')) return;
 
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/allocations/${allocation.id}/delete_allocation/?cluster_id=${clusterId}`,
+      { method: 'DELETE' },
+    );
+
+    if (res.ok) {
+      onLeavesUpdated();
+    } else {
+      alert('Failed to delete allocation');
+    }
+  } catch (e) {
+    console.error(e);
+    alert('Failed to delete allocation');
+  }
+};
 // CalendarPanel.tsx - getDayAllocations function
 
 const getDayAllocations = (date: Date | null) => {
@@ -213,23 +232,6 @@ const [showDayDetail, setShowDayDetail] = useState(false);
 const [detailDate, setDetailDate] = useState<Date | null>(null);
 const [detailCapacity, setDetailCapacity] = useState<any | null>(null);
 const [dayTotals, setDayTotals] = useState<Record<string, number>>({});
-const handleAllocationDelete = async (allocation: Allocation) => {
-  if (!window.confirm('Delete this allocation?')) return;
-
-  try {
-    await fetch(
-      `${API_BASE_URL}/api/allocations/${allocation.id}/delete_allocation/?cluster_id=${clusterId}`,
-      { method: 'DELETE' },
-    );
-
-    // simple way: ask parent to reload allocations
-    onLeavesUpdated(); // if you already use this for refresh, or better:
-    // expose a separate onAllocationsRefresh prop from FarmScheduler and call it here.
-  } catch (e) {
-    console.error(e);
-    alert('Failed to delete allocation');
-  }
-};
 
 const calculateDayCapacity = (date: Date | null) => {
   if (!date) return { status: 'empty', used: 0, total: 0, percentage: 0, conflicts: [], mukkadamsOnLeave: 0 };
@@ -569,7 +571,7 @@ const hasPotential = dayPotential.length > 0;
       {/* Jobs count – only in Jobs view */}
      {viewModes.includes('jobs') && dayJobs.length > 0 && (
   <div className="capacity-badge jobs-badge">
-    {dayJobs.length} jobs
+    {dayJobs.reduce((sum, job) => sum + (job.activities?.length || 0), 0)} activities
   </div>
 )}
 
@@ -619,10 +621,12 @@ const hasPotential = dayPotential.length > 0;
     date={detailDate}
     jobs={jobs.filter(job => {
       const dateStr = formatDate(detailDate);
-      return (job.activities || []).some(a => a.scheduled_date === dateStr);
+      return (job.activities || []).some(a => a.scheduled_date?.slice(0, 10) === dateStr); // ✅
     }).map(job => ({
       ...job,
-      activities: (job.activities || []).filter(a => a.scheduled_date === formatDate(detailDate))
+      activities: (job.activities || []).filter(a => 
+        a.scheduled_date?.slice(0, 10) === formatDate(detailDate) // ✅
+      )
     }))}
     allocations={getDayAllocations(detailDate)}
     mukkadams={mukkadams}
@@ -630,17 +634,15 @@ const hasPotential = dayPotential.length > 0;
     leaves={getDayLeaves(detailDate)}
     overloads={getDayOverloads(detailDate)}  
     onClose={() => setShowDayDetail(false)}
-    onAllocationDateChange={handleAllocationDateChange} 
-    onAllocationDelete={handleAllocationDelete}
+    onAllocationDateChange={(job, allocation) => handleAllocationDateChange(allocation)}
+onAllocationDelete={handleAllocationDelete}
     onStartAllocation={onStartAllocation}
     potentialJobs={potentialByDate?.[formatDate(detailDate)] || []}
-    filters={filters}  // ✅ ADD THIS
+    filters={filters}
     allJobs={allJobs || jobs}
-    clusterId={clusterId}    // ✅ ADD THIS - to look up job details
+    clusterId={clusterId}
   />
 )}
-
-
     </div>
   );
 };

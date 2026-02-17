@@ -2594,19 +2594,247 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to update allocation: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
     @action(detail=True, methods=['delete'])
     def delete_allocation(self, request, pk=None):
-        """
-        DELETE /tender/api/allocations/{id}/delete_allocation/
-        """
         allocation = self.get_object()
-        allocation.delete()
+
+        with transaction.atomic():
+            # 1) Restore job activity area
+            job_activity = allocation.job_activity
+            job_activity.allocated_area -= allocation.allocated_area
+            job_activity.save()
+
+            # 2) Restore mukkadam availability
+            avail = MukkadamAvailability.objects.filter(
+                mukkadam=allocation.mukkadam,
+                date=allocation.allocated_date
+            ).first()
+            if avail:
+                avail.allocated_workers -= allocation.allocated_workers
+                avail.save()
+
+            # 3) Now delete
+            allocation.delete()
+
         return Response(
             {'success': True, 'message': 'Allocation deleted'},
             status=status.HTTP_204_NO_CONTENT,
         )
 
 
+    @action(detail=False, methods=['post'])
+    def auto_allocate_day(self, request):
+        date_str = request.data.get('date')
+        cluster_id = request.data.get('cluster_id')
+
+        if not date_str or not cluster_id:
+            return Response({'error': 'date and cluster_id are required'}, status=400)
+
+        try:
+            alloc_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            cluster = Cluster.objects.get(id=cluster_id)
+        except (ValueError, Cluster.DoesNotExist):
+            return Response({'error': 'Invalid date or cluster'}, status=400)
+
+        job_activities = JobActivity.objects.filter(
+            job__cluster=cluster,
+            scheduled_date=alloc_date,
+        ).select_related('activity', 'job__farmer', 'job__plot')
+
+        job_activities = [
+            ja for ja in job_activities 
+            if float(ja.total_area - ja.allocated_area) > 0
+        ]
+
+        # ✅ Track workers used per mukkadam within this run
+        workers_used_today = {}  # mukkadam_id -> workers already allocated today
+
+        # Pre-load already existing allocations for this date
+        existing_allocs = MukkadamAvailability.objects.filter(
+            mukkadam__cluster=cluster,
+            date=alloc_date,
+        )
+        for avail in existing_allocs:
+            workers_used_today[avail.mukkadam_id] = avail.allocated_workers
+
+        results = []
+        failures = []
+
+        for ja in job_activities:
+            remaining_area = float(ja.total_area - ja.allocated_area)
+
+            rate_obj = MukkadamActivityRate.objects.filter(
+                activity=ja.activity,
+                is_active=True,
+                mukkadam__cluster=cluster,
+            ).select_related('mukkadam').first()
+
+            if not rate_obj:
+                failures.append({
+                    'job_activity_id': ja.id,
+                    'job_id': ja.job.job_id,
+                    'activity': ja.activity.name,
+                    'farmer': ja.job.farmer.farmer_name,
+                    'reason': 'No mukkadam with rate card for this activity',
+                    'reason_code': 'NO_MUKKADAM',
+                    'best_date': None,
+                })
+                continue
+
+            mukkadam = rate_obj.mukkadam
+            productivity = float(rate_obj.productivity_per_worker)
+
+            # ✅ Available workers = crew - already used (existing + this run)
+            already_used = workers_used_today.get(mukkadam.mukkadam_id, 0)
+            available_workers = max(mukkadam.crew_size - already_used, 0)
+
+            if available_workers == 0:
+                # Find best future date
+                best_date = _find_best_future_date(
+                    ja, mukkadam, rate_obj, remaining_area,
+                    math.ceil(remaining_area / productivity),
+                    alloc_date, cluster
+                )
+                failures.append({
+                    'job_activity_id': ja.id,
+                    'job_id': ja.job.job_id,
+                    'activity': ja.activity.name,
+                    'farmer': ja.job.farmer.farmer_name,
+                    'plot': ja.job.plot.plot_name if ja.job.plot else '',
+                    'reason': f'No workers available — team fully booked today',
+                    'reason_code': 'WORKER_CAPACITY',
+                    'best_date': str(best_date) if best_date else None,
+                    'mukkadam': mukkadam.mukkadam_name,
+                    'area_needed': remaining_area,
+                    'max_capacity': 0,
+                })
+                continue
+
+            # ✅ Minimum workers needed, capped at available
+            workers_needed = math.ceil(remaining_area / productivity)
+            workers = min(workers_needed, available_workers)
+            max_area_with_workers = round(workers * productivity, 2)
+
+            # ✅ Check if available workers can cover full area
+            if max_area_with_workers < remaining_area:
+                # Cannot fully allocate — find best future date
+                best_date = _find_best_future_date(
+                    ja, mukkadam, rate_obj, remaining_area,
+                    workers_needed,
+                    alloc_date, cluster
+                )
+                failures.append({
+                    'job_activity_id': ja.id,
+                    'job_id': ja.job.job_id,
+                    'activity': ja.activity.name,
+                    'farmer': ja.job.farmer.farmer_name,
+                    'plot': ja.job.plot.plot_name if ja.job.plot else '',
+                    'reason': (
+                        f'Only {available_workers} workers available '
+                        f'(need {workers_needed}) — can cover '
+                        f'{max_area_with_workers} ac of {remaining_date} ac'
+                    ),
+                    'reason_code': 'WORKER_CAPACITY',
+                    'best_date': str(best_date) if best_date else None,
+                    'mukkadam': mukkadam.mukkadam_name,
+                    'area_needed': remaining_area,
+                    'max_capacity': max_area_with_workers,
+                })
+                continue
+
+            # ✅ Can fully allocate
+            can_allocate, message, warnings = check_can_allocate(
+                ja.id,
+                mukkadam.mukkadam_id,
+                alloc_date,
+                remaining_area,
+                workers,
+                skip_strict_check=False,
+            )
+
+            if not can_allocate:
+                best_date = _find_best_future_date(
+                    ja, mukkadam, rate_obj, remaining_area,
+                    workers, alloc_date, cluster
+                )
+                failures.append({
+                    'job_activity_id': ja.id,
+                    'job_id': ja.job.job_id,
+                    'activity': ja.activity.name,
+                    'farmer': ja.job.farmer.farmer_name,
+                    'plot': ja.job.plot.plot_name if ja.job.plot else '',
+                    'reason': message,
+                    'reason_code': _classify_reason(message),
+                    'best_date': str(best_date) if best_date else None,
+                    'mukkadam': mukkadam.mukkadam_name,
+                    'area_needed': remaining_area,
+                    'max_capacity': max_area_with_workers,
+                })
+                continue
+
+            try:
+                with transaction.atomic():
+                    allocation = Allocation.objects.create(
+                        job_activity=ja,
+                        mukkadam=mukkadam,
+                        allocated_date=alloc_date,
+                        allocated_area=Decimal(str(remaining_area)),
+                        allocated_workers=workers,
+                        farmer_rate=ja.rate_per_acre,
+                        mukkadam_rate=rate_obj.rate_per_acre,
+                        status='scheduled',
+                        cluster=cluster,
+                    )
+
+                    ja.allocated_area += Decimal(str(remaining_area))
+                    ja.save()
+
+                    availability, _ = MukkadamAvailability.objects.get_or_create(
+                        mukkadam=mukkadam,
+                        date=alloc_date,
+                        defaults={
+                            'available_crew_size': mukkadam.crew_size,
+                            'is_available': True,
+                            'allocated_workers': 0,
+                        },
+                    )
+                    availability.allocated_workers += workers
+                    availability.save()
+
+                    # ✅ Update local tracker so next job sees correct available workers
+                    workers_used_today[mukkadam.mukkadam_id] = (
+                        workers_used_today.get(mukkadam.mukkadam_id, 0) + workers
+                    )
+
+                    results.append({
+                        'job_activity_id': ja.id,
+                        'job_id': ja.job.job_id,
+                        'activity': ja.activity.name,
+                        'farmer': ja.job.farmer.farmer_name,
+                        'mukkadam': mukkadam.mukkadam_name,
+                        'area': remaining_area,
+                        'workers': workers,
+                        'status': 'allocated',
+                    })
+
+            except Exception as e:
+                failures.append({
+                    'job_activity_id': ja.id,
+                    'job_id': ja.job.job_id,
+                    'activity': ja.activity.name,
+                    'farmer': ja.job.farmer.farmer_name,
+                    'reason': str(e),
+                    'reason_code': 'ERROR',
+                    'best_date': None,
+                })
+
+        return Response({
+            'success': True,
+            'allocated': results,
+            'failures': failures,
+            'summary': f'{len(results)} allocated, {len(failures)} need attention',
+        })
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import Cluster

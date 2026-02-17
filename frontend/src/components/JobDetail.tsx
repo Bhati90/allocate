@@ -99,11 +99,7 @@ const buildActivityRevenueRows = (
 
     const bookedRate = jobActs.length ? Number(jobActs[0].rate_per_acre || 0) : clusterRate;
 
-    let offsetDays = 0;
-    for (let i = 0; i <= index; i++) {
-      if (i === 0) continue;
-      offsetDays += Number(calendar[i - 1].gap_days || 0);
-    }
+const offsetDays = index === 0 ? 0 : Number(cal.gap_days || 0);  // flat from pruning
     const d = new Date(baseDate);
     d.setDate(d.getDate() + offsetDays);
     const potentialDateIso = d.toISOString().split('T')[0];
@@ -414,19 +410,16 @@ const handleEditActivity = async () => {
     }
   };
 
-  const autoFillActivitiesFromCalendar = (plotArea: number, baseDate: string) => {
-    if (!baseDate || clusterCalendar.length === 0 || plotArea <= 0) return;
-
+const autoFillActivitiesFromCalendar = (plotArea: number, baseDate: string) => {
     const base = new Date(baseDate);
-    let cumulativeDays = 0;
 
     const filled = clusterCalendar.map((cal, index) => {
-      if (index > 0) {
-        cumulativeDays += clusterCalendar[index - 1].gap_days;
-      }
+      // index 0 = pruning = day 0 (base date itself)
+      // all others = base + their own gap_days directly
+      const offsetDays = index === 0 ? 0 : cal.gap_days;
 
       const activityDate = new Date(base);
-      activityDate.setDate(activityDate.getDate() + cumulativeDays);
+      activityDate.setDate(activityDate.getDate() + offsetDays);
 
       return {
         activity_id: cal.activity_id,

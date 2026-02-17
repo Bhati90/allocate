@@ -98,15 +98,15 @@ def compute_cluster_potential(cluster: Cluster) -> Dict[str, List[PotentialJobDT
 
         booked_ids = set(per_activity.keys())
 
-        # Find FIRST booked activity's date
-        current_date = None
+        # AFTER
+        pruning_date = None
         for act in catalog_acts:
             if act.id in booked_ids and per_activity[act.id]["date"]:
-                current_date = per_activity[act.id]["date"]
+                pruning_date = per_activity[act.id]["date"]
                 break
-        
-        if current_date is None:
-            current_date = today
+
+        if pruning_date is None:
+            pruning_date = today
 
         default_job = plot_jobs[0]
         default_farmer = plot.farmer or default_job.farmer
@@ -114,30 +114,27 @@ def compute_cluster_potential(cluster: Cluster) -> Dict[str, List[PotentialJobDT
         # Process ALL activities
         for idx, act in enumerate(catalog_acts):
             activity_id = act.id
-            
-            # ✅ PRIORITY: ClusterActivityRate → ActivityCatalog.default_rate_per_acre
+
             if activity_id in cluster_rates:
                 rate = cluster_rates[activity_id]
             else:
                 rate = float(act.default_rate_per_acre)
-            
+
             if rate <= 0:
                 continue
-            
-            # Check if booked
+
             if activity_id in booked_ids:
                 info = per_activity[activity_id]
                 booked_area = info["booked"]
                 remaining_area = plot_area - booked_area
-                actual_date = info["date"] or current_date
-                
-                if info["date"]:
-                    current_date = info["date"]
-                
+                actual_date = info["date"] or pruning_date  # ✅ use pruning_date as fallback
+
+                # ✅ REMOVED: current_date = info["date"]
+
                 if remaining_area > 0:
                     booked_rate = info["rate"] or rate
                     potential_revenue = remaining_area * booked_rate
-                    
+
                     result[actual_date.isoformat()].append(
                         PotentialJobDTO(
                             date=actual_date.isoformat(),
@@ -157,14 +154,13 @@ def compute_cluster_potential(cluster: Cluster) -> Dict[str, List[PotentialJobDT
                         )
                     )
             else:
-                # Not booked
                 gap_days = effective_gap_days(cluster, act)
-                potential_date = current_date + datetime.timedelta(days=gap_days)
-                current_date = potential_date
-                
+                potential_date = pruning_date + datetime.timedelta(days=gap_days)  # ✅ always from pruning
+                # ✅ REMOVED: current_date = potential_date
+
                 unbooked_area = plot_area
                 potential_revenue = unbooked_area * rate
-                
+
                 result[potential_date.isoformat()].append(
                     PotentialJobDTO(
                         date=potential_date.isoformat(),
@@ -183,5 +179,4 @@ def compute_cluster_potential(cluster: Cluster) -> Dict[str, List[PotentialJobDT
                         variety=default_job.variety,
                     )
                 )
-
     return result

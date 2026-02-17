@@ -207,12 +207,18 @@ const handleSubmit = async (e: React.FormEvent) => {
       );
     }
 
-    if (helper.maxArea != null && team.allocated_area > helper.maxArea) {
-      validationErrors.push(
-        `Team ${i + 1} (${mukkadams.find(m => m.mukkadam_id === team.mukkadam_id)?.mukkadam_name} on ${team.allocated_date}): ` +
-        `Requested ${team.allocated_area.toFixed(2)} ac but max capacity is ${helper.maxArea.toFixed(2)} ac`
-      );
-    }
+    // if (helper.maxArea != null && team.allocated_area > helper.maxArea) {
+    //   validationErrors.push(
+    //     `Team ${i + 1} (${mukkadams.find(m => m.mukkadam_id === team.mukkadam_id)?.mukkadam_name} on ${team.allocated_date}): ` +
+    //     `Requested ${team.allocated_area.toFixed(2)} ac but max capacity is ${helper.maxArea.toFixed(2)} ac`
+    //   );
+    // }
+
+    if (helper.maxArea != null && team.allocated_area > helper.maxArea && !selectedActivity?.is_strict) {
+  validationErrors.push(
+    `Team ${i + 1} (...): Requested ${team.allocated_area.toFixed(2)} ac but max capacity is ${helper.maxArea.toFixed(2)} ac`
+  );
+}
   }
 
   if (validationErrors.length > 0) {
