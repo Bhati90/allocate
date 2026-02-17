@@ -69,8 +69,9 @@ interface DayDetailModalProps {
   filters?: CalendarFilters;  // ✅ ADD THIS
   allJobs?: Job[]; 
   onClose: () => void;
-  onAllocationDateChange: (allocation: Allocation) => void;
-  onAllocationDelete: (allocation: Allocation) => void;
+  // In DayDetailModalProps — revert to:
+onAllocationDateChange: (job: Job, allocation: Allocation) => void;
+onAllocationDelete: (allocation: Allocation) => void;
   onStartAllocation: (jobId: string, activityId: number, activity: any) => void;
   clusterId: number; // ✅ ADD THIS - to look up job details
 }
@@ -103,9 +104,11 @@ const [selectedMaxWorkActivity, setSelectedMaxWorkActivity] = useState<number | 
 
   const isoDate = date.toLocaleDateString('en-CA'); 
 
-  const jobsOnThisDay = jobs.filter(job =>
-    job.activities?.some(act => act.scheduled_date === isoDate)
-  );
+const jobsOnThisDay = jobs.filter(job =>
+  job.activities?.some(act =>
+    act.scheduled_date?.slice(0, 10) === isoDate
+  )
+);
 
   // ✅ Filter allocations based on activity filter
 const filteredAllocations = allocations.filter(alloc => {
@@ -146,6 +149,7 @@ useEffect(() => {
     setAvailableWorkers(null);
     return;
   }
+// Add this handler inside DayDetailModal component
 
   const fetchCapacity = async () => {
     try {
@@ -240,7 +244,88 @@ const handleEditAllocation = async () => {
   }
 };
 
+// Add this handler inside DayDetailModal component
+const handleQuickAllocate = async (job: Job, activity: any) => {
+  if (!activity) return;
 
+  const mukkadam = mukkadams.find(m =>
+    m.activity_rates?.some((r: any) =>
+      r.activity_id === activity.activity_id ||
+      r.activity_name === activity.activity_name
+    )
+  );
+
+  if (!mukkadam) {
+    toast.error('No mukkadam found with rate card for this activity');
+    return;
+  }
+
+  const rate = mukkadam.activity_rates?.find((r: any) =>
+    r.activity_id === activity.activity_id ||
+    r.activity_name === activity.activity_name
+  );
+
+  const productivity = Number(rate?.productivity_per_worker || 0);
+  const remainingArea = Number(activity.remaining_area || 0);
+
+  if (!productivity || !remainingArea) {
+    toast.error('Cannot calculate allocation. Check productivity and remaining area.');
+    return;
+  }
+
+  const usedWorkers = usedWorkersByMukkadam.get(mukkadam.mukkadam_id) || 0;
+  const availableWorkers = Math.max((mukkadam.crew_size || 0) - usedWorkers, 0);
+
+  if (availableWorkers === 0) {
+    toast.error(`No workers available today for ${mukkadam.mukkadam_name}`);
+    return;
+  }
+
+  // ✅ Allocate whatever is possible today
+  const maxAreaToday = parseFloat((availableWorkers * productivity).toFixed(2));
+  const areaToAllocate = parseFloat(Math.min(maxAreaToday, remainingArea).toFixed(2));
+  const workersNeeded = Math.ceil(areaToAllocate / productivity);
+  const workers = Math.min(workersNeeded, availableWorkers);
+
+  const isPartial = areaToAllocate < remainingArea;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job_activity_id: activity.id,
+        mukkadam_id: mukkadam.mukkadam_id,
+        allocated_date: isoDate,
+        allocated_area: areaToAllocate,  // ✅ what's possible, not full area
+        allocated_workers: workers,
+        farmer_rate: activity.rate_per_acre,
+        mukkadam_rate: Number(rate?.rate_per_acre || 0),
+        cluster_id: clusterId,
+        skip_strict_check: false,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+      if (isPartial) {
+        toast.success(
+          `Partially allocated ${areaToAllocate} ac of ${remainingArea} ac ` +
+          `to ${mukkadam.mukkadam_name}. ${(remainingArea - areaToAllocate).toFixed(2)} ac remaining for another date.`
+        );
+      } else {
+        toast.success(`Fully allocated ${areaToAllocate} ac to ${mukkadam.mukkadam_name}`);
+      }
+      onAllocationDelete({ id: -1 } as any);
+    } else {
+      toast.error(data.error || 'Allocation failed');
+    }
+  } catch (e) {
+    toast.error('Allocation failed');
+    console.error(e);
+  }
+};
 // workers already allocated on this day, per mukkadam
 const usedWorkersByMukkadam = new Map<number, number>();
 
@@ -367,7 +452,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
       )}
 
 
-        {filteredAllocations.map(a => {
+        {/* {filteredAllocations.map(a => {
   const m = mukkadams.find(mk => mk.mukkadam_id === a.mukkadam);
   const job = (allJobs || jobs).find(j => j.job_id === a.job_id); // ✅ Use allJobs
 
@@ -412,8 +497,139 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
 
 
   );
-})}
+})} */}
 
+{/* Jobs scheduled today — Quick Allocate section */}
+
+{jobsOnThisDay.length > 0 && (
+  <div className="quick-allocate-section" style={{ marginBottom: '1rem' }}>
+    <div className="form-divider">Jobs Scheduled Today</div>
+    {jobsOnThisDay.map(job =>
+      job.activities
+        .filter(act => act.scheduled_date?.slice(0, 10) === isoDate)
+        .map(act => {
+          const isAllocated = Number(act.allocated_area) > 0;
+          const isFullyAllocated = Number(act.allocated_area) >= Number(act.total_area);
+
+          // Find allocation record for this activity (from filteredAllocations)
+          const existingAllocation = allocations.find(
+            a => a.job_id === job.job_id && a.job_activity === act.id
+          );
+
+          const mukkadam = mukkadams.find(m =>
+            m.activity_rates?.some((r: any) =>
+              r.activity_id === act.activity_id ||
+              r.activity_name === act.activity_name
+            )
+          );
+          const rate = mukkadam?.activity_rates?.find((r: any) =>
+            r.activity_id === act.activity_id ||
+            r.activity_name === act.activity_name
+          );
+          const productivity = Number(rate?.productivity_per_worker || 0);
+
+          // ✅ Remaining workers = crew - already allocated workers today
+          const usedWorkers = usedWorkersByMukkadam.get(mukkadam?.mukkadam_id || 0) || 0;
+          const availableWorkers = Math.max((mukkadam?.crew_size || 0) - usedWorkers, 0);
+          const area = parseFloat((availableWorkers * productivity).toFixed(2));
+
+          // Allocated mukkadam details
+          const allocatedMukkadam = existingAllocation
+            ? mukkadams.find(m => m.mukkadam_id === existingAllocation.mukkadam)
+            : null;
+
+          return (
+            <div
+              key={`${job.job_id}-${act.id}`}
+              className="allocation-row card-style"
+              style={{
+                borderLeft: isFullyAllocated
+                  ? '3px solid #10b981'
+                  : isAllocated
+                  ? '3px solid #f59e0b'
+                  : '3px solid #e5e7eb',
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div className="item-title">{act.activity_name}</div>
+                <div style={{ fontSize: '0.85rem', color: '#475569' }}>
+                  <strong>{job.farmer_name}</strong> · {job.plot_name} · {job.crop_name}
+                </div>
+
+                {isAllocated ? (
+                  // ✅ Show allocation details
+                  <div style={{ marginTop: '4px' }}>
+                    <div className="item-meta" style={{ color: isFullyAllocated ? '#10b981' : '#f59e0b' }}>
+                      {isFullyAllocated ? '✅' : '🔶'} {act.allocated_area}/{act.total_area} ac allocated
+                      {!isFullyAllocated && ` · ${act.remaining_area} ac remaining`}
+                    </div>
+                    {existingAllocation && (
+                      <div className="item-sub" style={{ color: '#475569', fontSize: '0.82rem' }}>
+                        Team: <strong>{allocatedMukkadam?.mukkadam_name || 'N/A'}</strong>
+                        {' · '}{existingAllocation.allocated_workers} workers
+                        {' · '}{existingAllocation.allocated_area} ac
+                        {existingAllocation.mukkadam_rate > 0 && (
+                          <span> · ₹{existingAllocation.mukkadam_rate}/ac</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  // Not allocated yet
+                  <div className="item-meta" style={{ color: '#6b7280', marginTop: '4px' }}>
+                    Not allocated · {act.remaining_area} ac remaining
+                    {mukkadam && availableWorkers > 0 && area > 0 && (
+                      <span style={{ marginLeft: '0.5rem' }}>
+                        → {mukkadam.mukkadam_name}: {availableWorkers}w × {productivity} = {area} ac
+                      </span>
+                    )}
+                    {mukkadam && availableWorkers === 0 && (
+                      <span style={{ color: '#dc2626', marginLeft: '0.5rem' }}>
+                        · No workers available today
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="allocation-actions">
+                {/* ✅ Quick allocate only if NOT allocated */}
+                {!isAllocated && (
+                  <button
+                    className="btn-primary"
+                    style={{ whiteSpace: 'nowrap' }}
+                    disabled={!mukkadam || !area || availableWorkers === 0}
+                    onClick={() => handleQuickAllocate(job, act)}
+                    title={!mukkadam ? 'No mukkadam with rate card' : availableWorkers === 0 ? 'No workers available' : ''}
+                  >
+                    ⚡ Allocate
+                  </button>
+                )}
+
+                {/* ✅ Move/Remove only on allocated activities */}
+                {isAllocated && existingAllocation && (
+                  <>
+                    <button
+                      className="btn-link"
+                      onClick={() => onAllocationDateChange(job, existingAllocation)}
+                    >
+                      Move
+                    </button>
+                    <button
+                      className="btn-link delete"
+                      onClick={() => onAllocationDelete(existingAllocation)}
+                    >
+                      Remove
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })
+    )}
+  </div>
+)}
 {/* Edit Allocation Modal */}
 {showEditAllocationModal && editingAllocation && (
   <div className="modal-overlay" onClick={() => setShowEditAllocationModal(false)}>
@@ -619,7 +835,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
             </div>
 
             {job.activities
-              .filter(act => act.scheduled_date === isoDate)
+              .filter(act => act.scheduled_date?.slice(0, 10) === isoDate && Number(act.remaining_area) > 0)
               .map(act => {
                 const progress = (Number(act.allocated_area) / Number(act.total_area || 1)) * 100;
                 return (

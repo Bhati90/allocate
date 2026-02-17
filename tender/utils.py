@@ -193,7 +193,7 @@ def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers, skip_s
                 ]
             }
             
-            return False, "Productivity constraint violated", warnings
+            return False, "Productivity puted higher then real ", warnings
         
         elif area > (max_capacity * 0.9):
             # Warning: Close to capacity (90%+)
@@ -219,39 +219,51 @@ def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers, skip_s
     
     # Check strict activities
     if job_activity.activity.is_strict and not skip_strict_check:
-        # full_remaining = float(job_activity.remaining_area)
+        scheduled_date = job_activity.scheduled_date
+        # Only enforce date on FIRST allocation (nothing allocated yet)
+        # Once work has started (allocated_area > 0), future dates are allowed
+        if scheduled_date and str(scheduled_date) != str(date):
+            if float(job_activity.allocated_area) == 0:
+                return (
+                    False,
+                    f"Strict activity must start on its scheduled date: {scheduled_date}",
+                    warnings,
+                )
+            # else: work already started, allow any future date
+    # if job_activity.activity.is_strict and not skip_strict_check:
+    #     # full_remaining = float(job_activity.remaining_area)
 
-        # # How much already allocated on this date for this activity
-        # existing_today = Allocation.objects.filter(
-        #     job_activity=job_activity,
-        #     allocated_date=date,
-        # ).aggregate(total=models.Sum('allocated_area'))['total'] or 0.0
+    #     # # How much already allocated on this date for this activity
+    #     # existing_today = Allocation.objects.filter(
+    #     #     job_activity=job_activity,
+    #     #     allocated_date=date,
+    #     # ).aggregate(total=models.Sum('allocated_area'))['total'] or 0.0
 
-        # # Total after this allocation
-        # total_for_date = existing_today + area
+    #     # # Total after this allocation
+    #     # total_for_date = existing_today + area
 
-        # # For strict activities, total for the day must equal full remaining
-        # if abs(total_for_date - full_remaining) > 1e-6:
-        #     return (
-        #         False,
-        #         (
-        #             f"Strict activity requires {full_remaining:.2f} ac total on one date. "
-        #             f"Currently allocated: {existing_today:.2f} ac. "
-        #             f"You're trying to add: {area:.2f} ac. "
-        #             f"Total would be: {total_for_date:.2f} ac."
-        #         ),
-        #         warnings,
-        #     )
+    #     # # For strict activities, total for the day must equal full remaining
+    #     # if abs(total_for_date - full_remaining) > 1e-6:
+    #     #     return (
+    #     #         False,
+    #     #         (
+    #     #             f"Strict activity requires {full_remaining:.2f} ac total on one date. "
+    #     #             f"Currently allocated: {existing_today:.2f} ac. "
+    #     #             f"You're trying to add: {area:.2f} ac. "
+    #     #             f"Total would be: {total_for_date:.2f} ac."
+    #     #         ),
+    #     #         warnings,
+    #     #     )
 
-        # Check if this mukkadam can handle their part
-        # (No need to check if ALL mukkadams combined can do it - that's checked per allocation)
-        max_capacity_this_mukkadam = workers * productivity if productivity else 0
-        if area > max_capacity_this_mukkadam:
-            return (
-                False,
-                f"This mukkadam's team ({workers} workers) can only handle {max_capacity_this_mukkadam:.2f} ac, but you're allocating {area:.2f} ac.",
-                warnings,
-            )
+    #     # Check if this mukkadam can handle their part
+    #     # (No need to check if ALL mukkadams combined can do it - that's checked per allocation)
+    #     max_capacity_this_mukkadam = workers * productivity if productivity else 0
+    #     if area > max_capacity_this_mukkadam:
+    #         return (
+    #             False,
+    #             f"This mukkadam's team ({workers} workers) can only handle {max_capacity_this_mukkadam:.2f} ac, but you're allocating {area:.2f} ac.",
+    #             warnings,
+    #         )
 
     return True, "OK", warnings # 👈 MAKE SURE THIS LINE EXISTS AT THE END
 
