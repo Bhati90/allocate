@@ -124,11 +124,11 @@ class AddClusterActivitySerializer(serializers.Serializer):
 # FARMER & JOB SERIALIZERS
 # =============================================================================
 class FarmerSerializer(serializers.ModelSerializer):
-    cluster = serializers.PrimaryKeyRelatedField(
-        queryset=Cluster.objects.all(), allow_null=True, required=False
+    clusters = serializers.PrimaryKeyRelatedField(
+        queryset=Cluster.objects.all(), many=True, required=False
     )
 
-    # derive from cluster
+    # derive from first cluster
     village = serializers.SerializerMethodField(read_only=True)
     taluka = serializers.SerializerMethodField(read_only=True)
     district = serializers.SerializerMethodField(read_only=True)
@@ -138,7 +138,7 @@ class FarmerSerializer(serializers.ModelSerializer):
         fields = [
             'farmer_id',
             'farmer_name',
-            'cluster',
+            'clusters',        # ✅ was 'cluster'
             'phone_number',
             'village',
             'taluka',
@@ -150,14 +150,16 @@ class FarmerSerializer(serializers.ModelSerializer):
         read_only_fields = ['village', 'taluka', 'district']
 
     def get_village(self, obj):
-        return obj.cluster.village if obj.cluster else ''
+        first = obj.clusters.first()
+        return first.village if first else ''
 
     def get_taluka(self, obj):
-        return obj.cluster.taluka if obj.cluster else ''
+        first = obj.clusters.first()
+        return first.taluka if first else ''
 
     def get_district(self, obj):
-        return obj.cluster.district if obj.cluster else ''
-
+        first = obj.clusters.first()
+        return first.district if first else ''
 class JobActivitySerializer(serializers.ModelSerializer):
     activity_id = serializers.IntegerField(source='activity.id', read_only=True)
     activity_name = serializers.CharField(source='activity.name', read_only=True)
@@ -237,14 +239,15 @@ from .models import Plot
 # =============================================================================
 
 # serializers.py
-
 class MukkadamActivityRateSerializer(serializers.ModelSerializer):
     activity_id = serializers.IntegerField(source='activity.id')
     activity_name = serializers.CharField(source='activity.name')
-    
+    rate_id = serializers.IntegerField(source='id')  # ← add this
+
     class Meta:
         model = MukkadamActivityRate
         fields = [
+            'rate_id',                   # ← add this
             'activity_id',
             'activity_name',
             'rate_per_acre',
@@ -258,6 +261,8 @@ class MukkadamSerializer(serializers.ModelSerializer):
     class Meta:
         model = Mukkadam
         fields = '__all__'
+
+
 class MukkadamAvailabilitySerializer(serializers.ModelSerializer):
     mukkadam_name = serializers.CharField(source='mukkadam.mukkadam_name', read_only=True)
     
@@ -537,25 +542,28 @@ class ClusterSerializer(serializers.ModelSerializer):
     district = serializers.SerializerMethodField()
     taluka = serializers.SerializerMethodField()
     village = serializers.SerializerMethodField()
+    date_range = serializers.SerializerMethodField()
     
     class Meta:
         model = Cluster
-        fields = [
-            'id',
-            'name',
-            'state_code',
-            'district_codes',
-            'taluka_codes',
-            'village_codes',
-            'districts',
-            'talukas',
-            'villages',
-            'district',  # computed
-            'taluka',    # computed
-            'village',   # computed
-            'note',
-        ]
+        fields = '__all__'
         read_only_fields = ['id']
+
+    def get_date_range(self, obj):
+        from .models import JobActivity
+        from django.db.models import Min, Max
+        
+        result = JobActivity.objects.filter(
+            job__clusters=obj,
+            scheduled_date__isnull=False
+        ).aggregate(
+            start_date=Min('scheduled_date'),
+            end_date=Max('scheduled_date')
+        )
+        return {
+            'start_date': result['start_date'],
+            'end_date': result['end_date'],
+        }
     
     def get_district(self, obj):
         return ', '.join(obj.districts) if obj.districts else ''
@@ -565,12 +573,17 @@ class ClusterSerializer(serializers.ModelSerializer):
     
     def get_village(self, obj):
         return ', '.join(obj.villages) if obj.villages else ''
+
+
 class PlotSerializer(serializers.ModelSerializer):
+    clusters = serializers.PrimaryKeyRelatedField(
+        queryset=Cluster.objects.all(), many=True, required=False
+    )
+
     class Meta:
         model = Plot
-        fields = ['id', 'farmer', 'cluster', 'name', 'area_acres', 'plot_code',
+        fields = ['id', 'farmer', 'clusters', 'name', 'area_acres', 'plot_code',
                   'latitude', 'longitude']
-
 
 class ActivityScheduleRuleSerializer(serializers.ModelSerializer):
     class Meta:

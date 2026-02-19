@@ -57,54 +57,54 @@ def cluster_activity_calendar(request, cluster_id):
         return Response({'error': 'Cluster not found'}, status=404)
     
     if request.method == 'GET':
-        activities = ActivityCatalog.objects.all().order_by('id')
+        all_activities = ActivityCatalog.objects.all()
         
         calendar = []
-        for activity in activities:
-            # Farmer rate logic (existing)
+        for activity in all_activities:
             cluster_rate = ClusterActivityRate.objects.filter(
                 cluster=cluster, activity=activity
             ).first()
-            
+
             cluster_gap = ClusterActivityScheduleRule.objects.filter(
                 cluster=cluster, activity=activity
             ).first()
-            
-            global_rule = ActivityScheduleRule.objects.filter(activity=activity).first()
-            
+
+            global_rule = ActivityScheduleRule.objects.filter(
+                activity=activity
+            ).first()
+
+            # Use cluster override if exists, else global default
             farmer_rate = float(cluster_rate.rate_per_acre) if cluster_rate else float(activity.default_rate_per_acre)
             rate_overridden = bool(cluster_rate)
-            
-            gap_days = cluster_gap.gap_days if cluster_gap else (global_rule.gap_days if global_rule else activity.default_gap_days)
+
+            gap_days = cluster_gap.gap_days if cluster_gap else (
+                global_rule.gap_days if global_rule else activity.default_gap_days
+            )
             gap_overridden = bool(cluster_gap)
-            
-            # ✅ Mukkadam rate logic (NEW)
+
             mukkadam_cluster_rate = ClusterMukkadamActivityRate.objects.filter(
                 cluster=cluster, activity=activity
             ).first()
-            
-            mukkadam_rate = float(mukkadam_cluster_rate.rate_per_acre) if mukkadam_cluster_rate else farmer_rate * 0.8  # 80% of farmer rate as default
-            mukkadam_productivity = float(mukkadam_cluster_rate.productivity_per_worker) if mukkadam_cluster_rate else 0.150
+
+            mukkadam_rate = float(mukkadam_cluster_rate.rate_per_acre) if mukkadam_cluster_rate else farmer_rate * 0.8
+            mukkadam_productivity = float(mukkadam_cluster_rate.productivity_per_worker) if mukkadam_cluster_rate else float(activity.estimated_workers_per_acre) if activity.estimated_workers_per_acre else 0.150
             mukkadam_rate_overridden = bool(mukkadam_cluster_rate)
-            
+
             calendar.append({
                 'activity_id': activity.id,
                 'activity_name': activity.name,
                 'activity_type': activity.activity_type,
-                # Farmer rates
                 'rate_per_acre': farmer_rate,
                 'rate_overridden': rate_overridden,
                 'gap_days': gap_days,
                 'gap_overridden': gap_overridden,
-                # Mukkadam rates (NEW)
                 'mukkadam_rate_per_acre': mukkadam_rate,
                 'mukkadam_productivity': mukkadam_productivity,
                 'mukkadam_rate_overridden': mukkadam_rate_overridden,
-                # Common
                 'is_strict': activity.is_strict,
                 'phase_order': global_rule.phase_order if global_rule else 0,
             })
-        
+
         calendar.sort(key=lambda x: x['phase_order'])
         
         return Response({
@@ -112,7 +112,6 @@ def cluster_activity_calendar(request, cluster_id):
             'cluster_name': cluster.name,
             'activities': calendar
         })
-    
     elif request.method == 'POST':
         rate_overrides = request.data.get('rate_overrides', [])
         gap_overrides = request.data.get('gap_overrides', [])
@@ -177,6 +176,43 @@ def cluster_activity_calendar(request, cluster_id):
                 continue
         
         return Response({'success': True, 'message': 'Calendar updated'})
+
+@api_view(['GET', 'POST'])
+def global_activity_catalog(request):
+    if request.method == 'GET':
+        activities = ActivityCatalog.objects.all()
+        catalog_data = []
+        
+        for activity in activities:
+            global_rule = ActivityScheduleRule.objects.filter(activity=activity).first()
+            
+            # 1. Use the actual model fields for the master defaults
+            farmer_rate = float(activity.default_rate_per_acre)
+            
+            # Use estimated_workers_per_acre as the Global productivity default
+            # Use a fallback only if the field is null
+            mukkadam_productivity = float(activity.estimated_workers_per_acre) if activity.estimated_workers_per_acre else 0.150
+            
+            # Global Gap Days fallback logic
+            gap_days = global_rule.gap_days if global_rule else activity.default_gap_days
+            
+            catalog_data.append({
+                'activity_id': activity.id,
+                'activity_name': activity.name,
+                'activity_type': activity.activity_type,
+                'default_rate_per_acre': farmer_rate,
+                'default_gap_days': gap_days,
+                # For Global, we usually keep the 80% logic or 
+                # you can add a 'default_mukkadam_rate' field to ActivityCatalog
+                'mukkadam_default_rate': farmer_rate * 0.8, 
+                'mukkadam_default_productivity': mukkadam_productivity, # <--- FIXED
+                'is_strict': activity.is_strict,
+                'phase_order': global_rule.phase_order if global_rule else 0,
+            })
+
+        catalog_data.sort(key=lambda x: x['phase_order'])
+        return Response({'activities': catalog_data})
+
 @api_view(['GET'])
 def get_cluster_info(request, cluster_id):
     """
@@ -249,18 +285,21 @@ def reset_cluster_activity_override(request, cluster_id, activity_id):
 
 
 class FarmerViewSet(viewsets.ModelViewSet):
-    queryset = Farmer.objects.all().select_related('cluster')
+    queryset = Farmer.objects.all().prefetch_related('clusters')
+
+
     serializer_class = FarmerSerializer
     permission_classes = [AllowAny]
     authentication_classes = []
     
     def get_queryset(self):
+        
         queryset = super().get_queryset()
         
         # Filter by cluster
         cluster_id = self.request.query_params.get('cluster_id')
         if cluster_id:
-            queryset = queryset.filter(cluster_id=cluster_id)
+            queryset = queryset.filter(clusters__id=cluster_id)
         
         # Search by name or phone
         search = self.request.query_params.get('search')
@@ -274,48 +313,37 @@ class FarmerViewSet(viewsets.ModelViewSet):
 
 @api_view(['GET'])
 def get_cluster_plots(request, cluster_id):
-    """
-    GET: Get all plots in a cluster with farmer info
-    """
-    try:
-        plots = Plot.objects.filter(cluster_id=cluster_id).select_related('farmer')
-        
-        plot_list = []
-        for plot in plots:
-            plot_list.append({
-                'id': plot.id,
-                'name': plot.name,
-                'area_acres': float(plot.area_acres),
-                'plot_code': plot.plot_code,
-                'farmer_id': plot.farmer.farmer_id if plot.farmer else None,
-                'farmer_name': plot.farmer.farmer_name if plot.farmer else None,
-            })
-        
-        return Response({'plots': plot_list})
-    except Exception as e:
-        return Response({'error': str(e)}, status=500)
+    # ✅ M2M: filter plots where clusters contains this cluster
+    plots = Plot.objects.filter(clusters__id=cluster_id).select_related('farmer')
+    plot_list = [{
+        'id': plot.id,
+        'name': plot.name,
+        'area_acres': float(plot.area_acres),
+        'plot_code': plot.plot_code,
+        'farmer_id': plot.farmer.farmer_id if plot.farmer else None,
+        'farmer_name': plot.farmer.farmer_name if plot.farmer else None,
+    } for plot in plots]
+    return Response({'plots': plot_list})
+
 
 class PlotViewSet(viewsets.ModelViewSet):
-    queryset = Plot.objects.all().select_related('farmer', 'cluster')
+    queryset = Plot.objects.all().select_related('farmer').prefetch_related('clusters')
     serializer_class = PlotSerializer
     permission_classes = [AllowAny]
     authentication_classes = []
     
     def get_queryset(self):
-        queryset = super().get_queryset()
+        qs = super().get_queryset()  # ✅ use 'qs' not 'queryset'
         
-        # Filter by farmer
         farmer_id = self.request.query_params.get('farmer_id')
         if farmer_id:
-            queryset = queryset.filter(farmer_id=farmer_id)
+            qs = qs.filter(farmer_id=farmer_id)
         
-        # Filter by cluster
         cluster_id = self.request.query_params.get('cluster_id')
         if cluster_id:
-            queryset = queryset.filter(cluster_id=cluster_id)
+            qs = qs.filter(clusters__id=cluster_id)
         
-        return queryset.order_by('-created_at')
-
+        return qs.order_by('-created_at')
 
 
 def load_location_data(filename):
@@ -600,7 +628,58 @@ def get_villages(request):
     logger.info(f"✅ Returning {len(unique_villages)} villages")
     return Response(unique_villages)
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def search_villages(request):
+    """
+    Search villages by name prefix across all talukas for a state.
+    GET /locations/search_villages/?state_code=MH&q=sat
+    """
+    state_code = request.query_params.get('state_code', '').strip().upper()
+    q = request.query_params.get('q', '').strip().lower()
 
+    if not state_code or not q:
+        return Response([])
+
+    state_file_mapping = {
+        'MH': 'maharashtra_villages.json',
+        'GJ': 'gujarat_villages.json',
+    }
+
+    filename = state_file_mapping.get(state_code)
+    if not filename:
+        return Response({'error': 'Invalid state_code'}, status=400)
+
+    all_villages = load_location_data(filename)
+
+    results = []
+    seen = set()
+
+    for v in all_villages:
+        if not isinstance(v, dict):
+            continue
+
+        name_en = normalize_field_name(v, 'villagenameenglish', 'Village Name', 'Village name', 'Village Name ')
+        name_local = normalize_field_name(v, 'villagelocalname', 'Village Name', 'Village name', 'Village Name ')
+        code = normalize_field_name(v, 'villagecode', 'Village Code', 'Village code')
+
+        if not code or code in seen:
+            continue
+
+        if name_en.lower().startswith(q) or name_local.lower().startswith(q):
+            seen.add(code)
+            results.append({
+                'villagecode': code,
+                'villagenameenglish': name_en,
+                'villagelocalname': name_local,
+                'subdistrictcode': normalize_field_name(v, 'subdistrictcode', 'Subdistrict Code', 'Sub-District Code'),
+                'districtcode': normalize_field_name(v, 'districtcode', 'District Code'),
+            })
+
+        if len(results) >= 30:
+            break
+
+    return Response(results)
 
 # =============================================================================
 # ACTIVITY CATALOG VIEWSET
@@ -884,7 +963,8 @@ class LeaveViewSet(viewsets.ModelViewSet):
         cluster_id = self.request.query_params.get('cluster_id')
 
         if cluster_id:
-            queryset = queryset.filter(cluster_id=cluster_id)
+            queryset = queryset.filter(cluster__id=cluster_id).distinct()
+
 
         if start_date and end_date:
             queryset = queryset.filter(date__range=[start_date, end_date])
@@ -966,7 +1046,7 @@ class LeaveViewSet(viewsets.ModelViewSet):
         })
 
 from django.db.models import Prefetch
-
+from decimal import Decimal
 class JobViewSet(viewsets.ModelViewSet):
     serializer_class = JobSerializer
     permission_classes = [AllowAny]
@@ -974,6 +1054,7 @@ class JobViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = Job.objects.all().select_related('farmer', 'plot').prefetch_related(
+            'clusters',  # ✅ ADD THIS
             Prefetch(
                 'activities',
                 queryset=JobActivity.objects
@@ -989,7 +1070,7 @@ class JobViewSet(viewsets.ModelViewSet):
 
         cluster_id = self.request.query_params.get('cluster_id')
         if cluster_id:
-            queryset = queryset.filter(cluster_id=cluster_id)
+            queryset = queryset.filter(clusters__id=cluster_id).distinct()
 
         # NEW: filter jobs on a specific plot inside this cluster
         plot_id = self.request.query_params.get('plot')
@@ -1198,6 +1279,67 @@ class JobActivityViewSet(viewsets.ModelViewSet):
         """PATCH method"""
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
+    
+    @action(detail=True, methods=['post'])
+    def move(self, request, pk=None):
+        """
+        Move (split) a job activity to a new date with a specific area.
+        
+        POST /api/job-activities/{id}/move/
+        Body: { "new_date": "2026-03-15", "area": 1.5 }
+        """
+        activity = self.get_object()
+        
+        new_date = request.data.get('new_date')
+        area = request.data.get('area')
+        
+        if not new_date:
+            return Response({'error': 'new_date is required'}, status=400)
+        
+        try:
+            area = Decimal(str(area))
+        except Exception:
+            return Response({'error': 'Invalid area'}, status=400)
+        
+        if area <= 0:
+            return Response({'error': 'Area must be greater than 0'}, status=400)
+        
+        if area > activity.remaining_area:
+            return Response({
+                'error': f'Area ({area}) exceeds remaining area ({activity.remaining_area})'
+            }, status=400)
+        
+        # Subtract area from current activity
+        activity.total_area = activity.total_area - area
+        activity.save()
+        
+        # Create new activity on new date with the moved area
+        new_activity = JobActivity.objects.create(
+            job=activity.job,
+            activity=activity.activity,
+            plot=activity.plot,
+            is_strict=activity.is_strict,
+            total_area=area,
+            allocated_area=Decimal('0'),
+            remaining_area=area,
+            scheduled_date=new_date,
+            rate_per_acre=activity.rate_per_acre,
+            transport_cost=activity.transport_cost,
+            other_cost=activity.other_cost,
+            estimated_workers=activity.estimated_workers,
+            location=activity.location,
+        )
+        
+        return Response({
+            'message': f'{area} ac moved to {new_date}',
+            'original_activity_id': activity.id,
+            'original_remaining': float(activity.remaining_area),
+            'new_activity_id': new_activity.id,
+            'new_date': new_date,
+            'new_area': float(area),
+        }, status=200)
+
+
 
 
 # views.py - Update MukkadamViewSet
@@ -1223,7 +1365,7 @@ class MukkadamActivityRateViewSet(viewsets.ModelViewSet):
 # views.py - Update MukkadamViewSet
 
 class MukkadamViewSet(viewsets.ModelViewSet):
-    queryset = Mukkadam.objects.all().select_related('cluster')
+    queryset = Mukkadam.objects.all().prefetch_related('clusters')
     serializer_class = MukkadamSerializer
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -1233,7 +1375,7 @@ class MukkadamViewSet(viewsets.ModelViewSet):
         
         cluster_id = self.request.query_params.get('cluster_id')
         if cluster_id:
-            queryset = queryset.filter(cluster_id=cluster_id)
+            queryset = queryset.filter(clusters__id=cluster_id).distinct()
         
         search = self.request.query_params.get('search')
         if search:
@@ -1570,9 +1712,10 @@ class MukkadamViewSet(viewsets.ModelViewSet):
 
         # 👇 NEW: filter by cluster_id if provided
         cluster_id = request.query_params.get('cluster_id')
+        
         qs = Mukkadam.objects.all()
         if cluster_id:
-            qs = qs.filter(cluster_id=cluster_id)
+            qs = qs.filter(clusters__id=cluster_id)
 
         data = []
         for m in qs:
@@ -1599,8 +1742,7 @@ class MukkadamViewSet(viewsets.ModelViewSet):
         cluster_id = request.query_params.get('cluster_id')
         qs = Mukkadam.objects.all()
         if cluster_id:
-            qs = qs.filter(cluster_id=cluster_id)
-
+            qs = qs.filter(clusters__id=cluster_id)
         total = 0
         for m in qs:
             availability = get_mukkadam_availability(m.mukkadam_id, date)
@@ -1677,6 +1819,59 @@ class MukkadamViewSet(viewsets.ModelViewSet):
         return Response(result)
 
 
+    @action(detail=False, methods=['patch'])
+    def add_day_crew(self, request):
+        """
+        Add extra workers to a mukkadam's base crew for a specific date.
+        PATCH /api/mukkadams/add_day_crew/
+        Body: {
+            "mukkadam_id": 123,
+            "date": "2026-02-18",
+            "extra_crew": 5,
+            "cluster_id": 1
+        }
+        """
+        mukkadam_id = request.data.get('mukkadam_id')
+        date_str = request.data.get('date')
+        extra_crew = request.data.get('extra_crew', 0)
+
+        if not mukkadam_id or not date_str:
+            return Response(
+                {'error': 'mukkadam_id and date are required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
+            
+            # Use update_or_create to store the manual adjustment
+            # Assuming your MukkadamAvailability model has an 'extra_workers' field
+            availability, created = MukkadamAvailability.objects.update_or_create(
+                mukkadam=mukkadam,
+                date=date_str,
+                defaults={
+                    'extra_workers': int(extra_crew),
+                    'is_manually_set': True
+                }
+            )
+
+            # Recalculate total effective crew for that day
+            # This logic should be shared with your get_effective_crew_size util
+            effective_size = get_effective_crew_size(mukkadam, date_str)
+            availability.available_crew_size = effective_size
+            availability.save()
+
+            return Response({
+                'success': True,
+                'message': f'Added {extra_crew} extra workers for {mukkadam.mukkadam_name}',
+                'new_total_capacity': effective_size
+            })
+
+        except Mukkadam.DoesNotExist:
+            return Response({'error': 'Mukkadam not found'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from datetime import datetime
@@ -1699,13 +1894,13 @@ class PlanningViewSet(viewsets.ViewSet):
 
         # activities with a scheduled date and some remaining area
         activities = JobActivity.objects.filter(
-            job__cluster_id=cluster_id,
+            job__clusters__id=cluster_id,
             remaining_area__gt=0,
             scheduled_date__isnull=False,
         ).select_related("job__farmer", "activity")
 
 
-        mukkadams = Mukkadam.objects.filter(cluster_id=cluster_id)
+        mukkadams = Mukkadam.objects.filter(clusters__id=cluster_id)
 
         results = []
 
@@ -1746,7 +1941,7 @@ class PlanningViewSet(viewsets.ViewSet):
 
             results.append({
                 'job_id': ja.job.job_id,
-                'plot_name': ja.plot.name,
+                'plot_name': ja.plot.name if ja.plot else '',
                 'farmer_id': ja.job.farmer.farmer_id,
                 'farmer_name': ja.job.farmer.farmer_name, 
                   'crop_name': ja.job.crop_name,
@@ -1900,7 +2095,9 @@ from .models import Cluster
 from .serializers import ClusterSerializer
 
 class ClusterViewSet(viewsets.ModelViewSet):
-    queryset = Cluster.objects.all().order_by('name')
+    queryset = Cluster.objects.all().order_by('name').prefetch_related(
+        'jobs__activities'  # prefetch for date_range calculation
+    )
     serializer_class = ClusterSerializer
     permission_classes = [permissions.AllowAny]
 
@@ -2622,219 +2819,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
             status=status.HTTP_204_NO_CONTENT,
         )
 
-
-    @action(detail=False, methods=['post'])
-    def auto_allocate_day(self, request):
-        date_str = request.data.get('date')
-        cluster_id = request.data.get('cluster_id')
-
-        if not date_str or not cluster_id:
-            return Response({'error': 'date and cluster_id are required'}, status=400)
-
-        try:
-            alloc_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            cluster = Cluster.objects.get(id=cluster_id)
-        except (ValueError, Cluster.DoesNotExist):
-            return Response({'error': 'Invalid date or cluster'}, status=400)
-
-        job_activities = JobActivity.objects.filter(
-            job__cluster=cluster,
-            scheduled_date=alloc_date,
-        ).select_related('activity', 'job__farmer', 'job__plot')
-
-        job_activities = [
-            ja for ja in job_activities 
-            if float(ja.total_area - ja.allocated_area) > 0
-        ]
-
-        # ✅ Track workers used per mukkadam within this run
-        workers_used_today = {}  # mukkadam_id -> workers already allocated today
-
-        # Pre-load already existing allocations for this date
-        existing_allocs = MukkadamAvailability.objects.filter(
-            mukkadam__cluster=cluster,
-            date=alloc_date,
-        )
-        for avail in existing_allocs:
-            workers_used_today[avail.mukkadam_id] = avail.allocated_workers
-
-        results = []
-        failures = []
-
-        for ja in job_activities:
-            remaining_area = float(ja.total_area - ja.allocated_area)
-
-            rate_obj = MukkadamActivityRate.objects.filter(
-                activity=ja.activity,
-                is_active=True,
-                mukkadam__cluster=cluster,
-            ).select_related('mukkadam').first()
-
-            if not rate_obj:
-                failures.append({
-                    'job_activity_id': ja.id,
-                    'job_id': ja.job.job_id,
-                    'activity': ja.activity.name,
-                    'farmer': ja.job.farmer.farmer_name,
-                    'reason': 'No mukkadam with rate card for this activity',
-                    'reason_code': 'NO_MUKKADAM',
-                    'best_date': None,
-                })
-                continue
-
-            mukkadam = rate_obj.mukkadam
-            productivity = float(rate_obj.productivity_per_worker)
-
-            # ✅ Available workers = crew - already used (existing + this run)
-            already_used = workers_used_today.get(mukkadam.mukkadam_id, 0)
-            available_workers = max(mukkadam.crew_size - already_used, 0)
-
-            if available_workers == 0:
-                # Find best future date
-                best_date = _find_best_future_date(
-                    ja, mukkadam, rate_obj, remaining_area,
-                    math.ceil(remaining_area / productivity),
-                    alloc_date, cluster
-                )
-                failures.append({
-                    'job_activity_id': ja.id,
-                    'job_id': ja.job.job_id,
-                    'activity': ja.activity.name,
-                    'farmer': ja.job.farmer.farmer_name,
-                    'plot': ja.job.plot.plot_name if ja.job.plot else '',
-                    'reason': f'No workers available — team fully booked today',
-                    'reason_code': 'WORKER_CAPACITY',
-                    'best_date': str(best_date) if best_date else None,
-                    'mukkadam': mukkadam.mukkadam_name,
-                    'area_needed': remaining_area,
-                    'max_capacity': 0,
-                })
-                continue
-
-            # ✅ Minimum workers needed, capped at available
-            workers_needed = math.ceil(remaining_area / productivity)
-            workers = min(workers_needed, available_workers)
-            max_area_with_workers = round(workers * productivity, 2)
-
-            # ✅ Check if available workers can cover full area
-            if max_area_with_workers < remaining_area:
-                # Cannot fully allocate — find best future date
-                best_date = _find_best_future_date(
-                    ja, mukkadam, rate_obj, remaining_area,
-                    workers_needed,
-                    alloc_date, cluster
-                )
-                failures.append({
-                    'job_activity_id': ja.id,
-                    'job_id': ja.job.job_id,
-                    'activity': ja.activity.name,
-                    'farmer': ja.job.farmer.farmer_name,
-                    'plot': ja.job.plot.plot_name if ja.job.plot else '',
-                    'reason': (
-                        f'Only {available_workers} workers available '
-                        f'(need {workers_needed}) — can cover '
-                        f'{max_area_with_workers} ac of {remaining_date} ac'
-                    ),
-                    'reason_code': 'WORKER_CAPACITY',
-                    'best_date': str(best_date) if best_date else None,
-                    'mukkadam': mukkadam.mukkadam_name,
-                    'area_needed': remaining_area,
-                    'max_capacity': max_area_with_workers,
-                })
-                continue
-
-            # ✅ Can fully allocate
-            can_allocate, message, warnings = check_can_allocate(
-                ja.id,
-                mukkadam.mukkadam_id,
-                alloc_date,
-                remaining_area,
-                workers,
-                skip_strict_check=False,
-            )
-
-            if not can_allocate:
-                best_date = _find_best_future_date(
-                    ja, mukkadam, rate_obj, remaining_area,
-                    workers, alloc_date, cluster
-                )
-                failures.append({
-                    'job_activity_id': ja.id,
-                    'job_id': ja.job.job_id,
-                    'activity': ja.activity.name,
-                    'farmer': ja.job.farmer.farmer_name,
-                    'plot': ja.job.plot.plot_name if ja.job.plot else '',
-                    'reason': message,
-                    'reason_code': _classify_reason(message),
-                    'best_date': str(best_date) if best_date else None,
-                    'mukkadam': mukkadam.mukkadam_name,
-                    'area_needed': remaining_area,
-                    'max_capacity': max_area_with_workers,
-                })
-                continue
-
-            try:
-                with transaction.atomic():
-                    allocation = Allocation.objects.create(
-                        job_activity=ja,
-                        mukkadam=mukkadam,
-                        allocated_date=alloc_date,
-                        allocated_area=Decimal(str(remaining_area)),
-                        allocated_workers=workers,
-                        farmer_rate=ja.rate_per_acre,
-                        mukkadam_rate=rate_obj.rate_per_acre,
-                        status='scheduled',
-                        cluster=cluster,
-                    )
-
-                    ja.allocated_area += Decimal(str(remaining_area))
-                    ja.save()
-
-                    availability, _ = MukkadamAvailability.objects.get_or_create(
-                        mukkadam=mukkadam,
-                        date=alloc_date,
-                        defaults={
-                            'available_crew_size': mukkadam.crew_size,
-                            'is_available': True,
-                            'allocated_workers': 0,
-                        },
-                    )
-                    availability.allocated_workers += workers
-                    availability.save()
-
-                    # ✅ Update local tracker so next job sees correct available workers
-                    workers_used_today[mukkadam.mukkadam_id] = (
-                        workers_used_today.get(mukkadam.mukkadam_id, 0) + workers
-                    )
-
-                    results.append({
-                        'job_activity_id': ja.id,
-                        'job_id': ja.job.job_id,
-                        'activity': ja.activity.name,
-                        'farmer': ja.job.farmer.farmer_name,
-                        'mukkadam': mukkadam.mukkadam_name,
-                        'area': remaining_area,
-                        'workers': workers,
-                        'status': 'allocated',
-                    })
-
-            except Exception as e:
-                failures.append({
-                    'job_activity_id': ja.id,
-                    'job_id': ja.job.job_id,
-                    'activity': ja.activity.name,
-                    'farmer': ja.job.farmer.farmer_name,
-                    'reason': str(e),
-                    'reason_code': 'ERROR',
-                    'best_date': None,
-                })
-
-        return Response({
-            'success': True,
-            'allocated': results,
-            'failures': failures,
-            'summary': f'{len(results)} allocated, {len(failures)} need attention',
-        })
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import Cluster
@@ -2866,6 +2850,419 @@ def cluster_potential_jobs(request, cluster_id: int):
             for p in items
         ]
     return Response(out)
+
+# tender/views.py — ADD THESE
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def search_farmers_for_cluster(request, cluster_id):
+    """
+    Search farmers with their plots + cluster membership info.
+    GET /api/clusters/<id>/search_farmers/?q=hemant
+    """
+    q = request.query_params.get('q', '').strip()
+    
+    farmers_qs = Farmer.objects.prefetch_related(
+        'clusters',
+        Prefetch('plots', queryset=Plot.objects.prefetch_related('clusters'))
+    )
+    if q:
+        farmers_qs = farmers_qs.filter(
+            Q(farmer_name__icontains=q) |
+            Q(farmer_id__icontains=q) |
+            Q(phone_number__icontains=q)
+        )
+    
+    farmers_qs = farmers_qs[:20]
+    
+    result = []
+    for farmer in farmers_qs:
+        farmer_clusters = list(farmer.clusters.all())
+        plots_data = []
+        for plot in farmer.plots.all():
+            plot_clusters = list(plot.clusters.all())
+            in_this_cluster = any(pc.id == cluster_id for pc in plot_clusters)
+            plots_data.append({
+                'plot_id': plot.id,
+                'plot_code': plot.plot_code,
+                'name': plot.name,
+                'area_acres': float(plot.area_acres),
+                'crop_name': plot.crop_name,
+                'in_this_cluster': in_this_cluster,
+                'other_clusters': [
+                    {'id': pc.id, 'name': pc.name}
+                    for pc in plot_clusters if pc.id != cluster_id
+                ],
+            })
+        
+        result.append({
+            'farmer_id': farmer.farmer_id,
+            'farmer_name': farmer.farmer_name,
+            'phone_number': farmer.phone_number,
+            'location': farmer.location,
+            'in_this_cluster': any(fc.id == cluster_id for fc in farmer_clusters),
+            'other_clusters': [
+                {'id': fc.id, 'name': fc.name}
+                for fc in farmer_clusters if fc.id != cluster_id
+            ],
+            'plots': plots_data,
+        })
+    
+    return Response(result)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def add_farmer_plots_to_cluster(request, cluster_id):
+    cluster = Cluster.objects.get(id=cluster_id)
+    farmer_id = request.data.get('farmer_id')
+    plot_ids = request.data.get('plot_ids', [])
+
+    farmer = Farmer.objects.get(farmer_id=farmer_id)
+    farmer.clusters.add(cluster)
+
+    added_plots = []
+    fixed_jobs = 0
+
+    for plot_id in plot_ids:
+        try:
+            plot = Plot.objects.get(id=plot_id, farmer=farmer)
+            plot.clusters.add(cluster)
+            added_plots.append(plot.name)
+
+            # ✅ Fix all jobs on this plot with no cluster
+            jobs_on_plot = Job.objects.filter(plot=plot)
+            for job in jobs_on_plot:
+                job.clusters.add(cluster)
+            fixed_jobs += jobs_on_plot.count()
+
+        except Plot.DoesNotExist:
+            pass
+
+    return Response({
+        'success': True,
+        'farmer_name': farmer.farmer_name,
+        'cluster_name': cluster.name,
+        'plots_added': added_plots,
+        'jobs_fixed': fixed_jobs,
+    })
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def search_mukkadams_for_cluster(request, cluster_id):
+    q = request.query_params.get('q', '').strip()
+    
+    mukkadams_qs = Mukkadam.objects.prefetch_related(
+        'clusters',
+        'activity_rates__activity'  # ✅ prefetch rates
+    )
+    if q:
+        mukkadams_qs = mukkadams_qs.filter(
+            Q(mukkadam_name__icontains=q) |
+            Q(mobile_numbers__icontains=q)
+        )
+    
+    mukkadams_qs = mukkadams_qs[:20]
+    
+    result = []
+    for m in mukkadams_qs:
+        m_clusters = list(m.clusters.all())
+
+        # ✅ Use activity_rates (has real ID) instead of tender_activities JSON
+        activities = [
+            {
+                'id': rate.id,
+                'name': rate.activity.name,
+                'price': float(rate.rate_per_acre or 0),
+                'productivity': float(rate.productivity_per_worker or 0.15),
+            }
+            for rate in m.activity_rates.all()
+        ]
+
+        result.append({
+            'id': m.mukkadam_id,
+            'name': m.mukkadam_name,
+            'mobile': m.mobile_numbers,
+            'crew_size': m.crew_size,
+            'max_crew_capacity': m.max_crew_capacity,
+            'village': m.village,
+            'district': m.district,
+            'activities': activities,
+            'in_this_cluster': any(mc.id == cluster_id for mc in m_clusters),
+            'other_clusters': [
+                {'id': mc.id, 'name': mc.name}
+                for mc in m_clusters if mc.id != cluster_id
+            ],
+        })
+    
+    return Response(result)
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def add_mukkadam_to_cluster(request, cluster_id):
+    """
+    POST /api/clusters/<id>/add_mukkadam/
+    Body: { "mukkadam_id": 278 }
+    """
+    try:
+        cluster = Cluster.objects.get(id=cluster_id)
+    except Cluster.DoesNotExist:
+        return Response({'error': 'Cluster not found'}, status=404)
+    
+    mukkadam_id = request.data.get('mukkadam_id')
+    if not mukkadam_id:
+        return Response({'error': 'mukkadam_id required'}, status=400)
+    
+    try:
+        mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
+    except Mukkadam.DoesNotExist:
+        return Response({'error': 'Mukkadam not found'}, status=404)
+    
+    mukkadam.clusters.add(cluster)
+    
+    return Response({
+        'success': True,
+        'mukkadam_name': mukkadam.mukkadam_name,
+        'cluster_name': cluster.name,
+    })
+
+# tender/views.py - ADD THIS
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from django.db.models import Prefetch, Sum
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def tender_dashboard(request):
+    """
+    Single endpoint for the tender dashboard page.
+    Returns mukkadams (tab 1) + farmers with plots/jobs/payments (tab 2).
+    
+    Query params:
+    - cluster_id: filter farmers by cluster (optional)
+    """
+    cluster_id = request.query_params.get('cluster_id')
+
+    # ============ MUKKADAMS ============
+    mukkadams_qs = Mukkadam.objects.all().prefetch_related(
+        'clusters',
+        Prefetch(
+            'activity_rates',
+            queryset=MukkadamActivityRate.objects.filter(
+                is_active=True
+            ).select_related('activity'),
+            to_attr='prefetched_rates'
+        )
+    )
+    
+    mukkadams_data = []
+    for m in mukkadams_qs:
+        activities = (m.tender_activities or {}).get('activities', [])
+        # Filter out empty activities
+        rates = m.prefetched_rates  # from prefetch above
+        
+        activity_rates = [
+            {
+                'rate_id': rate.id,                                    # ← key field
+                'activity_id': rate.activity.id,
+                'activity_name': rate.activity.name,
+                'rate_per_acre': float(rate.rate_per_acre),
+                'productivity_per_worker': float(rate.productivity_per_worker),
+                'is_active': rate.is_active,
+            }
+            for rate in rates
+        ]
+        
+        total_price = 0
+        try:
+            total_price = float((m.tender_activities or {}).get('total_price', 0) or 0)
+        except (ValueError, TypeError):
+            pass
+
+        mukkadams_data.append({
+            'id': m.mukkadam_id,
+            'name': m.mukkadam_name,
+            'mobile': m.mobile_numbers,
+            'crew_size': m.crew_size,
+            'max_crew_capacity': m.max_crew_capacity,
+            'location': {
+                'state': m.state,
+                'district': m.district,
+                'taluka': m.taluka,
+                'village': m.village,
+            },
+            'availability': {
+                'start_date': str(m.start_date) if m.start_date else None,
+                'end_date': str(m.end_date) if m.end_date else None,
+            },
+            'activities': activity_rates,  
+            'total_price': total_price,
+            'reference_image_url': (m.tender_activities or {}).get('reference_image_url', ''),
+            'efficiency': float(m.efficiency),
+            'clusters': [
+                {'id': c.id, 'name': c.name}
+                for c in m.clusters.all()
+            ],
+        })
+
+    # ============ FARMERS ============
+    farmers_qs = Farmer.objects.prefetch_related(
+        'clusters',
+        Prefetch(
+            'plots',
+            queryset=Plot.objects.prefetch_related('clusters')
+        ),
+        Prefetch(
+            'jobs',
+            queryset=Job.objects.filter(booking_type='tender').prefetch_related(
+                Prefetch(
+                    'activities',
+                    queryset=JobActivity.objects.select_related('activity', 'plot')
+                ),
+                'booking__payments'
+            )
+        )
+    )
+
+    # Apply cluster filter if provided
+    if cluster_id:
+        farmers_qs = farmers_qs.filter(clusters__id=cluster_id)
+
+    farmers_data = []
+    for farmer in farmers_qs:
+        farmer_clusters = list(farmer.clusters.all())
+        all_plots = list(farmer.plots.all())
+        all_jobs = list(farmer.jobs.all())
+
+        # Group plots by cluster
+        # Group plots by cluster
+        plots_by_cluster = {}
+        for plot in all_plots:
+            plot_clusters = list(plot.clusters.all())
+            
+            if plot_clusters:
+                cluster_groups = [(str(pc.id), pc.id, pc.name) for pc in plot_clusters]
+            else:
+                cluster_groups = [('none', None, 'No Cluster')]
+            
+            # Find jobs for this plot
+            plot_jobs = [j for j in all_jobs if j.plot_id == plot.id or
+                        any(a.plot_id == plot.id for a in j.activities.all())]
+            
+            total_amount = sum(float(j.booking.total_amount) for j in plot_jobs if hasattr(j, 'booking'))
+            advance_paid = sum(float(j.booking.advance_paid) for j in plot_jobs if hasattr(j, 'booking'))
+            balance = total_amount - advance_paid
+
+            plot_entry = {
+                'plot_id': plot.id,
+                'plot_code': plot.plot_code,
+                'name': plot.name,
+                'area_acres': float(plot.area_acres),
+                'crop_name': getattr(plot, 'crop_name', ''),
+                'variety': getattr(plot, 'variety', ''),
+                'pruning_date': str(plot.pruning_date) if getattr(plot, 'pruning_date', None) else None,
+                'jobs_count': len(plot_jobs),
+                'payment_summary': {
+                    'total_amount': total_amount,
+                    'advance_paid': advance_paid,
+                    'balance': balance,
+                    'is_fully_paid': balance <= 0,
+                },
+                'jobs': [
+                    {
+                        'job_id': j.job_id,
+                        'status': j.status,
+                        'priority': j.priority,
+                        'scheduled_date': str(j.scheduled_date) if j.scheduled_date else None,
+                        'total_activities_amount': float(j.total_activities_amount),
+                        'activities': [
+                            {
+                                'id': a.id,
+                                'name': a.activity.name,
+                                'total_area': float(a.total_area),
+                                'allocated_area': float(a.allocated_area),
+                                'remaining_area': float(a.remaining_area),
+                                'scheduled_date': str(a.scheduled_date) if a.scheduled_date else None,
+                                'total_price': float(a.total_price),
+                                'allocation_status': a.allocation_status,
+                            }
+                            for a in j.activities.all()
+                        ],
+                        'booking': {
+                            'booking_id': j.booking.booking_id,
+                            'status': j.booking.status,
+                            'total_amount': float(j.booking.total_amount),
+                            'advance_paid': float(j.booking.advance_paid),
+                            'balance': float(j.booking.balance),
+                            'payments': [
+                                {
+                                    'payment_id': p.payment_id,
+                                    'amount': float(p.amount),
+                                    'mode': p.mode,
+                                    'paid_at': str(p.paid_at),
+                                    'paid_status': p.paid_status,
+                                    'notes': p.notes,
+                                }
+                                for p in j.booking.payments.all()
+                            ]
+                        } if hasattr(j, 'booking') else None,
+                    }
+                    for j in plot_jobs
+                ]
+            }
+
+            # ✅ Add plot to each cluster group it belongs to
+            for cluster_key, cluster_id_val, cluster_name in cluster_groups:
+                if cluster_key not in plots_by_cluster:
+                    plots_by_cluster[cluster_key] = {
+                        'cluster_id': cluster_id_val,
+                        'cluster_name': cluster_name,
+                        'plots': []
+                    }
+                plots_by_cluster[cluster_key]['plots'].append(plot_entry)
+
+        # Overall payment summary for this farmer
+        farmer_total = sum(
+            float(j.booking.total_amount)
+            for j in all_jobs if hasattr(j, 'booking')
+        )
+        farmer_advance = sum(
+            float(j.booking.advance_paid)
+            for j in all_jobs if hasattr(j, 'booking')
+        )
+
+        farmers_data.append({
+            'farmer_id': farmer.farmer_id,
+            'farmer_name': farmer.farmer_name,
+            'phone_number': farmer.phone_number,
+            'location': farmer.location,
+            'clusters': [{'id': c.id, 'name': c.name} for c in farmer_clusters],
+            'total_plots': len(all_plots),
+            'total_jobs': len(all_jobs),
+            'payment_summary': {
+                'total_amount': farmer_total,
+                'advance_paid': farmer_advance,
+                'balance': farmer_total - farmer_advance,
+            },
+            'plots_by_cluster': list(plots_by_cluster.values()),
+        })
+
+    # ============ SUMMARY STATS ============
+    total_mukkadams = len(mukkadams_data)
+    total_farmers = len(farmers_data)
+
+    return Response({
+        'summary': {
+            'total_mukkadams': total_mukkadams,
+            'total_farmers': total_farmers,
+            'total_tender_jobs': Job.objects.filter(booking_type='tender').count(),
+        },
+        'mukkadams': mukkadams_data,
+        'farmers': farmers_data,
+    })
+
 
 
 # Example usage in views

@@ -26,6 +26,7 @@ class ActivityCatalog(models.Model):
         default=False,
         help_text="Strict activities must be completed on scheduled date and before other activities"
     )
+    
     estimated_workers_per_acre = models.IntegerField(
         default=10,
         validators=[MinValueValidator(1)],
@@ -83,6 +84,27 @@ class Cluster(models.Model):
     @property
     def village(self):
         return ', '.join(self.villages) if self.villages else ''
+
+    @property
+    def date_range(self):
+        """
+        Compute start/end dates from all JobActivities 
+        linked to jobs in this cluster.
+        """
+        from django.db.models import Min, Max
+        
+        result = JobActivity.objects.filter(
+            job__clusters=self,
+            scheduled_date__isnull=False
+        ).aggregate(
+            start_date=Min('scheduled_date'),
+            end_date=Max('scheduled_date')
+        )
+        return {
+            'start_date': result['start_date'],
+            'end_date': result['end_date'],
+        }
+
 # ============================================================================
 # JOB/BOOKING MODELS
 # ============================================================================
@@ -94,10 +116,10 @@ class Farmer(models.Model):
     farmer_name = models.CharField(max_length=200)
     phone_number = models.CharField(max_length=20, blank=True)
 
-    # only cluster, derive location from it
-    cluster = models.ForeignKey(
-        Cluster, null=True, blank=True,
-        on_delete=models.SET_NULL,
+    # ✅ CHANGED: ManyToMany - manual assignment
+    clusters = models.ManyToManyField(
+        'Cluster',
+        blank=True,
         related_name='farmers'
     )
 
@@ -129,14 +151,16 @@ class Plot(models.Model):
     farmer = models.ForeignKey(
         Farmer, on_delete=models.CASCADE, related_name='plots'
     )
-    cluster = models.ForeignKey(
-        Cluster, null=True, blank=True,
-        on_delete=models.SET_NULL, related_name='plots'
+    clusters = models.ManyToManyField(
+        Cluster, blank=True, related_name='plots'
     )
 
     name = models.CharField(max_length=100)  # e.g. "Plot 1", "Bagal Wadi"
     area_acres = models.DecimalField(max_digits=10, decimal_places=2)
 
+    crop_name = models.CharField(max_length=100, blank=True)
+    variety = models.CharField(max_length=100, blank=True)
+    pruning_date = models.DateField(null=True, blank=True)
     # optional: geo / code
     plot_code = models.CharField(max_length=50, blank=True, null=True)
     latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
@@ -197,9 +221,10 @@ class Job(models.Model):
         default='pending',
         blank=True
     )
-    cluster = models.ForeignKey(
-        Cluster, null=True, blank=True,
-        on_delete=models.SET_NULL
+    # ADD this:
+    clusters = models.ManyToManyField(
+        Cluster, blank=True,
+        related_name='jobs'
     )
     booking_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
@@ -494,52 +519,107 @@ def effective_gap_days(cluster, activity):
 # MUKKADAM (TEAM) MODELS
 # ============================================================================
 
+# class Mukkadam(models.Model):
+#     """
+#     Mukkadam/Labor contractor information (synced from API)
+#     """
+#     mukkadam_id = models.BigIntegerField(unique=True, primary_key=True)
+#     mukkadam_name = models.CharField(max_length=200)
+#     mobile_numbers = models.CharField(max_length=100)
+#     # ✅ CHANGED: ManyToMany - manual assignment
+#     clusters = models.ManyToManyField(
+#         'Cluster',
+#         blank=True,
+#         related_name='mukkadams'
+#     )
+    
+#     is_permanent = models.BooleanField(default=False)
+    
+#     # Location
+#     district = models.CharField(max_length=100, blank=True)
+#     taluka = models.CharField(max_length=100, blank=True)
+#     village = models.CharField(max_length=100, blank=True)
+#     current_latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+#     current_longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
+    
+#     # Availability
+#     start_date = models.DateField(null=True, blank=True)
+#     end_date = models.DateField(null=True, blank=True)
+    
+#     # Crew information
+#     crew_size = models.IntegerField(default=0)
+#     has_smartphone = models.CharField(max_length=10, default='no')
+#     work_mode = models.CharField(max_length=50, blank=True)
+    
+#     # Rate cards (from API)
+#     rate_card = models.JSONField(default=dict, blank=True)
+#     tender_activities = models.JSONField(default=dict, blank=True)
+    
+#     # API raw data
+#     api_raw_data = models.JSONField(default=dict, blank=True)
+    
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+#     last_synced = models.DateTimeField(auto_now=True)
+    
+#     class Meta:
+#         db_table = 'mukkadams'
+#         ordering = ['mukkadam_name']
+    
+#     def __str__(self):
+#         return f"{self.mukkadam_name} (Crew: {self.crew_size})"
+
 class Mukkadam(models.Model):
-    """
-    Mukkadam/Labor contractor information (synced from API)
-    """
     mukkadam_id = models.BigIntegerField(unique=True, primary_key=True)
     mukkadam_name = models.CharField(max_length=200)
     mobile_numbers = models.CharField(max_length=100)
-    cluster = models.ForeignKey(Cluster, null=True, blank=True,
-                                on_delete=models.SET_NULL)
-    
+
+    clusters = models.ManyToManyField('Cluster', blank=True, related_name='mukkadams')
+
     is_permanent = models.BooleanField(default=False)
-    
-    # Location
+
+    # Location (stored from API)
+    state = models.CharField(max_length=100, blank=True)
+    state_code = models.CharField(max_length=20, blank=True)
     district = models.CharField(max_length=100, blank=True)
+    district_code = models.CharField(max_length=20, blank=True)
     taluka = models.CharField(max_length=100, blank=True)
+    taluka_code = models.CharField(max_length=20, blank=True)
     village = models.CharField(max_length=100, blank=True)
+    village_code = models.CharField(max_length=20, blank=True)
+
     current_latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
     current_longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
-    
-    # Availability
-    start_date = models.DateField(null=True, blank=True)
-    end_date = models.DateField(null=True, blank=True)
-    
-    # Crew information
+
+    # Crew
     crew_size = models.IntegerField(default=0)
+    max_crew_capacity = models.IntegerField(default=0)  # ✅ NEW
+
     has_smartphone = models.CharField(max_length=10, default='no')
     work_mode = models.CharField(max_length=50, blank=True)
-    
-    # Rate cards (from API)
-    rate_card = models.JSONField(default=dict, blank=True)
+
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+
+    # Activities + rates (from API)
     tender_activities = models.JSONField(default=dict, blank=True)
-    
-    # API raw data
+    rate_card = models.JSONField(default=dict, blank=True)
+
+    # ✅ Efficiency - default 0.10, updatable later
+    efficiency = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.10'))
+
     api_raw_data = models.JSONField(default=dict, blank=True)
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_synced = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'mukkadams'
         ordering = ['mukkadam_name']
-    
+
     def __str__(self):
         return f"{self.mukkadam_name} (Crew: {self.crew_size})"
-
 # models.py - Add new model
 
 class ClusterMukkadamActivityRate(models.Model):
@@ -558,7 +638,7 @@ class ClusterMukkadamActivityRate(models.Model):
         related_name='cluster_mukkadam_defaults'
     )
     rate_per_acre = models.DecimalField(
-        max_digits=10, 
+        max_digits=15, 
         decimal_places=2,
         validators=[MinValueValidator(0)]
     )

@@ -640,6 +640,7 @@ onAllocationDelete={handleAllocationDelete}
     potentialJobs={potentialByDate?.[formatDate(detailDate)] || []}
     filters={filters}
     allJobs={allJobs || jobs}
+    viewMode={viewModes}  // pass the array directly, not viewModes[clusterId]
     clusterId={clusterId}
   />
 )}

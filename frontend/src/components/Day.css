@@ -1,5 +1,5 @@
 .day-detail-modal {
-  max-width: 700px;
+  max-width: 790px;
 }
 .day-detail-body {
   display: flex;
@@ -22,7 +22,7 @@
 
 /* Modal Refinement */
 .day-detail-modal {
-  max-width: 600px;
+  max-width: 680px;
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
@@ -217,7 +217,7 @@
 }
 
 .day-detail-modal {
-    max-width: 550px;
+    min-width: 790px;
     border-radius: 12px;
 }
 
@@ -481,4 +481,10 @@
   font-size: 13px;
   margin-bottom: 6px;
   color: #111827;
+}
+
+
+.modal-body-scroll {
+
+  padding: 1rem;
 }

@@ -1,11 +1,17 @@
 // App.tsx (TenderFront)
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import FarmScheduler from './Farm';
 import ClusterActivityCalendar from './ClusterCalender';
 import { API_BASE_URL } from './types/config';
-import './Farm.css';
 
+import {X, Save,Edit2 ,Calendar,User,Users} from 'lucide-react'
+import './Farm.css';
+import toast from 'react-hot-toast';
 interface Cluster {
+  date_range?: {
+    start_date: string | null;
+    end_date: string | null;
+  };
   id: number;
   name: string;
   district?: string;
@@ -32,39 +38,911 @@ interface TalukaOption {
   subdistrictcode: string;
   subdistrictnameenglish: string;
   subdistrictlocalname: string;
+  districtcode?: string;
 }
 
 interface VillageOption {
   villagecode: string;
   villagenameenglish: string;
   villagelocalname: string;
+  subdistrictcode?: string;
+  districtcode?: string;
 }
 
+interface SelectedLocation {
+  village: VillageOption;
+  talukaName: string;
+  districtName: string;
+  talukaCode: string;
+  districtCode: string;
+}
+
+// ─── LocationSearch ───────────────────────────────────────────────────────────
+interface LocationSearchProps {
+  stateCode: string;
+  onSelectionChange: (locations: SelectedLocation[]) => void;
+}
+
+const LocationSearch: React.FC<LocationSearchProps> = ({ stateCode, onSelectionChange }) => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<VillageOption[]>([]);
+  const [selected, setSelected] = useState<SelectedLocation[]>([]);
+  const [isOpen, setIsOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  // Use refs for lookup maps — avoids stale closure issues entirely
+  const talukaMapRef = useRef<Map<string, TalukaOption>>(new Map());
+  const districtMapRef = useRef<Map<string, DistrictOption>>(new Map());
+
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Load districts + talukas into ref maps once per stateCode
+  useEffect(() => {
+    talukaMapRef.current = new Map();
+    districtMapRef.current = new Map();
+
+    if (!stateCode) return;
+
+    const load = async () => {
+      try {
+        const distRes = await fetch(`${API_BASE_URL}/locations/districts/?state_code=${stateCode}`);
+        const distData: DistrictOption[] = await distRes.json();
+        distData.forEach(d => districtMapRef.current.set(String(d.districtcode), d));
+
+        const talukaPromises = distData.map(d =>
+          fetch(`${API_BASE_URL}/locations/talukas/?state_code=${stateCode}&district_code=${d.districtcode}`)
+            .then(r => r.json()).catch(() => [])
+        );
+        const arrays = await Promise.all(talukaPromises);
+        arrays.flat().forEach((t: TalukaOption) => {
+          talukaMapRef.current.set(String(t.subdistrictcode), t);
+        });
+      } catch (e) {
+        console.error('Failed to load meta', e);
+      }
+    };
+
+    load();
+  }, [stateCode]);
+
+  // Search villages via API on each keystroke
+  useEffect(() => {
+    if (!query || query.length < 1) {
+      setResults([]);
+      setIsOpen(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/locations/search_villages/?state_code=${stateCode}&q=${encodeURIComponent(query)}`
+        );
+        const data: VillageOption[] = await res.json();
+        setResults(data);
+        setIsOpen(data.length > 0);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [query, stateCode]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+        inputRef.current && !inputRef.current.contains(e.target as Node)
+      ) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const handleSelect = (village: VillageOption) => {
+    if (selected.some(s => s.village.villagecode === village.villagecode)) return;
+
+    const talukaCode = String(village.subdistrictcode || '');
+    const taluka = talukaMapRef.current.get(talukaCode);
+    const districtCode = taluka
+      ? String(taluka.districtcode || '')
+      : String(village.districtcode || '');
+    const district = districtMapRef.current.get(districtCode);
+
+    const loc: SelectedLocation = {
+      village,
+      talukaCode,
+      districtCode,
+      talukaName: taluka?.subdistrictnameenglish || talukaCode,
+      districtName: district?.districtnameenglish || districtCode,
+    };
+
+    const updated = [...selected, loc];
+    setSelected(updated);
+    onSelectionChange(updated);
+    setQuery('');
+    setResults([]);
+    setIsOpen(false);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const handleRemove = (villagecode: string) => {
+    const updated = selected.filter(s => s.village.villagecode !== villagecode);
+    setSelected(updated);
+    onSelectionChange(updated);
+  };
+
+  const highlightMatch = (text: string) => {
+    if (!query || !text) return <span>{text}</span>;
+    const idx = text.toLowerCase().indexOf(query.toLowerCase());
+    if (idx === -1) return <span>{text}</span>;
+    return (
+      <span>
+        {text.slice(0, idx)}
+        <strong style={{ color: '#1d4ed8', fontWeight: 700 }}>
+          {text.slice(idx, idx + query.length)}
+        </strong>
+        {text.slice(idx + query.length)}
+      </span>
+    );
+  };
+
+  return (
+    <div style={{ position: 'relative', marginTop: '0.25rem' }}>
+
+      {/* Tag input box */}
+      <div
+        style={{
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+          gap: '0.35rem', border: '1.5px solid #d1d5db', borderRadius: '8px',
+          padding: '0.4rem 0.75rem', background: '#fff', minHeight: '44px', cursor: 'text',
+        }}
+        onClick={() => inputRef.current?.focus()}
+      >
+        {selected.map(loc => (
+          <span
+            key={loc.village.villagecode}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '4px',
+              background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px',
+              padding: '2px 8px', fontSize: '0.82rem', color: '#1e40af',
+              fontWeight: 500, whiteSpace: 'nowrap',
+            }}
+          >
+            {loc.village.villagenameenglish}
+            {loc.talukaName && (
+              <span style={{ color: '#93c5fd', fontSize: '0.75rem' }}>
+                · {loc.talukaName}
+              </span>
+            )}
+            <button
+              type="button"
+              onMouseDown={e => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleRemove(loc.village.villagecode);
+              }}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: '#60a5fa', padding: '0 2px', fontSize: '14px',
+                lineHeight: 1, display: 'flex', alignItems: 'center',
+              }}
+            >×</button>
+          </span>
+        ))}
+
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          onFocus={() => results.length > 0 && setIsOpen(true)}
+          placeholder={selected.length === 0 ? 'Type village name to search...' : 'Add more...'}
+          style={{
+            border: 'none', outline: 'none', flex: 1,
+            minWidth: '140px', fontSize: '0.9rem',
+            background: 'transparent', color: '#111827',
+          }}
+        />
+        {loading && (
+          <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>searching...</span>
+        )}
+      </div>
+
+      {/* Dropdown */}
+      {isOpen && results.length > 0 && (
+        <div
+          ref={dropdownRef}
+          style={{
+            position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 9999,
+            background: '#fff', border: '1.5px solid #e5e7eb', borderRadius: '8px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.15)', maxHeight: '280px',
+            overflowY: 'auto', marginTop: '4px',
+          }}
+        >
+          {results.map((v, idx) => {
+            const talukaCode = String(v.subdistrictcode || '');
+            const taluka = talukaMapRef.current.get(talukaCode);
+            const districtCode = taluka ? String(taluka.districtcode || '') : String(v.districtcode || '');
+            const district = districtMapRef.current.get(districtCode);
+            const isAlreadySelected = selected.some(s => s.village.villagecode === v.villagecode);
+
+            return (
+              <div
+                key={v.villagecode}
+                onMouseDown={e => {
+                  e.preventDefault(); // critical — prevents blur before select fires
+                  if (!isAlreadySelected) handleSelect(v);
+                }}
+                style={{
+                  padding: '0.6rem 1rem',
+                  cursor: isAlreadySelected ? 'not-allowed' : 'pointer',
+                  background: isAlreadySelected ? '#f9fafb' : idx % 2 === 0 ? '#fff' : '#fafafa',
+                  opacity: isAlreadySelected ? 0.5 : 1,
+                  borderBottom: idx < results.length - 1 ? '1px solid #f3f4f6' : 'none',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}
+                onMouseEnter={e => {
+                  if (!isAlreadySelected)
+                    (e.currentTarget as HTMLDivElement).style.background = '#eff6ff';
+                }}
+                onMouseLeave={e => {
+                  (e.currentTarget as HTMLDivElement).style.background =
+                    isAlreadySelected ? '#f9fafb' : idx % 2 === 0 ? '#fff' : '#fafafa';
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '0.9rem', color: '#111827', fontWeight: 500 }}>
+                    {highlightMatch(v.villagenameenglish)}
+                  </div>
+                  {v.villagelocalname && v.villagelocalname !== v.villagenameenglish && (
+                    <div style={{ fontSize: '0.78rem', color: '#6b7280' }}>{v.villagelocalname}</div>
+                  )}
+                </div>
+                <div style={{ textAlign: 'right', fontSize: '0.78rem', color: '#9ca3af' }}>
+                  {taluka && <div>{taluka.subdistrictnameenglish}</div>}
+                  {district && <div>{district.districtnameenglish}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Selected list below input */}
+      {selected.length > 0 && (
+        <div style={{ marginTop: '0.6rem' }}>
+          <div style={{
+            fontSize: '0.72rem', color: '#6b7280', marginBottom: '0.35rem',
+            fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em',
+          }}>
+            {selected.length} village{selected.length > 1 ? 's' : ''} selected
+          </div>
+          {selected.map(loc => (
+            <div
+              key={loc.village.villagecode}
+              style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '0.35rem 0.75rem', background: '#f0f9ff',
+                borderRadius: '6px', fontSize: '0.83rem', marginBottom: '0.3rem',
+              }}
+            >
+              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, color: '#1e40af' }}>
+                  {loc.village.villagenameenglish}
+                </span>
+                {loc.talukaName && (
+                  <>
+                    <span style={{ color: '#94a3b8' }}>›</span>
+                    <span style={{ color: '#475569' }}>{loc.talukaName}</span>
+                  </>
+                )}
+                {loc.districtName && (
+                  <>
+                    <span style={{ color: '#94a3b8' }}>›</span>
+                    <span style={{ color: '#64748b' }}>{loc.districtName}</span>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => handleRemove(loc.village.villagecode)}
+                style={{
+                  background: 'none', border: 'none', color: '#ef4444',
+                  cursor: 'pointer', fontSize: '0.8rem', padding: '0 4px',
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+// ─── Types ───────────────────────────────────────────────
+interface PlotInfo {
+  plot_id: number;
+  plot_code: string;
+  name: string;
+  area_acres: number;
+  crop_name: string;
+  in_this_cluster: boolean;
+  other_clusters: { id: number; name: string }[];
+}
+interface FarmerResult {
+  farmer_id: string;
+  farmer_name: string;
+  phone_number: string;
+  location: string;
+  in_this_cluster: boolean;
+  other_clusters: { id: number; name: string }[];
+  plots: PlotInfo[];
+}
+interface MukkadamResult {
+  id: number;
+  name: string;
+  mobile: string;
+  crew_size: number;
+  max_crew_capacity: number;
+  village: string;
+  district: string;
+  activities: { name: string; price: string }[];
+  in_this_cluster: boolean;
+  other_clusters: { id: number; name: string }[];
+}
+
+// ─── AddToClusterModal ────────────────────────────────────
+interface AddToClusterModalProps {
+  clusterId: number;
+  clusterName: string;
+  mode: 'farmer' | 'mukkadam';
+  onClose: () => void;
+}
+
+export const AddToClusterModal: React.FC<AddToClusterModalProps> = ({
+  clusterId, clusterName, mode, onClose
+}) => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<FarmerResult[] | MukkadamResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+const [selectedMukkadamForEfficiency, setSelectedMukkadamForEfficiency] = useState<MukkadamResult | null>(null);
+const [editableActivities, setEditableActivities] = useState<any[]>([]);
+
+const handleInitiateEfficiencyEdit = (m: MukkadamResult) => {
+  console.log('activities:', m.activities); // ← check what fields exist
+  setSelectedMukkadamForEfficiency(m);
+  setEditableActivities(m.activities.map((a: any) => ({
+    rate_id: a.id,
+    name: a.name,
+    productivity: a.productivity || 0.15
+  })));
+};
+
+const handleSaveSingleEfficiency = async (rateId: number, index: number) => {
+  const newProductivity = editableActivities[index].productivity;
+  
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/mukkadam-rates/${rateId}/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ productivity_per_worker: newProductivity })
+    });
+
+    if (response.ok) {
+      toast.success('Efficiency saved to Mukkadam profile');
+    } else {
+      toast.error('Failed to update efficiency');
+    }
+  } catch (error) {
+    console.error('Error updating efficiency:', error);
+  }
+};
+  // Farmer state
+  const [expandedFarmer, setExpandedFarmer] = useState<string | null>(null);
+  const [selectedPlots, setSelectedPlots] = useState<Record<string, Set<number>>>({});
+
+  // Confirm state
+  const [confirmPending, setConfirmPending] = useState<{
+    type: 'farmer' | 'mukkadam';
+    id: string | number;
+    name: string;
+    otherClusters: { id: number; name: string }[];
+    plotIds?: number[];
+  } | null>(null);
+
+  // Search
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (query.length < 1) { setResults([]); return; }
+      setLoading(true);
+      try {
+        const endpoint = mode === 'farmer'
+          ? `${API_BASE_URL}/api/cluster/${clusterId}/search_farmers/?q=${encodeURIComponent(query)}`
+          : `${API_BASE_URL}/api/cluster/${clusterId}/search_mukkadams/?q=${encodeURIComponent(query)}`;
+        const res = await fetch(endpoint);
+        setResults(await res.json());
+      } finally {
+        setLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query, clusterId, mode]);
+
+  const togglePlot = (farmerId: string, plotId: number) => {
+    setSelectedPlots(prev => {
+      const next = { ...prev };
+      if (!next[farmerId]) next[farmerId] = new Set();
+      else next[farmerId] = new Set(next[farmerId]);
+      if (next[farmerId].has(plotId)) next[farmerId].delete(plotId);
+      else next[farmerId].add(plotId);
+      return next;
+    });
+  };
+
+  const handleAddFarmer = (farmer: FarmerResult) => {
+    const plots = Array.from(selectedPlots[farmer.farmer_id] || new Set<number>());
+    if (farmer.other_clusters.length > 0) {
+      setConfirmPending({
+        type: 'farmer', id: farmer.farmer_id, name: farmer.farmer_name,
+        otherClusters: farmer.other_clusters, plotIds: plots,
+      });
+    } else {
+      doAddFarmer(farmer.farmer_id, plots);
+    }
+  };
+
+  const handleAddMukkadam = (m: MukkadamResult) => {
+    if (m.other_clusters.length > 0) {
+      setConfirmPending({
+        type: 'mukkadam', id: m.id, name: m.name,
+        otherClusters: m.other_clusters,
+      });
+    } else {
+      doAddMukkadam(m.id);
+    }
+  };
+
+  const doAddFarmer = async (farmerId: string, plotIds: number[]) => {
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE_URL}/api/cluster/${clusterId}/add_farmer/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ farmer_id: farmerId, plot_ids: plotIds }),
+      });
+      // Refresh results
+      const res = await fetch(
+        `${API_BASE_URL}/api/cluster/${clusterId}/search_farmers/?q=${encodeURIComponent(query)}`
+      );
+      setResults(await res.json());
+      setConfirmPending(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const doAddMukkadam = async (mukkadamId: number) => {
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE_URL}/api/cluster/${clusterId}/add_mukkadam/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mukkadam_id: mukkadamId }),
+      });
+      const res = await fetch(
+        `${API_BASE_URL}/api/cluster/${clusterId}/search_mukkadams/?q=${encodeURIComponent(query)}`
+      );
+      setResults(await res.json());
+      setConfirmPending(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isFarmerMode = mode === 'farmer';
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+      zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <div style={{
+        background: '#fff', borderRadius: '14px', width: '560px',
+        maxHeight: '85vh', display: 'flex', flexDirection: 'column',
+        boxShadow: '0 24px 60px rgba(0,0,0,0.25)',
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: '1.2rem 1.5rem', borderBottom: '1px solid #e5e7eb',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '1.05rem', color: '#111827' }}>
+              Add {isFarmerMode ? 'Farmer' : 'Mukkadam'} to Cluster
+            </div>
+            <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: '2px' }}>
+              Cluster: <strong>{clusterName}</strong>
+            </div>
+          </div>
+          <button onClick={onClose} style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            fontSize: '1.4rem', color: '#9ca3af', lineHeight: 1,
+          }}>×</button>
+        </div>
+
+        {/* Search */}
+        <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #f3f4f6' }}>
+          <input
+            autoFocus
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder={`Search ${isFarmerMode ? 'farmer name or phone' : 'mukkadam name or mobile'}...`}
+            style={{
+              width: '100%', padding: '0.6rem 1rem', border: '1.5px solid #d1d5db',
+              borderRadius: '8px', fontSize: '0.9rem', outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+
+        {/* Results */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 1.5rem' }}>
+          {loading && (
+            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem' }}>
+              Searching...
+            </div>
+          )}
+
+          {!loading && results.length === 0 && query.length > 0 && (
+            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem' }}>
+              No results found
+            </div>
+          )}
+
+          {!loading && query.length === 0 && (
+            <div style={{ textAlign: 'center', color: '#d1d5db', padding: '2rem', fontSize: '0.85rem' }}>
+              Type to search
+            </div>
+          )}
+
+          {/* FARMER RESULTS */}
+          {isFarmerMode && (results as FarmerResult[]).map(farmer => (
+            <div key={farmer.farmer_id} style={{
+              border: '1.5px solid #e5e7eb', borderRadius: '10px',
+              marginBottom: '0.75rem', overflow: 'hidden',
+            }}>
+              {/* Farmer row */}
+              <div style={{
+                padding: '0.75rem 1rem', background: farmer.in_this_cluster ? '#f0fdf4' : '#fff',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontWeight: 700, color: '#111827' }}>{farmer.farmer_name}</span>
+                    {farmer.in_this_cluster && (
+                      <span style={{
+                        background: '#dcfce7', color: '#15803d',
+                        fontSize: '0.7rem', fontWeight: 700,
+                        padding: '1px 7px', borderRadius: '999px',
+                      }}>✓ In this cluster</span>
+                    )}
+                    {farmer.other_clusters.map(oc => (
+                      <span key={oc.id} style={{
+                        background: '#fef9c3', color: '#854d0e',
+                        fontSize: '0.7rem', padding: '1px 7px', borderRadius: '999px',
+                      }}>{oc.name}</span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: '2px' }}>
+                    {farmer.phone_number} · {farmer.location}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setExpandedFarmer(
+                    expandedFarmer === farmer.farmer_id ? null : farmer.farmer_id
+                  )}
+                  style={{
+                    background: '#f3f4f6', border: 'none', cursor: 'pointer',
+                    borderRadius: '6px', padding: '4px 10px', fontSize: '0.8rem',
+                    color: '#374151',
+                  }}
+                >
+                  {expandedFarmer === farmer.farmer_id ? '▲ Plots' : '▼ Plots'}
+                </button>
+              </div>
+
+              {/* Plots */}
+              {expandedFarmer === farmer.farmer_id && (
+                <div style={{ borderTop: '1px solid #f3f4f6', background: '#fafafa', padding: '0.6rem 1rem' }}>
+                  {farmer.plots.length === 0 ? (
+                    <p style={{ fontSize: '0.8rem', color: '#9ca3af' }}>No plots found</p>
+                  ) : farmer.plots.map(plot => (
+                    <div key={plot.plot_id} style={{
+                      display: 'flex', alignItems: 'center', gap: '10px',
+                      padding: '0.4rem 0', borderBottom: '1px solid #f3f4f6',
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={plot.in_this_cluster || (selectedPlots[farmer.farmer_id]?.has(plot.plot_id) ?? false)}
+                        disabled={plot.in_this_cluster}
+                        onChange={() => togglePlot(farmer.farmer_id, plot.plot_id)}
+                        style={{ accentColor: '#14b8a6', width: '15px', height: '15px' }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontWeight: 600, fontSize: '0.85rem', color: '#1f2937' }}>
+                          {plot.name}
+                        </span>
+                        <span style={{ fontSize: '0.75rem', color: '#6b7280', marginLeft: '6px' }}>
+                          {plot.area_acres}ac · {plot.crop_name}
+                        </span>
+                        {plot.in_this_cluster && (
+                          <span style={{
+                            marginLeft: '6px', fontSize: '0.68rem',
+                            background: '#dcfce7', color: '#15803d',
+                            padding: '1px 6px', borderRadius: '999px',
+                          }}>In cluster</span>
+                        )}
+                        {plot.other_clusters.map(oc => (
+                          <span key={oc.id} style={{
+                            marginLeft: '4px', fontSize: '0.68rem',
+                            background: '#fef9c3', color: '#854d0e',
+                            padding: '1px 6px', borderRadius: '999px',
+                          }}>{oc.name}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Add button */}
+                  <button
+                    disabled={
+                      saving ||
+                      farmer.in_this_cluster && farmer.plots.every(p => p.in_this_cluster)
+                    }
+                    onClick={() => handleAddFarmer(farmer)}
+                    style={{
+                      marginTop: '0.6rem', background: '#14b8a6', color: '#fff',
+                      border: 'none', borderRadius: '7px', padding: '6px 16px',
+                      fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer',
+                      opacity: saving ? 0.7 : 1,
+                    }}
+                  >
+                    {saving ? 'Adding...' : `Add to ${clusterName}`}
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* MUKKADAM RESULTS */}
+          {!isFarmerMode && (results as MukkadamResult[]).map(m => (
+            <div key={m.id} style={{
+              border: '1.5px solid #e5e7eb', borderRadius: '10px',
+              marginBottom: '0.75rem', padding: '0.75rem 1rem',
+              background: m.in_this_cluster ? '#f0fdf4' : '#fff',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 700, color: '#111827' }}>{m.name}</span>
+                  <span style={{
+                    background: '#eff6ff', color: '#1d4ed8',
+                    fontSize: '0.7rem', padding: '1px 7px', borderRadius: '999px',
+                  }}>Crew: {m.crew_size}/{m.max_crew_capacity}</span>
+                  {m.in_this_cluster && (
+                    <span style={{
+                      background: '#dcfce7', color: '#15803d',
+                      fontSize: '0.7rem', fontWeight: 700,
+                      padding: '1px 7px', borderRadius: '999px',
+                    }}>✓ In this cluster</span>
+                  )}
+                  {m.other_clusters.map(oc => (
+                    <span key={oc.id} style={{
+                      background: '#fef9c3', color: '#854d0e',
+                      fontSize: '0.7rem', padding: '1px 7px', borderRadius: '999px',
+                    }}>{oc.name}</span>
+                  ))}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: '3px' }}>
+                  {m.mobile} · {m.village}, {m.district}
+                </div>
+                {m.activities.length > 0 && (
+                  <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '3px' }}>
+                    Activities: {m.activities.map(a => a.name).join(', ')}
+                  </div>
+                )}
+              </div>
+
+              <button
+                disabled={m.in_this_cluster || saving}
+                onClick={() => handleAddMukkadam(m)}
+                style={{
+                  background: m.in_this_cluster ? '#e5e7eb' : '#14b8a6',
+                  color: m.in_this_cluster ? '#9ca3af' : '#fff',
+                  border: 'none', borderRadius: '7px', padding: '6px 14px',
+                  fontSize: '0.82rem', fontWeight: 600,
+                  cursor: m.in_this_cluster ? 'not-allowed' : 'pointer',
+                  whiteSpace: 'nowrap', marginLeft: '12px',
+                }}
+              >
+                {m.in_this_cluster ? '✓ Added' : saving ? 'Adding...' : 'Add'}
+              </button>
+
+              {!m.in_this_cluster && (
+                <button
+                  type="button"
+                  onClick={() => handleInitiateEfficiencyEdit(m)}
+                  style={{
+                    background: '#f3f4f6', 
+                    border: '1px solid #d1d5db',
+                    padding: '6px', 
+                    borderRadius: '6px', 
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Edit Efficiency"
+                >
+                  <Edit2 size={16} className="text-gray-600" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Confirm Modal (already in other cluster) */}
+      {confirmPending && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: '12px', padding: '1.5rem',
+            width: '380px', boxShadow: '0 20px 50px rgba(0,0,0,0.3)',
+          }}>
+            <div style={{ fontSize: '1rem', fontWeight: 700, color: '#111827', marginBottom: '0.75rem' }}>
+              Already in another cluster
+            </div>
+            <p style={{ fontSize: '0.88rem', color: '#374151', marginBottom: '0.5rem' }}>
+              <strong>{confirmPending.name}</strong> is already in:
+            </p>
+            <div style={{ marginBottom: '1rem' }}>
+              {confirmPending.otherClusters.map(oc => (
+                <div key={oc.id} style={{
+                  display: 'inline-block', background: '#fef9c3', color: '#854d0e',
+                  padding: '2px 10px', borderRadius: '999px', fontSize: '0.8rem',
+                  marginRight: '6px', marginBottom: '4px', fontWeight: 600,
+                }}>
+                  {oc.name}
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: '1.25rem' }}>
+              Are you sure you want to also add to <strong>{clusterName}</strong>?
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <button
+                onClick={() => setConfirmPending(null)}
+                style={{
+                  flex: 1, padding: '0.6rem', border: '1.5px solid #e5e7eb',
+                  borderRadius: '8px', background: '#fff', cursor: 'pointer',
+                  fontSize: '0.88rem', color: '#374151',
+                }}
+              >Cancel</button>
+              <button
+                disabled={saving}
+                onClick={() => {
+                  if (confirmPending.type === 'farmer') {
+                    doAddFarmer(confirmPending.id as string, confirmPending.plotIds || []);
+                  } else {
+                    doAddMukkadam(confirmPending.id as number);
+                  }
+                }}
+                style={{
+                  flex: 1, padding: '0.6rem', border: 'none',
+                  borderRadius: '8px', background: '#14b8a6', color: '#fff',
+                  cursor: 'pointer', fontSize: '0.88rem', fontWeight: 700,
+                }}
+              >
+                {saving ? 'Adding...' : 'Yes, Add to Both'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedMukkadamForEfficiency && (
+  <div style={{
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+    zIndex: 11000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  }}>
+    <div style={{ background: '#fff', borderRadius: '12px', width: '400px', overflow: 'hidden', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
+      <div style={{ padding: '1rem', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>Edit Efficiency: {selectedMukkadamForEfficiency.name}</h3>
+        <button onClick={() => setSelectedMukkadamForEfficiency(null)} style={{ border: 'none', background: 'none', cursor: 'pointer' }}><X size={20}/></button>
+      </div>
+      
+      <div style={{ padding: '1rem', maxHeight: '400px', overflowY: 'auto' }}>
+        {editableActivities.map((act, idx) => (
+          <div key={idx} style={{ marginBottom: '12px', padding: '12px', border: '1px solid #f1f5f9', borderRadius: '8px', background: '#f8fafc' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>{act.name}</span>
+              <button 
+                onClick={() => handleSaveSingleEfficiency(act.rate_id, idx)}
+                style={{ color: '#10b981', background: 'none', border: 'none', cursor: 'pointer' }}
+                title="Save this activity"
+              >
+                <Save size={16} />
+              </button>
+            </div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: 500 }}>Efficiency (ac/worker/day)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={act.productivity}
+                onChange={(e) => {
+                  const updated = [...editableActivities];
+                  updated[idx].productivity = parseFloat(e.target.value) || 0;
+                  setEditableActivities(updated);
+                }}
+                style={{ width: '100%', padding: '8px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '0.9rem' }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ padding: '1rem', borderTop: '1px solid #e5e7eb', textAlign: 'right' }}>
+        <button 
+          onClick={() => setSelectedMukkadamForEfficiency(null)} 
+          style={{ width: '100%', padding: '10px', background: '#334155', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 600, cursor: 'pointer' }}
+        >
+          Close Editor
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+    </div>
+  );
+};
+
+// ─── Main TenderFront ─────────────────────────────────────────────────────────
 const TenderFront: React.FC = () => {
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
-
   const [newName, setNewName] = useState('Satana');
-
   const [states, setStates] = useState<StateOption[]>([]);
-  const [districts, setDistricts] = useState<DistrictOption[]>([]);
-  const [talukas, setTalukas] = useState<TalukaOption[]>([]);
-  const [villages, setVillages] = useState<VillageOption[]>([]);
-
   const [selectedState, setSelectedState] = useState<string>('MH');
-  
-  // Change to arrays for multi-select
-  const [selectedDistricts, setSelectedDistricts] = useState<string[]>([]);
-  const [selectedTalukas, setSelectedTalukas] = useState<string[]>([]);
-  const [selectedVillages, setSelectedVillages] = useState<string[]>([]);
-
-  // Calendar modal state
+  const [selectedLocations, setSelectedLocations] = useState<SelectedLocation[]>([]);
   const [showCalendar, setShowCalendar] = useState(false);
   const [calendarClusterId, setCalendarClusterId] = useState<number | null>(null);
   const [calendarClusterName, setCalendarClusterName] = useState('');
 
-  // load clusters + states
+
+  const [addModal, setAddModal] = useState<{
+  clusterId: number;
+  clusterName: string;
+  mode: 'farmer' | 'mukkadam';
+} | null>(null);
   useEffect(() => {
     const loadClusters = async () => {
       setLoading(true);
@@ -76,158 +954,26 @@ const TenderFront: React.FC = () => {
         setLoading(false);
       }
     };
-
     const loadStates = async () => {
       const res = await fetch(`${API_BASE_URL}/locations/states/`);
       const data = await res.json();
       setStates(data);
     };
-
     loadClusters();
     loadStates();
   }, []);
 
-  // load districts when state changes
-  useEffect(() => {
-    if (!selectedState) {
-      setDistricts([]);
-      setSelectedDistricts([]);
-      setTalukas([]);
-      setVillages([]);
-      setSelectedTalukas([]);
-      setSelectedVillages([]);
-      return;
-    }
-
-    const loadDistricts = async () => {
-      const res = await fetch(
-        `${API_BASE_URL}/locations/districts/?state_code=${selectedState}`
-      );
-      const data = await res.json();
-      setDistricts(data);
-      setSelectedDistricts([]);
-      setTalukas([]);
-      setVillages([]);
-      setSelectedTalukas([]);
-      setSelectedVillages([]);
-    };
-
-    loadDistricts();
-  }, [selectedState]);
-
-  // load talukas when districts change
-  useEffect(() => {
-    if (!selectedState || selectedDistricts.length === 0) {
-      setTalukas([]);
-      setSelectedTalukas([]);
-      setVillages([]);
-      setSelectedVillages([]);
-      return;
-    }
-
-    const loadTalukas = async () => {
-      // Fetch talukas for all selected districts
-      const allTalukas: TalukaOption[] = [];
-      
-      for (const districtCode of selectedDistricts) {
-        const res = await fetch(
-          `${API_BASE_URL}/locations/talukas/?state_code=${selectedState}&district_code=${districtCode}`
-        );
-        const data = await res.json();
-        allTalukas.push(...data);
-      }
-      
-      // Remove duplicates based on subdistrictcode
-      const uniqueTalukas = Array.from(
-        new Map(allTalukas.map(t => [t.subdistrictcode, t])).values()
-      );
-      
-      setTalukas(uniqueTalukas);
-      setSelectedTalukas([]);
-      setVillages([]);
-      setSelectedVillages([]);
-    };
-
-    loadTalukas();
-  }, [selectedState, selectedDistricts]);
-
-  // load villages when talukas change
-  useEffect(() => {
-    if (!selectedState || selectedTalukas.length === 0) {
-      setVillages([]);
-      setSelectedVillages([]);
-      return;
-    }
-
-    const loadVillages = async () => {
-      // Fetch villages for all selected talukas
-      const allVillages: VillageOption[] = [];
-      
-      for (const talukaCode of selectedTalukas) {
-        const res = await fetch(
-          `${API_BASE_URL}/locations/villages/?state_code=${selectedState}&taluka_code=${talukaCode}`
-        );
-        const data = await res.json();
-        allVillages.push(...data);
-      }
-      
-      // Remove duplicates based on villagecode
-      const uniqueVillages = Array.from(
-        new Map(allVillages.map(v => [v.villagecode, v])).values()
-      );
-      
-      setVillages(uniqueVillages);
-      setSelectedVillages([]);
-    };
-
-    loadVillages();
-  }, [selectedState, selectedTalukas]);
-
-  const handleDistrictChange = (districtCode: string) => {
-    setSelectedDistricts(prev => {
-      if (prev.includes(districtCode)) {
-        return prev.filter(d => d !== districtCode);
-      } else {
-        return [...prev, districtCode];
-      }
-    });
-  };
-
-  const handleTalukaChange = (talukaCode: string) => {
-    setSelectedTalukas(prev => {
-      if (prev.includes(talukaCode)) {
-        return prev.filter(t => t !== talukaCode);
-      } else {
-        return [...prev, talukaCode];
-      }
-    });
-  };
-
-  const handleVillageChange = (villageCode: string) => {
-    setSelectedVillages(prev => {
-      if (prev.includes(villageCode)) {
-        return prev.filter(v => v !== villageCode);
-      } else {
-        return [...prev, villageCode];
-      }
-    });
-  };
-
   const handleCreateCluster = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (selectedLocations.length === 0) return;
     setLoading(true);
     try {
-      const districtNames = selectedDistricts
-        .map(code => districts.find(d => d.districtcode === code)?.districtnameenglish)
-        .filter(Boolean) as string[];
-      
-      const talukaNames = selectedTalukas
-        .map(code => talukas.find(t => t.subdistrictcode === code)?.subdistrictnameenglish)
-        .filter(Boolean) as string[];
-      
-      const villageNames = selectedVillages
-        .map(code => villages.find(v => v.villagecode === code)?.villagenameenglish)
-        .filter(Boolean) as string[];
+      const districtNames = [...new Set(selectedLocations.map(l => l.districtName).filter(Boolean))];
+      const talukaNames = [...new Set(selectedLocations.map(l => l.talukaName).filter(Boolean))];
+      const villageNames = selectedLocations.map(l => l.village.villagenameenglish);
+      const districtCodes = [...new Set(selectedLocations.map(l => l.districtCode).filter(Boolean))];
+      const talukaCodes = [...new Set(selectedLocations.map(l => l.talukaCode).filter(Boolean))];
+      const villageCodes = selectedLocations.map(l => l.village.villagecode);
 
       const res = await fetch(`${API_BASE_URL}/api/clusters/`, {
         method: 'POST',
@@ -235,33 +981,20 @@ const TenderFront: React.FC = () => {
         body: JSON.stringify({
           name: newName,
           state_code: selectedState,
-          district_codes: selectedDistricts,
-          taluka_codes: selectedTalukas,
-          village_codes: selectedVillages,
+          district_codes: districtCodes,
+          taluka_codes: talukaCodes,
+          village_codes: villageCodes,
           districts: districtNames,
           talukas: talukaNames,
           villages: villageNames,
         }),
       });
-
       const cluster = await res.json();
-      setClusters((prev) => [...prev, cluster]);
+      setClusters(prev => [...prev, cluster]);
       setSelectedClusterId(cluster.id);
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleOpenCalendar = (clusterId: number, clusterName: string) => {
-    setCalendarClusterId(clusterId);
-    setCalendarClusterName(clusterName);
-    setShowCalendar(true);
-  };
-
-  const handleCloseCalendar = () => {
-    setShowCalendar(false);
-    setCalendarClusterId(null);
-    setCalendarClusterName('');
   };
 
   if (!selectedClusterId) {
@@ -276,13 +1009,9 @@ const TenderFront: React.FC = () => {
             {clusters.length === 0 && !loading && (
               <p className="cluster-empty">No clusters yet.</p>
             )}
-
-            {clusters.map((c) => (
+            {/* {clusters.map(c => (
               <div key={c.id} className="cluster-card-wrapper">
-                <button
-                  className="cluster-card"
-                  onClick={() => setSelectedClusterId(c.id)}
-                >
+                <button className="cluster-card" onClick={() => setSelectedClusterId(c.id)}>
                   <div className="cluster-card-name">{c.name}</div>
                   <div className="cluster-card-meta">
                     {[c.district, c.taluka, c.village].filter(Boolean).join(' · ')}
@@ -290,13 +1019,80 @@ const TenderFront: React.FC = () => {
                 </button>
                 <button
                   className="cluster-card-action"
-                  onClick={() => handleOpenCalendar(c.id, c.name)}
+                  onClick={() => {
+                    setCalendarClusterId(c.id);
+                    setCalendarClusterName(c.name);
+                    setShowCalendar(true);
+                  }}
                   title="View Activity Calendar"
-                >
-                  📅
-                </button>
+                >📅</button>
               </div>
-            ))}
+            ))} */}
+
+            {clusters.map(c => (
+  <div key={c.id} className="cluster-card-wrapper">
+    <button className="cluster-card" onClick={() => setSelectedClusterId(c.id)}>
+      <div className="cluster-card-name">{c.name}</div>
+      <div className="cluster-card-meta">
+        {[c.district, c.taluka, c.village].filter(Boolean).join(' · ')}
+      </div>
+{c.date_range?.start_date && (
+  <span style={{ fontSize: '0.65rem', color: '#9ca3af', display: 'block', marginTop: '1px' }}>
+    {c.date_range.start_date} → {c.date_range.end_date || '?'}
+  </span>
+)}
+    </button>
+
+{/* Action buttons - Clean Dashboard Style */}
+<div style={{ 
+  display: 'grid', 
+  gridTemplateColumns: 'repeat(3, 1fr)', 
+  gap: '8px', 
+  marginTop: '12px',
+  padding: '8px',
+  background: '#f8fafc',
+  borderRadius: '12px'
+}}>
+  <button
+    className="cluster-action-btn"
+    onClick={() => setAddModal({ clusterId: c.id, clusterName: c.name, mode: 'farmer' })}
+    title="Add Farmer"
+  >
+    <div className="icon-wrapper farmer-icon">
+       <User size={18} />
+    </div>
+    <span>Farmer</span>
+  </button>
+
+  <button
+    className="cluster-action-btn"
+    onClick={() => setAddModal({ clusterId: c.id, clusterName: c.name, mode: 'mukkadam' })}
+    title="Add Mukkadam"
+  >
+    <div className="icon-wrapper mukkadam-icon">
+       <Users size={18} />
+    </div>
+    <span>Mukkadam</span>
+  </button>
+
+  <button
+    className="cluster-action-btn"
+    onClick={() => {
+      setCalendarClusterId(c.id);
+      setCalendarClusterName(c.name);
+      setShowCalendar(true);
+    }}
+    title="View Activity Calendar"
+  >
+    <div className="icon-wrapper calendar-icon">
+       <Calendar size={18} />
+    </div>
+    <span>Calendar</span>
+  </button>
+</div>
+  </div>
+))}
+
           </section>
 
           <section className="cluster-form-section">
@@ -307,7 +1103,7 @@ const TenderFront: React.FC = () => {
                 <input
                   className="form-input"
                   value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
+                  onChange={e => setNewName(e.target.value)}
                 />
               </label>
 
@@ -316,10 +1112,13 @@ const TenderFront: React.FC = () => {
                 <select
                   className="form-input"
                   value={selectedState}
-                  onChange={(e) => setSelectedState(e.target.value)}
+                  onChange={e => {
+                    setSelectedState(e.target.value);
+                    setSelectedLocations([]);
+                  }}
                 >
                   <option value="">Select state</option>
-                  {states.map((s) => (
+                  {states.map(s => (
                     <option key={s.state_code} value={s.state_code}>
                       {s.state_name_english}
                     </option>
@@ -327,88 +1126,54 @@ const TenderFront: React.FC = () => {
                 </select>
               </label>
 
-              {/* Multi-select Districts */}
               <label className="form-label">
-                Districts ({selectedDistricts.length} selected)
-                <div className="multi-select-container">
-                  {districts.map((d) => (
-                    <label key={d.districtcode} className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={selectedDistricts.includes(d.districtcode)}
-                        onChange={() => handleDistrictChange(d.districtcode)}
-                        disabled={!selectedState}
-                      />
-                      <span>{d.districtnameenglish}</span>
-                    </label>
-                  ))}
-                  {districts.length === 0 && selectedState && (
-                    <p className="empty-message">No districts available</p>
-                  )}
-                </div>
-              </label>
-
-              {/* Multi-select Talukas */}
-              <label className="form-label">
-                Talukas ({selectedTalukas.length} selected)
-                <div className="multi-select-container">
-                  {talukas.map((t) => (
-                    <label key={t.subdistrictcode} className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={selectedTalukas.includes(t.subdistrictcode)}
-                        onChange={() => handleTalukaChange(t.subdistrictcode)}
-                        disabled={selectedDistricts.length === 0}
-                      />
-                      <span>{t.subdistrictnameenglish}</span>
-                    </label>
-                  ))}
-                  {talukas.length === 0 && selectedDistricts.length > 0 && (
-                    <p className="empty-message">No talukas available</p>
-                  )}
-                </div>
-              </label>
-
-              {/* Multi-select Villages */}
-              <label className="form-label">
-                Villages ({selectedVillages.length} selected)
-                <div className="multi-select-container">
-                  {villages.map((v) => (
-                    <label key={v.villagecode} className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={selectedVillages.includes(v.villagecode)}
-                        onChange={() => handleVillageChange(v.villagecode)}
-                        disabled={selectedTalukas.length === 0}
-                      />
-                      <span>{v.villagelocalname || v.villagenameenglish}</span>
-                    </label>
-                  ))}
-                  {villages.length === 0 && selectedTalukas.length > 0 && (
-                    <p className="empty-message">No villages available</p>
-                  )}
-                </div>
+                Villages
+                {selectedState ? (
+                  // key=selectedState forces full remount on state change
+                  <LocationSearch
+                    key={selectedState}
+                    stateCode={selectedState}
+                    onSelectionChange={setSelectedLocations}
+                  />
+                ) : (
+                  <p style={{ fontSize: '0.85rem', color: '#9ca3af', marginTop: '0.4rem' }}>
+                    Select a state first
+                  </p>
+                )}
               </label>
 
               <button
                 className="btn-primary full-width"
                 type="submit"
-                disabled={loading || !newName || selectedVillages.length === 0}
+                disabled={loading || !newName || selectedLocations.length === 0}
               >
-                + Create & open
+                {loading ? 'Creating...' : '+ Create & open'}
               </button>
             </form>
           </section>
         </div>
 
-        {/* Activity Calendar Modal */}
         {showCalendar && calendarClusterId && (
           <ClusterActivityCalendar
             clusterId={calendarClusterId}
             clusterName={calendarClusterName}
-            onClose={handleCloseCalendar}
+            onClose={() => {
+              setShowCalendar(false);
+              setCalendarClusterId(null);
+              setCalendarClusterName('');
+            }}
           />
         )}
+
+
+        {addModal && (
+  <AddToClusterModal
+    clusterId={addModal.clusterId}
+    clusterName={addModal.clusterName}
+    mode={addModal.mode}
+    onClose={() => setAddModal(null)}
+  />
+)}
       </div>
     );
   }

@@ -201,16 +201,19 @@
 
 /* Fix the modal height and body scrolling */
 .day-detail-modal {
-    max-height: 85vh; /* Keep it within the screen */
+    max-height: 85vh; 
+    max-width: 700px;/* Keep it within the screen */
     display: flex;
     flex-direction: column;
 }
 
 .modal-body-scroll {
     flex: 1;
-    overflow-y: auto; /* Independent scrolling for the content */
-    padding: 20px;
+    overflow-y: auto;
+    padding: 24px; /* Increased padding slightly for better whitespace */
     background: #ffffff;
+    min-height: 400px; /* Prevents the modal from being too short */
+    max-height: 70vh;  /* Limits height to 70% of viewport to keep header/footer visible */
 }
 
 /* Leave Section styling inside the tab */

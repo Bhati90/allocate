@@ -1,6 +1,6 @@
 // components/DayDetailModal.tsx
 import React, { useEffect } from 'react';
-import { X } from 'lucide-react';
+import { X,Plus,Users } from 'lucide-react';
 import { Allocation, Job, Mukkadam } from '../types/types';
 import './Day.css';
 import { Tractor, User, AlertCircle } from 'lucide-react';
@@ -9,7 +9,10 @@ import { useState } from 'react';
 import { toast } from './ui/sonner';
 import { API_BASE_URL } from '@/types/config';
 type PotentialStatus = 'PARTIAL' | 'NONE';
+import { createPortal } from "react-dom";
 
+import LeaveModal from './leave'; // Import your leave modal component
+import ReactDOM from 'react-dom';
 interface CalendarFilters {
   farmerId: string | null;
   mukkadamId: number | null;
@@ -69,6 +72,8 @@ interface DayDetailModalProps {
   filters?: CalendarFilters;  // ✅ ADD THIS
   allJobs?: Job[]; 
   onClose: () => void;
+  // To:
+viewMode: string | string[];
   // In DayDetailModalProps — revert to:
 onAllocationDateChange: (job: Job, allocation: Allocation) => void;
 onAllocationDelete: (allocation: Allocation) => void;
@@ -76,6 +81,135 @@ onAllocationDelete: (allocation: Allocation) => void;
   clusterId: number; // ✅ ADD THIS - to look up job details
 }
 
+
+function MoveJobButton({ job, act }: {
+  job: any;
+  act: any;
+  
+}) {
+  const [open, setOpen] = useState(false);
+  const [moveDate, setMoveDate] = useState('');
+  const [moveArea, setMoveArea] = useState<number>(Number(act.remaining_area));
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!moveDate) { toast.error('Select a date'); return; }
+    if (!moveArea || moveArea <= 0) { toast.error('Enter valid area'); return; }
+    setSaving(true);
+    try {
+      // 🔧 Replace with your actual move API call
+      const res = await fetch(`${API_BASE_URL}/api/job-activities/${act.id}/move/`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ new_date: moveDate, area: moveArea }),
+});
+      if (res.ok) {
+        toast.success('Job moved');
+        setOpen(false);
+        // onSuccess();
+      } else {
+        toast.error('Failed to move job');
+      }
+    } catch {
+      toast.error('Network error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="px-3 py-1.5 bg-orange-50 text-orange-600 border border-orange-200 text-xs font-semibold rounded-lg hover:bg-orange-100 transition"
+      >
+        Move
+      </button>
+
+      {open && ReactDOM.createPortal(
+        <div
+          className="fixed inset-0 flex items-center justify-center"
+          style={{ background: 'rgba(0,0,0,0.4)', zIndex: 99999 }}
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl p-6 w-80"
+            onClick={e => e.stopPropagation()}
+          >
+            <h4 className="font-bold text-gray-900 mb-1">Move Job</h4>
+            <div>
+  <label className="text-xs font-semibold text-gray-600 block mb-1">
+    Area to Move (ac)
+  </label>
+  <input
+    type="number"
+    step="0.01"
+    min="0.01"
+    max={act.remaining_area}
+    value={moveArea}
+    onChange={e => {
+      const val = parseFloat(e.target.value) || 0;
+      setMoveArea(val);
+    }}
+    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+  />
+  <p className="text-xs text-gray-400 mt-1">
+    Max: {act.remaining_area} ac (remaining unallocated)
+  </p>
+  {moveArea > Number(act.remaining_area) && (
+    <p className="text-xs text-red-500 mt-1">
+      ⚠ Exceeds remaining area
+    </p>
+  )}
+</div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">New Date</label>
+                <input
+                  type="date"
+                  value={moveDate}
+                  onChange={e => setMoveDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">Area to Move (ac)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max={act.remaining_area}
+                  value={moveArea}
+                  onChange={e => setMoveArea(parseFloat(e.target.value) || 0)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                />
+                <p className="text-xs text-gray-400 mt-1">Max: {act.remaining_area} ac</p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-5">
+              <button
+                onClick={() => setOpen(false)}
+                className="flex-1 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={saving}
+                className="flex-1 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-bold hover:bg-orange-600 disabled:opacity-50 transition"
+              >
+                {saving ? 'Moving...' : 'Confirm Move'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
 const DayDetailModal: React.FC<DayDetailModalProps> = ({
   date,
   allocations,
@@ -83,6 +217,7 @@ const DayDetailModal: React.FC<DayDetailModalProps> = ({
   overloads,
   filters,
   allJobs,
+  viewMode,
   capacitySummary,
   leaves,potentialJobs,
   onClose,
@@ -91,7 +226,7 @@ onAllocationDateChange,
   jobs,onStartAllocation,clusterId
 }) => {
 const [activeTab, setActiveTab] =
-  useState<'allocations' | 'jobs' | 'conflicts' | 'potential' | 'maxwork'>(
+  useState<'allocations' | 'jobs' | 'conflicts' | 'potential' | 'maxwork'| 'leaves'>(
     'allocations'
   );
 
@@ -139,6 +274,15 @@ const [editForm, setEditForm] = useState({
   allocated_area: 0,
   mukkadam_rate: 0,
 });
+
+const [showLeaveModal, setShowLeaveModal] = useState(false);
+const [onLeavesUpdatedTrigger, setOnLeavesUpdatedTrigger] = useState(0); // To refresh internal UI if needed
+
+// Inside DayDetailModal component
+const [showExtraCrewModal, setShowExtraCrewModal] = useState(false);
+const [selectedMukkadamForExtra, setSelectedMukkadamForExtra] = useState<Mukkadam | null>(null);
+const [extraCrewCount, setExtraCrewCount] = useState(1);
+
 const [maxCapacity, setMaxCapacity] = useState<number | null>(null);
 const [availableWorkers, setAvailableWorkers] = useState<number | null>(null);
 
@@ -317,7 +461,7 @@ const handleQuickAllocate = async (job: Job, activity: any) => {
       } else {
         toast.success(`Fully allocated ${areaToAllocate} ac to ${mukkadam.mukkadam_name}`);
       }
-      onAllocationDelete({ id: -1 } as any);
+      // onAllocationDelete({ id: -1 } as any);
     } else {
       toast.error(data.error || 'Allocation failed');
     }
@@ -334,6 +478,35 @@ allocations.forEach(a => {
   usedWorkersByMukkadam.set(a.mukkadam, current + (a.allocated_workers || 0));
 });
 
+
+const handleSaveExtraCrew = async () => {
+  if (!selectedMukkadamForExtra) return;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/extra-workers/`, {
+      method: 'POST', // As per your requirement
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mukkadam_id: selectedMukkadamForExtra.mukkadam_id,
+        mukkadam: selectedMukkadamForExtra.mukkadam_id, // Double mapping as requested
+        date: isoDate, // Your existing formatted date variable
+        workers: extraCrewCount,
+      }),
+    });
+
+    if (res.ok) {
+      toast.success(`Successfully added workers`);
+      setShowExtraCrewModal(false);
+      // Trigger global refresh using the existing pattern
+      if (onAllocationDelete) onAllocationDelete({ id: -1 } as any);
+    } else {
+      toast.error('Failed to add workers');
+    }
+  } catch (e) {
+    console.error(e);
+    toast.error('Network error');
+  }
+};
 const maxWorkMap = new Map<string, MaxWorkRow>();
 
 mukkadams.forEach((m) => {
@@ -408,7 +581,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
     Jobs ({jobsOnThisDay.length})
   </button>
 
-  <button
+  {/* <button
     className={`modal-tab ${activeTab === 'conflicts' ? 'active' : ''}`}
     onClick={() => setActiveTab('conflicts')}
   >
@@ -416,92 +589,135 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
       capacitySummary.conflicts.length +
       overloads.filter((o: any) => o.overloaded).length
     })
-  </button>
+  </button> */}
 
-  <button
+  {/* <button
     className={`modal-tab ${activeTab === 'potential' ? 'active' : ''}`}
     onClick={() => setActiveTab('potential')}
   >
     Potential ({potentialJobs ? potentialJobs.length : 0})
-  </button>
+  </button> */}
   <button
     className={`modal-tab ${activeTab === 'maxwork' ? 'active' : ''}`}
     onClick={() => setActiveTab('maxwork')}
   >
     Max work
   </button>
+
+<button
+  className={`modal-tab ${activeTab === 'leaves' ? 'active' : ''}`}
+  onClick={() => setActiveTab('leaves')}
+>
+  Attendance ({leaves.length})
+</button>
 </div>
 
 <div className="modal-body-scroll">
-  {/* TAB 1: ALLOCATIONS */}
-  {activeTab === 'allocations' && (
-    <div className="tab-content">
-      {/* Leaves Section */}
-      {leaves.length > 0 && (
-        <div className="leave-section-mini">
-          {leaves.map(l => (
-            <div key={l.id} className="leave-alert-row">
-              {l.leave_type === 'general' ? (
-                <span>🏖️ <strong>Holiday:</strong> {l.reason}</span>
-              ) : (
-                <span>👤 <strong>{l.mukkadam_name}:</strong> {l.crew_on_leave} workers on leave</span>
-              )}
+{/* TAB 1: ALLOCATIONS */}
+{activeTab === 'allocations' && (
+  <div className="tab-content">
+    {/* Leaves Section - Improved Styling */}
+    {leaves.length > 0 && (
+      <div className="mb-4 space-y-2">
+        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Attendance Alerts</div>
+        {leaves.map(l => (
+          <div key={l.id} className={`leave-alert-row p-2 rounded border-l-4 ${l.leave_type === 'general' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-red-50 border-red-400 text-red-700'}`}>
+            {l.leave_type === 'general' ? (
+              <span className="text-sm font-medium">🏖️ Holiday: {l.reason}</span>
+            ) : (
+              <span className="text-sm font-medium">👤 {l.mukkadam_name}: {l.crew_on_leave} workers absent</span>
+            )}
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* Section Header */}
+    <div className="form-divider mb-4">Active Allocations ({filteredAllocations.length})</div>
+
+    {filteredAllocations.length === 0 ? (
+      <p className="empty-text">No allocations made for this day.</p>
+    ) : (
+      <div className="space-y-4">
+        {filteredAllocations.map(a => {
+          const m = mukkadams.find(mk => mk.mukkadam_id === a.mukkadam);
+          const job = (allJobs || jobs).find(j => j.job_id === a.job_id);
+
+          return (
+            <div key={a.id} className="allocation-row card-style border-l-4 border-green-500 hover:shadow-md transition-shadow">
+              <div className="allocation-main">
+                <div className="flex justify-between items-start">
+                  <div className="item-title flex items-center gap-2 text-lg font-bold text-gray-800">
+                    <Tractor size={18} className="text-green-600" /> 
+                    {a.activity_name}
+                  </div>
+                  {/* Status Badge */}
+                  <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-[10px] font-bold uppercase">
+                    Allocated
+                  </span>
+                </div>
+                
+                {/* Information Grid */}
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] text-gray-400 uppercase font-bold">Farmer & Plot</span>
+                    <div className="text-sm text-gray-700 truncate">
+                      <strong>{job?.farmer_name}</strong> · {job?.plot_name}
+                    </div>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[10px] text-gray-400 uppercase font-bold">Crop Details</span>
+                    <div className="text-sm text-gray-600 italic">
+                      {job?.crop_name} ({job?.variety})
+                    </div>
+                  </div>
+                </div>
+
+                {/* Metrics Bar */}
+                <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100">
+                  <div className="flex items-center gap-1 text-sm font-semibold text-gray-700">
+                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                    {a.allocated_area} ac
+                  </div>
+                  <div className="flex items-center gap-1 text-sm font-semibold text-gray-700">
+                    <Users size={14} className="text-gray-400" />
+                    {a.allocated_workers} Workers
+                  </div>
+                  <div className="ml-auto text-xs text-gray-500 bg-gray-50 px-2 py-1 rounded border border-gray-200">
+                    Team: <span className="font-bold text-gray-700">{m?.mukkadam_name || 'N/A'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="allocation-actions mt-3 flex justify-end gap-2 border-t pt-2">
+                <button
+                  className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded transition"
+                  onClick={() => {
+                    setEditingAllocation(a);
+                    setEditForm({
+                      mukkadam_id: a.mukkadam,
+                      allocated_date: a.allocated_date,
+                      allocated_workers: a.allocated_workers,
+                      allocated_area: a.allocated_area,
+                      mukkadam_rate: a.mukkadam_rate,
+                    });
+                    setShowEditAllocationModal(true);
+                  }}
+                >
+                  Edit
+                </button>
+                <button 
+                  className="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded transition" 
+                  onClick={() => onAllocationDelete(a)}
+                >
+                  Remove
+                </button>
+              </div>
             </div>
-          ))}
-        </div>
-      )}
+          );
+        })}
 
-
-        {/* {filteredAllocations.map(a => {
-  const m = mukkadams.find(mk => mk.mukkadam_id === a.mukkadam);
-  const job = (allJobs || jobs).find(j => j.job_id === a.job_id); // ✅ Use allJobs
-
-  return (
-    <div key={a.id} className="allocation-row card-style">
-      <div className="allocation-main">
-        <div className="item-title"><Tractor size={14} /> {a.activity_name}</div>
-        
-        <div className="item-farmer" style={{ fontSize: '0.85rem', color: '#475569', margin: '4px 0' }}>
-          <span className="item-plot">{job?.plot_name || 'Unknown Plot'}</span>--
-          <span className="item-plot">{job?.crop_name || 'Unknown Crop'}</span>--
-          <span className="item-plot">{job?.variety || 'Unknown Variety'}</span>--
-          <User size={12} style={{ marginRight: '4px' }} /> 
-          <strong>{job?.farmer_name || 'Unknown Farmer'}</strong>
-        </div>
-
-        <div className="item-meta">{a.allocated_area} ac • {a.allocated_workers} workers</div>
-        <div className="item-sub">Team: {m?.mukkadam_name || 'N/A'}</div>
-      </div>
-      <div className="allocation-actions">
-        <button
-    className="btn-link"
-    onClick={() => {
-      setEditingAllocation(a);
-      setEditForm({
-        mukkadam_id: a.mukkadam,
-        allocated_date: a.allocated_date,
-        allocated_workers: a.allocated_workers,
-        allocated_area: a.allocated_area,
-        mukkadam_rate: a.mukkadam_rate,
-      });
-      setShowEditAllocationModal(true);
-    }}
-  >
-    Edit
-  </button>
-        <button className="btn-link" onClick={() => onAllocationDateChange(a)}>Move</button>
-        <button className="btn-link delete" onClick={() => onAllocationDelete(a)}>Remove</button>
-      </div>
-    </div>
-
-
-
-  );
-})} */}
-
-{/* Jobs scheduled today — Quick Allocate section */}
-
-{jobsOnThisDay.length > 0 && (
+        {jobsOnThisDay.length > 0 && (
   <div className="quick-allocate-section" style={{ marginBottom: '1rem' }}>
     <div className="form-divider">Jobs Scheduled Today</div>
     {jobsOnThisDay.map(job =>
@@ -630,6 +846,14 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
     )}
   </div>
 )}
+      </div>
+    )}
+  </div>
+)}
+
+{/* Jobs scheduled today — Quick Allocate section */}
+
+
 {/* Edit Allocation Modal */}
 {showEditAllocationModal && editingAllocation && (
   <div className="modal-overlay" onClick={() => setShowEditAllocationModal(false)}>
@@ -801,71 +1025,126 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
     </div>
   </div>
 )}
-    </div>
-  )}
+
 
   {/* TAB 2: JOBS */}
-  {activeTab === 'jobs' && (
-    <div className="tab-content">
-      {jobsOnThisDay.length === 0 ? (
-        <p className="empty-text">No jobs scheduled.</p>
-      ) : (
-        jobsOnThisDay.map(job => (
-          <div 
-            key={job.job_id} 
-            className="job-card card-style clickable-job-card" 
-            onClick={() => {
-              const activity = job.activities.find(act => act.scheduled_date === isoDate);
-              if (activity) {
-                onStartAllocation(job.job_id, activity.id, activity);
-              }
-            }}
-          >
-            <div className="job-card-header">
-              <span className="farmer-name">
-                <User size={14} /> {job.farmer_name}
-              </span>
-              <span className="allocate-badge">Allocate →</span>
-            </div>
+{/* TAB 2: JOBS */}
+{activeTab === 'jobs' && (
+  <div className="tab-content">
+    {jobsOnThisDay.length === 0 ? (
+      <p className="text-sm text-gray-400 italic mt-4">No jobs scheduled.</p>
+    ) : (
+      <div className="mt-2 rounded-xl border border-gray-200 overflow-x-auto">  {/* ← overflow-x-auto */}
+        <table className="text-sm" style={{ minWidth: '750px', width: '100%' }}>  {/* ← minWidth */}
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-200">
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Farmer</th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Plot / Crop</th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Activity</th>
+              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Area (ac)</th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Workers Required</th>
+              {viewMode.includes('allocations') && ( 
+                <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500">Action</th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {jobsOnThisDay.flatMap(job =>
+              job.activities
+                .filter(act => act.scheduled_date?.slice(0, 10) === isoDate && Number(act.remaining_area) > 0)
+                .map(act => {
+                  // Calculate workers needed per mukkadam team
+const workerRows = maxWorkRows.filter(
+  r => r.activityName === act.activity_name
+);
+                  return (
+                    <tr
+                      key={`${job.job_id}-${act.id}`}
+                      className="border-b border-gray-100 hover:bg-gray-50 transition"
+                    >
+                      {/* Farmer */}
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          <User size={13} className="text-gray-400 shrink-0" />
+                          <span className="font-medium text-gray-800">{job.farmer_name}</span>
+                        </div>
+                      </td>
 
-            <div className="job-plot">
-              {job.plot_name || job.job_id || 'Unknown plot'}--
-              <span className="item-plot">{job?.crop_name || 'Unknown Crop'}</span>--
-              <span className="item-plot">{job?.variety || 'Unknown Variety'}</span>
-            </div>
+                      {/* Plot / Crop */}
+                      <td className="px-4 py-3">
+                        <p className="text-gray-700 font-medium">{job.plot_name || job.job_id}</p>
+                        <p className="text-xs text-gray-400">
+                          {job.crop_name || '—'}{job.variety ? ` • ${job.variety}` : ''}
+                        </p>
+                      </td>
 
-            {job.activities
-              .filter(act => act.scheduled_date?.slice(0, 10) === isoDate && Number(act.remaining_area) > 0)
-              .map(act => {
-                const progress = (Number(act.allocated_area) / Number(act.total_area || 1)) * 100;
-                return (
-                  <div key={act.id} className="job-activity-item">
-                    <div className="activity-info">
-                      <span className="act-name">{act.activity_name}</span>
-                      <span className="act-area">
-                        {act.allocated_area}/{act.total_area} ac
-                      </span>
-                    </div>
-                    <div className="progress-container">
-                      <div className="progress-bar-bg">
-                        <div
-                          className="progress-bar-fill"
-                          style={{ width: `${progress}%` }}
-                        />
-                      </div>
-                      <span className="progress-text">
-                        {progress.toFixed(0)}%
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
-        ))
-      )}
-    </div>
-  )}
+                      {/* Activity */}
+                      <td className="px-4 py-3">
+                        <span className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded-full text-xs font-medium">
+                          {act.activity_name}
+                        </span>
+                      </td>
 
+                      {/* Area */}
+                      <td className="px-4 py-3 text-right">
+                        <span className="font-semibold text-gray-800">{act.remaining_area}</span>
+                        <span className="text-xs text-gray-400 ml-1">ac</span>
+                      </td>
+
+                      {/* Workers Required per team */}
+                      <td className="px-4 py-3">
+                        {workerRows.length === 0 ? (
+                          <span className="text-xs text-gray-400 italic">No team data</span>
+                        ) : (
+                          <div className="flex flex-col gap-1">
+                            {workerRows.map((r, i) => {
+                              const needed = r.productivity > 0
+                                ? Math.ceil(Number(act.remaining_area) / r.productivity)
+                                : '—';
+                              return (
+                                <div key={i} className="flex items-center gap-2">
+                                  <span className="text-xs text-gray-500 w-28 truncate">{r.mukkadamName}</span>
+                                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                                    typeof needed === 'number' && needed <= r.availableWorkers
+                                      ? 'bg-green-50 text-green-700'
+                                      : 'bg-red-50 text-red-600'
+                                  }`}>
+                                    {needed} workers
+                                  </span>
+                                  <span className="text-xs text-gray-400">
+                                    / {r.availableWorkers} avail
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Action — allocation mode only */}
+                      {viewMode.includes('allocations') && ( 
+                        <td className="px-4 py-3 text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            {/* <button
+                              onClick={() => onStartAllocation(job.job_id, act.id, act)}
+                              className="px-3 py-1.5 bg-teal-500 text-white text-xs font-semibold rounded-lg hover:bg-teal-600 transition"
+                            >
+                              Allocate →
+                            </button> */}
+                            <MoveJobButton job={job} act={act}  />
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })
+            )}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+)}
   {/* TAB 3: CONFLICTS */}
   {activeTab === 'conflicts' && (
     <div className="tab-content">
@@ -990,9 +1269,10 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
   <div className="tab-content">
     <h3 className="section-title">Max work for this day</h3>
 
+    {/* Filter */}
     <div className="maxwork-filters">
-      <label>
-        Activity:{' '}
+      <label className="flex items-center gap-2 text-sm text-gray-600">
+        Activity:
         <select
           value={selectedMaxWorkActivity ?? ''}
           onChange={(e) =>
@@ -1000,48 +1280,149 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
               e.target.value ? Number(e.target.value) : null
             )
           }
+          className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
         >
           <option value="">All activities</option>
           {maxWorkActivities.map(a => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
+            <option key={a.id} value={a.id}>{a.name}</option>
           ))}
         </select>
       </label>
     </div>
 
     {visibleMaxWorkRows.length === 0 ? (
-      <p className="empty-text">No capacity for this selection.</p>
+      <p className="text-sm text-gray-400 italic mt-4">No capacity for this selection.</p>
     ) : (
       <>
-        <div className="maxwork-summary">
-          Total possible area:{' '}
-          <strong>{totalMaxArea.toFixed(2)} ac</strong>
-        </div>
-
-        <div className="maxwork-grid">
+        {/* Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-4">
           {visibleMaxWorkRows.map((row, idx) => (
-            <div key={idx} className="maxwork-card">
-              <div className="maxwork-header">
-                <span className="team-name">{row.mukkadamName}</span>
-                <span className="activity-name">{row.activityName}</span>
-              </div>
-              <div className="maxwork-body">
-                <div>{row.availableWorkers} workers available</div>
+            <div
+              key={idx}
+              className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm"
+            >
+              {/* Card Header */}
+              <div className="flex items-start justify-between mb-3">
                 <div>
-                  {row.productivity.toFixed(2)} ac/worker/day →{' '}
-                  <strong>{row.maxArea.toFixed(2)} ac</strong>
+                  <p className="font-semibold text-gray-900 text-sm">{row.mukkadamName}</p>
+                  <span className="inline-block mt-1 px-2 py-0.5 bg-teal-50 text-teal-700 text-xs rounded-full font-medium">
+                    {row.activityName}
+                  </span>
                 </div>
+                <div className="text-right shrink-0 ml-2">
+                  <p className="text-xs text-gray-400">Max area</p>
+                  <p className="text-lg font-bold text-teal-600">{row.maxArea.toFixed(2)}</p>
+                  <p className="text-xs text-gray-400">acres</p>
+                </div>
+              </div>
+
+              {/* Card Body */}
+              <div className="flex items-center justify-between text-xs text-gray-500 border-t border-gray-100 pt-2 mt-2">
+                <span className="flex items-center gap-1">
+                  <Users size={11} />
+                  {row.availableWorkers} workers
+                </span>
+                <span className="text-gray-400">×</span>
+                <span>{row.productivity.toFixed(2)} ac/worker</span>
               </div>
             </div>
           ))}
         </div>
+
+        {/* Total — only when a specific activity is selected */}
+        {selectedMaxWorkActivity !== null && (
+          <div className="mt-4 flex items-center justify-end">
+            <div className="bg-teal-50 border border-teal-200 rounded-xl px-5 py-3 flex items-center gap-3">
+              <span className="text-sm text-teal-700 font-medium">Total possible area</span>
+              <span className="text-xl font-bold text-teal-600">{totalMaxArea.toFixed(2)} ac</span>
+            </div>
+          </div>
+        )}
       </>
     )}
   </div>
 )}
 
+{/* TAB 6: ATTENDANCE & ADJUSTMENTS */}
+{/* TAB: ATTENDANCE */}
+{activeTab === 'leaves' && (
+  <div className="tab-content">
+    <div className="flex justify-between items-center mb-4">
+      <h3 className="section-title">Attendance & Daily Adjustments</h3>
+      <div className="flex gap-2">
+        <button className="btn-secondary text-xs" onClick={() => setShowLeaveModal(true)}>
+          <X size={14} /> Mark Absence
+        </button>
+        <button className="btn-primary text-xs" onClick={() => setShowExtraCrewModal(true)}>
+          <Plus size={14} /> Add Extra Crew
+        </button>
+      </div>
+    </div>
+
+    {/* List existing adjustments (Leaves/Absences) */}
+    <div className="space-y-2">
+      {leaves.map(l => (
+        <div key={l.id} className="attendance-row card-style" onClick={() => setShowLeaveModal(true)}>
+          <span>{l.leave_type === 'general' ? '🏖️ Holiday' : `👤 ${l.mukkadam_name}`}</span>
+          <span className="text-red-600">-{l.crew_on_leave} workers</span>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
+{/* Add Extra Crew Modal Popup */}
+{showExtraCrewModal && (
+  <div className="modal-overlay" style={{ zIndex: 1100 }}>
+    <div className="modal-content modal-sm">
+      <div className="modal-header">
+        <h3 className="modal-title">Add Extra Workers</h3>
+        <button onClick={() => setShowExtraCrewModal(false)}><X size={20}/></button>
+      </div>
+      <div className="modal-body space-y-4">
+        <div>
+          <label className="form-label">Select Mukkadam</label>
+          <select 
+            className="form-select"
+            onChange={(e) => setSelectedMukkadamForExtra(mukkadams.find(m => m.mukkadam_id === Number(e.target.value)) || null)}
+          >
+            <option value="">Choose Team...</option>
+            {mukkadams.map(m => (
+              <option key={m.mukkadam_id} value={m.mukkadam_id}>{m.mukkadam_name}  {m.crew_size}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="form-label">Extra Workers to Add</label>
+          <input 
+            type="number" 
+            className="form-input" 
+            value={extraCrewCount} 
+            onChange={(e) => setExtraCrewCount(Number(e.target.value))}
+          />
+        </div>
+      </div>
+      <div className="modal-footer">
+        <button className="btn-primary w-full" onClick={handleSaveExtraCrew}>Add Workers for Today</button>
+      </div>
+    </div>
+  </div>
+)}
+{showLeaveModal && (
+        <LeaveModal
+          selectedDate={date} // Uses the 'date' prop passed into DayDetailModal
+          mukkadams={mukkadams}
+          existingLeaves={leaves} // Pass the same leaves prop
+          onClose={() => setShowLeaveModal(false)}
+          onLeaveMarked={() => {
+            setShowLeaveModal(false);
+            // This is important: it should call the refresh logic 
+            // provided by the parent (CalendarPanel)
+            // if (onAllocationDelete) onAllocationDelete({ id: -1 } as any); 
+          }}
+          clusterId={clusterId} 
+        />
+      )}
 </div>
       </div>
     </div>

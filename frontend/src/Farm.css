@@ -1350,3 +1350,52 @@ body {
   padding: 8px;
   text-align: center;
 }
+
+
+.cluster-action-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 10px 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    color: #475569;
+}
+
+.cluster-action-btn:hover {
+    border-color: #3b82f6;
+    background: #eff6ff;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.cluster-action-btn span {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+/* Icon Styling */
+.icon-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+}
+
+.farmer-icon { background: #ecfdf5; color: #10b981; } /* Green theme */
+.mukkadam-icon { background: #fff7ed; color: #f97316; } /* Orange theme */
+.calendar-icon { background: #eff6ff; color: #3b82f6; } /* Blue theme */
+
+/* Override for the title emoji looks */
+.cluster-action-btn svg {
+    stroke-width: 2.5px;
+}
