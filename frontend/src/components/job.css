@@ -1,6 +1,4 @@
-/* Add to Farm.css */
 
-/* Job Detail Panel Styles */
 .job-detail-info {
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
@@ -57,7 +55,6 @@
   color: #1e40af;
 }
 
-/* Activity Card */
 .activity-card {
   background: white;
   border: 1px solid var(--border-color);
@@ -134,7 +131,6 @@
   margin-bottom: 0.5rem;
 }
 
-/* Progress Bar */
 .progress-bar {
   height: 6px;
   background: #e5e7eb;
@@ -150,7 +146,6 @@
   border-radius: 9999px;
 }
 
-/* Section Header */
 .section-header {
   display: flex;
   justify-content: space-between;
@@ -163,7 +158,6 @@
   font-size: 0.75rem;
 }
 
-/* Form Styles */
 .form-row {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -215,7 +209,6 @@
   cursor: pointer;
 }
 
-/* Left Panel Split */
 .panel-left-content {
   display: flex;
   flex-direction: column;
@@ -233,7 +226,6 @@
   overflow-y: auto;
 }
 
-/* Utilities */
 .flex {
   display: flex;
 }
@@ -290,17 +282,17 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 0;          /* important when inside flex parent */
+  min-height: 0;          
 }
 
 .jobs-panel .panel-header {
-  flex: 0 0 auto;         /* only as tall as content */
+  flex: 0 0 auto;         
 }
 
 .jobs-panel .panel-content {
-  flex: 1 1 auto;         /* takes remaining height */
+  flex: 1 1 auto;         
   min-height: 0;
-  overflow-y: auto;       /* scroll only body, header stays fixed */
+  overflow-y: auto;       
 }
 
 
@@ -581,7 +573,7 @@
   opacity: 0.85;
 }
 
-/* colors */
+
 .revenue-green {
   background: #ecfdf3;
   border: 1px solid #22c55e33;
@@ -607,8 +599,8 @@
 
   display: flex;
   justify-content: center;
-  align-items: center;   /* center vertically */
-  padding: 24px;         /* space from edges */
+  align-items: center;   
+  padding: 24px;        
 }
 
 .mukkadam-modal {
@@ -631,7 +623,7 @@
 }
 
 .booked-label {
-  color: #059669; /* Greenish to show it's active */
+  color: #059669; 
 }
 
 .activity-check-row.booked {
@@ -649,7 +641,6 @@
   font-weight: 600;
 }
 
-/* Booked Activities (Read-only) */
 .booked-activities-list {
   display: flex;
   flex-direction: column;
@@ -685,7 +676,7 @@
   color: #475569;
 }
 
-/* Not-Booked Activities (Selectable) */
+
 .not-booked-activities-list {
   display: flex;
   flex-direction: column;
@@ -739,4 +730,314 @@
 .form-input:read-only {
   background: #f1f5f9;
   cursor: not-allowed;
+}
+
+/* ── Append these to your existing job.css ─────────────────────────────────── */
+
+/* Top action bar */
+.panel-top-actions {
+  padding: 0.75rem 1rem 0.25rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.panel-top-actions .btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.55rem 1rem;
+  font-size: 0.875rem;
+}
+
+/* Panel header with search + refresh inline */
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+}
+
+.panel-header .form-input {
+  flex: 1;
+  margin: 0;
+}
+
+.btn-secondary.icon-only {
+  flex-shrink: 0;
+  padding: 0.4rem 0.6rem;
+}
+
+/* ── Farmer accordion ─────────────────────────────────────────────── */
+.farmer-accordion {
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  margin-bottom: 0.5rem;
+  background: #fff;
+  overflow: hidden;
+  transition: box-shadow 0.15s;
+}
+
+.farmer-accordion.expanded {
+  border-color: #93c5fd;
+  box-shadow: 0 2px 12px rgba(59, 130, 246, 0.08);
+}
+
+.farmer-accordion.completed {
+  opacity: 0.72;
+}
+
+.farmer-accordion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  user-select: none;
+  background: #fff;
+  transition: background 0.12s;
+}
+
+.farmer-accordion-header:hover {
+  background: #f8fafc;
+}
+
+.farmer-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.farmer-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #1e293b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.farmer-meta {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.76rem;
+  color: #64748b;
+}
+
+.remaining-active {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.remaining-done {
+  color: #10b981;
+  font-weight: 600;
+}
+
+.farmer-date {
+  font-size: 0.74rem;
+  color: #94a3b8;
+}
+
+.farmer-header-right {
+  color: #94a3b8;
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+}
+
+.farmer-accordion-body {
+  padding: 0 0.75rem 0.75rem;
+  border-top: 1px solid #f1f5f9;
+  background: #fafafa;
+}
+
+/* ── Plot accordion ───────────────────────────────────────────────── */
+.plot-accordion {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  margin-top: 0.5rem;
+  background: #fff;
+  overflow: hidden;
+}
+
+.plot-accordion-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.84rem;
+  background: #f8fafc;
+  transition: background 0.1s;
+}
+
+.plot-accordion-header:hover {
+  background: #eff6ff;
+}
+
+.plot-accordion-header .plot-name {
+  flex: 1;
+  font-weight: 500;
+  color: #334155;
+}
+
+.plot-accordion-header .plot-area {
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.plot-accordion-body {
+  padding: 0.5rem 0.75rem;
+}
+
+/* ── Inline job card inside plot ──────────────────────────────────── */
+.job-inline-card {
+  margin-bottom: 0.5rem;
+}
+
+.job-inline-header {
+  padding: 0.25rem 0;
+}
+
+/* ── Activity inline row ──────────────────────────────────────────── */
+.activity-inline-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.activity-inline-row:last-child {
+  border-bottom: none;
+}
+
+.activity-inline-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-inline-name {
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: #1e293b;
+}
+
+.activity-inline-meta {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.74rem;
+  color: #64748b;
+  margin-top: 0.15rem;
+}
+
+.activity-inline-actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+/* ── Add job inline form ──────────────────────────────────────────── */
+.add-job-btn {
+  margin-top: 0.6rem;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.inline-job-form {
+  margin-top: 0.6rem;
+  border: 1.5px dashed #93c5fd;
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: #f0f9ff;
+}
+
+.inline-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #bfdbfe;
+}
+
+/* ── Icon buttons ─────────────────────────────────────────────────── */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  background: transparent;
+  transition: background 0.12s;
+}
+
+.icon-btn.edit {
+  color: #3b82f6;
+}
+
+.icon-btn.edit:hover {
+  background: #eff6ff;
+}
+
+.icon-btn.danger {
+  color: #ef4444;
+}
+
+.icon-btn.danger:hover {
+  background: #fef2f2;
+}
+
+/* ── Small button variant ─────────────────────────────────────────── */
+.btn-sm {
+  padding: 0.3rem 0.65rem !important;
+  font-size: 0.8rem !important;
+}
+
+/* ── Progress bar ─────────────────────────────────────────────────── */
+.progress-bar {
+  height: 4px;
+  background: #e2e8f0;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+/* ── Strict badge ─────────────────────────────────────────────────── */
+.strict-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #fef3c7;
+  color: #d97706;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+}
+
+/* Add to job.css */
+.activity-inline-row.next-job-highlight {
+  background-color: #f8faff; /* Very subtle blue tint */
+  border-left: 3px solid #3b82f6; /* Blue indicator bar */
+  padding-left: 8px;
+}
+
+.activity-inline-row.backlog-highlight {
+  border-left: 3px solid #ef4444; /* Red indicator for backlog */
 }

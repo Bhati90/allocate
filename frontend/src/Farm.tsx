@@ -54,7 +54,7 @@ const [potentialByDate, setPotentialByDate] = useState<PotentialByDate>({});
   const [showProductivityWarning, setShowProductivityWarning] = useState(false);
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [pendingAllocation, setPendingAllocation] = useState<any>(null);
-const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential')[]>(['allocations']);
+const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential')[]>(['jobs']);
 
   // Load initial data
 useEffect(() => {
@@ -828,12 +828,12 @@ const varietyOptions = [
       ← Back to clusters
     </button>
 
-    <div>
+    {/* <div>
       <h1>Farm Labor Scheduling System</h1>
       <div className="header-subtitle">
         Multi-Team · Smart Allocation · Real-time Capacity Tracking
       </div>
-    </div>
+    </div> */}
   </div>
 
   {/* CENTER: filters + view tabs */}
@@ -995,39 +995,41 @@ const varietyOptions = [
 
 
 <div className="view-tabs">
+
   <button
+    className={viewModes.includes('jobs') ? 'tab active' : 'tab'}
+    onClick={() => toggleViewMode('jobs')}
+  >
+    AI
+  </button>
+
+    <button
     className={viewModes.includes('allocations') ? 'tab active' : 'tab'}
     onClick={() => toggleViewMode('allocations')}
   >
     Allocations
   </button>
-  <button
-    className={viewModes.includes('jobs') ? 'tab active' : 'tab'}
-    onClick={() => toggleViewMode('jobs')}
-  >
-    Jobs (by scheduled date)
-  </button>
-  <button
+  {/* <button
     className={viewModes.includes('potential') ? 'tab active' : 'tab'}
     onClick={() => toggleViewMode('potential')}
   >
     Potential
-  </button>
+  </button> */}
 </div>
 
   </div>
 
   {/* RIGHT: actions */}
   <div className="header-actions">
-    <button
+    {/* <button
       className="btn-primary"
       onClick={() => setShowAllocationModal(true)}
     >
       + Create Allocation
-    </button>
-    <button className="btn-secondary" onClick={handleRefreshAll}>
+    </button> */}
+    {/* <button className="btn-secondary" onClick={handleRefreshAll}>
       🔄 Refresh
-    </button>
+    </button> */}
   </div>
 </header>
 
@@ -1037,7 +1039,7 @@ const varietyOptions = [
       {/* Main Layout */}
 <div className="scheduler-layout">
   <div className="panel-left-content">
-    <div className="jobs-wrapper">
+    
     <JobsPanel
       jobs={jobs}
           loading={loading}
@@ -1045,16 +1047,16 @@ const varietyOptions = [
           onFarmerSelect={handleFarmerSelect}
           clusterId={clusterId}
     />
-  </div>
 
-  <div className="job-details-wrapper">
+
+  {/* <div className="job-details-wrapper">
     <JobDetailPanel
     selectedFarmerId={selectedFarmerId}
           selectedFarmerName={selectedFarmerName}
           onActivityAdded={loadJobs}
           clusterId={clusterId}
     />
-  </div>
+  </div> */}
 </div>
 
 
@@ -1092,7 +1094,7 @@ const varietyOptions = [
         </div>
 
         {/* Right Panel - Mukkadams */}
-<div className="panel right-panel">
+{/* <div className="panel right-panel">
   <div className="right-split">
     <div className="right-top">
       <MukkadamDetailPanel
@@ -1125,7 +1127,7 @@ const varietyOptions = [
       />
     </div>
   </div>
-</div>
+</div> */}
 
 
 

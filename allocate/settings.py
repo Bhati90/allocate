@@ -195,25 +195,25 @@ ALLOCATION_API_URL = 'http://localhost:8001'
 # SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'
 # ALLOCATION_API_URL = 'https://allocation.bharatintelligence.ai'
 # Tell Celery to use Redis, not RabbitMQ
-CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
-CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+# CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
+# CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TASK_SERIALIZER = 'json'
 
 
-# Redis Cache Configuration
-CACHES = {
-    'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': 'redis://127.0.0.1:6379/1',  # Use your Redis server
-        'OPTIONS': {
-            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-        },
-        'KEY_PREFIX': 'allocation_app',
-        'TIMEOUT': 3600,  # 1 hour default
-    }
-}
+# # Redis Cache Configuration
+# CACHES = {
+#     'default': {
+#         'BACKEND': 'django_redis.cache.RedisCache',
+#         'LOCATION': 'redis://127.0.0.1:6379/1',  # Use your Redis server
+#         'OPTIONS': {
+#             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+#         },
+#         'KEY_PREFIX': 'allocation_app',
+#         'TIMEOUT': 3600,  # 1 hour default
+#     }
+# }
 
 
 
@@ -268,22 +268,22 @@ AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
 # Celery
-CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
-CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+# CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
+# CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TASK_SERIALIZER = 'json'
 
 # Cache
-CACHES = {
-    'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': 'redis://127.0.0.1:6379/1',
-        'OPTIONS': {'CLIENT_CLASS': 'django_redis.client.DefaultClient'},
-        'KEY_PREFIX': 'allocation_app',
-        'TIMEOUT': 3600,
-    }
-}
+# CACHES = {
+#     'default': {
+#         'BACKEND': 'django_redis.cache.RedisCache',
+#         'LOCATION': 'redis://127.0.0.1:6379/1',
+#         'OPTIONS': {'CLIENT_CLASS': 'django_redis.client.DefaultClient'},
+#         'KEY_PREFIX': 'allocation_app',
+#         'TIMEOUT': 3600,
+#     }
+# }
 
 CACHE_MUKKADAM_TIMEOUT = 3600
 CACHE_FARMER_TIMEOUT = 3600

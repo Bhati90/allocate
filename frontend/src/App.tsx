@@ -23,6 +23,7 @@ import TotalJobsView from "./Total";
 import FarmScheduler from "./Farm";
 import MukkadamManagement from "./MukkadamManagement";
 import TenderFront from "./Tender";
+import TenderDashboard from "./TenderDashboard";
 // import MukkadamPerformanceDashboard from "./analyatics";
 // import ActiveMukkadamsDashboard from "./analyatics";
 const queryClient = new QueryClient();
@@ -45,6 +46,10 @@ const App = () => (
 
           <Route path="/" element={
            <TenderFront />
+          } />
+
+          <Route path="/data" element={
+           <TenderDashboard />
           } />
 {/* 
           <Route path="/mukkadam" element={
@@ -69,7 +74,7 @@ const App = () => (
           
           
 
-          {/* <Route path="*" element={<Navigate to="/dashboard" />} /> */}
+          <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
       </BrowserRouter>
       </AuthProvider>

@@ -587,3 +587,83 @@
     min-width: 600px;
   }
 }
+
+/* Container Alignment */
+.calendar-modal-header {
+  display: flex;
+  justify-content: space-between; /* Pushes title left, actions right */
+  align-items: center;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid #e5e7eb;
+  background-color: #fff;
+}
+
+.calendar-modal-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  color: #111827;
+  font-weight: 600;
+}
+
+/* Actions Group */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem; /* Space between buttons */
+}
+
+/* Button Stylings based on your images */
+.btn-secondary-outline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: white;
+  border: 1px solid #d1d5db;
+  color: #374151;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-secondary-outline:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.btn-primary-green {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #48bb78; /* Matches the green in image_21c7be.png */
+  border: none;
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.btn-primary-green:hover {
+  background: #38a169;
+}
+
+/* Close Icon Styling */
+.modal-close-icon {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.5rem;
+}
+
+.modal-close-icon:hover {
+  color: #4b5563;
+}

@@ -80,21 +80,29 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
     loadActivities();
   }, [clusterId]);
 
-  const loadActivities = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/clusters/${clusterId}/activity-calendar/`
-      );
-      const data = await res.json();
-      setActivities(data.activities || []);
-    } catch (error) {
-      toast.error('Failed to load activities');
-    } finally {
-      setLoading(false);
-    }
-  };
+const loadActivities = async () => {
+  setLoading(true);
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/clusters/${clusterId}/activity-calendar/`  // ✅ always cluster
+    );
+    const data = await res.json();
+    
+    const sortedActivities = (data.activities || []).sort((a: any, b: any) => 
+      a.gap_days - b.gap_days
+    );
+    
+    setActivities(sortedActivities);
+  } catch (error) {
+    toast.error('Failed to load activities');
+  } finally {
+    setLoading(false);
+  }
+};
 
+useEffect(() => {
+  loadActivities(); // initial → global
+}, [clusterId]);
   // Farmer handlers (existing)
   const handleFarmerEditStart = (activity: ActivityCalendarItem) => {
     setEditingFarmerActivityId(activity.activity_id);
@@ -162,7 +170,7 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
     setEditingMukkadamActivityId(null);
   };
 
-  const handleSaveMukkadamEdit = async () => {
+const handleSaveMukkadamEdit = async () => {
     if (!editingMukkadamActivityId) return;
 
     setLoading(true);
@@ -186,8 +194,10 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
 
       if (res.ok) {
         toast.success('Mukkadam rates updated!');
+        // 1. Clear editing state first
         setEditingMukkadamActivityId(null);
-        loadActivities();
+        // 2. Re-fetch data from server to get the updated 'mukkadam_productivity'
+        await loadActivities(); 
       } else {
         toast.error('Failed to update');
       }
@@ -197,7 +207,6 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
       setLoading(false);
     }
   };
-
   return (
     <div className="calendar-modal-overlay" onClick={onClose}>
       <div className="calendar-modal-content" onClick={(e) => e.stopPropagation()}>
@@ -206,28 +215,28 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
           {/* <button onClick={onClose} className="modal-close">
             <X size={24} />
           </button> */}
-          <div className="calendar-modal-header">
-  <h2>{clusterName} - Activity Calendar & Rates</h2>
+
+  <h2 className="modal-title">{clusterName} - Activity Calendar & Rates</h2>
   <div className="header-actions">
-    <button
+    {/* <button
       onClick={() => setShowGlobalActivityManager(true)}
-      className="btn-secondary"
+      className="btn-secondary-outline"
     >
       <Plus size={16} />
-      New Global Activity
+      <span>New Global Activity Add</span>
     </button>
     <button
       onClick={() => setShowClusterActivityAdder(true)}
-      className="btn-primary"
+      className="btn-primary-green"
     >
       <Plus size={16} />
-      Add to Cluster
-    </button>
-    <button onClick={onClose} className="modal-close">
-      <X size={24} />
+      <span>Add New Activity Cluster</span>
+    </button> */}
+    <button onClick={onClose} className="modal-close-icon">
+      <X size={20} />
     </button>
   </div>
-</div>
+
         </div>
 
         {/* Tabs */}
@@ -250,15 +259,15 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
           {/* Farmer Tab */}
           {activeTab === 'farmer' && (
             <div className="activities-table-wrapper">
-              <p className="tab-description">
+              {/* <p className="tab-description">
                 Set default rates and scheduling gaps for farmers in this cluster
-              </p>
+              </p> */}
               <table className="activities-table">
                 <thead>
                   <tr>
                     
                     <th>Activity</th>
-                    <th>Rate (₹/acre)</th>
+                    {/* <th>Rate (₹/acre)</th> */}
                     <th>Gap (days)</th>
                     {/* <th>Strict</th> */}
                     <th>Actions</th>
@@ -275,7 +284,7 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
                           <strong>{activity.activity_name}</strong>
                           <div className="activity-type">{activity.activity_type}</div>
                         </td>
-                        <td>
+                        {/* <td>
                           {isEditing ? (
                             <input
                               type="number"
@@ -297,7 +306,7 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
                               )}
                             </>
                           )}
-                        </td>
+                        </td> */}
                         <td>
                           {isEditing ? (
                             <input
@@ -376,15 +385,15 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
           {/* Mukkadam Tab */}
           {activeTab === 'mukkadam' && (
             <div className="activities-table-wrapper">
-              <p className="tab-description">
+              {/* <p className="tab-description">
                 Set default rates and efficiency for mukkadams in this cluster. These will be used when creating new mukkadams.
-              </p>
+              </p> */}
               <table className="activities-table">
                 <thead>
                   <tr>
                     {/* <th>Order</th> */}
                     <th>Activity</th>
-                    <th>Rate (₹/acre)</th>
+                    {/* <th>Rate (₹/acre)</th> */}
                     <th>Efficiency (ac/w/d)</th>
                     <th>Actions</th>
                   </tr>
@@ -400,7 +409,7 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
                           <strong>{activity.activity_name}</strong>
                           <div className="activity-type">{activity.activity_type}</div>
                         </td>
-                        <td>
+                        {/* <td>
                           {isEditing ? (
                             <input
                               type="number"
@@ -422,7 +431,7 @@ const [showClusterActivityAdder, setShowClusterActivityAdder] = useState(false);
                               )}
                             </>
                           )}
-                        </td>
+                        </td> */}
                         <td>
                           {isEditing ? (
                             <input

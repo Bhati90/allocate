@@ -10,6 +10,7 @@ from tender.models import (
     Cluster, Job, Plot,
     ClusterActivityRate, ActivityCatalog, effective_gap_days,
 )
+from django.db.models import Q
 
 
 @dataclass
@@ -32,12 +33,15 @@ class PotentialJobDTO:
 def compute_cluster_potential(cluster: Cluster) -> Dict[str, List[PotentialJobDTO]]:
     result: Dict[str, List[PotentialJobDTO]] = defaultdict(list)
 
-    plots = Plot.objects.filter(cluster=cluster).select_related("farmer")
+    plots = Plot.objects.filter(clusters=cluster).select_related("farmer")
     jobs = (
-        Job.objects.filter(cluster=cluster)
-        .select_related("farmer", "plot")
-        .prefetch_related("activities", "activities__activity")
+    Job.objects.filter(
+        Q(clusters=cluster) | Q(plot__clusters=cluster)
     )
+    .select_related("farmer", "plot")
+    .prefetch_related("activities", "activities__activity")
+    .distinct()
+)
     
     jobs_by_plot: Dict[int, List[Job]] = defaultdict(list)
     for job in jobs:
@@ -99,14 +103,16 @@ def compute_cluster_potential(cluster: Cluster) -> Dict[str, List[PotentialJobDT
         booked_ids = set(per_activity.keys())
 
         # AFTER
-        pruning_date = None
-        for act in catalog_acts:
-            if act.id in booked_ids and per_activity[act.id]["date"]:
-                pruning_date = per_activity[act.id]["date"]
-                break
+        # pruning_date = None
+        # for act in catalog_acts:
+        #     if act.id in booked_ids and per_activity[act.id]["date"]:
+        #         pruning_date = per_activity[act.id]["date"]
+        #         break
 
-        if pruning_date is None:
-            pruning_date = today
+        # if pruning_date is None:
+        #     pruning_date = today
+
+        pruning_date = plot.pruning_date if plot.pruning_date else today
 
         default_job = plot_jobs[0]
         default_farmer = plot.farmer or default_job.farmer
