@@ -32,6 +32,8 @@ export interface JobActivity {
   estimated_workers: number;
   rate_per_acre: number;
   total_price: number;
+  is_manually_moved?: boolean;
+  source?: 'ai' | 'manual';
   allocation_status: string;
   is_fully_allocated: boolean;
 }

@@ -70,6 +70,8 @@ def get_mukkadam_availability(mukkadam_id, date):
         'allocated_workers': allocated_workers,
         'remaining_capacity': remaining,
     }
+
+
 def get_available_mukkadams(date, min_workers=1, activity_id=None):
     """
     Get all mukkadams available on a specific date
@@ -599,12 +601,21 @@ from .models import Leave, Mukkadam
 
 import logging
 logger = logging.getLogger(__name__)
-
 def get_effective_crew_size(mukkadam, date):
-    # ensure `date` is a datetime.date
     if isinstance(date, str):
         from datetime import datetime
         date = datetime.strptime(date, "%Y-%m-%d").date()
+
+    # ✅ CHECK GENERAL HOLIDAY FIRST
+    is_holiday = Leave.objects.filter(
+        date=date,
+        leave_type='general',
+        is_active=True,
+        cluster__mukkadams=mukkadam  # ✅ holiday in mukkadam's cluster
+    ).exists()
+
+    if is_holiday:
+        return 0  # ✅ entire cluster blocked, ignore leaves/extra workers
 
     base = mukkadam.crew_size
 
@@ -612,17 +623,16 @@ def get_effective_crew_size(mukkadam, date):
 
     leave_count = Leave.objects.filter(
         mukkadam=mukkadam,
-        date=date,                      # ✅ exact day
+        date=date,
     ).aggregate(total=models.Sum('crew_on_leave'))['total'] or 0
 
     extra_count = ExtraWorker.objects.filter(
         mukkadam=mukkadam,
-        date=date,                      # ✅ exact same field/type
+        date=date,
     ).aggregate(total=models.Sum('workers'))['total'] or 0
 
     eff = max(base - leave_count + extra_count, 0)
     return eff
-
 def validate_allocation_data(data):
     """
     Validate allocation data before creation

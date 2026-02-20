@@ -537,7 +537,8 @@ const hasPotential = dayPotential.length > 0;
           {/* Capacity ratio */}
           {capacity.status !== 'holiday' && capacity.status !== 'empty' && (
             <span className="mini-capacity">
-              {capacity.used}/{capacity.total}w
+              {capacity.total}w
+              {/* {capacity.used}/{capacity.total}w */}
             </span>
           )}
 
@@ -569,12 +570,19 @@ const hasPotential = dayPotential.length > 0;
       )}
 
       {/* Jobs count – only in Jobs view */}
-     {viewModes.includes('jobs') && dayJobs.length > 0 && (
-  <div className="capacity-badge jobs-badge">
-    {dayJobs.reduce((sum, job) => sum + (job.activities?.length || 0), 0)} activities
-  </div>
-)}
-
+{/* Jobs count – only in Jobs view, exclude manually moved activities */}
+{viewModes.includes('jobs') && dayJobs.length > 0 && (() => {
+  const aiCount = dayJobs.reduce((sum, job) =>
+    sum + (job.activities || []).filter(act =>
+      !(act as any).is_manually_moved
+    ).length, 0
+  );
+  return aiCount > 0 ? (
+    <div className="capacity-badge jobs-badge">
+      {aiCount} ai
+    </div>
+  ) : null;
+})()}
       {/* Potential badge – show in Jobs + Potential views */}
       {/* {(viewMode === 'jobs' )  && (
         <div className="capacity-badge potential-badge">
@@ -589,14 +597,33 @@ const hasPotential = dayPotential.length > 0;
       )}
 
       {/* Allocations count – only in Allocations view */}
-      {viewModes.includes('allocations') && (
-        <div className="allocation-chips">
-          {dayAllocs.length > 0 && (
-            <div className="allocation-chip more">+{dayAllocs.length}</div>
-          )}
+{viewModes.includes('allocations') && (() => {
+  // ✅ Count H activities from allJobs for this date
+  // ✅ Use jobs (filtered) not allJobs so farmer/plot filters apply
+const hCount = jobs.reduce((sum, job) =>
+  sum + (job.activities || []).filter(act =>
+    act.scheduled_date?.slice(0, 10) === dateKey &&
+    (act as any).is_manually_moved === true
+  ).length, 0
+);
+
+  return (
+    <div className="allocation-chips">
+      {hCount > 0 && (
+        <div
+          className="allocation-chip"
+          style={{ backgroundColor: '#fff7ed', color: '#c2410c', fontWeight: 700 }}
+        >
+          {hCount} H
         </div>
       )}
-
+      {/* ✅ Only show allocation count when NOT in jobs mode */}
+      {!viewModes.includes('jobs') && dayAllocs.length > 0 && (
+        <div className="allocation-chip more">+{dayAllocs.length}</div>
+      )}
+    </div>
+  );
+})()}
       {/* Allocations count */}
       
     </div>
@@ -619,15 +646,15 @@ const hasPotential = dayPotential.length > 0;
 {showDayDetail && detailDate && detailCapacity && (
   <DayDetailModal
     date={detailDate}
-    jobs={jobs.filter(job => {
-      const dateStr = formatDate(detailDate);
-      return (job.activities || []).some(a => a.scheduled_date?.slice(0, 10) === dateStr); // ✅
-    }).map(job => ({
-      ...job,
-      activities: (job.activities || []).filter(a => 
-        a.scheduled_date?.slice(0, 10) === formatDate(detailDate) // ✅
-      )
-    }))}
+jobs={(allJobs || jobs).filter(job => {
+  const dateStr = formatDate(detailDate);
+  return (job.activities || []).some(a => a.scheduled_date?.slice(0, 10) === dateStr);
+}).map(job => ({
+  ...job,
+  activities: (job.activities || []).filter(a => 
+    a.scheduled_date?.slice(0, 10) === formatDate(detailDate)
+  )
+}))}
     allocations={getDayAllocations(detailDate)}
     mukkadams={mukkadams}
     capacitySummary={detailCapacity}

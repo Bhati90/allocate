@@ -591,11 +591,11 @@ return Array.from(map.values()).sort((a, b) => {
 
 <div className="farmer-meta">
   <span>{s.plotCount} plot{s.plotCount !== 1 ? 's' : ''}</span>
-  <span>{s.doneCount}/{s.totalActivities} done</span> {/* Updated this */}
+  {/* <span>{s.doneCount}/{s.totalActivities} done</span> Updated this */}
   <span>{s.totalActivities} activities</span>
-  <span className={isActive ? 'remaining-active' : 'remaining-done'}>
+  {/* <span className={isActive ? 'remaining-active' : 'remaining-done'}>
     {s.remainingArea.toFixed(2)} ac remaining
-  </span>
+  </span> */}
 </div>
                       {s.nearestDate && (
                         <div className="farmer-date">

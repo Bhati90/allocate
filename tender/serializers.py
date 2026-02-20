@@ -176,7 +176,9 @@ class JobActivitySerializer(serializers.ModelSerializer):
             'activity_name',
             'activity_type',
             'is_strict',
+            'is_manually_moved',
             'total_area',
+            
             'allocated_area',
             'remaining_area',
             

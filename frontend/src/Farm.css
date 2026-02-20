@@ -1399,3 +1399,33 @@ body {
 .cluster-action-btn svg {
     stroke-width: 2.5px;
 }
+
+
+
+/* Container for the tabs */
+/* .view-tabs {
+  display: flex;
+  background-color: #f0f0f0; 
+  padding: 4px;
+  border-radius: 20px;
+  width: fit-content;
+} */
+
+/* Default state: NOT CLICKED (Full Black background, White text) */
+.tab {
+  background-color: #000000 !important; 
+  color: #ffffff !important;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 18px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+
+/* Active state: CLICKED (Full White background, Black text) */
+.tab.active {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2); /* Adds a slight lift effect */
+}

@@ -3,6 +3,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import FarmScheduler from './Farm';
 import ClusterActivityCalendar from './ClusterCalender';
 import { API_BASE_URL } from './types/config';
+import { useNavigate } from 'react-router-dom';
 
 import {X, Save,Edit2 ,Calendar,User,Users} from 'lucide-react'
 import './Farm.css';
@@ -936,6 +937,7 @@ const TenderFront: React.FC = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const [calendarClusterId, setCalendarClusterId] = useState<number | null>(null);
   const [calendarClusterName, setCalendarClusterName] = useState('');
+const navigate = useNavigate();
 
 
   const [addModal, setAddModal] = useState<{
@@ -1000,6 +1002,12 @@ const TenderFront: React.FC = () => {
   if (!selectedClusterId) {
     return (
       <div className="cluster-page">
+        <button
+  onClick={() => navigate('/data')}
+  className="px-4 py-2 bg-blue-500 text-white text-sm font-semibold rounded-lg hover:bg-blue-600 transition"
+>
+  Go to Data
+</button>
         <header className="cluster-header">
           <h1>Choose cluster</h1>
         </header>
