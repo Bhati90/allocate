@@ -227,7 +227,7 @@ onAllocationDateChange,
 }) => {
 const [activeTab, setActiveTab] =
   useState<'allocations' | 'jobs' | 'conflicts' | 'potential' | 'maxwork'| 'leaves'>(
-    'allocations'
+    'jobs'
   );
 
   const dateStr = date.toLocaleDateString('en-US', {
@@ -510,17 +510,17 @@ const handleSaveExtraCrew = async () => {
 const maxWorkMap = new Map<string, MaxWorkRow>();
 
 mukkadams.forEach((m) => {
-  const baseCrew =
-    (m as any).available_crew_size ?? m.crew_size ?? 0; // total for the day (after leaves/extra)
+  const baseCrew = (m as any).available_crew_size ?? m.crew_size ?? 0;
   const used = usedWorkersByMukkadam.get(m.mukkadam_id) || 0;
   const remainingWorkers = Math.max(baseCrew - used, 0);
-  if (remainingWorkers <= 0) return;
+
+  // ✅ REMOVED: if (remainingWorkers <= 0) return;  ← this was hiding 0-worker mukkadams
 
   (m.activity_rates || []).forEach((rate: any) => {
     const productivity = Number(rate.productivity_per_worker || 0);
     if (!productivity) return;
 
-    const maxArea = remainingWorkers * productivity;
+    const maxArea = remainingWorkers * productivity;  // ✅ will be 0 on holiday
     const key = `${m.mukkadam_id}-${rate.activity_id}`;
 
     if (!maxWorkMap.has(key)) {
@@ -530,8 +530,8 @@ mukkadams.forEach((m) => {
         activityId: rate.activity_id,
         activityName: rate.activity_name,
         productivity,
-        availableWorkers: remainingWorkers,   // 👈 use remaining
-        maxArea,
+        availableWorkers: remainingWorkers,  // ✅ shows 0
+        maxArea,                             // ✅ shows 0
       });
     }
   });
@@ -567,12 +567,12 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
         </div>
 
 <div className="modal-tabs">
-  <button
+  {/* <button
     className={`modal-tab ${activeTab === 'allocations' ? 'active' : ''}`}
     onClick={() => setActiveTab('allocations')}
   >
     Allocations ({filteredAllocations.length})
-  </button>
+  </button> */}
 
   <button
     className={`modal-tab ${activeTab === 'jobs' ? 'active' : ''}`}
@@ -1049,96 +1049,112 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
             </tr>
           </thead>
           <tbody>
-            {jobsOnThisDay.flatMap(job =>
-              job.activities
-                .filter(act => act.scheduled_date?.slice(0, 10) === isoDate && Number(act.remaining_area) > 0)
-                .map(act => {
-                  // Calculate workers needed per mukkadam team
-const workerRows = maxWorkRows.filter(
-  r => r.activityName === act.activity_name
-);
+{jobsOnThisDay.flatMap(job =>
+  job.activities
+    .filter(act => {
+      // ✅ Date filter always applies
+      if (act.scheduled_date?.slice(0, 10) !== isoDate) return false;
+      if (Number(act.remaining_area) <= 0) return false;
+
+      // ✅ Show based on viewMode
+      const isManual = (act as any).is_manually_moved === true;
+      const bothActive = viewMode.includes('jobs') && viewMode.includes('allocations');
+
+  // ✅ Both active → show everything
+      if (bothActive) return true;
+      if (viewMode.includes('allocations')) {
+        return isManual;   // ✅ allocations tab → only H activities
+      } else {
+        return !isManual;  // ✅ jobs/AI tab → only AI activities
+      }
+    })
+    .map(act => {
+      const workerRows = maxWorkRows.filter(r => r.activityName === act.activity_name);
+      return (
+        <tr key={`${job.job_id}-${act.id}`} className="border-b border-gray-100 hover:bg-gray-50 transition">
+          {/* Farmer */}
+          <td className="px-4 py-3">
+            <div className="flex items-center gap-1.5">
+              <User size={13} className="text-gray-400 shrink-0" />
+              <span className="font-medium text-gray-800">{job.farmer_name}</span>
+            </div>
+          </td>
+
+          {/* Plot / Crop */}
+          <td className="px-4 py-3">
+            <p className="text-gray-700 font-medium">{job.plot_name || job.job_id}</p>
+            <p className="text-xs text-gray-400">
+              {job.crop_name || '—'}{job.variety ? ` • ${job.variety}` : ''}
+            </p>
+          </td>
+
+          {/* Activity + H/AI tag */}
+          <td className="px-4 py-3">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded-full text-xs font-medium">
+                {act.activity_name}
+              </span>
+              {/* ✅ Source tag */}
+              {(act as any).is_manually_moved ? (
+                <span className="px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded text-[10px] font-bold">H</span>
+              ) : (
+                <span className="px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-bold">AI</span>
+              )}
+            </div>
+          </td>
+
+          {/* Area */}
+          <td className="px-4 py-3 text-right">
+            <span className="font-semibold text-gray-800">{act.remaining_area}</span>
+            <span className="text-xs text-gray-400 ml-1">ac</span>
+          </td>
+
+          {/* Workers Required */}
+          <td className="px-4 py-3">
+            {workerRows.length === 0 ? (
+              <span className="text-xs text-gray-400 italic">No team data</span>
+            ) : (
+              <div className="flex flex-col gap-1">
+                {workerRows.map((r, i) => {
+                  const needed = r.productivity > 0
+                    ? Math.ceil(Number(act.remaining_area) / r.productivity)
+                    : '—';
                   return (
-                    <tr
-                      key={`${job.job_id}-${act.id}`}
-                      className="border-b border-gray-100 hover:bg-gray-50 transition"
-                    >
-                      {/* Farmer */}
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <User size={13} className="text-gray-400 shrink-0" />
-                          <span className="font-medium text-gray-800">{job.farmer_name}</span>
-                        </div>
-                      </td>
-
-                      {/* Plot / Crop */}
-                      <td className="px-4 py-3">
-                        <p className="text-gray-700 font-medium">{job.plot_name || job.job_id}</p>
-                        <p className="text-xs text-gray-400">
-                          {job.crop_name || '—'}{job.variety ? ` • ${job.variety}` : ''}
-                        </p>
-                      </td>
-
-                      {/* Activity */}
-                      <td className="px-4 py-3">
-                        <span className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded-full text-xs font-medium">
-                          {act.activity_name}
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500 w-28 truncate">{r.mukkadamName}</span>
+                      {r.availableWorkers === 0 ? (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-gray-100 text-gray-400">
+                          🏖️ Holiday
                         </span>
-                      </td>
-
-                      {/* Area */}
-                      <td className="px-4 py-3 text-right">
-                        <span className="font-semibold text-gray-800">{act.remaining_area}</span>
-                        <span className="text-xs text-gray-400 ml-1">ac</span>
-                      </td>
-
-                      {/* Workers Required per team */}
-                      <td className="px-4 py-3">
-                        {workerRows.length === 0 ? (
-                          <span className="text-xs text-gray-400 italic">No team data</span>
-                        ) : (
-                          <div className="flex flex-col gap-1">
-                            {workerRows.map((r, i) => {
-                              const needed = r.productivity > 0
-                                ? Math.ceil(Number(act.remaining_area) / r.productivity)
-                                : '—';
-                              return (
-                                <div key={i} className="flex items-center gap-2">
-                                  <span className="text-xs text-gray-500 w-28 truncate">{r.mukkadamName}</span>
-                                  <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-                                    typeof needed === 'number' && needed <= r.availableWorkers
-                                      ? 'bg-green-50 text-green-700'
-                                      : 'bg-red-50 text-red-600'
-                                  }`}>
-                                    {needed} workers
-                                  </span>
-                                  <span className="text-xs text-gray-400">
-                                    / {r.availableWorkers} avail
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Action — allocation mode only */}
-                      {viewMode.includes('allocations') && ( 
-                        <td className="px-4 py-3 text-center">
-                          <div className="flex items-center justify-center gap-2">
-                            {/* <button
-                              onClick={() => onStartAllocation(job.job_id, act.id, act)}
-                              className="px-3 py-1.5 bg-teal-500 text-white text-xs font-semibold rounded-lg hover:bg-teal-600 transition"
-                            >
-                              Allocate →
-                            </button> */}
-                            <MoveJobButton job={job} act={act}  />
-                          </div>
-                        </td>
+                      ) : (
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                          typeof needed === 'number' && needed <= r.availableWorkers
+                            ? 'bg-green-50 text-green-700'
+                            : 'bg-red-50 text-red-600'
+                        }`}>
+                          {needed} workers
+                        </span>
                       )}
-                    </tr>
+                      <span className="text-xs text-gray-400">/ {r.availableWorkers} avail</span>
+                    </div>
                   );
-                })
+                })}
+              </div>
             )}
+          </td>
+
+          {/* Action */}
+          {viewMode.includes('allocations') && (
+            <td className="px-4 py-3 text-center">
+              <div className="flex items-center justify-center gap-2">
+                <MoveJobButton job={job} act={act} />
+              </div>
+            </td>
+          )}
+        </tr>
+      );
+    })
+)}
           </tbody>
         </table>
       </div>

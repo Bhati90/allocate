@@ -577,8 +577,8 @@ function MukkadamCard({ m, clusters, onSuccess }: {
 ))}
 
                     <tr className="border-t-2 border-gray-200 bg-teal-50">
-                      <td className="px-3 py-2 font-bold text-gray-800">Total</td>
-                      <td className="px-3 py-2 text-right font-bold text-teal-700">{fmt(m.total_price)}</td>
+                      {/* <td className="px-3 py-2 font-bold text-gray-800">Total</td>
+                      <td className="px-3 py-2 text-right font-bold text-teal-700">{fmt(m.total_price)}</td> */}
                       <td />
                     </tr>
                   </tbody>
@@ -1209,7 +1209,7 @@ function FarmerCard({ farmer, clusters, onSuccess }: FarmerCardProps) {
                                       <div key={a.id} className="flex items-center gap-2 text-xs">
                                         <span className="w-24 text-gray-700 font-medium truncate">{a.name}</span>
                                         <span className="text-gray-400">{a.total_area}ac</span>
-                                        <AllocationBar allocated={a.allocated_area} total={a.total_area} />
+                                        {/* <AllocationBar allocated={a.allocated_area} total={a.total_area} /> */}
                                         <span className={`px-1.5 py-0.5 rounded text-xs ${
                                           a.allocation_status === 'fully_allocated' ? 'bg-green-100 text-green-700' :
                                           a.allocation_status === 'partially_allocated' ? 'bg-yellow-100 text-yellow-700' :

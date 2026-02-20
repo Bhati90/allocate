@@ -731,6 +731,19 @@ const handleRefreshAll = async () => {
   ]);
 };
 
+const setViewMode = (mode: 'jobs' | 'allocations' | 'both') => {
+  if (mode === 'both') {
+    setViewModes(['jobs', 'allocations']);
+  } else {
+    setViewModes([mode]);
+  }
+};
+
+const currentMode = viewModes.includes('jobs') && viewModes.includes('allocations')
+  ? 'both'
+  : viewModes.includes('allocations')
+  ? 'allocations'
+  : 'jobs';
 const toggleViewMode = (mode: 'jobs' | 'allocations' | 'potential') => {
   setViewModes(prev => {
     if (prev.includes(mode)) {
@@ -993,30 +1006,26 @@ const varietyOptions = [
   </button>
 </div>
 
-
 <div className="view-tabs">
-
   <button
-    className={viewModes.includes('jobs') ? 'tab active' : 'tab'}
-    onClick={() => toggleViewMode('jobs')}
+    className={currentMode === 'jobs' ? 'tab active' : 'tab'}
+    onClick={() => setViewMode('jobs')}
   >
     AI
   </button>
-
-    <button
-    className={viewModes.includes('allocations') ? 'tab active' : 'tab'}
-    onClick={() => toggleViewMode('allocations')}
+  <button
+    className={currentMode === 'allocations' ? 'tab active' : 'tab'}
+    onClick={() => setViewMode('allocations')}
   >
     Allocations
   </button>
-  {/* <button
-    className={viewModes.includes('potential') ? 'tab active' : 'tab'}
-    onClick={() => toggleViewMode('potential')}
+  <button
+    className={currentMode === 'both' ? 'tab active' : 'tab'}
+    onClick={() => setViewMode('both')}
   >
-    Potential
-  </button> */}
+    Both
+  </button>
 </div>
-
   </div>
 
   {/* RIGHT: actions */}

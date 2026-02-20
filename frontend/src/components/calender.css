@@ -377,3 +377,18 @@
   display: flex;
   gap: 4px;
 }
+
+
+.tab {
+  background-color: white;
+  color: black;
+  padding: 8px 16px;
+  border: 1px solid black;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.tab.active {
+  background-color: white;
+  color: black;
+}

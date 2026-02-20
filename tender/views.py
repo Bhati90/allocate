@@ -978,6 +978,27 @@ class LeaveViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(mukkadam_id=mukkadam_id)
 
         return queryset.filter(is_active=True).order_by('date')
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        data = serializer.data
+
+        cluster_id = request.query_params.get('cluster_id')
+
+        # ✅ For each general holiday, set crew_on_leave = total cluster crew
+        for i, leave in enumerate(queryset):
+            if leave.leave_type == 'general' and cluster_id:
+                total_crew = Mukkadam.objects.filter(
+                    clusters__id=cluster_id
+                ).aggregate(
+                    total=models.Sum('crew_size')
+                )['total'] or 0
+
+                data[i]['crew_on_leave'] = total_crew  # ✅ show total blocked workers
+                data[i]['is_general_holiday'] = True   # ✅ flag for frontend
+
+        return Response(data)
 
     @action(detail=False, methods=['get'])
     def check_availability(self, request):
@@ -1135,11 +1156,13 @@ class JobViewSet(viewsets.ModelViewSet):
                 'is_strict': activity.activity.is_strict,
                 'total_area': float(activity.total_area),
                 'allocated_area': float(activity.allocated_area),
+                'is_manually_moved': activity.is_manually_moved, 
                 'remaining_area': float(activity.remaining_area),
                 'allocation_percentage': (
                     (activity.allocated_area / activity.total_area * 100) 
                     if activity.total_area > 0 else 0
                 ),
+                'source': 'manual' if activity.is_manually_moved else 'ai',
                 'scheduled_date': activity.scheduled_date,
                 'allocation_count': allocations.count(),
                 'status': activity.allocation_status
@@ -1282,12 +1305,6 @@ class JobActivityViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def move(self, request, pk=None):
-        """
-        Move (split) a job activity to a new date with a specific area.
-        
-        POST /api/job-activities/{id}/move/
-        Body: { "new_date": "2026-03-15", "area": 1.5 }
-        """
         activity = self.get_object()
         
         new_date = request.data.get('new_date')
@@ -1313,7 +1330,7 @@ class JobActivityViewSet(viewsets.ModelViewSet):
         activity.total_area = activity.total_area - area
         activity.save()
         
-        # Create new activity on new date with the moved area
+        # ✅ Create new activity marked as manually moved
         new_activity = JobActivity.objects.create(
             job=activity.job,
             activity=activity.activity,
@@ -1328,6 +1345,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             other_cost=activity.other_cost,
             estimated_workers=activity.estimated_workers,
             location=activity.location,
+            is_manually_moved=True,   # ✅ mark as H
+            api_activity_id='',       # ✅ no API id, it's manual
         )
         
         return Response({
@@ -1337,9 +1356,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             'new_activity_id': new_activity.id,
             'new_date': new_date,
             'new_area': float(area),
+            'is_manually_moved': True,  # ✅ tell frontend
         }, status=200)
-
-
 
 
 # views.py - Update MukkadamViewSet
@@ -1644,6 +1662,8 @@ class MukkadamViewSet(viewsets.ModelViewSet):
             'used_workers': info['used_workers'],
             'available_crew_size': info['remaining_workers'],
         })
+    
+    
     @action(detail=False, methods=['get'])
     def available_on_date(self, request):
         """

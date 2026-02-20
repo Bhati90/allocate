@@ -297,6 +297,9 @@ class JobActivity(models.Model):
         related_name='activities'
     )
 
+    # In JobActivity model, add this field:
+    is_manually_moved = models.BooleanField(default=False)  # ✅ True = moved via H button  
+
     is_strict = models.BooleanField(default=False)
 
     total_area = models.DecimalField(
