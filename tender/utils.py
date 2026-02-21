@@ -106,7 +106,14 @@ def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers, skip_s
     Check if allocation is possible with PRODUCTIVITY validation
     
     Returns: (bool, str, dict) - (can_allocate, error_message, warnings)
+
+
     """
+
+    from decimal import Decimal, ROUND_HALF_UP
+
+    area = Decimal(str(area))
+    workers = int(workers)
     try:
         job_activity = JobActivity.objects.get(id=job_activity_id)
         mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
@@ -135,14 +142,13 @@ def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers, skip_s
             is_active=True
         )
         
-        productivity = float(mukkadam_rate.productivity_per_worker)
-        max_capacity = workers * productivity
-        
+        productivity = Decimal(str(mukkadam_rate.productivity_per_worker))
+        max_capacity = workers * productivity  # now Decimal * int = Decimal ✓
+
         if area > max_capacity:
-            # Calculate suggestions
-            suggested_area = max_capacity
-            required_workers = int(area / productivity) if productivity > 0 else workers
-            required_productivity = area / workers if workers > 0 else productivity
+            suggested_area = float(max_capacity)
+            required_workers = int(float(area) / float(productivity)) if productivity > 0 else workers
+            required_productivity = float(area) / workers if workers > 0 else float(productivity)
             
             warnings['productivity_warning'] = {
                 'severity': 'error',
@@ -197,7 +203,7 @@ def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers, skip_s
             
             return False, "Productivity puted higher then real ", warnings
         
-        elif area > (max_capacity * 0.9):
+        elif area > (max_capacity * Decimal('0.9')):
             # Warning: Close to capacity (90%+)
             warnings['productivity_warning'] = {
                 'severity': 'warning',

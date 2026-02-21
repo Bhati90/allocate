@@ -53,7 +53,7 @@ interface CalendarPanelProps {
   onLeavesUpdated: () => void;
   filters: CalendarFilters;
   setFilters: React.Dispatch<React.SetStateAction<CalendarFilters>>;
-  viewModes: ('jobs' | 'allocations' | 'potential')[];
+  viewModes: ('jobs' | 'allocations' | 'potential'| 'payments')[];
   jobsByDate?: Record<string, Job[]>;
   jobs: Job[]; // pass all jobs for the month to show in day detail
   clusterId: number;
@@ -617,10 +617,10 @@ const hCount = jobs.reduce((sum, job) =>
           {hCount} H
         </div>
       )}
-      {/* ✅ Only show allocation count when NOT in jobs mode */}
+      {/* ✅ Only show allocation count when NOT in jobs mode
       {!viewModes.includes('jobs') && dayAllocs.length > 0 && (
         <div className="allocation-chip more">+{dayAllocs.length}</div>
-      )}
+      )} */}
     </div>
   );
 })()}

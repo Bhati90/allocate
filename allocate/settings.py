@@ -20,7 +20,7 @@ SECRET_KEY = 'django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw$9t
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # DEBUG = True
-DEBUG = os.environ.get("DEBUG", "False") == "True"
+DEBUG = "False"
 
 ALLOWED_HOSTS = ['*']
 
@@ -188,12 +188,12 @@ DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
 
 # # allocate/settings.py
-SUPPLY_API_URL = 'http://localhost:8000'
-ALLOCATION_API_URL = 'http://localhost:8001'
+# SUPPLY_API_URL = 'http://localhost:8000'
+# ALLOCATION_API_URL = 'http://localhost:8001'
 
 # allocate/settings.py
-# SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'
-# ALLOCATION_API_URL = 'https://allocation.bharatintelligence.ai'
+SUPPLY_API_URL = 'https://supply.bharatintelligence.ai'
+ALLOCATION_API_URL = 'https://allocation.bharatintelligence.ai'
 # Tell Celery to use Redis, not RabbitMQ
 # CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
 # CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'

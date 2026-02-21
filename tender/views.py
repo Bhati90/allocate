@@ -1309,10 +1309,14 @@ class JobActivityViewSet(viewsets.ModelViewSet):
         
         new_date = request.data.get('new_date')
         area = request.data.get('area')
-        
+        reason = request.data.get('reason', '').strip()
+
         if not new_date:
             return Response({'error': 'new_date is required'}, status=400)
         
+        if not reason:
+            return Response({'error': 'reason is required'}, status=400)
+
         try:
             area = Decimal(str(area))
         except Exception:
@@ -1326,11 +1330,9 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 'error': f'Area ({area}) exceeds remaining area ({activity.remaining_area})'
             }, status=400)
         
-        # Subtract area from current activity
         activity.total_area = activity.total_area - area
         activity.save()
         
-        # ✅ Create new activity marked as manually moved
         new_activity = JobActivity.objects.create(
             job=activity.job,
             activity=activity.activity,
@@ -1345,24 +1347,114 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             other_cost=activity.other_cost,
             estimated_workers=activity.estimated_workers,
             location=activity.location,
-            is_manually_moved=True,   # ✅ mark as H
-            api_activity_id='',       # ✅ no API id, it's manual
+            is_manually_moved=True,
+            lost_reason=reason,   # reuse lost_reason field to store move reason
+            api_activity_id='',
         )
         
         return Response({
             'message': f'{area} ac moved to {new_date}',
+            'reason': reason,
             'original_activity_id': activity.id,
             'original_remaining': float(activity.remaining_area),
             'new_activity_id': new_activity.id,
             'new_date': new_date,
             'new_area': float(area),
-            'is_manually_moved': True,  # ✅ tell frontend
+            'is_manually_moved': True,
         }, status=200)
-
 
 # views.py - Update MukkadamViewSet
 # views.py - Add new viewset
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def mukkadam_misc_costs(request, mukkadam_id, job_id):
+    """
+    GET  /api/mukkadam/<id>/job/<job_id>/misc/
+    POST /api/mukkadam/<id>/job/<job_id>/misc/
+    """
+    try:
+        mukkadam = Mukkadam.objects.get(pk=mukkadam_id)
+        job = Job.objects.get(job_id=job_id)
+    except (Mukkadam.DoesNotExist, Job.DoesNotExist):
+        return Response({'error': 'Not found'}, status=404)
 
+    if request.method == 'GET':
+        costs = MukkadamMiscCost.objects.filter(mukkadam=mukkadam, job=job)
+        return Response([{
+            'id': c.id,
+            'amount': float(c.amount),
+            'reason': c.reason,
+            'created_at': str(c.created_at.date()),
+        } for c in costs])
+
+    # POST — add new misc cost
+    amount = request.data.get('amount')
+    reason = request.data.get('reason', '').strip()
+
+    if not amount or float(amount) <= 0:
+        return Response({'error': 'Invalid amount'}, status=400)
+    if not reason:
+        return Response({'error': 'Reason is required'}, status=400)
+
+    cost = MukkadamMiscCost.objects.create(
+        mukkadam=mukkadam, job=job,
+        amount=amount, reason=reason,
+    )
+
+    # Recalculate settlement net_payable
+    _recalculate_settlement_misc(mukkadam, job)
+
+    return Response({
+        'id': cost.id,
+        'amount': float(cost.amount),
+        'reason': cost.reason,
+        'created_at': str(cost.created_at.date()),
+    }, status=201)
+
+
+@api_view(['DELETE'])
+@permission_classes([AllowAny])
+def mukkadam_misc_cost_delete(request, mukkadam_id, job_id, cost_id):
+    """DELETE /api/mukkadam/<id>/job/<job_id>/misc/<cost_id>/"""
+    try:
+        cost = MukkadamMiscCost.objects.get(
+            pk=cost_id, mukkadam_id=mukkadam_id, job__job_id=job_id
+        )
+    except MukkadamMiscCost.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    cost.delete()
+
+    try:
+        mukkadam = Mukkadam.objects.get(pk=mukkadam_id)
+        job = Job.objects.get(job_id=job_id)
+        _recalculate_settlement_misc(mukkadam, job)
+    except Exception:
+        pass
+
+    return Response({'success': True})
+
+
+def _recalculate_settlement_misc(mukkadam, job):
+    """Update settlement net_payable after misc cost change."""
+    from decimal import Decimal
+    try:
+        settlement = MukkadamJobSettlement.objects.get(mukkadam=mukkadam, job=job)
+        total_misc = MukkadamMiscCost.objects.filter(
+            mukkadam=mukkadam, job=job
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        # net = payable + deposit_carried_forward - advance - weekly - misc
+        settlement.net_payable = (
+            settlement.payable_amount
+            + settlement.deposit_carried_forward
+            - settlement.advance_deducted
+            - settlement.weekly_payments_deducted
+            - total_misc
+        )
+        settlement.save()
+    except MukkadamJobSettlement.DoesNotExist:
+        pass
 class MukkadamActivityRateViewSet(viewsets.ModelViewSet):
     """
     CRUD operations for mukkadam activity rates
@@ -2250,6 +2342,60 @@ class ClusterViewSet(viewsets.ModelViewSet):
             'cluster_name': cluster.name,
             'available_activities': list(available)
         })
+    
+    @action(detail=True, methods=['post'], url_path='set_weekly_payment_day')
+    def set_weekly_payment_day(self, request, pk=None):
+        """
+        Set the weekly payment day for a specific mukkadam in this cluster.
+        
+        POST /api/clusters/{id}/set_weekly_payment_day/
+        Body: {
+            "mukkadam_id": 123,
+            "weekly_payment_day": 0   // 0=Monday ... 6=Sunday
+        }
+        """
+        cluster = self.get_object()
+        mukkadam_id = request.data.get('mukkadam_id')
+        weekly_payment_day = request.data.get('weekly_payment_day')
+
+        if mukkadam_id is None or weekly_payment_day is None:
+            return Response(
+                {'error': 'mukkadam_id and weekly_payment_day are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if weekly_payment_day not in range(7):
+            return Response(
+                {'error': 'weekly_payment_day must be between 0 (Monday) and 6 (Sunday)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            assignment = ClusterMukkadamAssignment.objects.get(
+                cluster=cluster,
+                mukkadam_id=mukkadam_id,
+                is_active=True
+            )
+        except ClusterMukkadamAssignment.DoesNotExist:
+            return Response(
+                {'error': 'Mukkadam is not assigned to this cluster'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        assignment.weekly_payment_day = weekly_payment_day
+        assignment.save()
+
+        day_name = dict(ClusterMukkadamAssignment.WEEKDAY_CHOICES)[weekly_payment_day]
+
+        return Response({
+            'success': True,
+            'message': f'Weekly payment day set to {day_name} for {assignment.mukkadam.mukkadam_name} in {cluster.name}',
+            'mukkadam_id': mukkadam_id,
+            'cluster_id': cluster.id,
+            'weekly_payment_day': weekly_payment_day,
+            'weekly_payment_day_name': day_name,
+            'weekly_payment_amount': float(assignment.get_weekly_payment_amount()),
+        })
 
 class AllocationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
@@ -3016,38 +3162,81 @@ def search_mukkadams_for_cluster(request, cluster_id):
         })
     
     return Response(result)
-
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def add_mukkadam_to_cluster(request, cluster_id):
-    """
-    POST /api/clusters/<id>/add_mukkadam/
-    Body: { "mukkadam_id": 278 }
-    """
     try:
         cluster = Cluster.objects.get(id=cluster_id)
     except Cluster.DoesNotExist:
         return Response({'error': 'Cluster not found'}, status=404)
-    
+
     mukkadam_id = request.data.get('mukkadam_id')
+    transport_price = request.data.get('transport_price')
+    weekly_payment_day = request.data.get('weekly_payment_day')
+    advance_amount = request.data.get('advance_amount')
+    weekly_amount = request.data.get('weekly_amount')
+
     if not mukkadam_id:
         return Response({'error': 'mukkadam_id required'}, status=400)
-    
+
+    if transport_price is None:
+        return Response({'error': 'transport_price is required'}, status=400)
+
     try:
         mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
     except Mukkadam.DoesNotExist:
         return Response({'error': 'Mukkadam not found'}, status=404)
-    
-    mukkadam.clusters.add(cluster)
-    
+
+    if ClusterMukkadamAssignment.objects.filter(mukkadam=mukkadam, cluster=cluster, is_active=True).exists():
+        return Response({'error': 'Mukkadam is already assigned to this cluster'}, status=400)
+
+    if weekly_payment_day is not None and weekly_payment_day not in range(7):
+        return Response({'error': 'weekly_payment_day must be 0 (Monday) to 6 (Sunday)'}, status=400)
+
+    # Create assignment first
+    assignment = ClusterMukkadamAssignment.objects.create(
+        mukkadam=mukkadam,
+        cluster=cluster,
+        transport_price=transport_price,
+        weekly_payment_day=weekly_payment_day,
+        is_active=True,
+    )
+
+    # Override auto-calculated values if provided
+    if advance_amount is not None:
+        assignment.advance_amount = Decimal(str(advance_amount))
+    if weekly_amount is not None:
+        assignment.weekly_payment_amount = Decimal(str(weekly_amount))
+
+    if advance_amount is not None or weekly_amount is not None:
+        assignment.save()
+
+    day_name = (
+        dict(ClusterMukkadamAssignment.WEEKDAY_CHOICES)[weekly_payment_day]
+        if weekly_payment_day is not None else None
+    )
+
     return Response({
         'success': True,
         'mukkadam_name': mukkadam.mukkadam_name,
         'cluster_name': cluster.name,
-    })
+        'crew_size': mukkadam.crew_size,
+        'transport_price': float(assignment.transport_price),
+        'advance_amount': float(assignment.advance_amount),
+        'weekly_payment_amount': float(assignment.get_weekly_payment_amount()),
+        'weekly_payment_day': weekly_payment_day,
+        'weekly_payment_day_name': day_name,
+        'message': (
+            f'{mukkadam.mukkadam_name} added to {cluster.name}. '
+            f'Advance: ₹{assignment.advance_amount}, '
+            f'Transport: ₹{transport_price}, '
+            f'Weekly: ₹{assignment.get_weekly_payment_amount()}'
+            + (f' every {day_name}' if day_name else ' (payment day not set yet)')
+        )
+    }, status=201)
 
 # tender/views.py - ADD THIS
-
+# models.py
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -3283,6 +3472,579 @@ def tender_dashboard(request):
         'farmers': farmers_data,
     })
 
+
+# views.py
+from .ervices.settlement import is_settlement_triggered,create_or_update_settlement
+
+from django.utils import timezone
+
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def mukkadam_settlement_detail(request, mukkadam_id, job_id):
+    """
+    GET /api/mukkadam/<id>/settlement/<job_id>/
+    Returns full breakdown for frontend display.
+    """
+    try:
+        mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
+        job = Job.objects.get(job_id=job_id)
+    except (Mukkadam.DoesNotExist, Job.DoesNotExist):
+        return Response({'error': 'Not found'}, status=404)
+
+    if not is_settlement_triggered(job):
+        return Response({'triggered': False, 'message': 'Shoot selection not yet completed'})
+
+    settlement = MukkadamJobSettlement.objects.filter(
+        mukkadam=mukkadam, job=job
+    ).first()
+
+    if not settlement:
+        cluster = job.clusters.first()
+        settlement = create_or_update_settlement(mukkadam, job, cluster)
+
+    # Build activity breakdown
+    today = timezone.localdate()
+    allocations = Allocation.objects.filter(
+        mukkadam=mukkadam,
+        job_activity__job=job,
+        job_activity__scheduled_date__lte=today,
+    ).select_related('job_activity__activity', 'job_activity__plot')
+
+    breakdown = []
+    for a in allocations:
+        breakdown.append({
+            'activity_name': a.job_activity.activity.name,
+            'plot_code': a.job_activity.plot.plot_code if a.job_activity.plot else '—',
+            'scheduled_date': a.job_activity.scheduled_date,
+            'allocated_area': float(a.allocated_area),
+            'mukkadam_rate': float(a.mukkadam_rate),
+            'gross_amount': float(a.mukkadam_amount),
+        })
+
+    weekly_applied = settlement.weekly_payments_applied.all().values(
+        'payment_date', 'amount', 'crew_size_on_date'
+    )
+
+    return Response({
+        'triggered': True,
+        'mukkadam_name': mukkadam.mukkadam_name,
+        'job_id': job.job_id,
+        'farmer_name': job.farmer.farmer_name,
+        'settlement_status': settlement.status,
+        'breakdown': {
+            'activities': breakdown,
+            'gross_amount': float(settlement.gross_amount),
+            'deposit_held_10pct': float(
+                settlement.gross_amount * Decimal('10') / Decimal('100')
+            ),
+            'payable_90pct': float(settlement.payable_amount),
+            'deposit_from_prev_job': float(settlement.deposit_carried_forward),
+            'advance_deducted': float(settlement.advance_deducted),
+            'weekly_payments': list(weekly_applied),
+            'weekly_payments_total': float(settlement.weekly_payments_deducted),
+            'net_payable': float(settlement.net_payable),
+        },
+        'show_raise_payment': settlement.net_payable > 0 and settlement.status == 'calculated',
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def raise_mukkadam_payment(request, mukkadam_id, job_id):
+    """
+    POST /api/mukkadam/<id>/settlement/<job_id>/pay/
+    Marks as paid in one click.
+    """
+    try:
+        mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
+        settlement = MukkadamJobSettlement.objects.get(
+            mukkadam=mukkadam, job__job_id=job_id
+        )
+    except (Mukkadam.DoesNotExist, MukkadamJobSettlement.DoesNotExist):
+        return Response({'error': 'Not found'}, status=404)
+
+    if settlement.net_payable <= 0:
+        return Response({'error': 'No payment needed'}, status=400)
+
+    if settlement.status == 'paid':
+        return Response({'error': 'Already paid'}, status=400)
+
+    with transaction.atomic():
+        # Create MukkadamPayment record
+        payment = MukkadamPayment.objects.create(
+            mukkadam=mukkadam,
+            payment_id=f"SETTLE-{job_id}-{mukkadam_id}-{timezone.now().strftime('%Y%m%d%H%M%S')}",
+            amount=settlement.net_payable,
+            mode='CASH',
+            paid_at=timezone.now(),
+            notes=f'Auto settlement for job {job_id}',
+        )
+        settlement.status = 'paid'
+        settlement.paid_at = timezone.now()
+        settlement.save(update_fields=['status', 'paid_at'])
+
+    return Response({
+        'success': True,
+        'paid_amount': float(settlement.net_payable),
+        'payment_id': payment.payment_id,
+        'message': f'₹{settlement.net_payable} paid to {mukkadam.mukkadam_name}',
+    })
+
+
+# views.py
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def mukkadam_all_settlements(request, mukkadam_id):
+    try:
+        mukkadam = Mukkadam.objects.get(pk=mukkadam_id)
+    except Mukkadam.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    today = timezone.localdate()
+
+    settlements = MukkadamJobSettlement.objects.filter(
+        mukkadam=mukkadam
+    ).select_related(
+        'job', 'job__farmer', 'cluster'
+    ).prefetch_related(
+        'weekly_payments_applied'
+    ).order_by('-created_at')
+
+    data = []
+    for s in settlements:
+
+        # ── Activity breakdown for this settlement ──
+        allocations = Allocation.objects.filter(
+            mukkadam=mukkadam,
+            job_activity__job=s.job,
+            job_activity__scheduled_date__lte=today,
+        ).select_related(
+            'job_activity__activity',
+            'job_activity__plot',
+        ).order_by('job_activity__scheduled_date')
+
+        activity_rows = []
+        for a in allocations:
+            ja = a.job_activity
+            activity_rows.append({
+                'activity_name': ja.activity.name,
+                'plot_code': ja.plot.plot_code if ja.plot else '—',
+                'plot_name': ja.plot.name if ja.plot else '—',
+                'scheduled_date': str(ja.scheduled_date) if ja.scheduled_date else '—',
+                'allocated_area': float(a.allocated_area),
+                'mukkadam_rate': float(a.mukkadam_rate),
+                'gross_amount': float(a.mukkadam_amount),
+                'allocation_status': a.status,
+            })
+
+        # ── Weekly payments breakdown ──
+        weekly_rows = []
+        for w in s.weekly_payments_applied.all().order_by('payment_date'):
+            weekly_rows.append({
+                'payment_date': str(w.payment_date),
+                'amount': float(w.amount),
+                'crew_size': w.crew_size_on_date,
+            })
+
+        deposit_held = round(float(s.gross_amount) * 0.10, 2)
+
+        data.append({
+            'job_id': s.job.job_id,
+            'farmer_name': s.job.farmer.farmer_name,
+            'farmer_id': s.job.farmer.farmer_id,
+            'cluster_name': s.cluster.name if s.cluster else '—',
+            'status': s.status,
+            'calculated_at': s.calculated_at,
+            'paid_at': s.paid_at,
+
+            # Financials
+            'gross_amount': float(s.gross_amount),
+            'deposit_held_10pct': deposit_held,
+            'payable_90pct': float(s.payable_amount),
+            'deposit_carried_forward': float(s.deposit_carried_forward),
+            'advance_deducted': float(s.advance_deducted),
+            'weekly_payments_deducted': float(s.weekly_payments_deducted),
+            'net_payable': float(s.net_payable),
+
+            # Breakdowns
+            'activity_breakdown': activity_rows,
+            'weekly_breakdown': weekly_rows,
+        })
+
+    total_gross = sum(s.gross_amount for s in settlements)
+    total_paid = sum(
+        s.net_payable for s in settlements
+        if s.status == 'paid' and s.net_payable > 0
+    )
+    total_pending = sum(
+        s.net_payable for s in settlements
+        if s.status == 'calculated' and s.net_payable > 0
+    )
+
+    return Response({
+        'mukkadam_name': mukkadam.mukkadam_name,
+        'summary': {
+            'total_jobs': len(data),
+            'total_gross': float(total_gross),
+            'total_paid': float(total_paid),
+            'total_pending': float(total_pending),
+        },
+        'settlements': data,
+    })
+
+# views.py
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def list_all_settlements(request):
+    """
+    GET /api/settlements/
+    All settlements across all mukkadams — for the Payments tab.
+    Supports: ?cluster_id=, ?status=, ?search=
+    """
+    qs = MukkadamJobSettlement.objects.select_related(
+        'mukkadam', 'job', 'job__farmer', 'cluster'
+    ).order_by('-created_at')
+
+    # Filters
+    cluster_id = request.query_params.get('cluster_id')
+    status = request.query_params.get('status')
+    search = request.query_params.get('search', '').strip()
+
+    if cluster_id:
+        qs = qs.filter(cluster_id=cluster_id)
+    if status:
+        qs = qs.filter(status=status)
+    if search:
+        qs = qs.filter(
+            models.Q(mukkadam__mukkadam_name__icontains=search) |
+            models.Q(job__farmer__farmer_name__icontains=search) |
+            models.Q(job__job_id__icontains=search)
+        )
+
+    data = []
+    for s in qs:
+        data.append({
+            'mukkadam_id': s.mukkadam.pk,
+            'mukkadam_name': s.mukkadam.mukkadam_name,
+            'crew_size': s.mukkadam.crew_size,
+            'job_id': s.job.job_id,
+            'farmer_name': s.job.farmer.farmer_name,
+            'farmer_id': s.job.farmer.farmer_id,
+            'cluster_name': s.cluster.name if s.cluster else '—',
+            'gross_amount': float(s.gross_amount),
+            'advance_deducted': float(s.advance_deducted),
+            'weekly_payments_deducted': float(s.weekly_payments_deducted),
+            'net_payable': float(s.net_payable),
+            'status': s.status,
+            'calculated_at': s.calculated_at,
+            'paid_at': s.paid_at,
+        })
+
+    return Response(data)
+
+
+
+from tender.ervices.farmerbill import get_farmer_billing_for_job
+from django.utils import timezone
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def farmer_job_billing(request, farmer_id, job_id):
+    """GET /api/farmer/<farmer_id>/job/<job_id>/billing/"""
+    data = get_farmer_billing_for_job(job_id)
+    if not data:
+        return Response({'error': 'Job not found'}, status=404)
+    if data['farmer_id'] != farmer_id:
+        return Response({'error': 'Job does not belong to this farmer'}, status=400)
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def farmer_all_jobs_billing(request, farmer_id):
+    """GET /api/farmer/<farmer_id>/billing/  — all jobs for this farmer"""
+    jobs = Job.objects.filter(farmer_id=farmer_id).values_list('job_id', flat=True)
+    results = []
+    for job_id in jobs:
+        billing = get_farmer_billing_for_job(job_id)
+        if billing:
+            results.append(billing)
+    return Response(results)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def record_farmer_payment(request, farmer_id, job_id):
+    """
+    POST /api/farmer/<farmer_id>/job/<job_id>/payment/
+    Body: { amount, mode, notes }
+    """
+    try:
+        job = Job.objects.get(job_id=job_id, farmer_id=farmer_id)
+        booking = job.booking
+    except (Job.DoesNotExist, JobBooking.DoesNotExist):
+        return Response({'error': 'Job or booking not found'}, status=404)
+
+    amount = request.data.get('amount')
+    mode = request.data.get('mode', 'CASH')
+    notes = request.data.get('notes', '')
+
+    if not amount or float(amount) <= 0:
+        return Response({'error': 'Invalid amount'}, status=400)
+
+    payment = FarmerPayment.objects.create(
+        booking=booking,
+        payment_id=int(timezone.now().timestamp() * 1000),  # simple unique id
+        mode=mode,
+        amount=amount,
+        notes=notes,
+        paid_at=timezone.now(),
+    )
+
+    # Update booking balance
+    total_paid = booking.advance_paid + FarmerPayment.objects.filter(
+        booking=booking
+    ).aggregate(total=Sum('amount'))['total'] or 0
+    booking.balance = booking.total_amount - total_paid
+    booking.advance_paid = booking.advance_paid  # unchanged
+    if booking.balance <= 0:
+        booking.status = 'PAID'
+    elif total_paid > 0:
+        booking.status = 'PARTIALLY_PAID'
+    booking.save()
+
+    return Response({
+        'success': True,
+        'payment_id': payment.payment_id,
+        'amount_recorded': float(payment.amount),
+        'new_balance': float(booking.balance),
+        'message': f'₹{float(amount):,.0f} recorded successfully',
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def cluster_payment_dashboard(request, cluster_id):
+    """
+    GET /api/cluster/<cluster_id>/payment-dashboard/
+    Returns farmer billing + mukkadam settlements for this cluster.
+    """
+    from datetime import date
+    from decimal import Decimal
+    from django.db.models import Sum, Q
+
+    today = date.today()
+
+    # ── FARMERS ──────────────────────────────────────────────
+    # Farmers whose plots are in this cluster → jobs → activities
+    farmers_in_cluster = Farmer.objects.filter(clusters__id=cluster_id).distinct()
+
+    farmer_data = []
+    for farmer in farmers_in_cluster:
+        # Get all jobs for this farmer that have activities in this cluster
+        jobs = Job.objects.filter(
+            farmer=farmer,
+            activities__plot__clusters__id=cluster_id
+        ).distinct().prefetch_related('activities', 'booking')
+
+        for job in jobs:
+            try:
+                booking = job.booking
+            except JobBooking.DoesNotExist:
+                booking = None
+
+            activities = job.activities.filter(
+                plot__clusters__id=cluster_id
+            ).select_related('activity', 'plot').order_by('scheduled_date')
+
+            activity_rows = []
+            total_billable = Decimal('0')
+            all_past = True
+
+            for act in activities:
+                is_past = act.scheduled_date and act.scheduled_date <= today
+                if not is_past:
+                    all_past = False
+
+                billable = Decimal('0')
+                if is_past and act.allocated_area and act.rate_per_acre:
+                    billable = (act.allocated_area * act.rate_per_acre).quantize(Decimal('0.01'))
+                    total_billable += billable
+
+                activity_rows.append({
+                    'activity_id': act.id,
+                    'activity_name': act.activity.name,
+                    'plot_code': act.plot.plot_code if act.plot else '—',
+                    'scheduled_date': str(act.scheduled_date) if act.scheduled_date else None,
+                    'is_past': is_past,
+                    'allocated_area': float(act.allocated_area or 0),
+                    'total_area': float(act.total_area or 0),
+                    'rate_per_acre': float(act.rate_per_acre or 0),
+                    'billable_amount': float(billable),
+                    'allocation_status': act.allocation_status,
+                })
+
+            advance_paid = Decimal(str(booking.advance_paid)) if booking else Decimal('0')
+            additional_paid = Decimal('0')
+            payment_history = []
+
+            if booking:
+                fps = FarmerPayment.objects.filter(booking=booking).order_by('paid_at')
+                additional_paid = sum(Decimal(str(p.amount)) for p in fps)
+                if advance_paid > 0:
+                    payment_history.append({
+                        'type': 'advance', 'date': str(booking.created_at.date()),
+                        'amount': float(advance_paid), 'mode': 'Advance', 'notes': 'Initial advance',
+                    })
+                for p in fps:
+                    payment_history.append({
+                        'type': 'payment', 'date': str(p.paid_at.date()),
+                        'amount': float(p.amount), 'mode': p.mode, 'notes': p.notes,
+                    })
+            
+            total_paid = advance_paid + additional_paid
+            balance_due = total_billable - total_paid
+            booking_total = Decimal(str(booking.total_amount)) if booking else Decimal('0')
+            final_gap = (booking_total - total_paid) if all_past and booking else Decimal('0')
+
+            farmer_data.append({
+                'farmer_id': farmer.farmer_id,
+                'farmer_name': farmer.farmer_name,
+                'phone_number': farmer.phone_number,
+                'job_id': job.job_id,
+                'booking_id': booking.booking_id if booking else None,
+                'booking_total': float(booking_total),
+                'activities': activity_rows,
+                'summary': {
+                    'total_billable_so_far': float(total_billable),
+                    'advance_paid': float(advance_paid),
+                    'additional_paid': float(additional_paid),
+                    'total_paid': float(total_paid),
+                    'balance_due': float(balance_due),
+                    'all_activities_past': all_past,
+                    'final_gap': float(final_gap),
+                    'show_collect_button': balance_due > Decimal('0.01'),
+                    'show_final_collection': all_past and final_gap > Decimal('0.01'),
+                },
+                'payment_history': payment_history,
+            })
+
+    # ── MUKKADAMS ─────────────────────────────────────────────
+    # Mukkadams assigned to this cluster via ClusterMukkadamAssignment
+    assignments = ClusterMukkadamAssignment.objects.filter(
+        cluster_id=cluster_id
+    ).select_related('mukkadam')
+
+    mukkadam_data = []
+    for assignment in assignments:
+        mukkadam = assignment.mukkadam
+
+        settlements = MukkadamJobSettlement.objects.filter(
+            mukkadam=mukkadam,
+            cluster_id=cluster_id
+        ).select_related('job', 'job__farmer').order_by('-created_at')
+
+        settlement_rows = []
+        for s in settlements:
+            # Activity breakdown
+            allocations = Allocation.objects.filter(
+                mukkadam=mukkadam,
+                job_activity__job=s.job,
+            ).select_related('job_activity__activity', 'job_activity__plot')
+
+            activities = []
+            for alloc in allocations:
+                act = alloc.job_activity
+                activities.append({
+                    'activity_name': act.activity.name,
+                    'plot_code': act.plot.plot_code if act.plot else '—',
+                    'scheduled_date': str(act.scheduled_date) if act.scheduled_date else None,
+                    'allocated_area': float(alloc.allocated_area or 0),
+                    'mukkadam_rate': float(alloc.mukkadam_rate or 0),
+                    'gross_amount': float(alloc.mukkadam_amount or 0),
+                    'allocation_status': act.allocation_status,
+                })
+
+            # Weekly payments
+            weekly = list(s.weekly_payments_applied.all().values(
+                'payment_date', 'amount', 'crew_size_on_date'
+            ))
+
+            
+            misc_costs = MukkadamMiscCost.objects.filter(
+                mukkadam=mukkadam, job=s.job
+            )
+            total_misc = sum(float(c.amount) for c in misc_costs)
+            settlement_rows.append({
+                'job_id': s.job.job_id,
+                'misc_costs': [{
+                    'id': c.id,
+                    'amount': float(c.amount),
+                    'reason': c.reason,
+                    'created_at': str(c.created_at.date()),
+                } for c in misc_costs],
+                'total_misc': total_misc,
+                'farmer_name': s.job.farmer.farmer_name,
+                'farmer_id': s.job.farmer.farmer_id,
+                'status': s.status,
+                'gross_amount': float(s.gross_amount),
+                'deposit_held': float(s.gross_amount * Decimal('0.1')),
+                'payable_90pct': float(s.payable_amount),
+                'advance_deducted': float(s.advance_deducted),
+                'weekly_payments_deducted': float(s.weekly_payments_deducted),
+                'net_payable': float(s.net_payable),
+                'calculated_at': str(s.calculated_at.date()) if s.calculated_at else None,
+                'paid_at': str(s.paid_at.date()) if s.paid_at else None,
+                'show_raise_payment': s.status == 'calculated' and s.net_payable > 0,
+                'activities': activities,
+                'weekly_payments': [
+                    {
+                        'payment_date': str(w['payment_date']),
+                        'amount': float(w['amount']),
+                        'crew_size_on_date': w['crew_size_on_date'],
+                    } for w in weekly
+                ],
+                'weekly_payments_total': float(s.weekly_payments_deducted),
+            })
+
+        total_net = sum(s['net_payable'] for s in settlement_rows if s['status'] == 'calculated')
+        total_paid_out = sum(s['net_payable'] for s in settlement_rows if s['status'] == 'paid')
+
+        mukkadam_data.append({
+            'mukkadam_id': mukkadam.mukkadam_id,
+            'mukkadam_name': mukkadam.mukkadam_name,
+            'mobile': mukkadam.mobile_numbers,
+            'crew_size': mukkadam.crew_size,
+            'advance_amount': float(assignment.advance_amount or 0),
+            'settlements': settlement_rows,
+            'summary': {
+                'total_jobs': len(settlement_rows),
+                'pending_payment': float(total_net),
+                'total_paid_out': float(total_paid_out),
+            },
+        })
+
+    # ── CLUSTER SUMMARY ───────────────────────────────────────
+    total_farmer_due = sum(
+        max(0, f['summary']['balance_due']) for f in farmer_data
+    )
+    total_mukkadam_due = sum(
+        max(0, m['summary']['pending_payment']) for m in mukkadam_data
+    )
+
+    return Response({
+        'cluster_id': cluster_id,
+        'farmer_count': len(set(f['farmer_id'] for f in farmer_data)),
+        'mukkadam_count': len(mukkadam_data),
+        'total_farmer_due': float(total_farmer_due),
+        'total_mukkadam_due': float(total_mukkadam_due),
+        'farmers': farmer_data,
+        'mukkadams': mukkadam_data,
+    })
 
 
 # Example usage in views

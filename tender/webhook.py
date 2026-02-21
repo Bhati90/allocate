@@ -476,8 +476,10 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
 
 
 
-ALLOCATION_API_BASE_URL = "http://localhost:8000"  # your other backend
-ALLOCATION_API_TOKEN = "Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000"
+# ALLOCATION_API_BASE_URL = "http://localhost:8000"  # your other backend
+
+ALLOCATION_API_BASE_URL = "https://supply.bharatintelligence.ai"
+ALLOCATION_API_TOKEN = "Token 55d78dc15410726cbf90b3350690937f4e85ddf8"
 
 from tender.models import Mukkadam, MukkadamActivityRate, ActivityCatalog
 
