@@ -10,6 +10,8 @@ import { Job, Mukkadam, Allocation, ValidationResult } from './types/types';
 import { API_BASE_URL } from './types/config';
 import './Farm.css';
 import JobDetailPanel from './components/JobDetail';
+
+import { RefreshCw } from 'lucide-react';
 import MukkadamDetailPanel from './components/MukkadamDetail';
 type PotentialStatus = 'PARTIAL' | 'NONE';
 
@@ -33,10 +35,895 @@ interface PotentialJob {
 }
 
 type PotentialByDate = Record<string, PotentialJob[]>;
+// ─── Misc Costs Section ───────────────────────────────────
+function MiscCostsSection({
+  mukkadamId,
+  jobId,
+  initialCosts,
+  onCostChange,
+}: {
+  mukkadamId: number;
+  jobId: string;
+  initialCosts: any[];
+  onCostChange: () => void;
+}) {
+  const [costs, setCosts] = useState<any[]>(initialCosts);
+  const [adding, setAdding] = useState(false);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
+  const handleAdd = async () => {
+    if (!amount || parseFloat(amount) <= 0) { alert('Enter valid amount'); return; }
+    if (!reason.trim()) { alert('Reason is required'); return; }
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/mukkadam/${mukkadamId}/job/${jobId}/misc/`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: parseFloat(amount), reason }),
+        }
+      );
+      const data = await res.json();
+      if (res.ok) {
+        setCosts(prev => [data, ...prev]);
+        setAmount('');
+        setReason('');
+        setAdding(false);
+        onCostChange(); // refresh parent to update net_payable
+      } else {
+        alert(data.error);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (costId: number) => {
+    if (!confirm('Remove this misc cost?')) return;
+    setDeletingId(costId);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/mukkadam/${mukkadamId}/job/${jobId}/misc/${costId}/`,
+        { method: 'DELETE' }
+      );
+      if (res.ok) {
+        setCosts(prev => prev.filter(c => c.id !== costId));
+        onCostChange();
+      }
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const total = costs.reduce((t, c) => t + c.amount, 0);
+
+  return (
+    <div style={{
+      background: '#fafafa', borderRadius: '8px',
+      border: '1px solid #e5e7eb', padding: '10px 12px',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+        <p style={{ margin: 0, fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          ⚠ Miscellaneous Deductions
+        </p>
+        {!adding && (
+          <button
+            onClick={() => setAdding(true)}
+            style={{
+              fontSize: '0.68rem', padding: '3px 10px', borderRadius: '6px',
+              border: '1px solid #e5e7eb', background: '#fff',
+              color: '#374151', fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            + Add
+          </button>
+        )}
+      </div>
+
+      {/* Add form */}
+      {adding && (
+        <div style={{
+          background: '#fff', borderRadius: '8px', border: '1px solid #fde68a',
+          padding: '10px', marginBottom: '8px',
+        }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '8px', marginBottom: '8px' }}>
+            <div>
+              <label style={{ fontSize: '0.65rem', color: '#6b7280', display: 'block', marginBottom: '3px' }}>
+                Amount (₹)
+              </label>
+              <input
+                type="number"
+                value={amount}
+                onChange={e => setAmount(e.target.value)}
+                placeholder="0"
+                style={{
+                  width: '100%', padding: '6px 8px', border: '1px solid #e5e7eb',
+                  borderRadius: '6px', fontSize: '0.82rem', fontWeight: 700,
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: '0.65rem', color: '#6b7280', display: 'block', marginBottom: '3px' }}>
+                Reason <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <input
+                type="text"
+                value={reason}
+                onChange={e => setReason(e.target.value)}
+                placeholder="e.g. Tool damage, travel extra..."
+                style={{
+                  width: '100%', padding: '6px 8px', border: '1px solid #e5e7eb',
+                  borderRadius: '6px', fontSize: '0.78rem', boxSizing: 'border-box',
+                }}
+              />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => { setAdding(false); setAmount(''); setReason(''); }}
+              style={{
+                padding: '5px 12px', borderRadius: '6px', border: '1px solid #e5e7eb',
+                background: '#f9fafb', fontSize: '0.72rem', cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleAdd}
+              disabled={saving}
+              style={{
+                padding: '5px 12px', borderRadius: '6px', border: 'none',
+                background: saving ? '#fde68a' : '#f59e0b',
+                color: '#fff', fontSize: '0.72rem', fontWeight: 700,
+                cursor: saving ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {saving ? 'Saving...' : 'Add Deduction'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Costs list */}
+      {costs.length === 0 ? (
+        <p style={{ fontSize: '0.72rem', color: '#9ca3af', margin: 0, textAlign: 'center', padding: '8px 0' }}>
+          No misc deductions added
+        </p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          {costs.map((c, ci) => (
+            <div key={c.id} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '6px 8px', borderRadius: '6px',
+              background: '#fff', border: '1px solid #f3f4f6',
+              fontSize: '0.74rem',
+            }}>
+              <div style={{ flex: 1 }}>
+                <span style={{ color: '#374151', fontWeight: 600 }}>{c.reason}</span>
+                <span style={{ color: '#9ca3af', fontSize: '0.62rem', marginLeft: '6px' }}>{c.created_at}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontWeight: 800, color: '#dc2626' }}>
+                  −₹{Number(c.amount).toLocaleString('en-IN')}
+                </span>
+                <button
+                  onClick={() => handleDelete(c.id)}
+                  disabled={deletingId === c.id}
+                  style={{
+                    padding: '2px 6px', borderRadius: '4px', border: 'none',
+                    background: '#fef2f2', color: '#ef4444',
+                    fontSize: '0.65rem', cursor: 'pointer', fontWeight: 700,
+                  }}
+                >
+                  {deletingId === c.id ? '...' : '✕'}
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {/* Total */}
+          <div style={{
+            display: 'flex', justifyContent: 'space-between',
+            padding: '5px 8px', borderTop: '1.5px solid #e5e7eb', marginTop: '2px',
+            fontSize: '0.74rem',
+          }}>
+            <span style={{ fontWeight: 700, color: '#374151' }}>Total Misc Deductions</span>
+            <span style={{ fontWeight: 800, color: '#dc2626' }}>
+              −₹{total.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface FarmSchedulerProps {clusterId: number;onBackToClusters: () => void;}
+// ─── Payment Dashboard ────────────────────────────────────
+function PaymentDashboard({ clusterId }: { clusterId: number }) {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<'farmers' | 'mukkadams'>('farmers');
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
+  // Farmer payment modal
+  const [payModal, setPayModal] = useState<{
+    farmerId: string; jobId: string;
+    amount: number; farmerName: string;
+  } | null>(null);
+  const [payAmount, setPayAmount] = useState('');
+  const [payMode, setPayMode] = useState('CASH');
+  const [payNotes, setPayNotes] = useState('');
+  const [payLoading, setPayLoading] = useState(false);
+
+  // Mukkadam pay loading
+  const [mukkadamPaying, setMukkadamPaying] = useState<string | null>(null);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/cluster/${clusterId}/payment-dashboard/`);
+      setData(await res.json());
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchData(); }, [clusterId]);
+
+  const handleFarmerPay = async () => {
+    if (!payModal || !payAmount || parseFloat(payAmount) <= 0) return;
+    setPayLoading(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/farmer/${payModal.farmerId}/job/${payModal.jobId}/payment/`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: parseFloat(payAmount), mode: payMode, notes: payNotes }),
+        }
+      );
+      const result = await res.json();
+      if (res.ok) {
+        alert(`✅ ${result.message}`);
+        setPayModal(null);
+        fetchData();
+      } else {
+        alert(`❌ ${result.error}`);
+      }
+    } finally {
+      setPayLoading(false);
+    }
+  };
+
+  const handleMukkadamPay = async (mukkadamId: number, jobId: string, amount: number, name: string) => {
+    if (!confirm(`Pay ₹${amount.toLocaleString('en-IN')} to ${name} for job #${jobId}?`)) return;
+    const key = `${mukkadamId}-${jobId}`;
+    setMukkadamPaying(key);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/mukkadam/${mukkadamId}/settlement/${jobId}/pay/`,
+        { method: 'POST' }
+      );
+      const result = await res.json();
+      if (res.ok) {
+        alert(`✅ ${result.message}`);
+        fetchData();
+      } else {
+        alert(`❌ ${result.error}`);
+      }
+    } finally {
+      setMukkadamPaying(null);
+    }
+  };
+
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px', color: '#9ca3af' }}>
+      <RefreshCw size={24} className="animate-spin" style={{ color: '#14b8a6', marginRight: '10px' }} />
+      Loading payment data...
+    </div>
+  );
+
+  if (!data) return null;
+
+  const STATUS_META: Record<string, { bg: string; text: string; label: string }> = {
+    paid:              { bg: '#dcfce7', text: '#16a34a', label: '✓ Paid' },
+    calculated:        { bg: '#fef9c3', text: '#b45309', label: '⚠ Due' },
+    no_payment_needed: { bg: '#dbeafe', text: '#1d4ed8', label: '✅ Credit' },
+    payment_raised:    { bg: '#fce7f3', text: '#be185d', label: 'Raised' },
+    pending:           { bg: '#f3f4f6', text: '#6b7280', label: 'Pending' },
+  };
+
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {/* ── Top Summary Bar ── */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+        gap: '10px', padding: '14px 16px',
+        borderBottom: '1px solid #e5e7eb', background: '#fff', flexShrink: 0,
+      }}>
+        {[
+          { label: 'Farmers', value: data.farmer_count, suffix: 'in cluster', color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
+          { label: 'To Collect', value: `₹${data.total_farmer_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, suffix: 'from farmers', color: '#b45309', bg: '#fffbeb', border: '#fde68a' },
+          { label: 'Mukkadams', value: data.mukkadam_count, suffix: 'assigned', color: '#0f766e', bg: '#f0fdfa', border: '#99f6e4' },
+          { label: 'To Pay', value: `₹${data.total_mukkadam_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, suffix: 'to mukkadams', color: '#dc2626', bg: '#fef2f2', border: '#fecaca' },
+        ].map(s => (
+          <div key={s.label} style={{
+            background: s.bg, borderRadius: '10px',
+            border: `1.5px solid ${s.border}`, padding: '10px 14px',
+          }}>
+            <p style={{ margin: 0, fontSize: '0.65rem', color: '#6b7280', marginBottom: '3px' }}>{s.label}</p>
+            <p style={{ margin: 0, fontWeight: 800, fontSize: '1.2rem', color: s.color, lineHeight: 1 }}>{s.value}</p>
+            <p style={{ margin: '2px 0 0', fontSize: '0.62rem', color: '#9ca3af' }}>{s.suffix}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Tab Switch ── */}
+      <div style={{
+        display: 'flex', borderBottom: '1.5px solid #e5e7eb',
+        background: '#fff', flexShrink: 0,
+      }}>
+        {[
+          { key: 'farmers', label: '🌾 Farmer Collections', count: data.farmers.length, color: '#3b82f6' },
+          { key: 'mukkadams', label: '👷 Mukkadam Settlements', count: data.mukkadams.length, color: '#0f766e' },
+        ].map(t => (
+          <button
+            key={t.key}
+            onClick={() => { setTab(t.key as any); setExpandedKey(null); }}
+            style={{
+              padding: '10px 20px', border: 'none', background: 'none', cursor: 'pointer',
+              fontSize: '0.82rem', fontWeight: 700,
+              borderBottom: tab === t.key ? `2.5px solid ${t.color}` : '2.5px solid transparent',
+              color: tab === t.key ? t.color : '#6b7280',
+            }}
+          >
+            {t.label}
+            <span style={{
+              marginLeft: '6px', fontSize: '0.65rem', padding: '1px 6px',
+              borderRadius: '999px', background: tab === t.key ? t.color : '#f3f4f6',
+              color: tab === t.key ? '#fff' : '#6b7280', fontWeight: 700,
+            }}>
+              {t.count}
+            </span>
+          </button>
+        ))}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', paddingRight: '12px' }}>
+          <button
+            onClick={fetchData}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '5px',
+              padding: '6px 12px', borderRadius: '7px', border: 'none',
+              background: '#f3f4f6', color: '#374151',
+              fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* ── Scrollable Content ── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+
+        {/* ════ FARMERS TAB ════ */}
+        {tab === 'farmers' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {data.farmers.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '48px', color: '#9ca3af', fontSize: '0.82rem' }}>
+                No farmer jobs found in this cluster
+              </div>
+            ) : data.farmers.map((f: any) => {
+              const s = f.summary;
+              const hasBalance = s.balance_due > 0.01;
+              const expandKey = `farmer-${f.farmer_id}-${f.job_id}`;
+              const isOpen = expandedKey === expandKey;
+
+              return (
+                <div key={expandKey} style={{
+                  border: `1.5px solid ${hasBalance ? '#fde68a' : s.all_activities_past ? '#bbf7d0' : '#e5e7eb'}`,
+                  borderRadius: '12px', background: hasBalance ? '#fffbeb' : '#fff',
+                  overflow: 'hidden',
+                }}>
+                  {/* Header */}
+                  <div
+                    onClick={() => setExpandedKey(isOpen ? null : expandKey)}
+                    style={{
+                      padding: '12px 16px', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div>
+                        <p style={{ margin: 0, fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>
+                          {f.farmer_name}
+                        </p>
+                        <p style={{ margin: 0, fontSize: '0.68rem', color: '#9ca3af' }}>
+                          {f.farmer_id} · Job <span style={{ fontFamily: 'monospace', color: '#1d4ed8' }}>#{f.job_id}</span>
+                        </p>
+                      </div>
+                      <span style={{
+                        fontSize: '0.65rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 600,
+                        background: hasBalance ? '#fef9c3' : s.all_activities_past ? '#dcfce7' : '#f3f4f6',
+                        color: hasBalance ? '#b45309' : s.all_activities_past ? '#16a34a' : '#6b7280',
+                      }}>
+                        {hasBalance ? '⚠ Balance Due' : s.all_activities_past ? '✓ Complete' : '🕐 In Progress'}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ textAlign: 'right', fontSize: '0.72rem' }}>
+                        <span style={{ color: '#6b7280' }}>Billed: </span>
+                        <span style={{ fontWeight: 700, color: '#0f766e' }}>
+                          ₹{s.total_billable_so_far.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                        </span>
+                        <span style={{ color: '#6b7280', marginLeft: '8px' }}>Paid: </span>
+                        <span style={{ fontWeight: 700, color: '#16a34a' }}>
+                          ₹{s.total_paid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                        </span>
+                        {hasBalance && <>
+                          <span style={{ color: '#6b7280', marginLeft: '8px' }}>Due: </span>
+                          <span style={{ fontWeight: 800, color: '#dc2626' }}>
+                            ₹{s.balance_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                          </span>
+                        </>}
+                      </div>
+                      {hasBalance && (
+                        <button
+                          onClick={e => {
+                            e.stopPropagation();
+                            setPayModal({ farmerId: f.farmer_id, jobId: f.job_id, amount: Math.round(s.balance_due), farmerName: f.farmer_name });
+                            setPayAmount(String(Math.round(s.balance_due)));
+                            setPayMode('CASH'); setPayNotes('');
+                          }}
+                          style={{
+                            padding: '6px 12px', borderRadius: '7px', border: 'none',
+                            background: '#3b82f6', color: '#fff',
+                            fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+                          }}
+                        >
+                          + Collect
+                        </button>
+                      )}
+                      <span style={{ color: '#9ca3af', fontSize: '0.65rem' }}>{isOpen ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {/* Expanded */}
+                  {isOpen && (
+                    <div style={{ borderTop: '1px solid #e5e7eb', padding: '14px 16px', background: '#fafafa' }}>
+                      {/* Activity table */}
+                      <p style={{ margin: '0 0 8px', fontSize: '0.68rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        📋 Activities
+                      </p>
+                      <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', overflow: 'hidden', marginBottom: '12px', background: '#fff' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.74rem' }}>
+                          <thead>
+                            <tr style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
+                              {['Activity', 'Plot', 'Date', 'Done ac', 'Rate/ac', 'Billable', 'Status'].map(h => (
+                                <th key={h} style={{
+                                  padding: '6px 10px',
+                                  textAlign: ['Done ac', 'Rate/ac', 'Billable'].includes(h) ? 'right' : 'left',
+                                  color: '#6b7280', fontWeight: 600, fontSize: '0.66rem',
+                                }}>
+                                  {h}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {f.activities.map((act: any, idx: number) => (
+                              <tr key={act.activity_id} style={{
+                                borderTop: idx > 0 ? '1px solid #f3f4f6' : 'none',
+                                background: act.is_past ? '#f0fdfa' : '#fff',
+                                opacity: act.is_past ? 1 : 0.55,
+                              }}>
+                                <td style={{ padding: '7px 10px', fontWeight: 600, color: '#111827' }}>{act.activity_name}</td>
+                                <td style={{ padding: '7px 10px', color: '#6b7280', fontFamily: 'monospace', fontSize: '0.68rem' }}>{act.plot_code}</td>
+                                <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', color: act.is_past ? '#374151' : '#9ca3af' }}>
+                                  {act.scheduled_date || '—'}
+                                  {!act.is_past && <span style={{ marginLeft: '4px', fontSize: '0.58rem', color: '#9ca3af' }}>upcoming</span>}
+                                </td>
+                                <td style={{ padding: '7px 10px', textAlign: 'right' }}>{act.is_past ? act.allocated_area.toFixed(2) : '—'}</td>
+                                <td style={{ padding: '7px 10px', textAlign: 'right', color: '#6b7280' }}>₹{act.rate_per_acre.toLocaleString('en-IN')}</td>
+                                <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: act.billable_amount > 0 ? '#0f766e' : '#9ca3af' }}>
+                                  {act.billable_amount > 0 ? `₹${act.billable_amount.toLocaleString('en-IN')}` : '—'}
+                                </td>
+                                <td style={{ padding: '7px 10px' }}>
+                                  <span style={{
+                                    fontSize: '0.6rem', padding: '1px 6px', borderRadius: '999px', fontWeight: 600,
+                                    background: act.is_past ? '#dcfce7' : '#f3f4f6',
+                                    color: act.is_past ? '#16a34a' : '#9ca3af',
+                                  }}>
+                                    {act.is_past ? 'billed' : 'upcoming'}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                            <tr style={{ borderTop: '2px solid #e5e7eb', background: '#f0fdfa' }}>
+                              <td colSpan={3} style={{ padding: '7px 10px', fontWeight: 700, fontSize: '0.72rem' }}>
+                                Total ({f.activities.filter((a: any) => a.is_past).length}/{f.activities.length} done)
+                              </td>
+                              <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>
+                                {f.activities.filter((a: any) => a.is_past).reduce((t: number, a: any) => t + a.allocated_area, 0).toFixed(2)}
+                              </td>
+                              <td />
+                              <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 800, color: '#0f766e' }}>
+                                ₹{s.total_billable_so_far.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                              </td>
+                              <td />
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Calculation + History */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+                        {/* Calc */}
+                        <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', padding: '10px 12px', fontSize: '0.76rem' }}>
+                          <p style={{ margin: '0 0 8px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>💰 Calculation</p>
+                          {[
+                            { label: 'Total Billed So Far', val: `₹${s.total_billable_so_far.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e' },
+                            { label: '− Advance Paid', val: `−₹${s.advance_paid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#16a34a' },
+                            ...(s.additional_paid > 0 ? [{ label: '− Additional Collected', val: `−₹${s.additional_paid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#16a34a' }] : []),
+                          ].map((row, ri) => (
+                            <div key={ri} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                              <span style={{ color: '#6b7280' }}>{row.label}</span>
+                              <span style={{ fontWeight: 700, color: row.color }}>{row.val}</span>
+                            </div>
+                          ))}
+                          <div style={{ borderTop: '1.5px solid #e5e7eb', paddingTop: '6px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+                            <span style={{ color: '#111827' }}>Balance Due</span>
+                            <span style={{ color: hasBalance ? '#dc2626' : '#16a34a', fontSize: '0.9rem' }}>
+                              {hasBalance ? `₹${s.balance_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '✓ Clear'}
+                            </span>
+                          </div>
+                          {s.all_activities_past && s.final_gap > 0 && (
+                            <div style={{ marginTop: '6px', padding: '6px 8px', borderRadius: '6px', background: '#fef2f2', border: '1px solid #fecaca', fontSize: '0.68rem', color: '#dc2626', fontWeight: 700 }}>
+                              ⚠ All done — ₹{s.final_gap.toLocaleString('en-IN', { maximumFractionDigits: 0 })} vs booking total
+                            </div>
+                          )}
+                        </div>
+
+                        {/* History */}
+                        <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', padding: '10px 12px', fontSize: '0.76rem' }}>
+                          <p style={{ margin: '0 0 8px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📅 Payment History</p>
+                          {f.payment_history.length === 0 ? (
+                            <p style={{ color: '#9ca3af', fontSize: '0.72rem', margin: 0 }}>No payments recorded</p>
+                          ) : (
+                            <>
+                              {f.payment_history.map((p: any, pi: number) => (
+                                <div key={pi} style={{
+                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                  paddingBottom: '4px', marginBottom: '4px',
+                                  borderBottom: pi < f.payment_history.length - 1 ? '1px solid #f3f4f6' : 'none',
+                                }}>
+                                  <div>
+                                    <span style={{
+                                      fontSize: '0.6rem', padding: '1px 5px', borderRadius: '999px', marginRight: '5px',
+                                      background: p.type === 'advance' ? '#eff6ff' : '#f0fdf4',
+                                      color: p.type === 'advance' ? '#1d4ed8' : '#16a34a', fontWeight: 600,
+                                    }}>{p.mode}</span>
+                                    <span style={{ color: '#9ca3af', fontSize: '0.64rem' }}>{p.date}</span>
+                                  </div>
+                                  <span style={{ fontWeight: 700, color: '#16a34a' }}>
+                                    ₹{Number(p.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                                  </span>
+                                </div>
+                              ))}
+                              <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '5px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+                                <span>Total</span>
+                                <span style={{ color: '#16a34a' }}>₹{s.total_paid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {hasBalance && (
+                        <button
+                          onClick={() => {
+                            setPayModal({ farmerId: f.farmer_id, jobId: f.job_id, amount: Math.round(s.balance_due), farmerName: f.farmer_name });
+                            setPayAmount(String(Math.round(s.balance_due)));
+                            setPayMode('CASH'); setPayNotes('');
+                          }}
+                          style={{
+                            width: '100%', padding: '10px', borderRadius: '8px', border: 'none',
+                            background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer',
+                          }}
+                        >
+                          + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')} from {f.farmer_name}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ════ MUKKADAMS TAB ════ */}
+        {tab === 'mukkadams' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {data.mukkadams.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '48px', color: '#9ca3af', fontSize: '0.82rem' }}>
+                No mukkadams assigned to this cluster
+              </div>
+            ) : data.mukkadams.map((m: any) => {
+              const expandKey = `mukkadam-${m.mukkadam_id}`;
+              const isOpen = expandedKey === expandKey;
+              const hasDue = m.summary.pending_payment > 0.01;
+
+              return (
+                <div key={expandKey} style={{
+                  border: `1.5px solid ${hasDue ? '#fde68a' : '#e5e7eb'}`,
+                  borderRadius: '12px', background: hasDue ? '#fffbeb' : '#fff',
+                  overflow: 'hidden',
+                }}>
+                  {/* Header */}
+                  <div
+                    onClick={() => setExpandedKey(isOpen ? null : expandKey)}
+                    style={{
+                      padding: '12px 16px', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div>
+                        <p style={{ margin: 0, fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>{m.mukkadam_name}</p>
+                        <p style={{ margin: 0, fontSize: '0.68rem', color: '#9ca3af' }}>
+                          {m.mobile} · Crew: {m.crew_size} · {m.summary.total_jobs} job{m.summary.total_jobs !== 1 ? 's' : ''}
+                        </p>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ textAlign: 'right', fontSize: '0.72rem' }}>
+                        {hasDue && <>
+                          <span style={{ color: '#6b7280' }}>Pending: </span>
+                          <span style={{ fontWeight: 800, color: '#dc2626' }}>
+                            ₹{m.summary.pending_payment.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                          </span>
+                        </>}
+                        {m.summary.total_paid_out > 0 && <>
+                          <span style={{ color: '#6b7280', marginLeft: '8px' }}>Paid: </span>
+                          <span style={{ fontWeight: 700, color: '#16a34a' }}>
+                            ₹{m.summary.total_paid_out.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                          </span>
+                        </>}
+                      </div>
+                      <span style={{ color: '#9ca3af', fontSize: '0.65rem' }}>{isOpen ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {/* Expanded — settlements list */}
+                  {isOpen && (
+                    <div style={{ borderTop: '1px solid #e5e7eb', padding: '14px 16px', background: '#fafafa', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {m.settlements.length === 0 ? (
+                        <p style={{ fontSize: '0.78rem', color: '#9ca3af', margin: 0 }}>No settlements calculated yet</p>
+                      ) : m.settlements.map((s: any) => {
+                        const sm = STATUS_META[s.status] || STATUS_META.pending;
+                        const needsPay = s.show_raise_payment;
+                        const payKey = `${m.mukkadam_id}-${s.job_id}`;
+
+                        return (
+                          <div key={s.job_id} style={{
+                            background: '#fff', borderRadius: '10px',
+                            border: `1px solid ${needsPay ? '#fde68a' : s.net_payable <= 0 ? '#bbf7d0' : '#e5e7eb'}`,
+                            padding: '12px 14px',
+                          }}>
+                            {/* Settlement header */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                              <div>
+                                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8', fontSize: '0.8rem' }}>#{s.job_id}</span>
+                                <span style={{ marginLeft: '8px', fontSize: '0.78rem', color: '#374151', fontWeight: 600 }}>{s.farmer_name}</span>
+                                <span style={{ marginLeft: '6px', fontSize: '0.65rem', color: '#9ca3af' }}>{s.farmer_id}</span>
+                              </div>
+                              <span style={{
+                                fontSize: '0.65rem', padding: '2px 8px', borderRadius: '999px',
+                                fontWeight: 700, background: sm.bg, color: sm.text,
+                              }}>
+                                {sm.label}
+                              </span>
+                            </div>
+
+                            {/* Activity table */}
+                            <div style={{ border: '1px solid #e5e7eb', borderRadius: '7px', overflow: 'hidden', marginBottom: '10px' }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+                                <thead>
+                                  <tr style={{ background: '#f9fafb' }}>
+                                    {['Activity', 'Plot', 'Date', 'Acres', 'Rate/ac', 'Amount', 'Status'].map(h => (
+                                      <th key={h} style={{
+                                        padding: '5px 8px',
+                                        textAlign: ['Acres', 'Rate/ac', 'Amount'].includes(h) ? 'right' : 'left',
+                                        color: '#6b7280', fontWeight: 600, fontSize: '0.62rem',
+                                        borderBottom: '1px solid #e5e7eb',
+                                      }}>{h}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {s.activities.map((act: any, idx: number) => (
+                                    <tr key={idx} style={{ borderTop: idx > 0 ? '1px solid #f3f4f6' : 'none' }}>
+                                      <td style={{ padding: '6px 8px', fontWeight: 600, color: '#111827' }}>{act.activity_name}</td>
+                                      <td style={{ padding: '6px 8px', color: '#6b7280', fontFamily: 'monospace', fontSize: '0.66rem' }}>{act.plot_code}</td>
+                                      <td style={{ padding: '6px 8px', color: '#374151', whiteSpace: 'nowrap' }}>{act.scheduled_date || '—'}</td>
+                                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>{Number(act.allocated_area).toFixed(2)}</td>
+                                      <td style={{ padding: '6px 8px', textAlign: 'right', color: '#6b7280' }}>₹{Number(act.mukkadam_rate).toLocaleString('en-IN')}</td>
+                                      <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: '#0f766e' }}>₹{Number(act.gross_amount).toLocaleString('en-IN')}</td>
+                                      <td style={{ padding: '6px 8px' }}>
+                                        <span style={{
+                                          fontSize: '0.58rem', padding: '1px 5px', borderRadius: '999px', fontWeight: 600,
+                                          background: act.allocation_status === 'completed' ? '#dcfce7' : '#fef9c3',
+                                          color: act.allocation_status === 'completed' ? '#16a34a' : '#b45309',
+                                        }}>{act.allocation_status}</span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                  <tr style={{ borderTop: '2px solid #e5e7eb', background: '#f0fdfa' }}>
+                                    <td colSpan={3} style={{ padding: '6px 8px', fontWeight: 700, fontSize: '0.7rem' }}>Total</td>
+                                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>
+                                      {s.activities.reduce((t: number, a: any) => t + Number(a.allocated_area), 0).toFixed(2)}
+                                    </td>
+                                    <td />
+                                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 800, color: '#0f766e' }}>
+                                      ₹{s.gross_amount.toLocaleString('en-IN')}
+                                    </td>
+                                    <td />
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+
+                            {/* Settlement calc + weekly */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: needsPay ? '10px' : 0 }}>
+                              <div style={{ background: '#f9fafb', borderRadius: '8px', padding: '10px 12px', fontSize: '0.74rem' }}>
+                                <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>💰 Settlement</p>
+                                {[
+                                  { label: 'Gross Earned', val: `₹${s.gross_amount.toLocaleString('en-IN')}`, color: '#0f766e' },
+                                  { label: '− 10% Deposit', val: `−₹${s.deposit_held.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#b45309' },
+                                  { label: '= 90% Payable', val: `₹${s.payable_90pct.toLocaleString('en-IN')}`, color: '#1f2937', bold: true },
+                                  ...(s.advance_deducted > 0 ? [{ label: '− Advance', val: `−₹${s.advance_deducted.toLocaleString('en-IN')}`, color: '#dc2626' }] : []),...(s.total_misc > 0 ? [{
+                                          label: '− Miscellaneous',
+                                          val: `−₹${s.total_misc.toLocaleString('en-IN')}`,
+                                          color: '#dc2626',
+                                        }] : []),
+                                  ...(s.weekly_payments_deducted > 0 ? [{ label: '− Weekly Payments', val: `−₹${s.weekly_payments_deducted.toLocaleString('en-IN')}`, color: '#dc2626' }] : []),
+                                ].map((row: any, ri) => (
+                                  <div key={ri} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                    <span style={{ color: '#6b7280' }}>{row.label}</span>
+                                    <span style={{ fontWeight: row.bold ? 800 : 600, color: row.color }}>{row.val}</span>
+                                  </div>
+                                ))}
+                                
+                                <div style={{ borderTop: '1.5px solid #e5e7eb', paddingTop: '5px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+                                  <span style={{ color: '#111827' }}>Net Payable</span>
+                                  <span style={{ color: s.net_payable > 0 ? '#dc2626' : '#16a34a', fontSize: '0.88rem' }}>
+                                    {s.net_payable > 0 ? `₹${s.net_payable.toLocaleString('en-IN')}` : `−₹${Math.abs(s.net_payable).toLocaleString('en-IN')}`}
+                                  </span>
+                                </div>
+                                {s.net_payable <= 0 && (
+                                  <p style={{ margin: '3px 0 0', fontSize: '0.62rem', color: '#16a34a' }}>Mukkadam is in credit</p>
+                                )}
+                              </div>
+
+                              <div style={{ background: '#f9fafb', borderRadius: '8px', padding: '10px 12px', fontSize: '0.74rem' }}>
+                                <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📅 Weekly Payments</p>
+                                {s.weekly_payments.length === 0 ? (
+                                  <p style={{ color: '#9ca3af', fontSize: '0.7rem', margin: 0 }}>No weekly payments</p>
+                                ) : (
+                                  <>
+                                    {s.weekly_payments.map((w: any, wi: number) => (
+                                      <div key={wi} style={{
+                                        display: 'flex', justifyContent: 'space-between',
+                                        paddingBottom: '4px', marginBottom: '4px',
+                                        borderBottom: wi < s.weekly_payments.length - 1 ? '1px solid #e5e7eb' : 'none',
+                                      }}>
+                                        <div>
+                                          <span style={{ fontWeight: 600 }}>{w.payment_date}</span>
+                                          <span style={{ color: '#9ca3af', marginLeft: '5px', fontSize: '0.64rem' }}>{w.crew_size_on_date} workers</span>
+                                        </div>
+                                        <span style={{ fontWeight: 700, color: '#dc2626' }}>−₹{Number(w.amount).toLocaleString('en-IN')}</span>
+                                      </div>
+                                    ))}
+                                    <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '4px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+                                      <span>Total</span>
+                                      <span style={{ color: '#dc2626' }}>−₹{s.weekly_payments_total.toLocaleString('en-IN')}</span>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                            <MiscCostsSection
+                                mukkadamId={m.mukkadam_id}
+                                jobId={s.job_id}
+                                initialCosts={s.misc_costs || []}
+                                onCostChange={fetchData}
+                              />
+
+                            {needsPay && (
+                              <button
+                                onClick={() => handleMukkadamPay(m.mukkadam_id, s.job_id, s.net_payable, m.mukkadam_name)}
+                                disabled={mukkadamPaying === payKey}
+                                style={{
+                                  width: '100%', padding: '10px', borderRadius: '8px', border: 'none',
+                                  background: mukkadamPaying === payKey ? '#99f6e4' : '#14b8a6',
+                                  color: '#fff', fontWeight: 700, fontSize: '0.85rem',
+                                  cursor: mukkadamPaying === payKey ? 'not-allowed' : 'pointer',
+                                }}
+                              >
+                                {mukkadamPaying === payKey ? 'Processing...' : `🏦 Pay ₹${s.net_payable.toLocaleString('en-IN')} to ${m.mukkadam_name}`}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── Farmer Payment Modal ── */}
+      {payModal && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }} onClick={() => setPayModal(null)}>
+          <div style={{
+            background: '#fff', borderRadius: '16px', padding: '24px',
+            width: '360px', boxShadow: '0 24px 60px rgba(0,0,0,0.2)',
+          }} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 4px', fontSize: '1rem', fontWeight: 700 }}>💰 Collect Payment</h3>
+            <p style={{ margin: '0 0 18px', fontSize: '0.75rem', color: '#6b7280' }}>
+              From {payModal.farmerName} · Job #{payModal.jobId}
+            </p>
+            <label style={{ fontSize: '0.72rem', color: '#6b7280', display: 'block', marginBottom: '3px' }}>Amount (₹)</label>
+            <input
+              type="number" value={payAmount}
+              onChange={e => setPayAmount(e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '1rem', fontWeight: 700, marginBottom: '10px', boxSizing: 'border-box' }}
+            />
+            <label style={{ fontSize: '0.72rem', color: '#6b7280', display: 'block', marginBottom: '3px' }}>Mode</label>
+            <select
+              value={payMode} onChange={e => setPayMode(e.target.value)}
+              style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '0.82rem', marginBottom: '10px', background: '#fff', boxSizing: 'border-box' }}
+            >
+              {['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'OTHER'].map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <label style={{ fontSize: '0.72rem', color: '#6b7280', display: 'block', marginBottom: '3px' }}>Notes (optional)</label>
+            <input
+              value={payNotes} onChange={e => setPayNotes(e.target.value)}
+              placeholder="e.g. Cash received"
+              style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '0.82rem', marginBottom: '18px', boxSizing: 'border-box' }}
+            />
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => setPayModal(null)} style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb', background: '#f9fafb', fontSize: '0.82rem', cursor: 'pointer' }}>Cancel</button>
+              <button
+                onClick={handleFarmerPay} disabled={payLoading}
+                style={{ flex: 2, padding: '10px', borderRadius: '8px', border: 'none', background: payLoading ? '#93c5fd' : '#3b82f6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: payLoading ? 'not-allowed' : 'pointer' }}
+              >
+                {payLoading ? 'Recording...' : `Record ₹${parseFloat(payAmount || '0').toLocaleString('en-IN')}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 const FarmScheduler: React.FC<FarmSchedulerProps> = ({clusterId, onBackToClusters}) => {
   // State
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -54,7 +941,7 @@ const [potentialByDate, setPotentialByDate] = useState<PotentialByDate>({});
   const [showProductivityWarning, setShowProductivityWarning] = useState(false);
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [pendingAllocation, setPendingAllocation] = useState<any>(null);
-const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential')[]>(['jobs']);
+const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential'| 'payments')[]>(['jobs']);
 
   // Load initial data
 useEffect(() => {
@@ -193,13 +1080,37 @@ const [prefillData, setPrefillData] = useState<{
   activityId: number;
   activityDate?: string;
   farmerRate?: number;
+  // team-click prefill
+  mukkadamId?: number | null;
+  allocatedArea?: number | null;
+  allocatedWorkers?: number | null;
+  mukkadamRate?: number | null;
 } | null>(null);
-
 const handleStartAllocationFromDay = (
   jobId: string,
   activityId: number,
   activity: any,
 ) => {
+  const prefill = activity?.__prefill;
+
+  if (prefill) {
+    // ── Team click → direct allocation, no modal ──
+    const allocationData = {
+      job_id: jobId,
+      job_activity_id: activityId,
+      mukkadam_id: prefill.mukkadam_id,
+      allocated_date: activity.scheduled_date,
+      allocated_area: prefill.allocated_area,
+      allocated_workers: prefill.allocated_workers,
+      farmer_rate: activity.rate_per_acre,
+      mukkadam_rate: prefill.mukkadam_rate,
+      cluster_id: clusterId,
+    };
+    handleCreateAllocation([allocationData]);
+    return;
+  }
+
+  // ── Regular Allocate → button → open modal ──
   setPrefillData({
     jobId,
     activityId,
@@ -208,6 +1119,7 @@ const handleStartAllocationFromDay = (
   });
   setShowAllocationModal(true);
 };
+
 
 useEffect(() => {
   loadData();
@@ -731,15 +1643,19 @@ const handleRefreshAll = async () => {
   ]);
 };
 
-const setViewMode = (mode: 'jobs' | 'allocations' | 'both') => {
+const setViewMode = (mode: 'jobs' | 'allocations' | 'both' | 'payments') => {
   if (mode === 'both') {
     setViewModes(['jobs', 'allocations']);
+  } else if (mode === 'payments') {
+    setViewModes(['payments']);
   } else {
     setViewModes([mode]);
   }
 };
 
-const currentMode = viewModes.includes('jobs') && viewModes.includes('allocations')
+const currentMode = viewModes.includes('payments')
+  ? 'payments'
+  : viewModes.includes('jobs') && viewModes.includes('allocations')
   ? 'both'
   : viewModes.includes('allocations')
   ? 'allocations'
@@ -1007,23 +1923,11 @@ const varietyOptions = [
 </div>
 
 <div className="view-tabs">
-  <button
-    className={currentMode === 'jobs' ? 'tab active' : 'tab'}
-    onClick={() => setViewMode('jobs')}
-  >
-    AI
-  </button>
-  <button
-    className={currentMode === 'allocations' ? 'tab active' : 'tab'}
-    onClick={() => setViewMode('allocations')}
-  >
-    Allocations
-  </button>
-  <button
-    className={currentMode === 'both' ? 'tab active' : 'tab'}
-    onClick={() => setViewMode('both')}
-  >
-    Both
+  <button className={currentMode === 'jobs' ? 'tab active' : 'tab'} onClick={() => setViewMode('jobs')}>AI</button>
+  <button className={currentMode === 'allocations' ? 'tab active' : 'tab'} onClick={() => setViewMode('allocations')}>Allocations</button>
+  <button className={currentMode === 'both' ? 'tab active' : 'tab'} onClick={() => setViewMode('both')}>Both</button>
+  <button className={currentMode === 'payments' ? 'tab active' : 'tab'} onClick={() => setViewMode('payments')}>
+    💰 Payments
   </button>
 </div>
   </div>
@@ -1073,7 +1977,9 @@ const varietyOptions = [
 
         {/* Center Panel - Calendar */}
         <div className="center-panel">
-
+{currentMode === 'payments' ? (
+    <PaymentDashboard clusterId={clusterId} />
+  ) : (
 
 <CalendarPanel
   currentMonth={currentMonth}
@@ -1097,7 +2003,7 @@ const varietyOptions = [
   potentialByDate={filteredPotentialByDate}
   onStartAllocation={handleStartAllocationFromDay}  
 />
-
+  )}
 
 
         </div>

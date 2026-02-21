@@ -732,14 +732,15 @@ return Array.from(map.values()).sort((a, b) => {
                                 {isBacklog && <span className="badge-backlog"></span>}
                               </div>
                               <div className="activity-inline-meta">
-                                <span>{act.allocated_area}/{act.total_area} ac</span>
+                                {/* <span>{act.allocated_area}/{act.total_area} ac</span> */}
+                                <span>{act.total_area} ac</span>
                                 {act.scheduled_date && (
                                   <span style={{ color: isNextJob ? '#2563eb' : (isBacklog ? '#ef4444' : 'inherit') }}>
                                     📅 {new Date(act.scheduled_date).toLocaleDateString()}
                                   </span>
                                 )}
                               </div>
-                              <div className="progress-bar" style={{ marginTop: 4 }}>
+                              {/* <div className="progress-bar" style={{ marginTop: 4 }}>
                                 <div 
                                   className="progress-fill" 
                                   style={{ 
@@ -747,7 +748,7 @@ return Array.from(map.values()).sort((a, b) => {
                                     background: isNextJob ? '#3b82f6' : (isBacklog ? '#ef4444' : '#10b981')
                                   }} 
                                 />
-                              </div>
+                              </div> */}
                             </div>
                             {/* <div className="activity-inline-actions">
                               <button className="icon-btn edit" onClick={e => { e.stopPropagation(); setEditingActivity({ ...act, plotId: plot.id }); }}><Edit size={13} /></button>
