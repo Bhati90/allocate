@@ -74,7 +74,7 @@ const App = () => (
           
           
 
-          <Route path="*" element={<Navigate to="/dashboard" />} />
+          <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </BrowserRouter>
       </AuthProvider>
