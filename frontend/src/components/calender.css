@@ -392,3 +392,13 @@
   background-color: white;
   color: black;
 }
+
+
+.day-cell.carry-forward-day {
+  border-left: 3px solid #7c3aed;
+  background: linear-gradient(135deg, #faf5ff 0%, #ffffff 100%);
+}
+
+.day-cell.carry-forward-day .day-number {
+  color: #7c3aed;
+}

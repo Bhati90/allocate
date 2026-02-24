@@ -312,9 +312,9 @@ def get_scheduled_date_for_activity(activity_catalog, job, pruning_date):
     logger.info(f"'{activity_catalog.name}': {pruning_date} + {gap_days}d = {result}")
     return result
 
-
 def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
     from django.utils.dateparse import parse_datetime, parse_date
+    from collections import defaultdict
 
     processed = 0
     failed = 0
@@ -323,148 +323,173 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
         job.activities.values_list('api_activity_id', flat=True)
     )
 
-    # ✅ Pre-extract pruning date
-    # In sync_activities, pruning date extraction:
-    pruning_date = None
+    # ✅ Group activities by plot_id
+    plot_activities = defaultdict(list)
     for act in activities_data:
-        name = act.get('activity_name', '')
-        if 'pruning' in name.lower() or 'छाटणी' in name:
-            # ✅ Check both date_time and scheduled_date
-            raw = act.get('date_time') or act.get('scheduled_date')
-            if raw:
-                try:
-                    if 'T' in str(raw):
-                        p = parse_datetime(str(raw))
-                        pruning_date = p.date() if p else None
-                    else:
-                        pruning_date = parse_date(str(raw))
-                except Exception:
-                    pass
-            logger.info(f"✅ Pruning date extracted: {pruning_date} from '{name}'")
-            break
-    if not pruning_date:
-        logger.warning("⚠️ No pruning date found in activities_data!")
+        pid = str(act.get('plot_id') or '')
+        plot_activities[pid].append(act)
 
-    # ✅ Log cluster state
+    # ✅ Extract pruning date PER PLOT
+    def get_pruning_date_for_plot(activities):
+        for act in activities:
+            name = act.get('activity_name', '')
+            if 'pruning' in name.lower() or 'छाटणी' in name:
+                raw = act.get('date_time') or act.get('scheduled_date')
+                if raw:
+                    try:
+                        if 'T' in str(raw):
+                            p = parse_datetime(str(raw))
+                            return p.date() if p else None
+                        else:
+                            return parse_date(str(raw))
+                    except Exception:
+                        pass
+        return None
+
     clusters = list(job.clusters.all())
     logger.info(f"Job {job.job_id} clusters at sync time: {[c.name for c in clusters]}")
 
-    for activity_data in activities_data:
-        try:
-            activity_name = activity_data.get('activity_name', '').strip()
-            plot_code = str(activity_data.get('plot_id', '') or '')
-            # With this:
-            api_activity_id = str(
-                activity_data.get('id') or 
-                activity_data.get('activity_id') or 
-                ''
-            )
+    for plot_id_key, activities in plot_activities.items():
+        # ✅ Get pruning date for THIS plot only
+        pruning_date = get_pruning_date_for_plot(activities)
+        if pruning_date:
+            logger.info(f"Plot {plot_id_key}: pruning_date={pruning_date}")
+        else:
+            logger.warning(f"Plot {plot_id_key}: no pruning date found")
 
-            if not api_activity_id or api_activity_id in ('None', 'null', '0'):
-                # Generate a stable key from job + activity name to prevent duplicates
-                import hashlib
-                api_activity_id = hashlib.md5(
-                    f"{job.job_id}-{activity_name}".encode()
-                ).hexdigest()[:20]
-                logger.info(f"Generated stable id '{api_activity_id}' for activity '{activity_name}'")
-
-            if not activity_name:
-                logger.warning(f"Skipping activity with no name: {activity_data}")
-                failed += 1
-                continue
-
-            activity_catalog = get_or_create_activity_catalog(activity_name)
-
-            plot = None
-            if plot_code:
-                crop_name = activity_data.get('crop_name', '') or ''
-                variety = activity_data.get('variety', '') or ''
-                plot, plot_created = get_or_create_plot(
-                    plot_code, farmer,
-                    activity_data.get('acres', 0),
-                    crop_name=crop_name,
-                    variety=variety,
+        for activity_data in activities:
+            try:
+                activity_name = activity_data.get('activity_name', '').strip()
+                plot_code = str(activity_data.get('plot_id', '') or '')
+                api_activity_id = str(
+                    activity_data.get('id') or
+                    activity_data.get('activity_id') or
+                    ''
                 )
-                if plot_created:
-                    log_data['plots_created'] += 1
-            else:
-                plot = job_plot
 
+                if not api_activity_id or api_activity_id in ('None', 'null', '0'):
+                    import hashlib
+                    api_activity_id = hashlib.md5(
+                        f"{job.job_id}-{plot_code}-{activity_name}".encode()
+                    ).hexdigest()[:20]
+                    logger.info(f"Generated stable id '{api_activity_id}' for '{activity_name}' plot '{plot_code}'")
 
-            # ✅ Date logic
-            scheduled_date = None
-            scheduled_time = None
-            is_pruning = 'pruning' in activity_name.lower() or 'छाटणी' in activity_name
+                if not activity_name:
+                    logger.warning(f"Skipping activity with no name: {activity_data}")
+                    failed += 1
+                    continue
 
-            if is_pruning:
-                # ✅ Check both date_time and scheduled_date
-                raw_datetime = activity_data.get('date_time') or activity_data.get('scheduled_date')
-                if raw_datetime:
-                    try:
-                        if 'T' in str(raw_datetime):
-                            parsed = parse_datetime(str(raw_datetime))
-                            if parsed:
-                                scheduled_date = parsed.date()
-                                scheduled_time = parsed.time()
-                        else:
-                            scheduled_date = parse_date(str(raw_datetime))
-                    except Exception as e:
-                        logger.warning(f"Could not parse pruning date: {e}")
-            else:
-                # All other activities → calculate from pruning_date + gap rules
-                if pruning_date:
-                    scheduled_date = get_scheduled_date_for_activity(
-                        activity_catalog, job, pruning_date
+                activity_catalog = get_or_create_activity_catalog(activity_name)
+
+                # ✅ Resolve plot from activity's own plot_id
+                plot = None
+                if plot_code:
+                    crop_name = activity_data.get('crop_name', '') or ''
+                    variety = activity_data.get('variety', '') or ''
+
+                    plot, plot_created = get_or_create_plot(
+                        plot_code, farmer,
+                        activity_data.get('acres', 0) or activity_data.get('total_area', 0),
+                        crop_name=crop_name,
+                        variety=variety,
                     )
-                    logger.info(f"'{activity_name}' → calculated date={scheduled_date} from pruning={pruning_date}")
+                    if plot_created:
+                        log_data['plots_created'] += 1
+
+                    # ✅ If crop_name missing, fetch from farmer API
+                    if not plot.crop_name:
+                        fetched_crop, fetched_variety = fetch_plot_crop_details(
+                            farmer.farmer_id, plot_code
+                        )
+                        if fetched_crop:
+                            plot.crop_name = fetched_crop
+                            plot.variety = fetched_variety
+                            plot.save(update_fields=['crop_name', 'variety'])
+                            logger.info(f"Fetched crop='{fetched_crop}' variety='{fetched_variety}' for plot {plot_code}")
                 else:
-                    logger.warning(f"No pruning date found, cannot calculate date for '{activity_name}'")
+                    plot = job_plot
 
-            # Area and pricing
-            total_area = Decimal(str(activity_data.get('acres', 0) or 0))
-            total_price = Decimal(str(activity_data.get('total_price', 0) or 0))
-            transport_cost = Decimal(str(activity_data.get('transport_cost', 0) or 0))
-            other_cost = Decimal(str(activity_data.get('other_cost', 0) or 0))
+                # ✅ Date logic using THIS plot's pruning date
+                scheduled_date = None
+                scheduled_time = None
+                is_pruning = 'pruning' in activity_name.lower() or 'छाटणी' in activity_name
 
-            rate_per_acre = (
-                (total_price / total_area).quantize(Decimal('0.01'))
-                if total_area > 0
-                else Decimal('0')
-            )
+                if is_pruning:
+                    raw_datetime = activity_data.get('date_time') or activity_data.get('scheduled_date')
+                    if raw_datetime:
+                        try:
+                            if 'T' in str(raw_datetime):
+                                parsed = parse_datetime(str(raw_datetime))
+                                if parsed:
+                                    scheduled_date = parsed.date()
+                                    scheduled_time = parsed.time()
+                            else:
+                                scheduled_date = parse_date(str(raw_datetime))
+                        except Exception as e:
+                            logger.warning(f"Could not parse pruning date: {e}")
 
-            activity_defaults = {
-                'activity': activity_catalog,
-                'plot': plot,
-                'total_area': total_area,
-                'remaining_area': total_area,
-                'allocated_area': Decimal('0'),
-                'scheduled_date': scheduled_date,
-                'scheduled_time': scheduled_time,
-                'estimated_workers': activity_data.get('estimated_workers', 10),
-                'rate_per_acre': rate_per_acre,
-                'total_price': total_price,
-                'transport_cost': transport_cost,
-                'other_cost': other_cost,
-                'crop_bundles': int(activity_data.get('crop_bundles', 0) or 0),
-                'location': activity_data.get('location', 'N/A') or 'N/A',
-            }
+                    # ✅ Save pruning_date on the plot itself
+                    if scheduled_date and plot and plot.pruning_date != scheduled_date:
+                        plot.pruning_date = scheduled_date
+                        plot.save(update_fields=['pruning_date'])
+                        logger.info(f"Saved pruning_date={scheduled_date} on plot {plot_code}")
+                else:
+                    if pruning_date:
+                        scheduled_date = get_scheduled_date_for_activity(
+                            activity_catalog, job, pruning_date
+                        )
+                        logger.info(f"Plot {plot_code} '{activity_name}' → date={scheduled_date} from pruning={pruning_date}")
+                    else:
+                        logger.warning(f"Plot {plot_code}: no pruning date, cannot calculate date for '{activity_name}'")
 
-            if api_activity_id and api_activity_id in existing_activity_ids:
-                job.activities.filter(api_activity_id=api_activity_id).update(**activity_defaults)
-                logger.info(f"Updated activity {api_activity_id} for job {job.job_id}")
-            else:
-                JobActivity.objects.create(
-                    job=job,
-                    api_activity_id=api_activity_id,
-                    **activity_defaults
+                # ✅ Area and pricing
+                total_area = Decimal(str(
+                    activity_data.get('acres', 0) or
+                    activity_data.get('total_area', 0) or 0
+                ))
+                total_price = Decimal(str(activity_data.get('total_price', 0) or 0))
+                transport_cost = Decimal(str(activity_data.get('transport_cost', 0) or 0))
+                other_cost = Decimal(str(activity_data.get('other_cost', 0) or 0))
+
+                rate_per_acre = (
+                    (total_price / total_area).quantize(Decimal('0.01'))
+                    if total_area > 0
+                    else Decimal('0')
                 )
-                logger.info(f"Created activity {api_activity_id} for job {job.job_id}")
 
-            processed += 1
+                activity_defaults = {
+                    'activity': activity_catalog,
+                    'plot': plot,
+                    'total_area': total_area,
+                    'remaining_area': total_area,
+                    'allocated_area': Decimal('0'),
+                    'scheduled_date': scheduled_date,
+                    'scheduled_time': scheduled_time,
+                    'estimated_workers': activity_data.get('estimated_workers', 10),
+                    'rate_per_acre': rate_per_acre,
+                    'total_price': total_price,
+                    'transport_cost': transport_cost,
+                    'other_cost': other_cost,
+                    'crop_bundles': int(activity_data.get('crop_bundles', 0) or 0),
+                    'location': activity_data.get('location', 'N/A') or 'N/A',
+                }
 
-        except Exception as e:
-            logger.error(f"Failed to process activity {activity_data}: {str(e)}", exc_info=True)
-            failed += 1
+                if api_activity_id and api_activity_id in existing_activity_ids:
+                    job.activities.filter(api_activity_id=api_activity_id).update(**activity_defaults)
+                    logger.info(f"Updated activity {api_activity_id} plot={plot_code} for job {job.job_id}")
+                else:
+                    JobActivity.objects.create(
+                        job=job,
+                        api_activity_id=api_activity_id,
+                        **activity_defaults
+                    )
+                    logger.info(f"Created activity {api_activity_id} plot={plot_code} for job {job.job_id}")
+
+                processed += 1
+
+            except Exception as e:
+                logger.error(f"Failed to process activity {activity_data}: {str(e)}", exc_info=True)
+                failed += 1
 
     log_data['activities_processed'] += processed
     log_data['activities_failed'] += failed
@@ -473,14 +498,11 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
         is_complex=job.activities.count() > 1,
         total_activities_amount=sum(a.total_price for a in job.activities.all())
     )
+ALLOCATION_API_BASE_URL = "http://localhost:8000"  # your other backend
 
-
-
-# ALLOCATION_API_BASE_URL = "http://localhost:8000"  # your other backend
-
-ALLOCATION_API_BASE_URL = "https://supply.bharatintelligence.ai"
-ALLOCATION_API_TOKEN = "Token 55d78dc15410726cbf90b3350690937f4e85ddf8"
-
+# ALLOCATION_API_BASE_URL = "https://supply.bharatintelligence.ai"
+# ALLOCATION_API_TOKEN = "Token 55d78dc15410726cbf90b3350690937f4e85ddf8"
+ALLOCATION_API_TOKEN = "Token b5920d610d85bff62bb0ab70f971ed6a44eb1b8c"
 from tender.models import Mukkadam, MukkadamActivityRate, ActivityCatalog
 
 def sync_tender_mukkadams():

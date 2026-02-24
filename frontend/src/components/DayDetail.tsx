@@ -80,6 +80,22 @@ onAllocationDelete: (allocation: Allocation) => void;
   onStartAllocation: (jobId: string, activityId: number, activity: any) => void;
   clusterId: number; // ✅ ADD THIS - to look up job details
 }
+// ── helper types ──────────────────────────────────────────────────────────────
+interface AllocationWithReport extends Allocation {
+  report_submitted?: boolean;
+  actual_area_done?: number | null;
+  actual_crew_size?: number | null;
+  actual_start_time?: string | null;
+  actual_end_time?: string | null;
+  report_submitted_at?: string | null;
+  farmer_agreed?: boolean | null;
+  farmer_response_at?: string | null;
+  farmer_dispute_reason?: string | null;
+  use_actual_for_settlement?: boolean;
+  is_carry_forward?: boolean;
+  notes?: string;
+}
+
 
 
 function MoveJobButton({ job, act }: {
@@ -253,6 +269,50 @@ const [activeTab, setActiveTab] =
     'jobs'
   );
 
+
+  const [moveModal, setMoveModal] = useState<{
+  allocation: AllocationWithReport;
+  maxArea: number;
+} | null>(null);
+const [moveForm, setMoveForm] = useState({ date: '', area: '' });
+const [moveLoading, setMoveLoading] = useState(false);
+
+const handleMoveSubmit = async () => {
+  if (!moveModal) return;
+  const area = parseFloat(moveForm.area);
+  
+  if (!moveForm.date) return toast.error('Select a date');
+  if (isNaN(area) || area <= 0) return toast.error('Enter valid area');
+  if (area > moveModal.maxArea) return toast.error(`Area cannot exceed ${moveModal.maxArea} ac`);
+
+  setMoveLoading(true);
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/allocations/${moveModal.allocation.id}/change_date/?cluster_id=${clusterId}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          allocated_date: moveForm.date,
+          allocated_area: area,
+        }),
+      }
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      toast.error(data.error || 'Failed to move allocation');
+      return;
+    }
+    toast.success('Allocation moved successfully');
+    setMoveModal(null);
+    setMoveForm({ date: '', area: '' });
+    // onLeavesUpdated(); // refresh
+  } catch {
+    toast.error('Network error');
+  } finally {
+    setMoveLoading(false);
+  }
+};
   const dateStr = date.toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'short',
@@ -267,7 +327,65 @@ const jobsOnThisDay = jobs.filter(job =>
     act.scheduled_date?.slice(0, 10) === isoDate
   )
 );
+// ── inside DayDetailModal, replace state declarations ────────────────────────
+const [verifyLoading, setVerifyLoading] = useState<number | null>(null);
+const [disputeModal, setDisputeModal] = useState<{
+  allocationId: number;
+  mukkadamName: string;
+  activityName: string;
+  actualArea: number;
+} | null>(null);
+const [disputeReason, setDisputeReason] = useState('');
 
+// ── farmer verify handler ─────────────────────────────────────────────────────
+const handleFarmerVerify = async (
+  allocationId: number,
+  agreed: boolean,
+  disputeReasonText?: string
+) => {
+  setVerifyLoading(allocationId);
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/farmer/verify-work/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        allocation_id: allocationId,
+        agreed,
+        dispute_reason: disputeReasonText || '',
+      }),
+    });
+    const result = await res.json();
+    if (res.ok) {
+      toast.success(agreed
+        ? '✅ Verified! Allocation adjusted automatically.'
+        : '⚠️ Dispute recorded.'
+      );
+      // trigger parent refresh
+      // if (onAllocationDelete) onAllocationDelete({ id: -1 } as any);
+    } else {
+      toast.error(result.error || 'Failed to verify');
+    }
+  } catch {
+    toast.error('Network error');
+  } finally {
+    setVerifyLoading(null);
+  }
+};
+
+// ── verification status helper ────────────────────────────────────────────────
+const getVerifyStatus = (a: AllocationWithReport) => {
+  if (!a.report_submitted) return 'not_submitted';
+  if (a.farmer_agreed === null || a.farmer_agreed === undefined) return 'pending';
+  if (a.farmer_agreed) return 'agreed';
+  return 'disputed';
+};
+
+const VERIFY_STYLE = {
+  not_submitted: { bg: '#f3f4f6', color: '#6b7280',  label: '⏳ No Report Yet' },
+  pending:       { bg: '#fef9c3', color: '#b45309',  label: '👀 Awaiting Verification' },
+  agreed:        { bg: '#dcfce7', color: '#16a34a',  label: '✅ Verified' },
+  disputed:      { bg: '#fef2f2', color: '#dc2626',  label: '❌ Disputed' },
+};
   // ✅ Filter allocations based on activity filter
 const filteredAllocations = allocations.filter(alloc => {
   // If no activity filter, show all
@@ -636,10 +754,10 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
 </div>
 
 <div className="modal-body-scroll">
-{/* TAB 1: ALLOCATIONS */}
-{activeTab === 'allocations' && (
+
+{/* {activeTab === 'allocations' && (
   <div className="tab-content">
-    {/* Leaves Section - Improved Styling */}
+   
     {leaves.length > 0 && (
       <div className="mb-4 space-y-2">
         <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Attendance Alerts</div>
@@ -655,7 +773,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
       </div>
     )}
 
-    {/* Section Header */}
+
     <div className="form-divider mb-4">Active Allocations ({filteredAllocations.length})</div>
 
     {filteredAllocations.length === 0 ? (
@@ -674,13 +792,13 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                     <Tractor size={18} className="text-green-600" /> 
                     {a.activity_name}
                   </div>
-                  {/* Status Badge */}
+                  
                   <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-[10px] font-bold uppercase">
                     Allocated
                   </span>
                 </div>
                 
-                {/* Information Grid */}
+       
                 <div className="grid grid-cols-2 gap-2 mt-2">
                   <div className="flex flex-col">
                     <span className="text-[10px] text-gray-400 uppercase font-bold">Farmer & Plot</span>
@@ -696,7 +814,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                   </div>
                 </div>
 
-                {/* Metrics Bar */}
+               
                 <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100">
                   <div className="flex items-center gap-1 text-sm font-semibold text-gray-700">
                     <div className="w-2 h-2 rounded-full bg-blue-500"></div>
@@ -712,7 +830,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                 </div>
               </div>
 
-              {/* <div className="allocation-actions mt-3 flex justify-end gap-2 border-t pt-2">
+              <div className="allocation-actions mt-3 flex justify-end gap-2 border-t pt-2">
                 <button
                   className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded transition"
                   onClick={() => {
@@ -735,12 +853,12 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                 >
                   Remove
                 </button>
-              </div> */}
+              </div>
             </div>
           );
         })}
 
-        {/* {jobsOnThisDay.length > 0 && (
+        {jobsOnThisDay.length > 0 && (
   <div className="quick-allocate-section" style={{ marginBottom: '1rem' }}>
     <div className="form-divider">Jobs Scheduled Today</div>
     {jobsOnThisDay.map(job =>
@@ -868,16 +986,13 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
         })
     )}
   </div>
-)} */}
+)}
       </div>
     )}
   </div>
 )}
 
-{/* Jobs scheduled today — Quick Allocate section */}
 
-
-{/* Edit Allocation Modal */}
 {showEditAllocationModal && editingAllocation && (
   <div className="modal-overlay" onClick={() => setShowEditAllocationModal(false)}>
     <div className="modal-content modal-md" onClick={(e) => e.stopPropagation()}>
@@ -889,7 +1004,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
       </div>
 
       <div className="modal-body">
-        {/* Activity (Read-only) */}
+       
         <div className="form-group">
           <label className="form-label">Activity</label>
           <input
@@ -901,7 +1016,6 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
           />
         </div>
 
-        {/* Mukkadam */}
         <div className="form-group">
           <label className="form-label">Mukkadam *</label>
           <select
@@ -928,7 +1042,6 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
 
         </div>
 
-        {/* Date */}
         <div className="form-group">
           <label className="form-label">Date *</label>
           <input
@@ -940,7 +1053,6 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
           />
         </div>
 
-        {/* Workers */}
         <div className="form-group">
           <label className="form-label">Workers *</label>
           <input
@@ -965,7 +1077,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
           )}
         </div>
 
-        {/* Area */}
+
         <div className="form-group">
           <label className="form-label">Area (acres) *</label>
           <input
@@ -991,7 +1103,6 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
           )}
         </div>
 
-        {/* Summary */}
         <div className="allocation-summary" style={{
           padding: '1rem',
           backgroundColor: '#f0f9ff',
@@ -1050,8 +1161,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
 )}
 
 
-  {/* TAB 2: JOBS */}
-{/* TAB 2: JOBS */}
+
 {activeTab === 'jobs' && (
   <div className="tab-content">
     {jobsOnThisDay.length === 0 ? (
@@ -1076,7 +1186,6 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
           </thead>
           <tbody>
             {(() => {
-              // ── check if this day is in the past ──
               const today = new Date();
               today.setHours(0, 0, 0, 0);
               const isPastDay = date < today;
@@ -1085,10 +1194,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                 job.activities
                   .filter(act => {
   if (act.scheduled_date?.slice(0, 10) !== isoDate) return false;
-  
-  // ← temporarily remove this to test:
-  // if (Number(act.remaining_area) <= 0) return false;
-  
+
   const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
   const isManual = (act as any).is_manually_moved === true;
   if (modes.includes('both' as any)) return true;
@@ -1101,7 +1207,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
 
                     return (
                       <tr key={`${job.job_id}-${act.id}`} className="border-b border-gray-100 hover:bg-gray-50 transition">
-                        {/* Farmer */}
+                    
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1.5">
                             <User size={13} className="text-gray-400 shrink-0" />
@@ -1109,7 +1215,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                           </div>
                         </td>
 
-                        {/* Plot / Crop */}
+                
                         <td className="px-4 py-3">
                           <p className="text-gray-700 font-medium">{job.plot_name || job.job_id}</p>
                           <p className="text-xs text-gray-400">
@@ -1117,7 +1223,6 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                           </p>
                         </td>
 
-                        {/* Activity */}
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded-full text-xs font-medium">
@@ -1131,13 +1236,12 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                           </div>
                         </td>
 
-                        {/* Area */}
                         <td className="px-4 py-3 text-right">
                           <span className="font-semibold text-gray-800">{act.remaining_area}</span>
                           <span className="text-xs text-gray-400 ml-1">ac</span>
                         </td>
 
-                        {/* Workers Required */}
+         
                         <td className="px-4 py-3">
                           {workerRows.length === 0 ? (
                             <span className="text-xs text-gray-400 italic">No team data</span>
@@ -1163,7 +1267,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                                     rt.activity_id === act.activity_id || rt.activity_name === act.activity_name
                                   );
 
-                                  // ── confirmation toast / confirm ──
+                     
                                   const confirmed = window.confirm(
                                     `Allocate ${act.remaining_area} ac of "${act.activity_name}" to ${r.mukkadamName}?\n\n` +
                                     `Workers: ${needed}  |  Rate: ₹${rate?.rate_per_acre || 0}/ac`
@@ -1234,7 +1338,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                           )}
                         </td>
 
-                        {/* Action — only show Move if NOT past day */}
+                       
                         {(() => {
   const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
   return modes.includes('allocations') || modes.includes('both');
@@ -1253,6 +1357,914 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
       </div>
     )}
   </div>
+)} */}
+
+
+{/* ══════════════════════════════════════════════════════
+    TAB 1 — ALLOCATIONS  (with day-end reports + verify)
+══════════════════════════════════════════════════════ */}
+{activeTab === 'allocations' && (
+  <div className="tab-content">
+
+    {/* Attendance alerts */}
+    {leaves.length > 0 && (
+      <div className="mb-4 space-y-2">
+        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">
+          Attendance Alerts
+        </div>
+        {leaves.map(l => (
+          <div
+            key={l.id}
+            className={`p-2 rounded border-l-4 ${
+              l.leave_type === 'general'
+                ? 'bg-blue-50 border-blue-400 text-blue-700'
+                : 'bg-red-50 border-red-400 text-red-700'
+            }`}
+          >
+            {l.leave_type === 'general'
+              ? `🏖️ Holiday: ${l.reason}`
+              : `👤 ${l.mukkadam_name}: ${l.crew_on_leave} workers absent`}
+          </div>
+        ))}
+      </div>
+    )}
+
+    {/* ── Pending verification banner ── */}
+    {(() => {
+      const pendingCount = filteredAllocations.filter(
+        a => (a as AllocationWithReport).report_submitted &&
+             (a as AllocationWithReport).farmer_agreed == null
+      ).length;
+      const disputedCount = filteredAllocations.filter(
+        a => (a as AllocationWithReport).farmer_agreed === false
+      ).length;
+
+      if (pendingCount === 0 && disputedCount === 0) return null;
+      return (
+        <div className="mb-4 flex gap-3">
+          {pendingCount > 0 && (
+            <div className="flex-1 flex items-center gap-2 bg-amber-50 border border-amber-300 rounded-xl px-4 py-2.5">
+              <span className="text-amber-500 text-lg">👀</span>
+              <div>
+                <p className="text-xs font-bold text-amber-700">
+                  {pendingCount} Allocation{pendingCount > 1 ? 's' : ''} Awaiting Your Verification
+                </p>
+                <p className="text-xs text-amber-600">
+                  Mukkadam has submitted day-end report — please review and verify
+                </p>
+              </div>
+            </div>
+          )}
+          {disputedCount > 0 && (
+            <div className="flex-1 flex items-center gap-2 bg-red-50 border border-red-300 rounded-xl px-4 py-2.5">
+              <span className="text-red-500 text-lg">❌</span>
+              <div>
+                <p className="text-xs font-bold text-red-700">
+                  {disputedCount} Dispute{disputedCount > 1 ? 's' : ''} Recorded
+                </p>
+                <p className="text-xs text-red-600">
+                  Resolve with mukkadam and update verified area
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    })()}
+
+    <div className="form-divider mb-4">
+      Allocations ({filteredAllocations.length})
+    </div>
+
+    {filteredAllocations.length === 0 ? (
+      <p className="empty-text">No allocations for this day.</p>
+    ) : (
+      <div className="space-y-4">
+        {filteredAllocations.map(rawAlloc => {
+          const a = rawAlloc as AllocationWithReport;
+          const m = mukkadams.find(mk => mk.mukkadam_id === a.mukkadam);
+          const verifyStatus = getVerifyStatus(a);
+          const vstyle = VERIFY_STYLE[verifyStatus];
+
+          const areaDiff = a.actual_area_done != null
+            ? Number(a.actual_area_done) - Number(a.allocated_area)
+            : null;
+
+          const durationMins =
+            a.actual_start_time && a.actual_end_time
+              ? Math.round(
+                  (new Date(a.actual_end_time).getTime() -
+                   new Date(a.actual_start_time).getTime()) / 60000
+                )
+              : null;
+
+          return (
+            <div
+              key={a.id}
+              className="rounded-xl border overflow-hidden"
+              style={{
+                borderColor:
+                  verifyStatus === 'disputed' ? '#fca5a5' :
+                  verifyStatus === 'pending'  ? '#fde68a' :
+                  verifyStatus === 'agreed'   ? '#86efac' : '#e5e7eb',
+                background:
+                  verifyStatus === 'disputed' ? '#fff5f5' :
+                  verifyStatus === 'pending'  ? '#fffdf0' : '#fff',
+              }}
+            >
+              {/* ── Card header ── */}
+              <div className="px-4 py-3 flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-gray-900 text-sm">
+                      {a.activity_name}
+                    </span>
+                    {a.is_carry_forward && (
+                      <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full">
+                        🔄 Carry-forward
+                      </span>
+                    )}
+                    <span
+                      className="px-2 py-0.5 text-[10px] font-bold rounded-full"
+                      style={{ background: vstyle.bg, color: vstyle.color }}
+                    >
+                      {vstyle.label}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Team: <strong className="text-gray-700">{m?.mukkadam_name || 'N/A'}</strong>
+                    Farmer: <strong className="text-gray-700">{a?.farmer_name || 'N/A'}</strong>
+                    {/* Plot: <strong className="text-gray-700">{a?.plot_name || 'N/A'}</strong> */}
+                    {' · '}Job{' '}
+                    <span className="font-mono text-blue-600">#{a.job_id}</span>
+                    {/* <span className="font-mono text-blue-600">#{a.farmer_name}</span> */}
+                    
+                  </p>
+                  {a.notes && (
+                    <p className="text-xs text-purple-600 mt-0.5 italic">{a.notes}</p>
+                  )}
+                </div>
+
+                {/* Planned area pill */}
+                <div className="text-right shrink-0">
+                  <p className="text-xs text-gray-400">Planned</p>
+                  <p className="font-bold text-gray-800">
+                    {Number(a.allocated_area).toFixed(2)} ac
+                  </p>
+                  <p className="text-xs text-gray-400">
+                    {a.allocated_workers} workers
+                  </p>
+                </div>
+              </div>
+
+              {/* ── Planned vs Actual comparison ── */}
+              {a.report_submitted && a.actual_area_done != null && (
+                <div
+                  className="mx-4 mb-3 rounded-xl overflow-hidden border"
+                  style={{ borderColor: '#e5e7eb' }}
+                >
+                  <div
+                    className="grid text-center text-xs"
+                    style={{ gridTemplateColumns: '1fr 1fr 1fr' }}
+                  >
+                    {/* Planned */}
+                    <div className="bg-blue-50 px-3 py-2.5 border-r border-gray-200">
+                      <p className="text-[10px] font-bold text-blue-500 uppercase mb-1">
+                        📋 Planned
+                      </p>
+                      <p className="font-bold text-gray-800 text-base">
+                        {Number(a.allocated_area).toFixed(2)}
+                        <span className="text-xs font-normal ml-0.5">ac</span>
+                      </p>
+                      <p className="text-gray-500 text-[11px]">
+                        {a.allocated_workers} workers
+                      </p>
+                    </div>
+
+                    {/* Actual */}
+                    <div className="bg-green-50 px-3 py-2.5 border-r border-gray-200">
+                      <p className="text-[10px] font-bold text-green-600 uppercase mb-1">
+                        👷 Actual Done
+                      </p>
+                      <p
+                        className="font-bold text-base"
+                        style={{
+                          color: areaDiff == null ? '#374151' :
+                                 areaDiff < 0 ? '#dc2626' : '#16a34a'
+                        }}
+                      >
+                        {Number(a.actual_area_done).toFixed(2)}
+                        <span className="text-xs font-normal ml-0.5">ac</span>
+                      </p>
+                      <p className="text-gray-500 text-[11px]">
+                        {a.actual_crew_size ?? a.allocated_workers} workers
+                      </p>
+                    </div>
+
+                    {/* Variance */}
+                    <div
+                      className="px-3 py-2.5"
+                      style={{
+                        background: areaDiff == null ? '#f9fafb' :
+                                    areaDiff < 0 ? '#fef2f2' :
+                                    areaDiff > 0 ? '#f0fdf4' : '#f9fafb'
+                      }}
+                    >
+                      <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">
+                        Variance
+                      </p>
+                      {areaDiff != null ? (
+                        <>
+                          <p
+                            className="font-bold text-base"
+                            style={{ color: areaDiff < 0 ? '#dc2626' : areaDiff > 0 ? '#16a34a' : '#6b7280' }}
+                          >
+                            {areaDiff > 0 ? '+' : ''}{areaDiff.toFixed(2)}
+                            <span className="text-xs font-normal ml-0.5">ac</span>
+                          </p>
+                          <p className="text-[11px]" style={{
+                            color: areaDiff < 0 ? '#dc2626' : '#16a34a'
+                          }}>
+                            {areaDiff < 0
+                              ? `${Math.abs(areaDiff).toFixed(2)} ac short`
+                              : areaDiff > 0
+                              ? `${areaDiff.toFixed(2)} ac extra`
+                              : 'Exact match'}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-gray-400 text-sm">—</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Time row */}
+                  {(a.actual_start_time || a.actual_end_time) && (
+                    <div className="bg-gray-50 border-t border-gray-200 px-3 py-2 flex items-center justify-between text-xs text-gray-500">
+                      <span>
+                        🕐 Start:{' '}
+                        <strong>
+                          {a.actual_start_time
+                            ? new Date(a.actual_start_time).toLocaleTimeString('en-IN', {
+                                hour: '2-digit', minute: '2-digit'
+                              })
+                            : '—'}
+                        </strong>
+                      </span>
+                      {durationMins != null && (
+                        <span className="px-2 py-0.5 bg-gray-200 rounded-full font-semibold">
+                          {durationMins} mins
+                        </span>
+                      )}
+                      <span>
+                        🕐 End:{' '}
+                        <strong>
+                          {a.actual_end_time
+                            ? new Date(a.actual_end_time).toLocaleTimeString('en-IN', {
+                                hour: '2-digit', minute: '2-digit'
+                              })
+                            : '—'}
+                        </strong>
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Report submitted at */}
+                  {a.report_submitted_at && (
+                    <div className="bg-gray-50 border-t border-gray-100 px-3 py-1.5 text-[10px] text-gray-400">
+                      Report submitted:{' '}
+                      {new Date(a.report_submitted_at).toLocaleString('en-IN', {
+                        dateStyle: 'short', timeStyle: 'short'
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── No report yet ── */}
+              {!a.report_submitted && (
+                <div className="mx-4 mb-3 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-400 italic">
+                  Mukkadam has not submitted day-end report yet
+                </div>
+              )}
+
+              {/* ── Farmer response section ── */}
+              {a.report_submitted && (
+                <div className="mx-4 mb-4">
+                  {verifyStatus === 'pending' && (
+                    <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+                      <p className="text-xs font-bold text-amber-700 mb-1">
+                        👀 Mukkadam reported{' '}
+                        <strong>{Number(a.actual_area_done).toFixed(2)} ac</strong> done
+                        {areaDiff != null && areaDiff !== 0 && (
+                          <span
+                            className="ml-1"
+                            style={{ color: areaDiff < 0 ? '#dc2626' : '#16a34a' }}
+                          >
+                            ({areaDiff > 0 ? '+' : ''}{areaDiff.toFixed(2)} ac vs planned)
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-amber-600 mb-3">
+                        {areaDiff != null && areaDiff < 0
+                          ? `If you agree, ${Math.abs(areaDiff).toFixed(2)} ac will auto carry-forward to next working day`
+                          : areaDiff != null && areaDiff > 0
+                          ? `If you agree, next allocation will be reduced by ${areaDiff.toFixed(2)} ac`
+                          : 'If you agree, settlement will use actual area done'}
+      
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleFarmerVerify(a.id, true)}
+                          disabled={verifyLoading === a.id}
+                          className="flex-1 py-2 rounded-lg text-xs font-bold text-white transition"
+                          style={{
+                            background: verifyLoading === a.id ? '#86efac' : '#16a34a'
+                          }}
+                        >
+                          {verifyLoading === a.id ? '...' : '✅ Agree & Auto-adjust'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDisputeModal({
+                              allocationId: a.id,
+                              mukkadamName: m?.mukkadam_name || 'Mukkadam',
+                              activityName: a.activity_name,
+                              actualArea: Number(a.actual_area_done),
+                            });
+                            setDisputeReason('');
+                          }}
+                          disabled={verifyLoading === a.id}
+                          className="flex-1 py-2 rounded-lg text-xs font-bold text-white bg-red-500 hover:bg-red-600 transition"
+                        >
+                          ❌ Dispute
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {verifyStatus === 'agreed' && (
+                    <div className="rounded-xl border border-green-300 bg-green-50 px-4 py-2.5">
+                      <p className="text-xs font-bold text-green-700">
+                        ✅ You verified this report
+                      </p>
+                      <p className="text-xs text-green-600">
+                        Settlement uses actual area:{' '}
+                        <strong>{Number(a.actual_area_done).toFixed(2)} ac</strong>
+                        {areaDiff != null && areaDiff < 0 && (
+                          <span className="ml-1 text-green-500">
+                            · {Math.abs(areaDiff).toFixed(2)} ac carried forward
+                          </span>
+                        )}
+                      </p>
+                      {a.farmer_response_at && (
+                        <p className="text-[10px] text-green-400 mt-0.5">
+                          {new Date(a.farmer_response_at).toLocaleString('en-IN', {
+                            dateStyle: 'short', timeStyle: 'short'
+                          })}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {verifyStatus === 'disputed' && (
+                    <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-2.5">
+                      <p className="text-xs font-bold text-red-700">❌ Disputed</p>
+                      {a.farmer_dispute_reason && (
+                        <p className="text-xs text-red-600 mt-1 bg-red-100 rounded-lg px-2 py-1">
+                          "{a.farmer_dispute_reason}"
+                        </p>
+                      )}
+                      <p className="text-[10px] text-red-400 mt-1">
+                        Call mukkadam to resolve, then re-verify
+                      </p>
+                      {a.farmer_response_at && (
+                        <p className="text-[10px] text-red-400">
+                          Disputed on:{' '}
+                          {new Date(a.farmer_response_at).toLocaleString('en-IN', {
+                            dateStyle: 'short', timeStyle: 'short'
+                          })}
+                        </p>
+                      )}
+                      {/* Re-verify option after calling mukkadam */}
+                      <button
+                        onClick={() => {
+                          setDisputeModal({
+                            allocationId: a.id,
+                            mukkadamName: m?.mukkadam_name || 'Mukkadam',
+                            activityName: a.activity_name,
+                            actualArea: Number(a.actual_area_done),
+                          });
+                          setDisputeReason('');
+                        }}
+                        className="mt-2 w-full py-1.5 rounded-lg text-[11px] font-bold text-red-600 border border-red-300 bg-white hover:bg-red-50 transition"
+                      >
+                        📞 Resolved? Update & Verify
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Delete/Edit actions (bottom) ── */}
+              <div className="px-4 pb-3 flex justify-end gap-2 border-t border-gray-100 pt-2">
+                {/* <button
+                  className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                  onClick={() => {
+                    setEditingAllocation(a);
+                    setEditForm({
+                      mukkadam_id: a.mukkadam,
+                      allocated_date: a.allocated_date,
+                      allocated_workers: a.allocated_workers,
+                      allocated_area: a.allocated_area,
+                      mukkadam_rate: a.mukkadam_rate,
+                    });
+                    setShowEditAllocationModal(true);
+                  }}
+                >
+                  Edit
+                </button> */}
+                  <button
+    className="px-3 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-50 rounded-lg transition"
+    onClick={() => setMoveModal({ allocation: a, maxArea: Number(a.allocated_area) })}
+  >
+    📅 Move
+  </button>
+                {/* <button
+                  className="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition"
+                  onClick={() => onAllocationDelete(a)}
+                >
+                  Remove
+                </button> */}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </div>
+)}
+
+{/* ── Move Allocation Modal ── */}
+{moveModal && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100">
+        <h3 className="font-bold text-gray-900 text-sm">📅 Move Allocation</h3>
+        <p className="text-xs text-gray-500 mt-0.5">
+          {moveModal.allocation.activity_name} · {moveModal.allocation.farmer_name}
+        </p>
+      </div>
+
+      <div className="px-5 py-4 space-y-4">
+        {/* Area */}
+        <div>
+          <label className="text-xs font-semibold text-gray-600 block mb-1">
+            Area to move (max {moveModal.maxArea} ac)
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            max={moveModal.maxArea}
+            value={moveForm.area}
+            onChange={e => setMoveForm(f => ({ ...f, area: e.target.value }))}
+            placeholder={`e.g. ${moveModal.maxArea}`}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+          />
+          <p className="text-[10px] text-gray-400 mt-0.5">
+            Current allocation: {moveModal.maxArea} ac
+          </p>
+        </div>
+
+        {/* Date */}
+        <div>
+          <label className="text-xs font-semibold text-gray-600 block mb-1">
+            Move to date
+          </label>
+          <input
+            type="date"
+            value={moveForm.date}
+            min={new Date().toISOString().slice(0, 10)}
+            onChange={e => setMoveForm(f => ({ ...f, date: e.target.value }))}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+          />
+        </div>
+      </div>
+
+      <div className="px-5 pb-4 flex gap-2">
+        <button
+          onClick={() => { setMoveModal(null); setMoveForm({ date: '', area: '' }); }}
+          className="flex-1 py-2 rounded-lg text-xs font-semibold text-gray-600 border border-gray-200 hover:bg-gray-50"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleMoveSubmit}
+          disabled={moveLoading}
+          className="flex-1 py-2 rounded-lg text-xs font-bold text-white bg-orange-500 hover:bg-orange-600 transition"
+        >
+          {moveLoading ? 'Moving...' : '📅 Confirm Move'}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+{/* ══════════════════════════════════════════════════════
+    TAB 2 — JOBS  (with inline allocation status + carry-forward indicator)
+══════════════════════════════════════════════════════ */}
+{activeTab === 'jobs' && (
+  <div className="tab-content">
+    {jobsOnThisDay.length === 0 ? (
+      <p className="text-sm text-gray-400 italic mt-4">No jobs scheduled.</p>
+    ) : (
+      <div className="mt-2 rounded-xl border border-gray-200 overflow-x-auto">
+        <table className="text-sm" style={{ minWidth: '820px', width: '100%' }}>
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-200">
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Farmer</th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Plot / Crop</th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Activity</th>
+              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Planned</th>
+              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Actual</th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Team / Status</th>
+              {(() => {
+  const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
+  const isBothMode = modes.includes('jobs') && modes.includes('allocations');
+  return (isBothMode || modes.includes('allocations'))
+    ? <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500">Action</th>
+    : null;
+})()}
+            </tr>
+          </thead>
+          <tbody>
+            {(() => {
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              const isPastDay = date < today;
+
+              return jobsOnThisDay.flatMap(job =>
+                job.activities
+                  .filter(act => {
+                    if (act.scheduled_date?.slice(0, 10) !== isoDate) return false;
+                    
+                    const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
+                    const isManual = (act as any).is_manually_moved === true;
+                    
+                    const isBothMode = modes.includes('jobs') && modes.includes('allocations');
+                    
+                    if (isBothMode) return true;                                          // ✅ Both → show all
+                    if (modes.includes('allocations') && !modes.includes('jobs')) return isManual;  // Allocations only → manual only
+                    return !isManual;                                                     // Jobs only → AI only
+                  })
+                  .map(act => {
+                    const workerRows = maxWorkRows.filter(r => r.activityName === act.activity_name);
+
+                    // Find all allocations for this activity today
+                    const actAllocations = filteredAllocations.filter(
+                      al => al.job_id === job.job_id && al.job_activity === act.id
+                    ) as AllocationWithReport[];
+
+                    const carryForwardAllocs = actAllocations.filter(al => al.is_carry_forward);
+                    const normalAllocs = actAllocations.filter(al => !al.is_carry_forward);
+
+                    // Verification summary across all allocations
+                    const pendingVerify = actAllocations.filter(
+                      al => al.report_submitted && al.farmer_agreed == null
+                    ).length;
+                    const disputedCount = actAllocations.filter(
+                      al => al.farmer_agreed === false
+                    ).length;
+
+                    // Total actual done today
+                    const totalActual = actAllocations
+                      .filter(al => al.actual_area_done != null)
+                      .reduce((s, al) => s + Number(al.actual_area_done), 0);
+
+                    const isAllocated = Number(act.allocated_area) > 0;
+                    const isFullyAllocated =
+                      Number(act.allocated_area) >= Number(act.total_area);
+
+                    // Row border color
+                    const rowBorder =
+                      disputedCount > 0 ? '#fca5a5' :
+                      pendingVerify > 0 ? '#fde68a' :
+                      isFullyAllocated ? '#86efac' :
+                      isAllocated ? '#fcd34d' : '#e5e7eb';
+
+                    return (
+                      <tr
+                        key={`${job.job_id}-${act.id}`}
+                        className="border-b border-gray-100 hover:bg-gray-50 transition"
+                        style={{ borderLeft: `4px solid ${rowBorder}` }}
+                      >
+                        {/* Farmer */}
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <User size={13} className="text-gray-400 shrink-0" />
+                            <span className="font-medium text-gray-800">{job.farmer_name}</span>
+                          </div>
+                        </td>
+
+                        {/* Plot / Crop */}
+                        <td className="px-4 py-3">
+                          <p className="text-gray-700 font-medium">{job.plot_name || job.job_id}</p>
+                          <p className="text-xs text-gray-400">
+                            {job.crop_name || '—'}
+                            {job.variety ? ` • ${job.variety}` : ''}
+                          </p>
+                        </td>
+
+                        {/* Activity */}
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded-full text-xs font-medium">
+                              {act.activity_name}
+                            </span>
+                            {(act as any).is_manually_moved ? (
+                              <span className="px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded text-[10px] font-bold">H</span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-bold">AI</span>
+                            )}
+                            {carryForwardAllocs.length > 0 && (
+                              <span className="px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded text-[10px] font-bold">
+                                🔄 CF
+                              </span>
+                            )}
+                          </div>
+                          {/* Verification status badges */}
+                          <div className="flex gap-1 mt-1 flex-wrap">
+                            {pendingVerify > 0 && (
+                              <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">
+                                👀 {pendingVerify} pending
+                              </span>
+                            )}
+                            {disputedCount > 0 && (
+                              <span className="px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-[10px] font-bold">
+                                ❌ {disputedCount} disputed
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Planned area */}
+                        <td className="px-4 py-3 text-right">
+                          <p className="font-semibold text-gray-800">
+                            {Number(act.allocated_area).toFixed(2)}
+                            <span className="text-xs text-gray-400 ml-0.5">ac</span>
+                          </p>
+                          <p className="text-xs text-gray-400">
+                            of {Number(act.total_area).toFixed(2)} ac
+                          </p>
+                          {Number(act.remaining_area) > 0.01 && (
+                            <p className="text-xs text-amber-600 font-medium">
+                              {Number(act.remaining_area).toFixed(2)} remaining
+                            </p>
+                          )}
+                        </td>
+
+                        {/* Actual done */}
+                        <td className="px-4 py-3 text-right">
+                          {totalActual > 0 ? (
+                            <>
+                              <p
+                                className="font-bold"
+                                style={{
+                                  color: totalActual < Number(act.allocated_area)
+                                    ? '#dc2626'
+                                    : totalActual > Number(act.allocated_area)
+                                    ? '#16a34a'
+                                    : '#374151'
+                                }}
+                              >
+                                {totalActual.toFixed(2)}
+                                <span className="text-xs font-normal ml-0.5">ac</span>
+                              </p>
+                              <p
+                                className="text-xs"
+                                style={{
+                                  color: totalActual < Number(act.allocated_area)
+                                    ? '#dc2626' : '#16a34a'
+                                }}
+                              >
+                                {(totalActual - Number(act.allocated_area) > 0 ? '+' : '')}
+                                {(totalActual - Number(act.allocated_area)).toFixed(2)} ac
+                              </p>
+                            </>
+                          ) : (
+                            <span className="text-xs text-gray-300">—</span>
+                          )}
+                        </td>
+
+                        {/* Team + status */}
+                        <td className="px-4 py-3">
+                          {actAllocations.length > 0 ? (
+                            <div className="space-y-1">
+                              {actAllocations.map(al => {
+                                const alMukkadam = mukkadams.find(mk => mk.mukkadam_id === al.mukkadam);
+                                const vs = getVerifyStatus(al);
+                                const vstyle = VERIFY_STYLE[vs];
+                                return (
+                                  <div
+                                    key={al.id}
+                                    className="flex items-center gap-2 text-xs"
+                                  >
+                                    <span className="font-medium text-gray-700">
+                                      {alMukkadam?.mukkadam_name || 'N/A'}
+                                    </span>
+                                    <span className="text-gray-400">
+                                      {Number(al.allocated_area).toFixed(2)} ac
+                                    </span>
+                                    {al.is_carry_forward && (
+                                      <span className="text-purple-500 text-[10px]">🔄</span>
+                                    )}
+                                    <span
+                                      className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                                      style={{ background: vstyle.bg, color: vstyle.color }}
+                                    >
+                                      {vstyle.label}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            /* Not yet allocated — show team suggestions */
+                            <div className="space-y-1">
+                              {workerRows.length === 0 ? (
+                                <span className="text-xs text-gray-400 italic">No team data</span>
+                              ) : workerRows.map((r, i) => {
+                                const needed = r.productivity > 0
+                                  ? Math.ceil(Number(act.remaining_area) / r.productivity)
+                                  : 0;
+                                const canDo = !isPastDay &&
+                                  needed > 0 &&
+                                  needed <= r.availableWorkers &&
+                                  r.availableWorkers > 0;
+
+                                const handleTeamClick = () => {
+                                  if (!canDo) return;
+                                  const mukkadam = mukkadams.find(mk => mk.mukkadam_id === r.mukkadamId);
+                                  if (!mukkadam) return;
+                                  const rate = mukkadam.activity_rates?.find((rt: any) =>
+                                    rt.activity_id === act.activity_id || rt.activity_name === act.activity_name
+                                  );
+                                  const confirmed = window.confirm(
+                                    `Allocate ${act.remaining_area} ac of "${act.activity_name}" to ${r.mukkadamName}?\n\n` +
+                                    `Workers: ${needed}  |  Rate: ₹${rate?.rate_per_acre || 0}/ac`
+                                  );
+                                  if (!confirmed) return;
+                                  const enrichedAct = {
+                                    ...act,
+                                    __prefill: {
+                                      mukkadam_id: r.mukkadamId,
+                                      allocated_workers: needed,
+                                      allocated_area: Number(act.remaining_area),
+                                      mukkadam_rate: Number(rate?.rate_per_acre || 0),
+                                    }
+                                  };
+                                  onStartAllocation(job.job_id, act.id, enrichedAct);
+                                };
+
+                                return (
+                                  <div key={i} className="flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      disabled={!canDo}
+                                      onClick={handleTeamClick}
+                                      className={`text-xs text-left transition rounded px-1 py-0.5 ${
+                                        canDo
+                                          ? 'text-teal-700 font-semibold underline underline-offset-2 hover:bg-teal-50 cursor-pointer'
+                                          : 'text-gray-400 cursor-not-allowed'
+                                      }`}
+                                    >
+                                      {r.mukkadamName}
+                                    </button>
+                                    {r.availableWorkers === 0 ? (
+                                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-400">
+                                        🏖️ Holiday
+                                      </span>
+                                    ) : (
+                                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                                        canDo ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
+                                      }`}>
+                                        {needed} needed / {r.availableWorkers} avail
+                                      </span>
+                                    )}
+                                    {canDo && <span className="text-teal-500 text-xs">⚡</span>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Action column */}
+                        {(() => {
+  const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
+  const isBothMode = modes.includes('jobs') && modes.includes('allocations');
+  if (!isBothMode && !modes.includes('allocations')) return null;
+  
+  // ✅ Don't show Move if already allocated
+  const isAllocated = actAllocations.length > 0;
+  
+  return (
+    <td className="px-4 py-3 text-center">
+      {isPastDay ? (
+        <span className="text-xs text-gray-300 italic">Past</span>
+      ) : isAllocated ? (
+        null  // ✅ Already allocated — no move button
+      ) : (
+        <MoveJobButton job={job} act={act} />
+      )}
+    </td>
+  );
+})()}
+                      </tr>
+                    );
+                  })
+              );
+            })()}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+)}
+
+
+{/* ── Dispute Modal ── */}
+{disputeModal && ReactDOM.createPortal(
+  <div
+    className="fixed inset-0 flex items-center justify-center"
+    style={{ background: 'rgba(0,0,0,0.5)', zIndex: 99999 }}
+    onClick={() => setDisputeModal(null)}
+  >
+    <div
+      className="bg-white rounded-2xl shadow-2xl p-6 w-96"
+      onClick={e => e.stopPropagation()}
+    >
+      <h4 className="font-bold text-gray-900 mb-1">❌ Dispute Report</h4>
+      <p className="text-xs text-gray-500 mb-4">
+        {disputeModal.mukkadamName} reported{' '}
+        <strong>{disputeModal.actualArea.toFixed(2)} ac</strong> for{' '}
+        {disputeModal.activityName}
+      </p>
+
+      {/* Quick reasons */}
+      <div className="space-y-2 mb-3">
+        {[
+          'Area done is less than reported',
+          'Workers were fewer than reported',
+          'Work quality not acceptable',
+          'Wrong plot / activity reported',
+        ].map(r => (
+          <button
+            key={r}
+            onClick={() => setDisputeReason(r)}
+            className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition ${
+              disputeReason === r
+                ? 'bg-red-50 border-red-400 text-red-700'
+                : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-red-300 hover:bg-red-50'
+            }`}
+          >
+            {disputeReason === r ? '✓ ' : ''}{r}
+          </button>
+        ))}
+      </div>
+
+      <textarea
+        value={disputeReason}
+        onChange={e => setDisputeReason(e.target.value)}
+        placeholder="Or describe the issue in detail..."
+        rows={3}
+        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-red-300 resize-none"
+      />
+      {!disputeReason.trim() && (
+        <p className="text-xs text-red-400 mt-1">Reason is required to dispute</p>
+      )}
+
+      <div className="flex gap-2 mt-4">
+        <button
+          onClick={() => setDisputeModal(null)}
+          className="flex-1 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-200"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => {
+            if (!disputeReason.trim()) return;
+            handleFarmerVerify(disputeModal.allocationId, false, disputeReason);
+            setDisputeModal(null);
+          }}
+          disabled={!disputeReason.trim() || verifyLoading === disputeModal.allocationId}
+          className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-bold hover:bg-red-600 disabled:opacity-50 transition"
+        >
+          {verifyLoading === disputeModal.allocationId ? 'Saving...' : 'Submit Dispute'}
+        </button>
+      </div>
+    </div>
+  </div>,
+  document.body
 )}
   {/* TAB 3: CONFLICTS */}
   {activeTab === 'conflicts' && (

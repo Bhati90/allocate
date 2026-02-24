@@ -251,6 +251,7 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'farmers' | 'mukkadams'>('farmers');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [expandedAlloc, setExpandedAlloc] = useState<number | null>(null); // allocation detail expand
 
   // Farmer payment modal
   const [payModal, setPayModal] = useState<{
@@ -264,6 +265,9 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
 
   // Mukkadam pay loading
   const [mukkadamPaying, setMukkadamPaying] = useState<string | null>(null);
+
+  // Farmer verify loading
+  const [verifyLoading, setVerifyLoading] = useState<number | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -314,14 +318,57 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
         { method: 'POST' }
       );
       const result = await res.json();
+      if (res.ok) { alert(`✅ ${result.message}`); fetchData(); }
+      else { alert(`❌ ${result.error}`); }
+    } finally {
+      setMukkadamPaying(null);
+    }
+  };
+const handleAddWeeklyPayment = async (mukkadamId: number, assignmentId: number, amount: number) => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/weekly-payment/add/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        assignment_id: assignmentId,
+        amount: amount,
+        payment_date: new Date().toISOString().split('T')[0],
+      }),
+    });
+    if (res.ok) {
+      fetchData(); // refresh
+    }
+  } catch (e) {
+    console.error(e);
+  }
+};
+  const handleFarmerVerify = async (allocationId: number, farmerId: string, jobId: string, agreed: boolean, disputeReason?: string) => {
+    if (!agreed && !disputeReason?.trim()) {
+      const reason = window.prompt('Please enter dispute reason:');
+      if (!reason?.trim()) return;
+      disputeReason = reason;
+    }
+    setVerifyLoading(allocationId);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/farmer/verify-work/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          farmer_id: farmerId,
+          allocation_id: allocationId,
+          agreed,
+          dispute_reason: disputeReason || '',
+        }),
+      });
+      const result = await res.json();
       if (res.ok) {
-        alert(`✅ ${result.message}`);
+        alert(agreed ? '✅ Work verified successfully' : '⚠️ Dispute recorded');
         fetchData();
       } else {
         alert(`❌ ${result.error}`);
       }
     } finally {
-      setMukkadamPaying(null);
+      setVerifyLoading(null);
     }
   };
 
@@ -342,6 +389,282 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
     pending:           { bg: '#f3f4f6', text: '#6b7280', label: 'Pending' },
   };
 
+  // ── Farmer verify status badge ──────────────────────────
+  const VerifyBadge = ({ status }: { status: string }) => {
+    const map: Record<string, { bg: string; color: string; label: string }> = {
+      not_submitted:        { bg: '#f3f4f6', color: '#6b7280',  label: '⏳ Not Submitted' },
+      pending_your_response:{ bg: '#fef9c3', color: '#b45309',  label: '👀 Awaiting Your Response' },
+      agreed:               { bg: '#dcfce7', color: '#16a34a',  label: '✅ You Agreed' },
+      disputed:             { bg: '#fef2f2', color: '#dc2626',  label: '❌ Disputed' },
+    };
+    const m = map[status] || map.not_submitted;
+    return (
+      <span style={{
+        fontSize: '0.62rem', padding: '2px 8px', borderRadius: '999px',
+        fontWeight: 700, background: m.bg, color: m.color,
+      }}>
+        {m.label}
+      </span>
+    );
+  };
+
+  // ── Allocation day-end report card ──────────────────────
+  const AllocReportCard = ({ act, farmerId }: { act: any; farmerId: string }) => {
+    const isExpanded = expandedAlloc === act.allocation_id;
+    const hasReport = act.report_submitted;
+    const verifyStatus = !hasReport
+      ? 'not_submitted'
+      : act.farmer_agreed === null
+      ? 'pending_your_response'
+      : act.farmer_agreed
+      ? 'agreed'
+      : 'disputed';
+
+    const areaDiff = hasReport && act.actual_area_done != null
+      ? (act.actual_area_done - act.allocated_area).toFixed(2)
+      : null;
+    const areaDiffNum = areaDiff ? parseFloat(areaDiff) : 0;
+
+    return (
+      <div style={{
+        border: `1px solid ${verifyStatus === 'pending_your_response' ? '#fde68a' : verifyStatus === 'disputed' ? '#fecaca' : verifyStatus === 'agreed' ? '#bbf7d0' : '#e5e7eb'}`,
+        borderRadius: '8px', overflow: 'hidden', background: '#fff',
+        marginBottom: '6px',
+      }}>
+        {/* Row header */}
+        <div
+          onClick={() => setExpandedAlloc(isExpanded ? null : act.allocation_id)}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1.5fr 1fr 1fr 1fr 1fr auto',
+            gap: '8px', padding: '8px 12px',
+            cursor: 'pointer', alignItems: 'center',
+            fontSize: '0.74rem',
+          }}
+        >
+          <div>
+            <p style={{ margin: 0, fontWeight: 700, color: '#111827' }}>{act.activity_name}</p>
+            <p style={{ margin: 0, fontSize: '0.62rem', color: '#9ca3af' }}>{act.plot_code || act.plot_name || '—'}</p>
+          </div>
+
+          {/* Planned */}
+          <div style={{ textAlign: 'center' }}>
+            <p style={{ margin: 0, fontSize: '0.6rem', color: '#6b7280' }}>Planned</p>
+            <p style={{ margin: 0, fontWeight: 700, color: '#374151' }}>{Number(act.allocated_area).toFixed(2)} ac</p>
+            <p style={{ margin: 0, fontSize: '0.6rem', color: '#9ca3af' }}>{act.allocated_workers} workers</p>
+          </div>
+
+          {/* Actual */}
+          <div style={{ textAlign: 'center' }}>
+            <p style={{ margin: 0, fontSize: '0.6rem', color: '#6b7280' }}>Actual</p>
+            {hasReport ? (
+              <>
+                <p style={{ margin: 0, fontWeight: 700, color: areaDiffNum < 0 ? '#dc2626' : areaDiffNum > 0 ? '#0f766e' : '#374151' }}>
+                  {Number(act.actual_area_done).toFixed(2)} ac
+                </p>
+                <p style={{ margin: 0, fontSize: '0.6rem', color: '#9ca3af' }}>{act.actual_crew_size} workers</p>
+              </>
+            ) : (
+              <p style={{ margin: 0, color: '#9ca3af', fontSize: '0.68rem' }}>—</p>
+            )}
+          </div>
+
+          {/* Variance */}
+          <div style={{ textAlign: 'center' }}>
+            <p style={{ margin: 0, fontSize: '0.6rem', color: '#6b7280' }}>Variance</p>
+            {areaDiff != null ? (
+              <p style={{
+                margin: 0, fontWeight: 800,
+                color: areaDiffNum < 0 ? '#dc2626' : areaDiffNum > 0 ? '#0f766e' : '#6b7280',
+              }}>
+                {areaDiffNum > 0 ? '+' : ''}{areaDiff} ac
+              </p>
+            ) : (
+              <p style={{ margin: 0, color: '#9ca3af', fontSize: '0.68rem' }}>—</p>
+            )}
+          </div>
+
+          {/* Status */}
+          <div style={{ textAlign: 'center' }}>
+            <VerifyBadge status={verifyStatus} />
+          </div>
+
+          <span style={{ color: '#9ca3af', fontSize: '0.65rem' }}>{isExpanded ? '▲' : '▼'}</span>
+        </div>
+
+        {/* Expanded detail */}
+        {isExpanded && (
+          <div style={{ borderTop: '1px solid #f3f4f6', padding: '12px', background: '#fafafa' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+
+              {/* Planned box */}
+              <div style={{ background: '#eff6ff', borderRadius: '8px', padding: '10px 12px', fontSize: '0.72rem' }}>
+                <p style={{ margin: '0 0 6px', fontSize: '0.62rem', fontWeight: 700, color: '#1d4ed8', textTransform: 'uppercase' }}>📋 Planned</p>
+                {[
+                  { label: 'Date', val: act.allocated_date },
+                  { label: 'Area', val: `${Number(act.allocated_area).toFixed(2)} ac` },
+                  { label: 'Workers', val: act.allocated_workers },
+                  { label: 'Rate', val: `₹${Number(act.mukkadam_rate).toLocaleString('en-IN')}/ac` },
+                  { label: 'Amount', val: `₹${Number(act.mukkadam_amount).toLocaleString('en-IN')}` },
+                ].map((r, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
+                    <span style={{ color: '#6b7280' }}>{r.label}</span>
+                    <span style={{ fontWeight: 600, color: '#111827' }}>{r.val}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Mukkadam report box */}
+              <div style={{
+                background: hasReport ? '#f0fdf4' : '#f9fafb',
+                borderRadius: '8px', padding: '10px 12px', fontSize: '0.72rem',
+                border: hasReport ? '1px solid #bbf7d0' : '1px solid #e5e7eb',
+              }}>
+                <p style={{ margin: '0 0 6px', fontSize: '0.62rem', fontWeight: 700, color: hasReport ? '#16a34a' : '#6b7280', textTransform: 'uppercase' }}>
+                  👷 Mukkadam Report {!hasReport && '(Pending)'}
+                </p>
+                {hasReport ? (
+                  <>
+                    {[
+                      { label: 'Actual Area', val: `${Number(act.actual_area_done).toFixed(2)} ac` },
+                      { label: 'Crew Showed', val: act.actual_crew_size },
+                      { label: 'Start Time', val: act.actual_start_time ? new Date(act.actual_start_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—' },
+                      { label: 'End Time', val: act.actual_end_time ? new Date(act.actual_end_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—' },
+                      { label: 'Submitted', val: act.report_submitted_at ? new Date(act.report_submitted_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' }) : '—' },
+                    ].map((r, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
+                        <span style={{ color: '#6b7280' }}>{r.label}</span>
+                        <span style={{ fontWeight: 600, color: '#111827' }}>{r.val}</span>
+                      </div>
+                    ))}
+                    {/* Revised amount */}
+                    {act.actual_area_done && (
+                      <div style={{ borderTop: '1px solid #bbf7d0', marginTop: '5px', paddingTop: '5px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+                        <span style={{ color: '#6b7280' }}>Revised Amt</span>
+                        <span style={{ color: '#0f766e' }}>
+                          ₹{(Number(act.actual_area_done) * Number(act.mukkadam_rate)).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p style={{ color: '#9ca3af', fontSize: '0.7rem', margin: 0 }}>
+                    Mukkadam hasn't submitted day-end report yet
+                  </p>
+                )}
+              </div>
+
+              {/* Farmer response box */}
+              <div style={{
+                background: verifyStatus === 'agreed' ? '#f0fdf4' : verifyStatus === 'disputed' ? '#fef2f2' : '#fffbeb',
+                borderRadius: '8px', padding: '10px 12px', fontSize: '0.72rem',
+                border: `1px solid ${verifyStatus === 'agreed' ? '#bbf7d0' : verifyStatus === 'disputed' ? '#fecaca' : '#fde68a'}`,
+              }}>
+                <p style={{ margin: '0 0 6px', fontSize: '0.62rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>
+                  🌾 Your Response
+                </p>
+
+                {verifyStatus === 'not_submitted' && (
+                  <p style={{ color: '#9ca3af', fontSize: '0.7rem', margin: 0 }}>
+                    Waiting for mukkadam to submit report first
+                  </p>
+                )}
+
+                {verifyStatus === 'pending_your_response' && (
+                  <>
+                    <p style={{ margin: '0 0 8px', fontSize: '0.7rem', color: '#374151' }}>
+                      Mukkadam reported <strong>{Number(act.actual_area_done).toFixed(2)} ac</strong> done.
+                      {areaDiffNum !== 0 && (
+                        <span style={{ color: areaDiffNum < 0 ? '#dc2626' : '#0f766e', marginLeft: '4px' }}>
+                          ({areaDiffNum > 0 ? '+' : ''}{areaDiff} vs planned)
+                        </span>
+                      )}
+                    </p>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        onClick={() => handleFarmerVerify(act.allocation_id, farmerId, act.job_id, true)}
+                        disabled={verifyLoading === act.allocation_id}
+                        style={{
+                          flex: 1, padding: '6px', borderRadius: '6px', border: 'none',
+                          background: '#16a34a', color: '#fff',
+                          fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer',
+                        }}
+                      >
+                        {verifyLoading === act.allocation_id ? '...' : '✅ Agree'}
+                      </button>
+                      <button
+                        onClick={() => handleFarmerVerify(act.allocation_id, farmerId, act.job_id, false)}
+                        disabled={verifyLoading === act.allocation_id}
+                        style={{
+                          flex: 1, padding: '6px', borderRadius: '6px', border: 'none',
+                          background: '#dc2626', color: '#fff',
+                          fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer',
+                        }}
+                      >
+                        {verifyLoading === act.allocation_id ? '...' : '❌ Dispute'}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {verifyStatus === 'agreed' && (
+                  <>
+                    <p style={{ margin: '0 0 4px', color: '#16a34a', fontWeight: 700, fontSize: '0.78rem' }}>
+                      ✅ You agreed with the report
+                    </p>
+                    <p style={{ margin: 0, fontSize: '0.65rem', color: '#6b7280' }}>
+                      Settlement will use actual area: <strong>{Number(act.actual_area_done).toFixed(2)} ac</strong>
+                    </p>
+                    {act.farmer_response_at && (
+                      <p style={{ margin: '3px 0 0', fontSize: '0.6rem', color: '#9ca3af' }}>
+                        Responded: {new Date(act.farmer_response_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                      </p>
+                    )}
+                  </>
+                )}
+
+                {verifyStatus === 'disputed' && (
+                  <>
+                    <p style={{ margin: '0 0 4px', color: '#dc2626', fontWeight: 700, fontSize: '0.78rem' }}>
+                      ❌ You disputed this report
+                    </p>
+                    {act.farmer_dispute_reason && (
+                      <p style={{ margin: '0 0 4px', fontSize: '0.68rem', color: '#374151', background: '#fef2f2', padding: '5px 7px', borderRadius: '5px' }}>
+                        "{act.farmer_dispute_reason}"
+                      </p>
+                    )}
+                    {act.farmer_response_at && (
+                      <p style={{ margin: 0, fontSize: '0.6rem', color: '#9ca3af' }}>
+                        Responded: {new Date(act.farmer_response_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Duration bar if both times present */}
+            {act.actual_start_time && act.actual_end_time && (
+              <div style={{ background: '#fff', borderRadius: '6px', border: '1px solid #e5e7eb', padding: '8px 12px', fontSize: '0.7rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <span style={{ color: '#6b7280' }}>
+                    🕐 {new Date(act.actual_start_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <span style={{ fontWeight: 700, color: '#374151' }}>
+                    {Math.round((new Date(act.actual_end_time).getTime() - new Date(act.actual_start_time).getTime()) / 60000)} mins worked
+                  </span>
+                  <span style={{ color: '#6b7280' }}>
+                    🕐 {new Date(act.actual_end_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
@@ -355,12 +678,18 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
           { label: 'Farmers', value: data.farmer_count, suffix: 'in cluster', color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
           { label: 'To Collect', value: `₹${data.total_farmer_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, suffix: 'from farmers', color: '#b45309', bg: '#fffbeb', border: '#fde68a' },
           { label: 'Mukkadams', value: data.mukkadam_count, suffix: 'assigned', color: '#0f766e', bg: '#f0fdfa', border: '#99f6e4' },
-          { label: 'To Pay', value: `₹${data.total_mukkadam_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, suffix: 'to mukkadams', color: '#dc2626', bg: '#fef2f2', border: '#fecaca' },
-        ].map(s => (
-          <div key={s.label} style={{
-            background: s.bg, borderRadius: '10px',
-            border: `1.5px solid ${s.border}`, padding: '10px 14px',
-          }}>
+         { 
+  label: 'To Pay', 
+  value: `₹${Math.max(0, data.mukkadams.reduce((sum: number, m: any) => {
+    const totalNet = m.settlements.reduce((s: number, s2: any) => s + s2.net_payable, 0);
+    return sum + totalNet;
+  }, 0)).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, 
+  suffix: 'to mukkadams', 
+  color: '#dc2626', 
+  bg: '#fef2f2', 
+  border: '#fecaca' 
+}, ].map(s => (
+          <div key={s.label} style={{ background: s.bg, borderRadius: '10px', border: `1.5px solid ${s.border}`, padding: '10px 14px' }}>
             <p style={{ margin: 0, fontSize: '0.65rem', color: '#6b7280', marginBottom: '3px' }}>{s.label}</p>
             <p style={{ margin: 0, fontWeight: 800, fontSize: '1.2rem', color: s.color, lineHeight: 1 }}>{s.value}</p>
             <p style={{ margin: '2px 0 0', fontSize: '0.62rem', color: '#9ca3af' }}>{s.suffix}</p>
@@ -369,17 +698,14 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
       </div>
 
       {/* ── Tab Switch ── */}
-      <div style={{
-        display: 'flex', borderBottom: '1.5px solid #e5e7eb',
-        background: '#fff', flexShrink: 0,
-      }}>
+      <div style={{ display: 'flex', borderBottom: '1.5px solid #e5e7eb', background: '#fff', flexShrink: 0 }}>
         {[
           { key: 'farmers', label: '🌾 Farmer Collections', count: data.farmers.length, color: '#3b82f6' },
           { key: 'mukkadams', label: '👷 Mukkadam Settlements', count: data.mukkadams.length, color: '#0f766e' },
         ].map(t => (
           <button
             key={t.key}
-            onClick={() => { setTab(t.key as any); setExpandedKey(null); }}
+            onClick={() => { setTab(t.key as any); setExpandedKey(null); setExpandedAlloc(null); }}
             style={{
               padding: '10px 20px', border: 'none', background: 'none', cursor: 'pointer',
               fontSize: '0.82rem', fontWeight: 700,
@@ -398,15 +724,7 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
           </button>
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', paddingRight: '12px' }}>
-          <button
-            onClick={fetchData}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '5px',
-              padding: '6px 12px', borderRadius: '7px', border: 'none',
-              background: '#f3f4f6', color: '#374151',
-              fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer',
-            }}
-          >
+          <button onClick={fetchData} style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 12px', borderRadius: '7px', border: 'none', background: '#f3f4f6', color: '#374151', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer' }}>
             <RefreshCw size={12} /> Refresh
           </button>
         </div>
@@ -428,25 +746,25 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
               const expandKey = `farmer-${f.farmer_id}-${f.job_id}`;
               const isOpen = expandedKey === expandKey;
 
+              // Count pending verifications for this farmer
+              const pendingVerify = (f.activities || []).filter((a: any) =>
+                a.report_submitted && a.farmer_agreed === null
+              ).length;
+
               return (
                 <div key={expandKey} style={{
-                  border: `1.5px solid ${hasBalance ? '#fde68a' : s.all_activities_past ? '#bbf7d0' : '#e5e7eb'}`,
+                  border: `1.5px solid ${pendingVerify > 0 ? '#fde68a' : hasBalance ? '#fde68a' : s.all_activities_past ? '#bbf7d0' : '#e5e7eb'}`,
                   borderRadius: '12px', background: hasBalance ? '#fffbeb' : '#fff',
                   overflow: 'hidden',
                 }}>
                   {/* Header */}
                   <div
                     onClick={() => setExpandedKey(isOpen ? null : expandKey)}
-                    style={{
-                      padding: '12px 16px', cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    }}
+                    style={{ padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                       <div>
-                        <p style={{ margin: 0, fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>
-                          {f.farmer_name}
-                        </p>
+                        <p style={{ margin: 0, fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>{f.farmer_name}</p>
                         <p style={{ margin: 0, fontSize: '0.68rem', color: '#9ca3af' }}>
                           {f.farmer_id} · Job <span style={{ fontFamily: 'monospace', color: '#1d4ed8' }}>#{f.job_id}</span>
                         </p>
@@ -458,6 +776,11 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                       }}>
                         {hasBalance ? '⚠ Balance Due' : s.all_activities_past ? '✓ Complete' : '🕐 In Progress'}
                       </span>
+                      {pendingVerify > 0 && (
+                        <span style={{ fontSize: '0.62rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: '#fef9c3', color: '#b45309' }}>
+                          👀 {pendingVerify} Verification{pendingVerify > 1 ? 's' : ''} Pending
+                        </span>
+                      )}
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -485,11 +808,7 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                             setPayAmount(String(Math.round(s.balance_due)));
                             setPayMode('CASH'); setPayNotes('');
                           }}
-                          style={{
-                            padding: '6px 12px', borderRadius: '7px', border: 'none',
-                            background: '#3b82f6', color: '#fff',
-                            fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
-                          }}
+                          style={{ padding: '6px 12px', borderRadius: '7px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
                         >
                           + Collect
                         </button>
@@ -501,74 +820,39 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                   {/* Expanded */}
                   {isOpen && (
                     <div style={{ borderTop: '1px solid #e5e7eb', padding: '14px 16px', background: '#fafafa' }}>
-                      {/* Activity table */}
+
+                      {/* ── Work Reports section ── */}
                       <p style={{ margin: '0 0 8px', fontSize: '0.68rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                        📋 Activities
+                        📋 Work Allocations & Verification
                       </p>
-                      <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', overflow: 'hidden', marginBottom: '12px', background: '#fff' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.74rem' }}>
-                          <thead>
-                            <tr style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
-                              {['Activity', 'Plot', 'Date', 'Done ac', 'Rate/ac', 'Billable', 'Status'].map(h => (
-                                <th key={h} style={{
-                                  padding: '6px 10px',
-                                  textAlign: ['Done ac', 'Rate/ac', 'Billable'].includes(h) ? 'right' : 'left',
-                                  color: '#6b7280', fontWeight: 600, fontSize: '0.66rem',
-                                }}>
-                                  {h}
-                                </th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {f.activities.map((act: any, idx: number) => (
-                              <tr key={act.activity_id} style={{
-                                borderTop: idx > 0 ? '1px solid #f3f4f6' : 'none',
-                                background: act.is_past ? '#f0fdfa' : '#fff',
-                                opacity: act.is_past ? 1 : 0.55,
-                              }}>
-                                <td style={{ padding: '7px 10px', fontWeight: 600, color: '#111827' }}>{act.activity_name}</td>
-                                <td style={{ padding: '7px 10px', color: '#6b7280', fontFamily: 'monospace', fontSize: '0.68rem' }}>{act.plot_code}</td>
-                                <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', color: act.is_past ? '#374151' : '#9ca3af' }}>
-                                  {act.scheduled_date || '—'}
-                                  {!act.is_past && <span style={{ marginLeft: '4px', fontSize: '0.58rem', color: '#9ca3af' }}>upcoming</span>}
-                                </td>
-                                <td style={{ padding: '7px 10px', textAlign: 'right' }}>{act.is_past ? act.allocated_area.toFixed(2) : '—'}</td>
-                                <td style={{ padding: '7px 10px', textAlign: 'right', color: '#6b7280' }}>₹{act.rate_per_acre.toLocaleString('en-IN')}</td>
-                                <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: act.billable_amount > 0 ? '#0f766e' : '#9ca3af' }}>
-                                  {act.billable_amount > 0 ? `₹${act.billable_amount.toLocaleString('en-IN')}` : '—'}
-                                </td>
-                                <td style={{ padding: '7px 10px' }}>
-                                  <span style={{
-                                    fontSize: '0.6rem', padding: '1px 6px', borderRadius: '999px', fontWeight: 600,
-                                    background: act.is_past ? '#dcfce7' : '#f3f4f6',
-                                    color: act.is_past ? '#16a34a' : '#9ca3af',
-                                  }}>
-                                    {act.is_past ? 'billed' : 'upcoming'}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                            <tr style={{ borderTop: '2px solid #e5e7eb', background: '#f0fdfa' }}>
-                              <td colSpan={3} style={{ padding: '7px 10px', fontWeight: 700, fontSize: '0.72rem' }}>
-                                Total ({f.activities.filter((a: any) => a.is_past).length}/{f.activities.length} done)
-                              </td>
-                              <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>
-                                {f.activities.filter((a: any) => a.is_past).reduce((t: number, a: any) => t + a.allocated_area, 0).toFixed(2)}
-                              </td>
-                              <td />
-                              <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 800, color: '#0f766e' }}>
-                                ₹{s.total_billable_so_far.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                              </td>
-                              <td />
-                            </tr>
-                          </tbody>
-                        </table>
+
+                      {/* Column headers */}
+                      <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1.5fr 1fr 1fr 1fr 1fr auto',
+                        gap: '8px', padding: '4px 12px',
+                        fontSize: '0.6rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase',
+                      }}>
+                        <span>Activity / Plot</span>
+                        <span style={{ textAlign: 'center' }}>Planned</span>
+                        <span style={{ textAlign: 'center' }}>Actual</span>
+                        <span style={{ textAlign: 'center' }}>Variance</span>
+                        <span style={{ textAlign: 'center' }}>Status</span>
+                        <span />
                       </div>
 
-                      {/* Calculation + History */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
-                        {/* Calc */}
+                      {(f.activities || []).flatMap((act: any) =>
+  (act.allocations || [{ ...act, allocation_id: act.activity_id }]).map((alloc: any) => (
+    <AllocReportCard
+      key={alloc.allocation_id}
+      act={{ ...act, ...alloc }}   // merge activity fields + allocation fields
+      farmerId={f.farmer_id}
+    />
+  ))
+)}
+
+                      {/* ── Calculation + History ── */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', margin: '12px 0' }}>
                         <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', padding: '10px 12px', fontSize: '0.76rem' }}>
                           <p style={{ margin: '0 0 8px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>💰 Calculation</p>
                           {[
@@ -594,7 +878,6 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                           )}
                         </div>
 
-                        {/* History */}
                         <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid #e5e7eb', padding: '10px 12px', fontSize: '0.76rem' }}>
                           <p style={{ margin: '0 0 8px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📅 Payment History</p>
                           {f.payment_history.length === 0 ? (
@@ -602,22 +885,12 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                           ) : (
                             <>
                               {f.payment_history.map((p: any, pi: number) => (
-                                <div key={pi} style={{
-                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                  paddingBottom: '4px', marginBottom: '4px',
-                                  borderBottom: pi < f.payment_history.length - 1 ? '1px solid #f3f4f6' : 'none',
-                                }}>
+                                <div key={pi} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '4px', marginBottom: '4px', borderBottom: pi < f.payment_history.length - 1 ? '1px solid #f3f4f6' : 'none' }}>
                                   <div>
-                                    <span style={{
-                                      fontSize: '0.6rem', padding: '1px 5px', borderRadius: '999px', marginRight: '5px',
-                                      background: p.type === 'advance' ? '#eff6ff' : '#f0fdf4',
-                                      color: p.type === 'advance' ? '#1d4ed8' : '#16a34a', fontWeight: 600,
-                                    }}>{p.mode}</span>
+                                    <span style={{ fontSize: '0.6rem', padding: '1px 5px', borderRadius: '999px', marginRight: '5px', background: p.type === 'advance' ? '#eff6ff' : '#f0fdf4', color: p.type === 'advance' ? '#1d4ed8' : '#16a34a', fontWeight: 600 }}>{p.mode}</span>
                                     <span style={{ color: '#9ca3af', fontSize: '0.64rem' }}>{p.date}</span>
                                   </div>
-                                  <span style={{ fontWeight: 700, color: '#16a34a' }}>
-                                    ₹{Number(p.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                                  </span>
+                                  <span style={{ fontWeight: 700, color: '#16a34a' }}>₹{Number(p.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
                                 </div>
                               ))}
                               <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '5px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
@@ -636,10 +909,7 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                             setPayAmount(String(Math.round(s.balance_due)));
                             setPayMode('CASH'); setPayNotes('');
                           }}
-                          style={{
-                            width: '100%', padding: '10px', borderRadius: '8px', border: 'none',
-                            background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer',
-                          }}
+                          style={{ width: '100%', padding: '10px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}
                         >
                           + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')} from {f.farmer_name}
                         </button>
@@ -665,19 +935,8 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
               const hasDue = m.summary.pending_payment > 0.01;
 
               return (
-                <div key={expandKey} style={{
-                  border: `1.5px solid ${hasDue ? '#fde68a' : '#e5e7eb'}`,
-                  borderRadius: '12px', background: hasDue ? '#fffbeb' : '#fff',
-                  overflow: 'hidden',
-                }}>
-                  {/* Header */}
-                  <div
-                    onClick={() => setExpandedKey(isOpen ? null : expandKey)}
-                    style={{
-                      padding: '12px 16px', cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    }}
-                  >
+                <div key={expandKey} style={{ border: `1.5px solid ${hasDue ? '#fde68a' : '#e5e7eb'}`, borderRadius: '12px', background: hasDue ? '#fffbeb' : '#fff', overflow: 'hidden' }}>
+                  <div onClick={() => setExpandedKey(isOpen ? null : expandKey)} style={{ padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                       <div>
                         <p style={{ margin: 0, fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>{m.mukkadam_name}</p>
@@ -688,24 +947,16 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <div style={{ textAlign: 'right', fontSize: '0.72rem' }}>
-                        {hasDue && <>
-                          <span style={{ color: '#6b7280' }}>Pending: </span>
-                          <span style={{ fontWeight: 800, color: '#dc2626' }}>
-                            ₹{m.summary.pending_payment.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                          </span>
-                        </>}
-                        {m.summary.total_paid_out > 0 && <>
-                          <span style={{ color: '#6b7280', marginLeft: '8px' }}>Paid: </span>
-                          <span style={{ fontWeight: 700, color: '#16a34a' }}>
-                            ₹{m.summary.total_paid_out.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                          </span>
-                        </>}
+                        {hasDue && <><span style={{ color: '#6b7280' }}>Pending: </span><span style={{ fontWeight: 800, color: '#dc2626' }}>{(() => {
+  const totalNet = m.settlements.reduce((sum: number, s: any) => sum + s.net_payable, 0);
+  return `₹${Math.max(0, totalNet).toLocaleString('en-IN')}`;
+})()}</span></>}
+                        {m.summary.total_paid_out > 0 && <><span style={{ color: '#6b7280', marginLeft: '8px' }}>Paid: </span><span style={{ fontWeight: 700, color: '#16a34a' }}>₹{m.summary.total_paid_out.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></>}
                       </div>
                       <span style={{ color: '#9ca3af', fontSize: '0.65rem' }}>{isOpen ? '▲' : '▼'}</span>
                     </div>
                   </div>
 
-                  {/* Expanded — settlements list */}
                   {isOpen && (
                     <div style={{ borderTop: '1px solid #e5e7eb', padding: '14px 16px', background: '#fafafa', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                       {m.settlements.length === 0 ? (
@@ -716,65 +967,80 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                         const payKey = `${m.mukkadam_id}-${s.job_id}`;
 
                         return (
-                          <div key={s.job_id} style={{
-                            background: '#fff', borderRadius: '10px',
-                            border: `1px solid ${needsPay ? '#fde68a' : s.net_payable <= 0 ? '#bbf7d0' : '#e5e7eb'}`,
-                            padding: '12px 14px',
-                          }}>
-                            {/* Settlement header */}
+                          <div key={s.job_id} style={{ background: '#fff', borderRadius: '10px', border: `1px solid ${needsPay ? '#fde68a' : s.net_payable <= 0 ? '#bbf7d0' : '#e5e7eb'}`, padding: '12px 14px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
                               <div>
                                 <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8', fontSize: '0.8rem' }}>#{s.job_id}</span>
                                 <span style={{ marginLeft: '8px', fontSize: '0.78rem', color: '#374151', fontWeight: 600 }}>{s.farmer_name}</span>
                                 <span style={{ marginLeft: '6px', fontSize: '0.65rem', color: '#9ca3af' }}>{s.farmer_id}</span>
                               </div>
-                              <span style={{
-                                fontSize: '0.65rem', padding: '2px 8px', borderRadius: '999px',
-                                fontWeight: 700, background: sm.bg, color: sm.text,
-                              }}>
+                              <span style={{ fontSize: '0.65rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: sm.bg, color: sm.text }}>
                                 {sm.label}
                               </span>
                             </div>
 
-                            {/* Activity table */}
+                            {/* Activity table with actual vs planned */}
                             <div style={{ border: '1px solid #e5e7eb', borderRadius: '7px', overflow: 'hidden', marginBottom: '10px' }}>
                               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
                                 <thead>
                                   <tr style={{ background: '#f9fafb' }}>
-                                    {['Activity', 'Plot', 'Date', 'Acres', 'Rate/ac', 'Amount', 'Status'].map(h => (
-                                      <th key={h} style={{
-                                        padding: '5px 8px',
-                                        textAlign: ['Acres', 'Rate/ac', 'Amount'].includes(h) ? 'right' : 'left',
-                                        color: '#6b7280', fontWeight: 600, fontSize: '0.62rem',
-                                        borderBottom: '1px solid #e5e7eb',
-                                      }}>{h}</th>
+                                    {['Activity', 'Plot', 'Date', 'Planned ac', 'Actual ac', 'Crew', 'Rate/ac', 'Amount', 'Farmer ✓'].map(h => (
+                                      <th key={h} style={{ padding: '5px 8px', textAlign: ['Planned ac', 'Actual ac', 'Crew', 'Rate/ac', 'Amount'].includes(h) ? 'right' : 'left', color: '#6b7280', fontWeight: 600, fontSize: '0.62rem', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
                                     ))}
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {s.activities.map((act: any, idx: number) => (
-                                    <tr key={idx} style={{ borderTop: idx > 0 ? '1px solid #f3f4f6' : 'none' }}>
-                                      <td style={{ padding: '6px 8px', fontWeight: 600, color: '#111827' }}>{act.activity_name}</td>
-                                      <td style={{ padding: '6px 8px', color: '#6b7280', fontFamily: 'monospace', fontSize: '0.66rem' }}>{act.plot_code}</td>
-                                      <td style={{ padding: '6px 8px', color: '#374151', whiteSpace: 'nowrap' }}>{act.scheduled_date || '—'}</td>
-                                      <td style={{ padding: '6px 8px', textAlign: 'right' }}>{Number(act.allocated_area).toFixed(2)}</td>
-                                      <td style={{ padding: '6px 8px', textAlign: 'right', color: '#6b7280' }}>₹{Number(act.mukkadam_rate).toLocaleString('en-IN')}</td>
-                                      <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: '#0f766e' }}>₹{Number(act.gross_amount).toLocaleString('en-IN')}</td>
-                                      <td style={{ padding: '6px 8px' }}>
-                                        <span style={{
-                                          fontSize: '0.58rem', padding: '1px 5px', borderRadius: '999px', fontWeight: 600,
-                                          background: act.allocation_status === 'completed' ? '#dcfce7' : '#fef9c3',
-                                          color: act.allocation_status === 'completed' ? '#16a34a' : '#b45309',
-                                        }}>{act.allocation_status}</span>
-                                      </td>
-                                    </tr>
-                                  ))}
+                                  {s.activities.map((act: any, idx: number) => {
+                                    const hasActual = act.actual_area_done != null;
+                                    const diff = hasActual ? (act.actual_area_done - act.allocated_area) : 0;
+                                    const effectiveArea = act.use_actual_for_settlement && hasActual ? act.actual_area_done : act.allocated_area;
+                                    const effectiveAmt = effectiveArea * act.mukkadam_rate;
+
+                                    return (
+                                      <tr key={idx} style={{ borderTop: idx > 0 ? '1px solid #f3f4f6' : 'none' }}>
+                                        <td style={{ padding: '6px 8px', fontWeight: 600, color: '#111827' }}>{act.activity_name}</td>
+                                        <td style={{ padding: '6px 8px', color: '#6b7280', fontFamily: 'monospace', fontSize: '0.66rem' }}>{act.plot_code}</td>
+                                        <td style={{ padding: '6px 8px', color: '#374151', whiteSpace: 'nowrap' }}>{act.scheduled_date || '—'}</td>
+                                        <td style={{ padding: '6px 8px', textAlign: 'right', color: '#6b7280' }}>{Number(act.allocated_area).toFixed(2)}</td>
+                                        <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                                          {hasActual ? (
+                                            <span style={{ fontWeight: 700, color: diff < 0 ? '#dc2626' : diff > 0 ? '#0f766e' : '#374151' }}>
+                                              {Number(act.actual_area_done).toFixed(2)}
+                                              {diff !== 0 && <span style={{ fontSize: '0.6rem', marginLeft: '2px' }}>({diff > 0 ? '+' : ''}{diff.toFixed(2)})</span>}
+                                            </span>
+                                          ) : <span style={{ color: '#9ca3af' }}>—</span>}
+                                        </td>
+                                        <td style={{ padding: '6px 8px', textAlign: 'right', color: '#6b7280' }}>
+                                          {act.actual_crew_size ?? act.allocated_workers}
+                                          {act.actual_crew_size != null && act.actual_crew_size !== act.allocated_workers && (
+                                            <span style={{ fontSize: '0.58rem', color: '#9ca3af', marginLeft: '2px' }}>({act.allocated_workers} pln)</span>
+                                          )}
+                                        </td>
+                                        <td style={{ padding: '6px 8px', textAlign: 'right', color: '#6b7280' }}>₹{Number(act.mukkadam_rate).toLocaleString('en-IN')}</td>
+                                        <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: '#0f766e' }}>
+                                          ₹{Number(effectiveAmt).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                                          {act.use_actual_for_settlement && <span style={{ fontSize: '0.58rem', color: '#0f766e', marginLeft: '2px' }}>(actual)</span>}
+                                        </td>
+                                        <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                                          {act.farmer_agreed === true && <span style={{ color: '#16a34a', fontSize: '0.7rem' }}>✅</span>}
+                                          {act.farmer_agreed === false && <span style={{ color: '#dc2626', fontSize: '0.7rem' }}>❌</span>}
+                                          {act.farmer_agreed === null && act.report_submitted && <span style={{ color: '#b45309', fontSize: '0.7rem' }}>⏳</span>}
+                                          {!act.report_submitted && <span style={{ color: '#9ca3af', fontSize: '0.7rem' }}>—</span>}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
                                   <tr style={{ borderTop: '2px solid #e5e7eb', background: '#f0fdfa' }}>
                                     <td colSpan={3} style={{ padding: '6px 8px', fontWeight: 700, fontSize: '0.7rem' }}>Total</td>
-                                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>
+                                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: '#6b7280' }}>
                                       {s.activities.reduce((t: number, a: any) => t + Number(a.allocated_area), 0).toFixed(2)}
                                     </td>
-                                    <td />
+                                    <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700 }}>
+                                      {s.activities.some((a: any) => a.actual_area_done != null)
+                                        ? s.activities.reduce((t: number, a: any) => t + Number(a.actual_area_done ?? a.allocated_area), 0).toFixed(2)
+                                        : '—'}
+                                    </td>
+                                    <td colSpan={2} />
                                     <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 800, color: '#0f766e' }}>
                                       ₹{s.gross_amount.toLocaleString('en-IN')}
                                     </td>
@@ -785,35 +1051,30 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                             </div>
 
                             {/* Settlement calc + weekly */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: needsPay ? '10px' : 0 }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
                               <div style={{ background: '#f9fafb', borderRadius: '8px', padding: '10px 12px', fontSize: '0.74rem' }}>
                                 <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>💰 Settlement</p>
                                 {[
                                   { label: 'Gross Earned', val: `₹${s.gross_amount.toLocaleString('en-IN')}`, color: '#0f766e' },
-                                  { label: '− 10% Deposit', val: `−₹${s.deposit_held.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#b45309' },
-                                  { label: '= 90% Payable', val: `₹${s.payable_90pct.toLocaleString('en-IN')}`, color: '#1f2937', bold: true },
-                                  ...(s.advance_deducted > 0 ? [{ label: '− Advance', val: `−₹${s.advance_deducted.toLocaleString('en-IN')}`, color: '#dc2626' }] : []),...(s.total_misc > 0 ? [{
-                                          label: '− Miscellaneous',
-                                          val: `−₹${s.total_misc.toLocaleString('en-IN')}`,
-                                          color: '#dc2626',
-                                        }] : []),
-                                  ...(s.weekly_payments_deducted > 0 ? [{ label: '− Weekly Payments', val: `−₹${s.weekly_payments_deducted.toLocaleString('en-IN')}`, color: '#dc2626' }] : []),
-                                ].map((row: any, ri) => (
+{ label: '− 10% Deposit', val: `−₹${s.deposit_held.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#b45309' },
+{ label: '= 90% Payable', val: `₹${s.payable_90pct.toLocaleString('en-IN')}`, color: '#1f2937', bold: true },
+...(s.deposit_carried_forward > 0 ? [{ label: '+ Deposit from prev job', val: `+₹${Number(s.deposit_carried_forward).toLocaleString('en-IN')}`, color: '#0f766e' }] : []),
+...(s.advance_deducted > 0 ? [{ label: '− Advance', val: `−₹${s.advance_deducted.toLocaleString('en-IN')}`, color: '#dc2626' }] : []),
+...(s.total_misc > 0 ? [{ label: '− Miscellaneous', val: `−₹${s.total_misc.toLocaleString('en-IN')}`, color: '#dc2626' }] : []),
+...(s.weekly_payments_deducted > 0 ? [{ label: '− Weekly Payments', val: `−₹${s.weekly_payments_deducted.toLocaleString('en-IN')}`, color: '#dc2626' }] : []),
+...(s.credit_carried_forward > 0 ? [{ label: '− Credit from prev job', val: `−₹${Number(s.credit_carried_forward).toLocaleString('en-IN')}`, color: '#dc2626' }] : []),].map((row: any, ri) => (
                                   <div key={ri} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                                     <span style={{ color: '#6b7280' }}>{row.label}</span>
                                     <span style={{ fontWeight: row.bold ? 800 : 600, color: row.color }}>{row.val}</span>
                                   </div>
                                 ))}
-                                
                                 <div style={{ borderTop: '1.5px solid #e5e7eb', paddingTop: '5px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
                                   <span style={{ color: '#111827' }}>Net Payable</span>
                                   <span style={{ color: s.net_payable > 0 ? '#dc2626' : '#16a34a', fontSize: '0.88rem' }}>
                                     {s.net_payable > 0 ? `₹${s.net_payable.toLocaleString('en-IN')}` : `−₹${Math.abs(s.net_payable).toLocaleString('en-IN')}`}
                                   </span>
                                 </div>
-                                {s.net_payable <= 0 && (
-                                  <p style={{ margin: '3px 0 0', fontSize: '0.62rem', color: '#16a34a' }}>Mukkadam is in credit</p>
-                                )}
+                                {s.net_payable <= 0 && <p style={{ margin: '3px 0 0', fontSize: '0.62rem', color: '#16a34a' }}>Mukkadam is in credit</p>}
                               </div>
 
                               <div style={{ background: '#f9fafb', borderRadius: '8px', padding: '10px 12px', fontSize: '0.74rem' }}>
@@ -823,11 +1084,7 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                                 ) : (
                                   <>
                                     {s.weekly_payments.map((w: any, wi: number) => (
-                                      <div key={wi} style={{
-                                        display: 'flex', justifyContent: 'space-between',
-                                        paddingBottom: '4px', marginBottom: '4px',
-                                        borderBottom: wi < s.weekly_payments.length - 1 ? '1px solid #e5e7eb' : 'none',
-                                      }}>
+                                      <div key={wi} style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '4px', marginBottom: '4px', borderBottom: wi < s.weekly_payments.length - 1 ? '1px solid #e5e7eb' : 'none' }}>
                                         <div>
                                           <span style={{ fontWeight: 600 }}>{w.payment_date}</span>
                                           <span style={{ color: '#9ca3af', marginLeft: '5px', fontSize: '0.64rem' }}>{w.crew_size_on_date} workers</span>
@@ -837,29 +1094,95 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                                     ))}
                                     <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '4px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
                                       <span>Total</span>
-                                      <span style={{ color: '#dc2626' }}>−₹{s.weekly_payments_total.toLocaleString('en-IN')}</span>
-                                    </div>
+                                      <span style={{ color: '#dc2626' }}>
+  −₹{s.weekly_payments.reduce((sum: number, w: any) => sum + w.amount, 0).toLocaleString('en-IN')}
+</span></div>
                                   </>
                                 )}
                               </div>
                             </div>
+                            {/* Cross-job net summary — shown once per mukkadam after all settlement cards */}
+{(() => {
+  // Find which jobs had their credit absorbed into a later job
+  const absorbedJobIds = new Set(
+    m.settlements
+      .filter((s: any) => s.credit_carried_forward > 0)
+      .map((s: any) => s.job_id) // these jobs absorbed credit from previous
+  );
+
+  // The "real" remaining credit is only from jobs whose credit was NOT yet absorbed
+  // i.e. the latest job in credit that no one else carried forward from
+  const latestNet = m.settlements.reduce((sum: number, s: any) => sum + s.net_payable, 0);
+  
+  // Correct: sum only the jobs that haven't been absorbed
+  // Job 1774 credit was absorbed into 1822, so only count 1822
+  const alreadyAbsorbedCredit = m.settlements
+    .filter((s: any) => s.net_payable < 0)
+    .reduce((sum: number, s: any) => {
+      // If another job carried forward credit from this job, don't count it again
+      const wasAbsorbed = m.settlements.some(
+        (other: any) => other.credit_carried_forward > 0 && other.job_id !== s.job_id
+      );
+      return wasAbsorbed ? sum + s.net_payable : sum; // net_payable is negative
+    }, 0);
+
+  const trueRemainingNet = latestNet - alreadyAbsorbedCredit;
+  // = (-9223 + -7003) - (-7003) = -9223 ✓
+
+  const toPayTotal = m.settlements
+    .filter((s: any) => s.net_payable > 0)
+    .reduce((sum: number, s: any) => sum + s.net_payable, 0);
+
+  return (
+    <div style={{ background: toPayTotal > 0 ? '#fef2f2' : '#f0fdf4', border: `1px solid ${toPayTotal > 0 ? '#fecaca' : '#bbf7d0'}`, borderRadius: 8, padding: '10px 14px', marginTop: 4 }}>
+      <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📊 All Jobs Summary</p>
+
+      {m.settlements.map((s: any) => {
+        const wasAbsorbed = m.settlements.some(
+          (other: any) => other.credit_carried_forward > 0 && other.job_id !== s.job_id
+        );
+        return (
+          <div key={s.job_id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3, fontSize: '0.74rem' }}>
+            <span style={{ color: '#6b7280' }}>
+              Job #{s.job_id} ({s.farmer_name})
+              {wasAbsorbed && s.net_payable < 0 && (
+                <span style={{ fontSize: '0.6rem', color: '#9ca3af', marginLeft: 4 }}>(absorbed in next job)</span>
+              )}
+            </span>
+            <span style={{ fontWeight: 700, color: s.net_payable > 0 ? '#dc2626' : '#16a34a' }}>
+              {s.net_payable > 0
+                ? `To Pay ₹${s.net_payable.toLocaleString('en-IN')}`
+                : `In Credit ₹${Math.abs(s.net_payable).toLocaleString('en-IN')}`}
+            </span>
+          </div>
+        );
+      })}
+
+      <div style={{ borderTop: '1.5px solid #e5e7eb', paddingTop: 5, display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+        <span>Net to Pay Mukkadam</span>
+        <span style={{ fontSize: '0.92rem', color: toPayTotal > 0 ? '#dc2626' : '#16a34a' }}>
+          {toPayTotal > 0
+            ? `₹${toPayTotal.toLocaleString('en-IN')}`
+            : `₹0 (in credit ₹${Math.abs(trueRemainingNet).toLocaleString('en-IN')})`}
+        </span>
+      </div>
+    </div>
+  );
+})()}
+
+
                             <MiscCostsSection
-                                mukkadamId={m.mukkadam_id}
-                                jobId={s.job_id}
-                                initialCosts={s.misc_costs || []}
-                                onCostChange={fetchData}
-                              />
+                              mukkadamId={m.mukkadam_id}
+                              jobId={s.job_id}
+                              initialCosts={s.misc_costs || []}
+                              onCostChange={fetchData}
+                            />
 
                             {needsPay && (
                               <button
                                 onClick={() => handleMukkadamPay(m.mukkadam_id, s.job_id, s.net_payable, m.mukkadam_name)}
                                 disabled={mukkadamPaying === payKey}
-                                style={{
-                                  width: '100%', padding: '10px', borderRadius: '8px', border: 'none',
-                                  background: mukkadamPaying === payKey ? '#99f6e4' : '#14b8a6',
-                                  color: '#fff', fontWeight: 700, fontSize: '0.85rem',
-                                  cursor: mukkadamPaying === payKey ? 'not-allowed' : 'pointer',
-                                }}
+                                style={{ width: '100%', marginTop: '10px', padding: '10px', borderRadius: '8px', border: 'none', background: mukkadamPaying === payKey ? '#99f6e4' : '#14b8a6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: mukkadamPaying === payKey ? 'not-allowed' : 'pointer' }}
                               >
                                 {mukkadamPaying === payKey ? 'Processing...' : `🏦 Pay ₹${s.net_payable.toLocaleString('en-IN')} to ${m.mukkadam_name}`}
                               </button>
@@ -867,6 +1190,48 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
                           </div>
                         );
                       })}
+                      {/* Weekly Payment Button */}
+{(() => {
+  const assignment = m.assignment; // needs weekly_payment_day from backend
+  if (assignment?.weekly_payment_day_value === null || assignment?.weekly_payment_day_value === undefined) return null;
+
+  const today = new Date().getDay(); // 0=Sunday, 1=Monday...
+  // JS: 0=Sun, 1=Mon... Python: 0=Mon, 6=Sun — convert
+  const jsToday = today === 0 ? 6 : today - 1; // convert to Python weekday
+
+  if (jsToday !== assignment.weekly_payment_day_value) return null;
+
+  // Already paid today?
+  const alreadyPaidToday = m.settlements
+    .flatMap((s: any) => s.weekly_payments)
+    .some((w: any) => w.payment_date === new Date().toISOString().split('T')[0]);
+
+  if (alreadyPaidToday) return (
+    <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '8px 12px', fontSize: '0.74rem', color: '#16a34a', fontWeight: 700 }}>
+      ✓ Weekly payment already added today
+    </div>
+  );
+
+  const amount = assignment.weekly_payment_amount;
+
+  return (
+    <div style={{ background: '#fefce8', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 12px', marginBottom: 8 }}>
+      <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#92400e', textTransform: 'uppercase' }}>📅 Weekly Payment Due Today</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <span style={{ fontWeight: 700, fontSize: '0.88rem' }}>₹{Number(amount).toLocaleString('en-IN')}</span>
+          <span style={{ color: '#6b7280', fontSize: '0.7rem', marginLeft: 6 }}>{m.crew_size} workers</span>
+        </div>
+        <button
+          onClick={() => handleAddWeeklyPayment(m.mukkadam_id, assignment.assignment_id, amount)}
+          style={{ background: '#d97706', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontWeight: 700, cursor: 'pointer', fontSize: '0.74rem' }}
+        >
+          + Add Payment
+        </button>
+      </div>
+    </div>
+  );
+})()}
                     </div>
                   )}
                 </div>
@@ -878,43 +1243,21 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
 
       {/* ── Farmer Payment Modal ── */}
       {payModal && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }} onClick={() => setPayModal(null)}>
-          <div style={{
-            background: '#fff', borderRadius: '16px', padding: '24px',
-            width: '360px', boxShadow: '0 24px 60px rgba(0,0,0,0.2)',
-          }} onClick={e => e.stopPropagation()}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setPayModal(null)}>
+          <div style={{ background: '#fff', borderRadius: '16px', padding: '24px', width: '360px', boxShadow: '0 24px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 4px', fontSize: '1rem', fontWeight: 700 }}>💰 Collect Payment</h3>
-            <p style={{ margin: '0 0 18px', fontSize: '0.75rem', color: '#6b7280' }}>
-              From {payModal.farmerName} · Job #{payModal.jobId}
-            </p>
+            <p style={{ margin: '0 0 18px', fontSize: '0.75rem', color: '#6b7280' }}>From {payModal.farmerName} · Job #{payModal.jobId}</p>
             <label style={{ fontSize: '0.72rem', color: '#6b7280', display: 'block', marginBottom: '3px' }}>Amount (₹)</label>
-            <input
-              type="number" value={payAmount}
-              onChange={e => setPayAmount(e.target.value)}
-              style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '1rem', fontWeight: 700, marginBottom: '10px', boxSizing: 'border-box' }}
-            />
+            <input type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)} style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '1rem', fontWeight: 700, marginBottom: '10px', boxSizing: 'border-box' }} />
             <label style={{ fontSize: '0.72rem', color: '#6b7280', display: 'block', marginBottom: '3px' }}>Mode</label>
-            <select
-              value={payMode} onChange={e => setPayMode(e.target.value)}
-              style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '0.82rem', marginBottom: '10px', background: '#fff', boxSizing: 'border-box' }}
-            >
+            <select value={payMode} onChange={e => setPayMode(e.target.value)} style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '0.82rem', marginBottom: '10px', background: '#fff', boxSizing: 'border-box' }}>
               {['CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'OTHER'].map(m => <option key={m} value={m}>{m}</option>)}
             </select>
             <label style={{ fontSize: '0.72rem', color: '#6b7280', display: 'block', marginBottom: '3px' }}>Notes (optional)</label>
-            <input
-              value={payNotes} onChange={e => setPayNotes(e.target.value)}
-              placeholder="e.g. Cash received"
-              style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '0.82rem', marginBottom: '18px', boxSizing: 'border-box' }}
-            />
+            <input value={payNotes} onChange={e => setPayNotes(e.target.value)} placeholder="e.g. Cash received" style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: '8px', fontSize: '0.82rem', marginBottom: '18px', boxSizing: 'border-box' }} />
             <div style={{ display: 'flex', gap: '10px' }}>
               <button onClick={() => setPayModal(null)} style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb', background: '#f9fafb', fontSize: '0.82rem', cursor: 'pointer' }}>Cancel</button>
-              <button
-                onClick={handleFarmerPay} disabled={payLoading}
-                style={{ flex: 2, padding: '10px', borderRadius: '8px', border: 'none', background: payLoading ? '#93c5fd' : '#3b82f6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: payLoading ? 'not-allowed' : 'pointer' }}
-              >
+              <button onClick={handleFarmerPay} disabled={payLoading} style={{ flex: 2, padding: '10px', borderRadius: '8px', border: 'none', background: payLoading ? '#93c5fd' : '#3b82f6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: payLoading ? 'not-allowed' : 'pointer' }}>
                 {payLoading ? 'Recording...' : `Record ₹${parseFloat(payAmount || '0').toLocaleString('en-IN')}`}
               </button>
             </div>
@@ -945,12 +1288,15 @@ const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential'
 
   // Load initial data
 useEffect(() => {
-  loadJobs();
+  setJobs([]);      // ✅ clear stale data first
+  setAllJobs([]);
+  loadJobs(null);
   loadMukkadams();
   loadAllocations();
   loadLeaves();
-}, []);
-
+  loadOverload();
+  loadPotential();
+}, [clusterId]);
 
 const [leaves, setLeaves] = useState<any[]>([]);
 // in parent, e.g. CalendarPage.tsx
@@ -1009,13 +1355,6 @@ overloadItems.forEach((o) => {
   overloadMap[key] = o;
 });
 
-// call with other loads
-useEffect(() => {
-  loadJobs();
-  loadAllocations();
-  loadLeaves();
-  loadOverload();
-}, [clusterId]);
 
 useEffect(() => {
   if (!selectedMukkadam || !selectedDate) {
@@ -1121,9 +1460,7 @@ const handleStartAllocationFromDay = (
 };
 
 
-useEffect(() => {
-  loadData();
-}, []);
+
 const handleAddDayCrew = async (mukkadam: Mukkadam, date: Date) => {
   const input = window.prompt(
     `Add extra workers for ${mukkadam.mukkadam_name} on ${formatDate(date)}:`,
@@ -1186,46 +1523,46 @@ const loadLeaves = async () => {
     console.error('Failed to load leaves');
   }
 };
-useEffect(() => {
-  loadJobs();
-//   loadMukkadams();
-  loadAllocations();
-  loadLeaves(); // Add this
-}, []);
 
 useEffect(() => {
   loadAllocations();
   loadLeaves();
 }, [currentMonth]);
 
-  // Load allocations for current month
-  useEffect(() => {
-    loadAllocations();
-  }, [currentMonth]);
 
 // FarmScheduler.tsx
 
 // const [jobs, setJobs] = useState<Job[]>([]);
 const [allJobs, setAllJobs] = useState<Job[]>([]); // ✅ Add this
 
-const loadJobs = async () => {
+const loadJobs = async (plotId?: number | null) => {
+  const activePlotId = plotId !== undefined ? plotId : filters.plotId;
+  
+  console.log('loadJobs called, plotId:', activePlotId, 'filters.plotId:', filters.plotId);
+  
+  let url = `${API_BASE_URL}/api/jobs/?status=pending,scheduled,in_progress&cluster_id=${clusterId}`;
+  if (activePlotId) {
+    url += `&plot=${activePlotId}`;
+  }
+  
+  console.log('Fetching URL:', url);  // ← check this in browser
+  
   try {
     setLoading(true);
-    const response = await fetch(
-      `${API_BASE_URL}/api/jobs/?status=pending,scheduled,in_progress&cluster_id=${clusterId}`
-    );
+    const response = await fetch(url);
     const data = await response.json();
-    
-    setAllJobs(data); // ✅ Store unfiltered jobs
-    setJobs(data);    // This will be filtered later
+    setAllJobs(data);
+    setJobs(data);
   } catch (error) {
     toast.error('Failed to load jobs');
-    console.error(error);
   } finally {
     setLoading(false);
   }
 };
-
+// ✅ Jobs reload whenever clusterId OR plotId changes
+useEffect(() => {
+  loadJobs(filters.plotId);
+}, [clusterId, filters.plotId]);
 
   const loadAllocations = async () => {
     try {
@@ -1256,9 +1593,6 @@ const loadJobs = async () => {
   const [selectedFarmerId, setSelectedFarmerId] = useState<string | null>(null);
   const [selectedFarmerName, setSelectedFarmerName] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadJobs();
-  }, [clusterId]);
 
   // const loadJobs = async () => {
   //   setLoading(true);
@@ -1697,10 +2031,9 @@ const plotOptions = [
   ...new Map(
     jobs
       .filter(j => !filters.farmerId || j.farmer_id === filters.farmerId)
-      .map(j => [j.plot, { id: j.plot, name: j.plot_name }])
+      .map(j => [j.plot, { id: j.plot, name: j.plot_name }])  // ❌ job.plot is the MAIN plot only
   ).values(),
-].filter(p => p.id); // remove null
-
+].filter(p => p.id);
 // unique activities from jobs (for activity filter)
 const activityOptions = [
   ...new Map(
@@ -1792,11 +2125,14 @@ const varietyOptions = [
   <select
     value={filters.plotId ?? ''}
     onChange={(e) =>
-      setFilters(f => ({
-        ...f,
-        plotId: e.target.value ? Number(e.target.value) : null,
-      }))
-    }
+  setFilters(f => {
+    console.log('Plot selected:', e.target.value);  // ✅ add this
+    return {
+      ...f,
+      plotId: e.target.value ? Number(e.target.value) : null,
+    };
+  })
+}
     className="form-select"
   >
     <option value="">All plots</option>
@@ -1926,9 +2262,9 @@ const varietyOptions = [
   <button className={currentMode === 'jobs' ? 'tab active' : 'tab'} onClick={() => setViewMode('jobs')}>AI</button>
   <button className={currentMode === 'allocations' ? 'tab active' : 'tab'} onClick={() => setViewMode('allocations')}>Allocations</button>
   <button className={currentMode === 'both' ? 'tab active' : 'tab'} onClick={() => setViewMode('both')}>Both</button>
-  <button className={currentMode === 'payments' ? 'tab active' : 'tab'} onClick={() => setViewMode('payments')}>
+  {/* <button className={currentMode === 'payments' ? 'tab active' : 'tab'} onClick={() => setViewMode('payments')}>
     💰 Payments
-  </button>
+  </button> */}
 </div>
   </div>
 
@@ -1977,15 +2313,20 @@ const varietyOptions = [
 
         {/* Center Panel - Calendar */}
         <div className="center-panel">
-{currentMode === 'payments' ? (
+{
+
+currentMode === 'payments' ? (
     <PaymentDashboard clusterId={clusterId} />
-  ) : (
+  ) 
+  
+  
+  : (
 
 <CalendarPanel
   currentMonth={currentMonth}
   selectedDate={selectedDate}
   jobs={filteredJobs}  
-  allJobs={allJobs}     
+  allJobs={jobs}     
   allocations={filteredAllocations}
   mukkadams={adjustedMukkadams}   // ✅ use adjusted, not mukkadams
   leaves={leaves}

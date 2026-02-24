@@ -160,6 +160,8 @@ class FarmerSerializer(serializers.ModelSerializer):
     def get_district(self, obj):
         first = obj.clusters.first()
         return first.district if first else ''
+
+
 class JobActivitySerializer(serializers.ModelSerializer):
     activity_id = serializers.IntegerField(source='activity.id', read_only=True)
     activity_name = serializers.CharField(source='activity.name', read_only=True)
@@ -422,45 +424,28 @@ class AllocationSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Allocation
-        fields = [
-            'id',
-            'job_activity',
-            'job_id',
-            'farmer_id',
-            'farmer_name',
-            'activity_id',
-            'activity_name',
-            'is_strict',
-            'mukkadam',
-            'mukkadam_name',
-            'allocated_date',
-            'allocated_area',
-            'allocated_workers',
-            'farmer_rate',
-            'mukkadam_rate',
-            'farmer_amount',
-            'mukkadam_amount',
-            'profit',
-            'status',
-            'actual_workers',
-            'actual_area_completed',
-            'start_time',
-            'end_time',
-            'efficiency_score',
-            'notes',
-            'created_at',
-            'updated_at'
+        fields = ['activity_id',
+            'id', 'job_activity', 'job_activity_id', 'mukkadam', 'mukkadam_id',
+            'cluster','farmer_id','mukkadam_name','is_strict','activity_name','farmer_name','job_id', 'allocated_date', 'allocated_area', 'allocated_workers',
+            'farmer_rate', 'mukkadam_rate', 'farmer_amount', 'mukkadam_amount',
+            'profit', 'status', 'notes', 'is_carry_forward', 'carry_forward_from',
+            
+            # ✅ Day-end report fields
+            'report_submitted',
+            'report_submitted_at',
+            'actual_start_time',
+            'actual_end_time',
+            'actual_crew_size',
+            'actual_area_done',
+            
+            # ✅ Farmer verification fields
+            'farmer_agreed',
+            'farmer_response_at',
+            'farmer_dispute_reason',
+            'use_actual_for_settlement',
+            
+            'created_at', 'updated_at',
         ]
-        read_only_fields = [
-            'farmer_amount',
-            'mukkadam_amount',
-            'profit',
-            'efficiency_score',
-            'created_at',
-            'updated_at'
-        ]
-
-
 class MukkadamPaymentSerializer(serializers.ModelSerializer):
     mukkadam_name = serializers.CharField(source='mukkadam.mukkadam_name', read_only=True)
     allocation_count = serializers.IntegerField(source='allocations.count', read_only=True)
@@ -585,8 +570,8 @@ class PlotSerializer(serializers.ModelSerializer):
     class Meta:
         model = Plot
         fields = ['id', 'farmer', 'clusters', 'name', 'area_acres', 'plot_code',
-                  'latitude', 'longitude']
-
+                'crop_name', 'variety', 'pruning_date',  # ✅ add these 3
+                'latitude', 'longitude']
 class ActivityScheduleRuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ActivityScheduleRule

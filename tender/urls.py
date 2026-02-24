@@ -8,18 +8,18 @@ from .views import (
     LeaveViewSet,ExtraWorkerViewSet,
     MukkadamViewSet,cluster_payment_dashboard,
     AllocationViewSet,FarmerViewSet,mukkadam_all_settlements,mukkadam_misc_cost_delete,mukkadam_misc_costs,
-    MukkadamActivityRateViewSet,
+    MukkadamActivityRateViewSet,add_weekly_payment,
     PlanningViewSet,search_farmers_for_cluster,search_mukkadams_for_cluster,add_farmer_plots_to_cluster,add_mukkadam_to_cluster,
     PlotViewSet,tender_dashboard,list_all_settlements,
     get_cluster_plots,get_districts,get_states,get_talukas,get_villages,
     insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,
     reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,
-    search_villages,
+    search_villages,farmer_work_verification_detail,
     suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs
 )
 
 from .webhook import booking_webhook,run_mukkadam_sync
-
+from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report
 # Create router
 router = DefaultRouter()
 
@@ -61,12 +61,20 @@ path('api/settlements/', list_all_settlements, name='list-settlements'),
         mukkadam_settlement_detail,
         name='mukkadam-settlement-detail'
     ),
+
+path('api/mukkadam/workbook/', mukkadam_workbook, name='mukkadam_workbook'),
+
+path ('api/mukkadam/day-end-report/',mukkadam_day_end_report ),
+
+path('api/mukkadam/farmer-verify-work/',farmer_verify_work,name = 'farmer_response'),
 path('api/mukkadam/<int:mukkadam_id>/job/<str:job_id>/misc/', mukkadam_misc_costs),
 path('api/mukkadam/<int:mukkadam_id>/job/<str:job_id>/misc/<int:cost_id>/', mukkadam_misc_cost_delete),
     path('api/farmer/<str:farmer_id>/billing/', farmer_all_jobs_billing),
 path('api/farmer/<str:farmer_id>/job/<str:job_id>/billing/', farmer_job_billing),
 path('api/farmer/<str:farmer_id>/job/<str:job_id>/payment/', record_farmer_payment),
 
+path('api/farmer/verify-work/', farmer_verify_work, name='farmer_verify_work'),           # POST
+path('api/farmer/work-reports/', farmer_work_verification_detail, name='farmer_work_reports'),  # GET
 
 path('api/cluster/<int:cluster_id>/payment-dashboard/', cluster_payment_dashboard),
 
@@ -76,7 +84,7 @@ path('api/cluster/<int:cluster_id>/payment-dashboard/', cluster_payment_dashboar
         raise_mukkadam_payment,
         name='mukkadam-settlement-pay'
     ),
-
+path('api/weekly-payment/add/', add_weekly_payment),
     # List all settlements for a mukkadam (for the new tab)
     path(
         'api/mukkadam/<int:mukkadam_id>/settlements/',
