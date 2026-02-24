@@ -1072,7 +1072,7 @@ const navigate = useNavigate();
     <span>Farmer</span>
   </button>
 
-  <button
+  {/* <button
     className="cluster-action-btn"
     onClick={() => setAddModal({ clusterId: c.id, clusterName: c.name, mode: 'mukkadam' })}
     title="Add Mukkadam"
@@ -1081,7 +1081,7 @@ const navigate = useNavigate();
        <Users size={18} />
     </div>
     <span>Mukkadam</span>
-  </button>
+  </button> */}
 
   <button
     className="cluster-action-btn"

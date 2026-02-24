@@ -109,14 +109,23 @@ const JobsPanel: React.FC<JobsPanelProps> = ({
     } catch (e) { return []; }
   };
 
-  const loadPlotJobs = async (plotId: number) => {
+const loadPlotJobs = async (plotId: number) => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/jobs/?plot=${plotId}`);
       const data = await res.json();
-      setPlotJobs(prev => ({ ...prev, [plotId]: data }));
-      return data;
+      
+      // ✅ Filter activities to only this plot's
+      const filtered = data.map((job: any) => ({
+        ...job,
+        activities: (job.activities || []).filter(
+          (a: any) => Number(a.plot) === Number(plotId) || Number(a.plot_id) === Number(plotId)
+        )
+      }));
+      
+      setPlotJobs(prev => ({ ...prev, [plotId]: filtered }));
+      return filtered;
     } catch (e) { return []; }
-  };
+};
 
   const loadPlotActivityStatus = async (plotId: number, plotArea: number, farmerId: string) => {
     try {
@@ -187,16 +196,14 @@ const JobsPanel: React.FC<JobsPanelProps> = ({
     }
   };
 
-  const handlePlotClick = async (plotId: number, plotArea: number, farmerId: string) => {
+const handlePlotClick = async (plotId: number, plotArea: number, farmerId: string) => {
     if (expandedPlotId === plotId) {
       setExpandedPlotId(null);
       return;
     }
     setExpandedPlotId(plotId);
-    if (!plotJobs[plotId]) {
-      await loadPlotJobs(plotId);
-    }
-  };
+    await loadPlotJobs(plotId);  // ✅ always reload, remove the if(!plotJobs[plotId]) check
+};
 
   const handleDeleteActivity = async (activityId: number, plotId: number) => {
     if (!confirm('Delete this activity?')) return;
@@ -649,8 +656,12 @@ return Array.from(map.values()).sort((a, b) => {
 
       return sortedPlots.map(plot => {
         const isPlotExpanded = expandedPlotId === plot.id;
-        const currentPlotJobs = s.jobs.filter((j: any) => Number(j.plot) === Number(plot.id));
-
+        const currentPlotJobs = isPlotExpanded
+  ? (plotJobs[plot.id] || s.jobs.filter((j: any) => 
+      Number(j.plot) === Number(plot.id) || 
+      (j.activities || []).some((a: any) => Number(a.plot) === Number(plot.id))
+    ))
+  : s.jobs.filter((j: any) => Number(j.plot) === Number(plot.id));
         // Find nearest date for this specific plot header
         let plotNearestDate: string | null = null;
         currentPlotJobs.forEach(j => j.activities?.forEach((a: any) => {

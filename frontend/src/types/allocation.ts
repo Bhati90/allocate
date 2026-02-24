@@ -131,6 +131,11 @@ export interface Allocation {
   transport_price: number;
   status: 'allocated' | 'in_progress' | 'completed';
   
+  is_carry_forward?: boolean;
+  carry_forward_from?: number | null;
+  report_submitted?: boolean;
+  actual_area_done?: number | null;
+  farmer_agreed?: boolean | null;
   // Additional fields
   crew_size?: number;
   notes?: string;

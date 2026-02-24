@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 from django.db.models import Sum
-from tender.models import Job, JobActivity, JobBooking, FarmerPayment
+from tender.models import Job, JobActivity, JobBooking, FarmerPayment,Allocation
 
 
 def get_farmer_billing_for_job(job_id: str) -> dict:
@@ -27,15 +27,42 @@ def get_farmer_billing_for_job(job_id: str) -> dict:
     activity_rows = []
     total_billable = Decimal('0')
     all_activities_past = True
+    # from tender.models import Job, JobActivity, JobBooking, FarmerPayment, Allocation
 
     for act in activities:
         is_past = act.scheduled_date and act.scheduled_date <= today
-        if not is_past:
-            all_activities_past = False
+
+        # ── Pull allocation data for this activity ──
+        act_allocations = Allocation.objects.filter(
+            job_activity=act
+        ).order_by('allocated_date')
+
+        actual_area = sum(
+            a.actual_area_done for a in act_allocations 
+            if a.actual_area_done is not None
+        ) or None
+
+        actual_crew = sum(
+            a.actual_crew_size for a in act_allocations 
+            if a.actual_crew_size is not None
+        ) or None
+
+        # farmer_agreed: True if ALL agreed, False if any disputed, None if pending
+        agreed_values = [a.farmer_agreed for a in act_allocations if a.report_submitted]
+        if not agreed_values:
+            farmer_agreed = None
+        elif all(v is True for v in agreed_values):
+            farmer_agreed = True
+        elif any(v is False for v in agreed_values):
+            farmer_agreed = False
+        else:
+            farmer_agreed = None  # mixed/pending
 
         billable_amount = Decimal('0')
         if is_past and act.allocated_area and act.rate_per_acre:
-            billable_amount = (act.allocated_area * act.rate_per_acre).quantize(Decimal('0.01'))
+            # Use actual if farmer agreed, else planned
+            effective_area = Decimal(str(actual_area)) if (farmer_agreed and actual_area) else act.allocated_area
+            billable_amount = (effective_area * act.rate_per_acre).quantize(Decimal('0.01'))
             total_billable += billable_amount
 
         activity_rows.append({
@@ -50,6 +77,12 @@ def get_farmer_billing_for_job(job_id: str) -> dict:
             'rate_per_acre': float(act.rate_per_acre or 0),
             'billable_amount': float(billable_amount),
             'allocation_status': act.allocation_status,
+            # ── NEW fields ──
+            'actual_area_done': float(actual_area) if actual_area is not None else None,
+            'actual_crew_size': actual_crew,
+            'farmer_agreed': farmer_agreed,
+            'report_submitted': any(a.report_submitted for a in act_allocations),
+            'allocation_count': len(act_allocations),  # multiple allocs per activity
         })
 
     # Payments received
@@ -110,3 +143,6 @@ def get_farmer_billing_for_job(job_id: str) -> dict:
         },
         'payment_history': payment_history,
     }
+
+
+

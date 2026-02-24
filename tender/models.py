@@ -378,7 +378,7 @@ class JobActivity(models.Model):
     def save(self, *args, **kwargs):
         from decimal import Decimal, ROUND_HALF_UP
         
-        self.remaining_area = self.total_area - self.allocated_area
+        self.remaining_area = max(Decimal('0'), self.total_area - self.allocated_area)
 
         # status
         if self.allocated_area == 0:
@@ -399,7 +399,7 @@ class JobActivity(models.Model):
             Decimal('0.01'), rounding=ROUND_HALF_UP
         )
 
-        self.full_clean()
+     
         super().save(*args, **kwargs)
 
 
@@ -801,6 +801,47 @@ class Allocation(models.Model):
         decimal_places=2,
         help_text="Rate paid to mukkadam per acre"
     )
+
+    # In Allocation model, add these fields after `notes`:
+
+    # ── Mukkadam Day-End Report ──────────────────────────────
+    actual_start_time = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When mukkadam actually started work"
+    )
+    actual_end_time = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When mukkadam submitted day-end report"
+    )
+    actual_crew_size = models.IntegerField(
+        null=True, blank=True,
+        help_text="Actual crew who showed up (mukkadam reported)"
+    )
+    actual_area_done = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        null=True, blank=True,
+        help_text="Acres actually completed today (mukkadam reported)"
+    )
+    report_submitted_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Timestamp when mukkadam hit submit"
+    )
+    report_submitted = models.BooleanField(default=False)
+
+    # ── Farmer Verification ──────────────────────────────────
+    farmer_agreed = models.BooleanField(
+        null=True, blank=True,
+        help_text="True=agreed, False=disputed, None=not yet responded"
+    )
+    farmer_response_at = models.DateTimeField(null=True, blank=True)
+    farmer_dispute_reason = models.TextField(blank=True)
+
+    # ── Priority override ────────────────────────────────────
+    # After day-end report, use actual_area_done instead of allocated_area
+    use_actual_for_settlement = models.BooleanField(
+        default=False,
+        help_text="If True, settlement uses actual_area_done over allocated_area"
+    )
     
     # Calculated amounts
     farmer_amount = models.DecimalField(
@@ -856,7 +897,19 @@ class Allocation(models.Model):
     )
     
     notes = models.TextField(blank=True)
-    
+    # In tender/models.py — Allocation model, add these two fields:
+
+    is_carry_forward = models.BooleanField(
+        default=False,
+        help_text='Auto-created by carry-forward service when farmer agrees actual < allocated'
+    )
+    carry_forward_from = models.ForeignKey(
+        'self',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='carry_forward_allocations',
+        help_text='Original allocation this was carried forward from'
+    )
     # Audit
     created_by = models.ForeignKey(
         User, 
@@ -1266,6 +1319,12 @@ class MukkadamJobSettlement(models.Model):
     )
     cluster = models.ForeignKey(
         Cluster, on_delete=models.SET_NULL, null=True, blank=True
+    )
+
+    # In MukkadamJobSettlement model
+    credit_carried_forward = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text="Credit from previous job's negative balance"
     )
 
     # Gross calculation

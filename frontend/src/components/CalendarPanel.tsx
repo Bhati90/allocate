@@ -232,7 +232,15 @@ const [showDayDetail, setShowDayDetail] = useState(false);
 const [detailDate, setDetailDate] = useState<Date | null>(null);
 const [detailCapacity, setDetailCapacity] = useState<any | null>(null);
 const [dayTotals, setDayTotals] = useState<Record<string, number>>({});
-
+// Add this helper
+const getDayHasCarryForward = (date: Date | null) => {
+  if (!date) return false;
+  const dateStr = formatDate(date);
+  return allocations.some(a => 
+    formatDate(new Date(a.allocated_date)) === dateStr && 
+    (a as any).is_carry_forward === true
+  );
+};
 const calculateDayCapacity = (date: Date | null) => {
   if (!date) return { status: 'empty', used: 0, total: 0, percentage: 0, conflicts: [], mukkadamsOnLeave: 0 };
 
@@ -521,11 +529,13 @@ useEffect(() => {
 
 const dayPotential = potentialByDate?.[dateKey] || [];
 const hasPotential = dayPotential.length > 0;
+const hasCarryForward = getDayHasCarryForward(date);
 
-  return (
-    <div
-      key={dateKey}
-      className={`day-cell ${capacity.status} ${isSelected ? 'selected' : ''} ${hasOverload ? 'overload' : ''}`}
+return (
+  <div
+    key={dateKey}
+    className={`day-cell ${capacity.status} ${isSelected ? 'selected' : ''} ${hasOverload ? 'overload' : ''} ${hasCarryForward ? 'carry-forward-day' : ''}`}
+    
       onClick={() => handleDateClick(date)}
       onContextMenu={(e) => handleDateRightClick(e, date)}
     >
@@ -598,29 +608,35 @@ const hasPotential = dayPotential.length > 0;
 
       {/* Allocations count – only in Allocations view */}
 {viewModes.includes('allocations') && (() => {
-  // ✅ Count H activities from allJobs for this date
-  // ✅ Use jobs (filtered) not allJobs so farmer/plot filters apply
-const hCount = jobs.reduce((sum, job) =>
-  sum + (job.activities || []).filter(act =>
-    act.scheduled_date?.slice(0, 10) === dateKey &&
-    (act as any).is_manually_moved === true
-  ).length, 0
-);
+  const hCount = jobs.reduce((sum, job) =>
+    sum + (job.activities || []).filter(act =>
+      act.scheduled_date?.slice(0, 10) === dateKey &&
+      (act as any).is_manually_moved === true
+    ).length, 0
+  );
+
+  // ✅ Count carry-forward allocations for this day
+  const carryForwardCount = dayAllocs.filter(a => (a as any).is_carry_forward).length;
+  const normalAllocCount = dayAllocs.filter(a => !(a as any).is_carry_forward).length;
 
   return (
     <div className="allocation-chips">
       {hCount > 0 && (
-        <div
-          className="allocation-chip"
-          style={{ backgroundColor: '#fff7ed', color: '#c2410c', fontWeight: 700 }}
-        >
+        <div className="allocation-chip" style={{ backgroundColor: '#fff7ed', color: '#c2410c', fontWeight: 700 }}>
           {hCount} H
         </div>
       )}
-      {/* ✅ Only show allocation count when NOT in jobs mode
-      {!viewModes.includes('jobs') && dayAllocs.length > 0 && (
-        <div className="allocation-chip more">+{dayAllocs.length}</div>
-      )} */}
+      {normalAllocCount > 0 && (
+        <div className="allocation-chip" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8', fontWeight: 700 }}>
+          {normalAllocCount} alloc
+        </div>
+      )}
+      {/* ✅ Carry-forward badge */}
+      {carryForwardCount > 0 && (
+        <div className="allocation-chip" style={{ backgroundColor: '#f3e8ff', color: '#7c3aed', fontWeight: 700 }}>
+          🔄 {carryForwardCount} CF
+        </div>
+      )}
     </div>
   );
 })()}
@@ -646,14 +662,33 @@ const hCount = jobs.reduce((sum, job) =>
 {showDayDetail && detailDate && detailCapacity && (
   <DayDetailModal
     date={detailDate}
-jobs={(allJobs || jobs).filter(job => {
+jobs={jobs.filter(job => {
   const dateStr = formatDate(detailDate);
-  return (job.activities || []).some(a => a.scheduled_date?.slice(0, 10) === dateStr);
+  
+  // ✅ Has activity scheduled on this date
+  const hasScheduledActivity = (job.activities || []).some(
+    a => a.scheduled_date?.slice(0, 10) === dateStr
+  );
+  
+  // ✅ Has allocation on this date
+  const hasAllocationOnDate = getDayAllocations(detailDate).some(
+    a => a.job_id === job.job_id
+  );
+  
+  return hasScheduledActivity || hasAllocationOnDate;
 }).map(job => ({
   ...job,
-  activities: (job.activities || []).filter(a => 
-    a.scheduled_date?.slice(0, 10) === formatDate(detailDate)
-  )
+  activities: (job.activities || []).filter(a => {
+    const dateStr = formatDate(detailDate);
+    const scheduledMatch = a.scheduled_date?.slice(0, 10) === dateStr;
+    
+    // ✅ Also include activities that have allocations on this date
+    const hasAlloc = getDayAllocations(detailDate).some(
+      alloc => alloc.job_id === job.job_id && alloc.job_activity === a.id
+    );
+    
+    return scheduledMatch || hasAlloc;
+  })
 }))}
     allocations={getDayAllocations(detailDate)}
     mukkadams={mukkadams}

@@ -1411,7 +1411,7 @@ const [farmerTab, setFarmerTab] = useState<'details' | 'billing'>('details');
         onClick={() => setExpanded(!expanded)}
       >
 
-        <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', marginBottom: '12px' }}>
+        {/* <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', marginBottom: '12px' }}>
   {[
     { key: 'details', label: '📋 Details' },
     { key: 'billing', label: '💰 Billing' },
@@ -1429,7 +1429,7 @@ const [farmerTab, setFarmerTab] = useState<'details' | 'billing'>('details');
       {t.label}
     </button>
   ))}
-</div>
+</div> */}
 
 {farmerTab === 'billing' && (
   <FarmerBillingTab farmerId={farmer.farmer_id} />
@@ -2752,13 +2752,13 @@ const filteredFarmers = (data?.farmers || []).filter(f => {
     <User size={15} className="inline mr-1" />
     Farmers ({data?.farmers?.length || 0})
   </button>
-  <button
+  {/* <button
     onClick={() => { setTab('payments'); setNoCluster(false); setClusterFilter(''); }}
     className={`px-5 py-2 text-sm font-medium transition ${tab === 'payments' ? 'bg-orange-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
   >
     <IndianRupee size={15} className="inline mr-1" />
     Payments
-  </button>
+  </button> */}
 </div>
 
 <div className="flex items-center gap-2 flex-wrap flex-1">
