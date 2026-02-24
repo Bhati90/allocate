@@ -19,7 +19,7 @@ from .views import (
 )
 
 from .webhook import booking_webhook,run_mukkadam_sync
-from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report
+from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history
 # Create router
 router = DefaultRouter()
 
@@ -61,6 +61,11 @@ path('api/settlements/', list_all_settlements, name='list-settlements'),
         mukkadam_settlement_detail,
         name='mukkadam-settlement-detail'
     ),
+
+
+
+    path('api/mukkadam/future-work/',mukkadam_future_work),
+    path('api/mukkadam/settlements/',mukkadam_settlement_history),
 
 path('api/mukkadam/workbook/', mukkadam_workbook, name='mukkadam_workbook'),
 

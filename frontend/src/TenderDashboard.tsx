@@ -11,8 +11,9 @@ import {Pencil,Pen,Check,X,
 } from "lucide-react";
 
 import { AddToClusterModal } from "./Tender";
-const API_BASE = "http://localhost:8002/tender";
-const API_BASE_URL = "http://localhost:8002/tender";
+import { API_BASE_URL } from "./types/config";
+// const API_BASE = "http://localhost:8002/tender";
+// const API_BASE_URL = "http://localhost:8002/tender";
 
 import toast from "react-hot-toast";
 // ─── Types ───────────────────────────────────────────────
@@ -2635,8 +2636,8 @@ const [pruningTo, setPruningTo] = useState('');
       if (clusterFilter) params.cluster_id = clusterFilter;
 
       const [dashRes, clusterRes] = await Promise.all([
-        axios.get(`${API_BASE}/api/tender-dashboard/`, { params }),
-        axios.get(`${API_BASE}/api/clusters/`),
+        axios.get(`${API_BASE_URL}/api/tender-dashboard/`, { params }),
+        axios.get(`${API_BASE_URL}/api/clusters/`),
       ]);
       setData(dashRes.data);
       setClusters(clusterRes.data?.results || clusterRes.data || []);

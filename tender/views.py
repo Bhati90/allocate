@@ -4266,6 +4266,9 @@ def cluster_payment_dashboard(request, cluster_id):
         'farmers': farmer_data,
         'mukkadams': mukkadam_data,
     })
+
+
+
 @api_view(['POST'])
 def add_weekly_payment(request):
     assignment_id = request.data.get('assignment_id')
