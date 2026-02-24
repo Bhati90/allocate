@@ -375,19 +375,19 @@ def mukkadam_workbook(request):
         'work_summary': work_summary,
         'jobs': jobs_data,
     })
-
 @api_view(['GET'])
 def mukkadam_future_work(request):
     """
     Returns only upcoming/future jobs assigned to the mukkadam.
+    Includes IDs for Farmer, Mukkadam, and specific Allocations + Farmer contact.
     """
     mobile = request.query_params.get('mobile', '').strip()
     if not mobile:
-        return Response({'error': 'mobile required'}, status=400)
+        return Response({'error': 'mobile required'}, status=status.HTTP_400_BAD_REQUEST)
 
     mukkadam = Mukkadam.objects.filter(mobile_numbers__icontains=mobile).first()
     if not mukkadam:
-        return Response({'error': 'Not found'}, status=404)
+        return Response({'error': 'Mukkadam not found'}, status=status.HTTP_404_NOT_FOUND)
 
     today = date.today()
     
@@ -396,7 +396,9 @@ def mukkadam_future_work(request):
         mukkadam=mukkadam,
         allocated_date__gte=today
     ).select_related(
-        'job_activity__job__farmer', 'job_activity__activity', 'job_activity__plot', 'cluster'
+        'job_activity__job__farmer', 
+        'job_activity__activity', 
+        'job_activity__plot'
     ).order_by('allocated_date')
 
     jobs_map = {}
@@ -407,116 +409,157 @@ def mukkadam_future_work(request):
         if jid not in jobs_map:
             # Lat/Lng priority for navigation
             plot = alloc.job_activity.plot or job.plot
+            
             jobs_map[jid] = {
                 'job_id': jid,
+                'farmer_id': job.farmer.farmer_id,
+                'farmer_name': job.farmer.farmer_name,
+                'farmer_phone': job.farmer.phone_number,  # ✅ Added Farmer Phone
                 'scheduled_date': str(job.scheduled_date),
                 'crop': f"{job.crop_name} ({job.variety})",
-                'farmer_name': job.farmer.farmer_name,
                 'location': {
                     'address': job.farmer.location,
                     'lat': float(plot.latitude) if plot and plot.latitude else float(job.latitude) if job.latitude else None,
                     'lng': float(plot.longitude) if plot and plot.longitude else float(job.longitude) if job.longitude else None,
                 },
                 'activities': [],
-                'projected_earnings': 0
+                'projected_earnings': 0.0
             }
         
         projected = float(alloc.allocated_area * alloc.mukkadam_rate)
-        jobs_map[jid]['projected_earnings'] += projected
+        jobs_map[jid]['projected_earnings'] += round(projected, 2)
+        
         jobs_map[jid]['activities'].append({
+            'allocation_id': alloc.id,
             'name': alloc.job_activity.activity.name,
+            'date': str(alloc.allocated_date),
             'area': float(alloc.allocated_area),
             'rate': float(alloc.mukkadam_rate),
             'earning': round(projected, 2),
-            'date': str(alloc.allocated_date)
         })
 
     return Response({
+        'mukkadam_id': mukkadam.mukkadam_id,
         'mukkadam_name': mukkadam.mukkadam_name,
         'total_future_jobs': len(jobs_map),
-        'total_projected_earning': sum(j['projected_earnings'] for j in jobs_map.values()),
+        'total_projected_earning': round(sum(j['projected_earnings'] for j in jobs_map.values()), 2),
         'jobs': list(jobs_map.values())
     })
+from decimal import Decimal
+from django.db.models import Sum
+from rest_framework.response import Response
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from tender.models import Mukkadam, MukkadamJobSettlement, Allocation, MukkadamMiscCost
+
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def mukkadam_settlement_history(request):
     """
-    Returns history of completed jobs with detailed work breakdown and 
-    proper carry-forward balance adjustment.
+    Continuous Balance Chain Logic:
+    Each job's calculation releases the PREVIOUS job's deposit and 
+    incorporates the PREVIOUS running balance.
+    Includes Global Advance deduction total at the top level.
     """
     mobile = request.query_params.get('mobile', '').strip()
     mukkadam = Mukkadam.objects.filter(mobile_numbers__icontains=mobile).first()
     if not mukkadam:
         return Response({'error': 'Mukkadam not found'}, status=404)
 
-    # 1. Fetch settlements in chronological order
+    # 1. Fetch settlements in order of creation/completion
     settlements = MukkadamJobSettlement.objects.filter(
         mukkadam=mukkadam
     ).select_related('job', 'job__farmer').order_by('created_at')
 
     history_data = []
-    # This tracks the running balance (carry forward) from previous jobs
-    running_balance_carry_forward = Decimal('0')
+    
+    # --- ACCOUNT CHAIN VARIABLES ---
+    running_balance = Decimal('0')
+    previous_job_deposit = Decimal('0')
+
+    # --- GLOBAL AGGREGATORS ---
+    total_activities_all_time = 0
+    total_acres_all_time = Decimal('0')
+    total_gross_earned_all_time = Decimal('0')
+    total_weekly_received_all_time = Decimal('0')
+    total_misc_deducted_all_time = Decimal('0')
+    total_advance_deducted_all_time = Decimal('0')  # ✅ Added aggregator for advance
 
     for s in settlements:
-        # 2. Get detailed activities for this specific mukkadam on this job
-        # Logic matches your cluster dashboard breakdown
+        # 2. Get Work Details for the current job
         allocations = Allocation.objects.filter(
             mukkadam=mukkadam,
             job_activity__job=s.job,
         ).select_related('job_activity__activity', 'job_activity__plot')
 
         work_details = []
+        job_acres = Decimal('0')
+        job_activity_count = allocations.count()
+
         for alloc in allocations:
-            act = alloc.job_activity
+            effective_area = Decimal(str(alloc.actual_area_done)) if (alloc.farmer_agreed and alloc.actual_area_done is not None) else Decimal(str(alloc.allocated_area or 0))
             
-            # Determine area to be billed (Use actual if agreed, else allocated)
-            effective_area = Decimal(str(alloc.allocated_area or 0))
-            if alloc.farmer_agreed and alloc.actual_area_done is not None:
-                effective_area = Decimal(str(alloc.actual_area_done))
-
-            gross_for_this_activity = (effective_area * Decimal(str(alloc.mukkadam_rate or 0))).quantize(Decimal('0.01'))
-
+            gross_act = (effective_area * Decimal(str(alloc.mukkadam_rate or 0))).quantize(Decimal('0.01'))
+            job_acres += effective_area
+            
             work_details.append({
-                'activity_name': act.activity.name,
-                'plot_code': act.plot.plot_code if act.plot else '—',
+                'activity_name': alloc.job_activity.activity.name,
+                'plot_code': alloc.job_activity.plot.plot_code if alloc.job_activity.plot else '—',
                 'allocated_date': str(alloc.allocated_date),
-                'effective_area': float(effective_area),
+                'area': float(effective_area),
                 'rate': float(alloc.mukkadam_rate),
-                'amount': float(gross_for_this_activity),
-                'is_actual_used': bool(alloc.farmer_agreed and alloc.actual_area_done is not None),
-                'farmer_agreed': alloc.farmer_agreed
+                'amount': float(gross_act),
             })
 
-        # 3. Financial Logic with Carry Forward Adjustment
-        current_job_gross = s.gross_amount
-        payable_after_deposit = s.payable_amount # This is the 90% amount
-        from django.db.models import Sum
+        # 3. Handle Misc Costs
         misc_total = MukkadamMiscCost.objects.filter(
             mukkadam=mukkadam, 
             job=s.job
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-        # Deductions specifically for this job entry
-        specific_deductions = s.advance_deducted + s.weekly_payments_deducted + misc_total
-        # Calculation: (90% Gross) - (This Job's Deductions) + (Balance from Previous Job)
-        # Note: running_balance_carry_forward will be negative if he was overpaid previously
-        calculated_net = payable_after_deposit - specific_deductions + running_balance_carry_forward
+        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+
+        # 4. THE CONTINUOUS CALCULATION
+        current_payable_90pct = s.payable_amount 
+        current_deposit_held = s.gross_amount * (s.deposit_percent / 100)
+        
+        # Money In = Current 90% + Released Previous Deposit + Previous Running Balance
+        money_in = current_payable_90pct + previous_job_deposit + running_balance
+        
+        # Deduct current liabilities
+        current_deductions = s.advance_deducted + s.weekly_payments_deducted + misc_total
+        
+        final_net_for_this_job = money_in - current_deductions
+
+        # 5. Update Global Totals
+        total_activities_all_time += job_activity_count
+        total_acres_all_time += job_acres
+        total_gross_earned_all_time += s.gross_amount
+        total_weekly_received_all_time += s.weekly_payments_deducted
+        total_misc_deducted_all_time += misc_total
+        total_advance_deducted_all_time += s.advance_deducted # ✅ Added to global aggregator
 
         history_data.append({
             'job_id': s.job.job_id,
             'farmer_name': s.job.farmer.farmer_name,
             'status': s.status,
-            'work_breakdown': work_details,
+            'work_summary': {
+                'total_acres': float(job_acres),
+                'activity_count': job_activity_count,
+                'details': work_details
+            },
             'financials': {
-                'gross_total': float(current_job_gross),
-                'deposit_held_10pct': float(current_job_gross * Decimal('0.1')),
-                'payable_amount': float(payable_after_deposit),
+                'gross_100pct': float(s.gross_amount),
+                'payable_90pct': float(current_payable_90pct),
+                'deposit_held_this_job': float(current_deposit_held),
+                'adjustments': {
+                    'carry_forward_balance': float(running_balance),
+                    'released_prev_deposit': float(previous_job_deposit),
+                },
                 'deductions': {
-            'advance_adjusted': float(s.advance_deducted),
-            'weekly_payments': float(s.weekly_payments_deducted),
-            'misc_costs': float(misc_total), # ✅ FIXED
-            'previous_balance_adjustment': float(running_balance_carry_forward)
-        },
-                'final_net_payable': float(calculated_net)
+                    'advance': float(s.advance_deducted),
+                    'weekly': float(s.weekly_payments_deducted),
+                    'misc': float(misc_total),
+                },
+                'final_net_payable': float(final_net_for_this_job)
             },
             'dates': {
                 'calculated_at': str(s.calculated_at.date()) if s.calculated_at else None,
@@ -524,16 +567,23 @@ def mukkadam_settlement_history(request):
             }
         })
 
-        # 4. Update the running balance for the NEXT job in the loop
-        # If the final_net_payable is negative, it carries over to the next job
-        if calculated_net < 0:
-            running_balance_carry_forward = calculated_net
-        else:
-            running_balance_carry_forward = Decimal('0')
+        # 6. PASS VARIABLES TO NEXT LOOP
+        running_balance = final_net_for_this_job
+        previous_job_deposit = current_deposit_held
 
+    # 7. Final Response
     return Response({
         'mukkadam_name': mukkadam.mukkadam_name,
-        'current_carry_forward_balance': float(running_balance_carry_forward),
+        'global_work_summary': {
+            'total_activities_done': total_activities_all_time,
+            'total_acres_completed': float(total_acres_all_time.quantize(Decimal('0.01'))),
+            'total_gross_earnings': float(total_gross_earned_all_time.quantize(Decimal('0.01'))),
+            'current_active_deposit': float(previous_job_deposit.quantize(Decimal('0.01'))),
+            'total_advance_deducted': float(total_advance_deducted_all_time.quantize(Decimal('0.01'))), # ✅ Added at top
+            'total_weekly_payments_received': float(total_weekly_received_all_time.quantize(Decimal('0.01'))),
+            'total_miscellaneous_payments': float(total_misc_deducted_all_time.quantize(Decimal('0.01'))),
+            'final_closing_balance': float(running_balance.quantize(Decimal('0.01')))
+        },
         'history': history_data
     })
 
