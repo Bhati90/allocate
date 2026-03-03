@@ -9,6 +9,7 @@ import {Pencil,Pen,Check,X,
   TrendingUp, RefreshCw, Filter, Search, CheckCircle,
   Clock, AlertCircle, Building2, User, PlusCircle
 } from "lucide-react";
+import { useNavigate } from 'react-router-dom';
 
 import { AddToClusterModal } from "./Tender";
 import { API_BASE_URL } from "./types/config";
@@ -16,6 +17,7 @@ import { API_BASE_URL } from "./types/config";
 // const API_BASE_URL = "http://localhost:8002/tender";
 
 import toast from "react-hot-toast";
+import Dialpad from "./call";
 // ─── Types ───────────────────────────────────────────────
 // interface Activity { name: string; price: string; }
 interface Mukkadam {
@@ -31,7 +33,17 @@ interface Mukkadam {
   total_price: number;
   reference_image_url: string;
   efficiency: number;
-  clusters: { id: number; name: string }[];
+  // In your TypeScript interfaces, update clusters:
+clusters: {
+  id: number;
+  name: string;
+  mukkadam_type: 'permanent' | 'updown';
+  updown_mode?: 'range' | 'specific';
+  updown_from_date?: string;
+  updown_to_date?: string;
+  updown_specific_dates?: string[];
+}[];
+
 }
 interface Payment {
   payment_id: number; amount: number; mode: string;
@@ -71,7 +83,19 @@ interface DashboardData {
   mukkadams: Mukkadam[];
   farmers: Farmer[];
 }
-interface ClusterOption { id: number; name: string; }
+interface ClusterOption { id: number; name: string;mukkadam_type?: 'permanent' | 'updown';
+  updown_mode?: 'range' | 'specific';
+  updown_from_date?: string | null;
+  updown_to_date?: string | null;
+  updown_specific_dates?: string[] | null;
+
+  transport_price?: number | null;
+  weekly_payment_day?: number | null;
+  advance_amount?: number | null;
+  weekly_amount?: number | null;
+
+  // frontend-only
+  isEdit?: boolean; }
 
 // ─── Helpers ────────────────────────────────────────────
 const fmt = (n: number) => `₹${n.toLocaleString('en-IN')}`;
@@ -144,6 +168,7 @@ function PortalDropdown({ anchorRef, onClose, children }: {
     }
   }, []);
 
+  // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (
@@ -155,11 +180,10 @@ function PortalDropdown({ anchorRef, onClose, children }: {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  useEffect(() => {
-    const handler = () => onClose();
-    window.addEventListener('scroll', handler, true);
-    return () => window.removeEventListener('scroll', handler, true);
-  }, []);
+  // ❌ REMOVED: scroll listener was firing immediately because
+  // autoFocus on the search input causes browser to scroll,
+  // which triggered onClose() right away → dropdown closed instantly
+  // and the page jumped to top.
 
   return ReactDOM.createPortal(
     <div
@@ -182,7 +206,6 @@ function PortalDropdown({ anchorRef, onClose, children }: {
     document.body
   );
 }
-
 // ─── Dropdown Header ─────────────────────────────────────
 function DropdownHeader({ label }: { label: string }) {
   return (
@@ -404,10 +427,11 @@ function ActivityRowWithEfficiency({ activity, mukkadamEfficiency }: {
   );
 }
 // ─── Mukkadam Card ───────────────────────────────────────
-function MukkadamCard({ m, clusters, onSuccess }: {
+function MukkadamCard({ m, clusters, onSuccess ,onCallClick}: {
   m: Mukkadam;
   clusters: ClusterOption[];
   onSuccess: () => void;
+  onCallClick: (number: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -426,9 +450,24 @@ function MukkadamCard({ m, clusters, onSuccess }: {
               </div>
               <div>
                 <p className="font-bold text-gray-900">{m.name}</p>
-                <p className="text-xs text-gray-500 flex items-center gap-1">
-                  <Phone size={11} /> {m.mobile}
-                </p>
+                <p className="text-xs text-gray-500 flex items-center gap-2">
+  <span className="inline-flex items-center gap-1">
+    <Phone size={11} /> {m.mobile}
+  </span>
+  <button
+    type="button"
+    onClick={(e) => {
+  e.stopPropagation();
+  console.log('Call clicked for', m.mobile);
+  onCallClick(m.mobile);
+}}
+
+    className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-green-50 text-green-700 border border-green-200 hover:bg-green-100"
+  >
+    Call
+  </button>
+</p>
+
               </div>
             </div>
 
@@ -439,36 +478,80 @@ function MukkadamCard({ m, clusters, onSuccess }: {
               <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-xs font-medium">
                 {m.activities.length} Activities
               </span>
-              {m.clusters.length === 0 ? (
-                <span className="px-2 py-0.5 bg-red-50 text-red-500 rounded text-xs">No Cluster</span>
-              ) : m.clusters.map(c => (
-                <span key={c.id} className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded text-xs">
-                  {c.name}
-                </span>
-              ))}
 
-              {/* Add to Cluster — stop card expand */}
-              <div onClick={e => e.stopPropagation()}>
-                <MukkadamAddToCluster
-                  mukkadam={m}
-                  clusters={clusters}
-                  onSuccess={onSuccess}
-                />
+              {/* Cluster pills with edit button */}
+              {m.clusters.length === 0 ? (
+                <span className="px-2 py-0.5 bg-red-50 text-red-500 rounded text-xs">
+                  No Cluster
+                </span>
+              ) : (
+                m.clusters.map((c: ClusterOption) => (
+                  <span
+                    key={c.id}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 8px',
+                      borderRadius: '6px',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      background:
+                        c.mukkadam_type === 'updown' ? '#fff7ed' : '#f0fdfa',
+                      color:
+                        c.mukkadam_type === 'updown' ? '#c2410c' : '#0f766e',
+                      border: `1px solid ${
+                        c.mukkadam_type === 'updown' ? '#fed7aa' : '#99f6e4'
+                      }`,
+                    }}
+                  >
+                    {c.mukkadam_type === 'updown' ? '📅' : '🏠'} {c.name}
+                    {c.mukkadam_type === 'updown' && (
+                      <span style={{ opacity: 0.7, fontWeight: 400 }}>
+                        {c.updown_mode === 'range'
+                          ? ` · ${c.updown_from_date} → ${c.updown_to_date}`
+                          : ` · ${(c.updown_specific_dates || []).length} days`}
+                      </span>
+                    )}
+
+                    {/* ✎ Edit assignment for this cluster */}
+                     <MukkadamAddToCluster
+                      mukkadam={m}
+                      clusters={clusters}
+                      onSuccess={onSuccess}
+                      mode="edit"
+                      clusterToEdit={c}
+                    />
+                  </span>
+                ))
+              )}
+
+              {/* Add to Cluster — separate trigger */}
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                }}
+              >
+                 <MukkadamAddToCluster
+                mukkadam={m}
+                clusters={clusters}
+                onSuccess={onSuccess}
+                mode="add"
+              />
               </div>
             </div>
           </div>
 
           <div className="text-right ml-4">
-            {/* <p className="text-xs text-gray-500">Total Price</p>
-            <p className="text-xl font-bold text-teal-600">{fmt(m.total_price)}</p> */}
-            {expanded
-              ? <ChevronUp size={16} className="ml-auto text-gray-400 mt-1" />
-              : <ChevronDown size={16} className="ml-auto text-gray-400 mt-1" />
-            }
+            {expanded ? (
+              <ChevronUp size={16} className="ml-auto text-gray-400 mt-1" />
+            ) : (
+              <ChevronDown size={16} className="ml-auto text-gray-400 mt-1" />
+            )}
           </div>
         </div>
       </div>
-
       {/* Expanded */}
       {expanded && (
         <div className="border-t border-gray-100 px-5 pb-5">
@@ -538,6 +621,8 @@ function MukkadamCard({ m, clusters, onSuccess }: {
                   />
                 </div>
               )}
+
+              
             </div>
           </div>
         </div>
@@ -596,165 +681,7 @@ interface AddToClusterTriggerProps {
   onOpen: (clusterId: number, clusterName: string, farmerId: string) => void;
 }
 
-// ─── Farmer Level: Add ALL plots to a cluster ────────────
-function AddToClusterTrigger({ farmer, clusters, onSuccess }: {
-  farmer: Farmer;
-  clusters: ClusterOption[];
-  onSuccess: () => void;
-}) {
-  const [showPicker, setShowPicker] = useState(false);
-  const [search, setSearch] = useState('');
-  const [saving, setSaving] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
 
-  // Close on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setShowPicker(false);
-        setSearch('');
-      }
-    };
-    if (showPicker) document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showPicker]);
-
-  const filtered = clusters.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const handleAddToCluster = async (cluster: ClusterOption) => {
-    if (saving) return;
-    setSaving(true);
-    try {
-      // Get ALL plot IDs for this farmer
-      const allPlotIds = farmer.plots_by_cluster.flatMap(g => g.plots.map(p => p.plot_id));
-
-      const res = await fetch(`${API_BASE_URL}/api/cluster/${cluster.id}/add_farmer/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          farmer_id: farmer.farmer_id,
-          plot_ids: allPlotIds,
-        }),
-      });
-
-      if (res.ok) {
-        toast.success(`All plots added to ${cluster.name}`);
-        setShowPicker(false);
-        setSearch('');
-        onSuccess();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        toast.error(err?.detail || 'Failed to add to cluster');
-      }
-    } catch {
-      toast.error('Network error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // Which cluster IDs already have ALL plots of this farmer?
-  const fullyInCluster = (clusterId: number) => {
-    const group = farmer.plots_by_cluster.find(g => g.cluster_id === clusterId);
-    const allPlotIds = new Set(farmer.plots_by_cluster.flatMap(g => g.plots.map(p => p.plot_id)));
-    const inClusterIds = new Set(group?.plots.map(p => p.plot_id) || []);
-    return allPlotIds.size > 0 && [...allPlotIds].every(id => inClusterIds.has(id));
-  };
-
-  return (
-    <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
-      <button
-        onClick={e => { e.stopPropagation(); setShowPicker(v => !v); }}
-        style={{
-          display: 'flex', alignItems: 'center', gap: '5px',
-          padding: '4px 10px', borderRadius: '999px',
-          border: '1.5px solid #14b8a6', background: '#f0fdfa',
-          color: '#0f766e', fontSize: '0.75rem', fontWeight: 600,
-          cursor: 'pointer', whiteSpace: 'nowrap',
-        }}
-      >
-        <PlusCircle size={13} />
-        Add to Cluster
-      </button>
-
-      {showPicker && (
-        <div
-          onClick={e => e.stopPropagation()}
-          style={{
-            position: 'absolute', top: 'calc(100% + 6px)', left: 0,
-            zIndex: 9999, background: '#fff', borderRadius: '12px',
-            border: '1px solid #e5e7eb', boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
-            width: '220px', overflow: 'hidden',
-          }}
-        >
-          {/* Header */}
-          <div style={{ padding: '10px 12px 6px', borderBottom: '1px solid #f3f4f6' }}>
-            <p style={{ margin: 0, fontSize: '0.7rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Add all plots to cluster
-            </p>
-          </div>
-
-          {/* Search */}
-          <div style={{ padding: '8px 10px', borderBottom: '1px solid #f3f4f6' }}>
-            <input
-              autoFocus
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search clusters..."
-              style={{
-                width: '100%', padding: '5px 8px', border: '1px solid #d1d5db',
-                borderRadius: '6px', fontSize: '0.8rem', outline: 'none',
-                boxSizing: 'border-box',
-              }}
-            />
-          </div>
-
-          {/* Cluster list */}
-          <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-            {filtered.length === 0 ? (
-              <p style={{ padding: '12px', textAlign: 'center', fontSize: '0.8rem', color: '#9ca3af' }}>
-                No clusters found
-              </p>
-            ) : filtered.map(c => {
-              const allIn = fullyInCluster(c.id);
-              return (
-                <button
-                  key={c.id}
-                  disabled={allIn || saving}
-                  onClick={() => handleAddToCluster(c)}
-                  style={{
-                    width: '100%', textAlign: 'left', padding: '9px 12px',
-                    background: 'none', border: 'none',
-                    cursor: allIn ? 'not-allowed' : 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    fontSize: '0.85rem',
-                    color: allIn ? '#9ca3af' : '#111827',
-                    borderBottom: '1px solid #f9fafb',
-                  }}
-                  onMouseEnter={e => { if (!allIn) (e.currentTarget as HTMLElement).style.background = '#f0fdfa'; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
-                >
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-                    <Building2 size={13} style={{ color: allIn ? '#d1d5db' : '#14b8a6', flexShrink: 0 }} />
-                    {c.name}
-                  </span>
-                  {allIn
-                    ? <span style={{ fontSize: '0.7rem', color: '#22c55e', fontWeight: 600 }}>✓ All in</span>
-                    : saving
-                      ? <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>...</span>
-                      : null
-                  }
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 // ─── Plot Cluster Tag + Add Button ───────────────────────
 interface PlotClusterControlProps {
   plot: Plot;
@@ -1184,6 +1111,7 @@ function MukkadamSettlementsTab({
 // import { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 
+// ─── Plot Cluster Control ─────────────────────────────────
 function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess }: {
   plot: Plot;
   clusterGroups: PlotsByCluster[];
@@ -1197,9 +1125,9 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Calculate position from button's bounding rect
   const openPicker = (e: React.MouseEvent) => {
     e.stopPropagation();
+    e.preventDefault();
     if (btnRef.current) {
       const rect = btnRef.current.getBoundingClientRect();
       setDropdownPos({
@@ -1210,7 +1138,8 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
     setShowPicker(v => !v);
   };
 
-  // Close on outside click
+  // Close on outside click only — NO scroll listener (scroll listener
+  // was firing immediately because autoFocus caused browser scroll → closed dropdown)
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (
@@ -1224,12 +1153,7 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
     return () => document.removeEventListener('mousedown', handler);
   }, [showPicker]);
 
-  // Close on scroll
-  useEffect(() => {
-    const handler = () => setShowPicker(false);
-    if (showPicker) window.addEventListener('scroll', handler, true);
-    return () => window.removeEventListener('scroll', handler, true);
-  }, [showPicker]);
+  // ❌ REMOVED scroll listener — was causing scroll-to-top
 
   const plotClusterIds = new Set(
     clusterGroups
@@ -1284,6 +1208,7 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
 
       {/* + button */}
       <button
+        type="button"
         ref={btnRef}
         onClick={openPicker}
         style={{
@@ -1300,7 +1225,7 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
         <PlusCircle size={13} />
       </button>
 
-      {/* Portal dropdown — renders at body level, escapes all overflow:hidden parents */}
+      {/* Portal dropdown */}
       {showPicker && ReactDOM.createPortal(
         <div
           ref={dropdownRef}
@@ -1317,7 +1242,6 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
             overflow: 'hidden',
           }}
         >
-          {/* Header */}
           <div style={{
             padding: '8px 12px',
             borderBottom: '1px solid #f3f4f6',
@@ -1331,7 +1255,6 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
             </p>
           </div>
 
-          {/* Cluster list */}
           <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
             {clusters.length === 0 && (
               <p style={{ padding: '10px 12px', fontSize: '0.8rem', color: '#9ca3af', margin: 0 }}>
@@ -1342,6 +1265,7 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
               const alreadyIn = plotClusterIds.has(c.id);
               return (
                 <button
+                  type="button"
                   key={c.id}
                   disabled={alreadyIn || saving}
                   onClick={() => handleAddPlot(c)}
@@ -1377,9 +1301,201 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
             })}
           </div>
         </div>,
-        document.body   // ← renders outside ALL parent containers
+        document.body
       )}
     </div>
+  );
+}
+
+
+// ─── Farmer Level: Add ALL plots to a cluster ────────────
+function AddToClusterTrigger({ farmer, clusters, onSuccess }: {
+  farmer: Farmer;
+  clusters: ClusterOption[];
+  onSuccess: () => void;
+}) {
+  const [showPicker, setShowPicker] = useState(false);
+  const [search, setSearch] = useState('');
+  const [saving, setSaving] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);  // ← manual focus, no autoFocus
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
+
+  // Close on outside click only — NO scroll listener
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (
+        dropRef.current && !dropRef.current.contains(e.target as Node) &&
+        btnRef.current && !btnRef.current.contains(e.target as Node)
+      ) {
+        setShowPicker(false);
+        setSearch('');
+      }
+    };
+    if (showPicker) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showPicker]);
+
+  // Focus search AFTER portal mounts, with preventScroll
+  useEffect(() => {
+    if (showPicker) {
+      setTimeout(() => {
+        searchRef.current?.focus({ preventScroll: true });
+      }, 0);
+    }
+  }, [showPicker]);
+
+  const openPicker = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setDropdownPos({
+        top: rect.bottom + window.scrollY + 6,
+        left: rect.left,
+      });
+    }
+    setShowPicker(v => !v);
+  };
+
+  const filtered = clusters.filter(c =>
+    c.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const handleAddToCluster = async (cluster: ClusterOption) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const allPlotIds = farmer.plots_by_cluster.flatMap(g => g.plots.map(p => p.plot_id));
+      const res = await fetch(`${API_BASE_URL}/api/cluster/${cluster.id}/add_farmer/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ farmer_id: farmer.farmer_id, plot_ids: allPlotIds }),
+      });
+      if (res.ok) {
+        toast.success(`All plots added to ${cluster.name}`);
+        setShowPicker(false);
+        setSearch('');
+        onSuccess();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err?.detail || 'Failed to add to cluster');
+      }
+    } catch {
+      toast.error('Network error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fullyInCluster = (clusterId: number) => {
+    const group = farmer.plots_by_cluster.find(g => g.cluster_id === clusterId);
+    const allPlotIds = new Set(farmer.plots_by_cluster.flatMap(g => g.plots.map(p => p.plot_id)));
+    const inClusterIds = new Set(group?.plots.map(p => p.plot_id) || []);
+    return allPlotIds.size > 0 && [...allPlotIds].every(id => inClusterIds.has(id));
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={btnRef}
+        onClick={openPicker}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '5px',
+          padding: '4px 10px', borderRadius: '999px',
+          border: '1.5px solid #14b8a6', background: '#f0fdfa',
+          color: '#0f766e', fontSize: '0.75rem', fontWeight: 600,
+          cursor: 'pointer', whiteSpace: 'nowrap',
+        }}
+      >
+        <PlusCircle size={13} />
+        Add to Cluster
+      </button>
+
+      {/* Portal dropdown — escapes overflow:hidden parents, no scroll jump */}
+      {showPicker && ReactDOM.createPortal(
+        <div
+          ref={dropRef}
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            top: dropdownPos.top,
+            left: dropdownPos.left,
+            zIndex: 99999,
+            background: '#fff',
+            borderRadius: '12px',
+            border: '1px solid #e5e7eb',
+            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
+            width: '220px',
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ padding: '10px 12px 6px', borderBottom: '1px solid #f3f4f6' }}>
+            <p style={{ margin: 0, fontSize: '0.7rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Add all plots to cluster
+            </p>
+          </div>
+
+          <div style={{ padding: '8px 10px', borderBottom: '1px solid #f3f4f6' }}>
+            <input
+              ref={searchRef}
+              // autoFocus REMOVED — was triggering scroll → closing dropdown immediately
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search clusters..."
+              style={{
+                width: '100%', padding: '5px 8px', border: '1px solid #d1d5db',
+                borderRadius: '6px', fontSize: '0.8rem', outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+
+          <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+            {filtered.length === 0 ? (
+              <p style={{ padding: '12px', textAlign: 'center', fontSize: '0.8rem', color: '#9ca3af' }}>
+                No clusters found
+              </p>
+            ) : filtered.map(c => {
+              const allIn = fullyInCluster(c.id);
+              return (
+                <button
+                  type="button"
+                  key={c.id}
+                  disabled={allIn || saving}
+                  onClick={() => handleAddToCluster(c)}
+                  style={{
+                    width: '100%', textAlign: 'left', padding: '9px 12px',
+                    background: 'none', border: 'none',
+                    cursor: allIn ? 'not-allowed' : 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    fontSize: '0.85rem',
+                    color: allIn ? '#9ca3af' : '#111827',
+                    borderBottom: '1px solid #f9fafb',
+                  }}
+                  onMouseEnter={e => { if (!allIn) (e.currentTarget as HTMLElement).style.background = '#f0fdfa'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                    <Building2 size={13} style={{ color: allIn ? '#d1d5db' : '#14b8a6', flexShrink: 0 }} />
+                    {c.name}
+                  </span>
+                  {allIn
+                    ? <span style={{ fontSize: '0.7rem', color: '#22c55e', fontWeight: 600 }}>✓ All in</span>
+                    : saving
+                      ? <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>...</span>
+                      : null
+                  }
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 // ─── Farmer Card ─────────────────────────────────────────
@@ -2611,6 +2727,7 @@ function FarmerBillingTab({ farmerId }: { farmerId: string }) {
 export default function TenderDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+   const navigate = useNavigate();
   // Change the tab type
 const [tab, setTab] = useState<'mukkadams' | 'farmers' | 'payments'>('mukkadams');
   const [search, setSearch] = useState('');
@@ -2618,6 +2735,11 @@ const [tab, setTab] = useState<'mukkadams' | 'farmers' | 'payments'>('mukkadams'
   const [clusters, setClusters] = useState<ClusterOption[]>([]);
 // Add alongside clusterFilter state
 const [noCluster, setNoCluster] = useState(false);
+
+
+const [dialpadOpen, setDialpadOpen] = useState(false);
+const [dialpadNumber, setDialpadNumber] = useState('');
+
 
 
 const [pruningFrom, setPruningFrom] = useState('');
@@ -2647,6 +2769,34 @@ const [pruningTo, setPruningTo] = useState('');
       setLoading(false);
     }
   };
+
+  // ── ADD THIS ─────────────────────────────────────────────────────
+  // Silent refresh — no spinner, no scroll-to-top.
+  // Used by MukkadamCard/FarmerCard onSuccess after add-to-cluster.
+  const fetchDataSilent = async () => {
+    const scrollY = window.scrollY;          // save position BEFORE fetch
+    try {
+      const params: Record<string, string> = {};
+      if (clusterFilter) params.cluster_id = clusterFilter;
+
+      const [dashRes, clusterRes] = await Promise.all([
+        axios.get(`${API_BASE_URL}/api/tender-dashboard/`, { params }),
+        axios.get(`${API_BASE_URL}/api/clusters/`),
+      ]);
+      setData(dashRes.data);
+      setClusters(clusterRes.data?.results || clusterRes.data || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      // Restore scroll after React re-renders (two frames to be safe)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.scrollTo({ top: scrollY, behavior: 'instant' });
+        });
+      });
+    }
+  };
+  // ─────────────────────────────────────────────────────────────────
 
 
 
@@ -2705,6 +2855,8 @@ const filteredFarmers = (data?.farmers || []).filter(f => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+
+      
       {/* Top Bar */}
       <div className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="flex items-center justify-between mb-4">
@@ -2712,13 +2864,14 @@ const filteredFarmers = (data?.farmers || []).filter(f => {
             <h1 className="text-2xl font-bold text-gray-900">Tender Dashboard</h1>
             <p className="text-sm text-gray-500">Mukkadams & Farmers for tender operations</p>
           </div>
-          <button
-            onClick={fetchData}
-            className="flex items-center gap-2 px-4 py-2 bg-teal-500 text-white rounded-lg hover:bg-teal-600 text-sm font-medium"
-          >
-            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-            Refresh
-          </button>
+         
+      <button
+        onClick={() => navigate('/')}
+        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-700 bg-white hover:bg-gray-50"
+      >
+        ← Back
+      </button>
+ 
         </div>
 
         {data && (
@@ -2853,18 +3006,39 @@ const filteredFarmers = (data?.farmers || []).filter(f => {
     <div className="space-y-3">
       {filteredMukkadams.length === 0
         ? <div className="text-center py-16 text-gray-400">No mukkadams found</div>
-        : filteredMukkadams.map(m => (
-          <MukkadamCard key={m.id} m={m} clusters={clusters} onSuccess={fetchData} />
-        ))
+        : // AFTER:
+filteredMukkadams.map(m => (
+  <MukkadamCard
+  key={m.id}
+  m={m}
+  clusters={clusters}
+  onSuccess={fetchDataSilent}
+  onCallClick={(num: string) => {
+    setDialpadNumber(num || '');
+    setDialpadOpen(true);
+  }}
+/>
+
+
+
+))
+
       }
+
+                 <Dialpad
+  isOpen={dialpadOpen}
+  number={dialpadNumber}
+  onClose={() => setDialpadOpen(false)}
+  onNumberChange={setDialpadNumber}
+/>
     </div>
   ) : tab === 'farmers' ? (
     <div className="space-y-3">
       {filteredFarmers.length === 0
         ? <div className="text-center py-16 text-gray-400">No farmers found</div>
         : filteredFarmers.map(f => (
-          <FarmerCard key={f.farmer_id} farmer={f} clusters={clusters} onSuccess={fetchData} />
-        ))
+  <FarmerCard key={f.farmer_id} farmer={f} clusters={clusters} onSuccess={fetchDataSilent} />
+))
       }
     </div>
   ) : (
@@ -2922,79 +3096,343 @@ const filteredFarmers = (data?.farmers || []).filter(f => {
             >
               Close
             </button>
+
+
           </div>
         </div>
       )}
     </div>
   );
 }
+type MukkadamType = 'permanent' | 'updown';
+type UpdownMode = 'range' | 'specific';
+
 function AddToClusterModalM({
   mukkadam,
   cluster,
   onConfirm,
   onCancel,
   saving,
+  isEdit,
 }: {
   mukkadam: Mukkadam;
   cluster: ClusterOption;
-  onConfirm: (transportPrice: number, weeklyPaymentDay: number, advanceAmount: number, weeklyAmount: number) => void;
+  onConfirm: (
+    transportPrice: number,
+    weeklyPaymentDay: number,
+    advanceAmount: number,
+    weeklyAmount: number,
+    updownConfig: {
+      mukkadam_type: MukkadamType;
+      updown_mode?: UpdownMode;
+      updown_from_date?: string;
+      updown_to_date?: string;
+      updown_specific_dates?: string[];
+    }
+  ) => void;
   onCancel: () => void;
   saving: boolean;
+  isEdit: boolean;
 }) {
-  const [transportPrice, setTransportPrice] = useState('');
-  const [weeklyPaymentDay, setWeeklyPaymentDay] = useState<number>(0);
+  const [transportPrice, setTransportPrice] = useState(
+    cluster.transport_price != null ? String(cluster.transport_price) : ''
+  );
+  const [weeklyPaymentDay, setWeeklyPaymentDay] = useState<number>(
+    cluster.weekly_payment_day ?? 0
+  );
+  const [advanceAmount, setAdvanceAmount] = useState(
+    cluster.advance_amount != null
+      ? String(cluster.advance_amount)
+      : String(getAdvanceAmount(mukkadam.crew_size ?? 0))
+  );
+  const [weeklyAmount, setWeeklyAmount] = useState(
+    cluster.weekly_amount != null
+      ? String(cluster.weekly_amount)
+      : String(getWeeklyAmount(mukkadam.crew_size ?? 0))
+  );
 
-  // Now editable, pre-filled with calculated defaults
-  const [advanceAmount, setAdvanceAmount] = useState(String(getAdvanceAmount(mukkadam.crew_size ?? 0)));
-  const [weeklyAmount, setWeeklyAmount] = useState(String(getWeeklyAmount(mukkadam.crew_size ?? 0)));
+  const [mukkadamType, setMukkadamType] = useState<MukkadamType>(
+    cluster.mukkadam_type || 'permanent'
+  );
+  const [updownMode, setUpdownMode] = useState<UpdownMode>(
+    cluster.updown_mode || 'range'
+  );
+  const [updownFrom, setUpdownFrom] = useState(cluster.updown_from_date || '');
+  const [updownTo, setUpdownTo] = useState(cluster.updown_to_date || '');
+  const [updownDates, setUpdownDates] = useState<string[]>(
+    cluster.updown_specific_dates || []
+  );
+  const [updownDateInput, setUpdownDateInput] = useState('');
 
   const handleSubmit = () => {
     const price = parseFloat(transportPrice);
     const advance = parseFloat(advanceAmount);
     const weekly = parseFloat(weeklyAmount);
 
-    if (isNaN(price) || price < 0) { toast.error('Enter a valid transport price'); return; }
-    if (isNaN(advance) || advance < 0) { toast.error('Enter a valid advance amount'); return; }
-    if (isNaN(weekly) || weekly < 0) { toast.error('Enter a valid weekly payment'); return; }
+    if (isNaN(price) || price < 0) {
+      toast.error('Enter a valid transport price');
+      return;
+    }
+    if (isNaN(advance) || advance < 0) {
+      toast.error('Enter a valid advance amount');
+      return;
+    }
+    if (isNaN(weekly) || weekly < 0) {
+      toast.error('Enter a valid weekly payment');
+      return;
+    }
 
-    onConfirm(price, weeklyPaymentDay, advance, weekly);
+    if (mukkadamType === 'updown') {
+      if (updownMode === 'range') {
+        if (!updownFrom || !updownTo) {
+          toast.error('Set from and to dates');
+          return;
+        }
+        if (updownFrom > updownTo) {
+          toast.error('From date must be before to date');
+          return;
+        }
+      }
+      if (updownMode === 'specific' && updownDates.length === 0) {
+        toast.error('Add at least one date');
+        return;
+      }
+    }
+
+    onConfirm(price, weeklyPaymentDay, advance, weekly, {
+      mukkadam_type: mukkadamType,
+      updown_mode: mukkadamType === 'updown' ? updownMode : undefined,
+      updown_from_date:
+        mukkadamType === 'updown' && updownMode === 'range'
+          ? updownFrom
+          : undefined,
+      updown_to_date:
+        mukkadamType === 'updown' && updownMode === 'range'
+          ? updownTo
+          : undefined,
+      updown_specific_dates:
+        mukkadamType === 'updown' && updownMode === 'specific'
+          ? updownDates
+          : undefined,
+    });
   };
 
-  const inputStyle = {
-    width: '100%', padding: '8px 10px', borderRadius: '7px',
-    border: '1.5px solid #e5e7eb', fontSize: '0.88rem',
-    outline: 'none', boxSizing: 'border-box' as const,
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '8px 10px',
+    borderRadius: '7px',
+    border: '1.5px solid #e5e7eb',
+    fontSize: '0.88rem',
+    outline: 'none',
+    boxSizing: 'border-box',
   };
 
   return (
     <div
       onClick={onCancel}
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-        zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.4)',
+        zIndex: 9999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
       }}
     >
       <div
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         style={{
-          background: '#fff', borderRadius: '12px', padding: '24px',
-          width: '380px', boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+          background: '#fff',
+          borderRadius: '12px',
+          padding: '24px',
+          width: '400px',
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
         }}
       >
         {/* Header */}
-        <div style={{ marginBottom: '18px' }}>
-          <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#111827' }}>
-            Add to {cluster.name}
+        <div style={{ marginBottom: '16px' }}>
+          <h3
+            style={{
+              margin: 0,
+              fontSize: '1rem',
+              fontWeight: 700,
+              color: '#111827',
+            }}
+          >
+            {isEdit ? 'Edit in ' : 'Add to '}
+            {cluster.name}
           </h3>
-          <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#6b7280' }}>
+          <p
+            style={{
+              margin: '4px 0 0',
+              fontSize: '0.82rem',
+              color: '#6b7280',
+            }}
+          >
             {mukkadam.name} · Crew size: {mukkadam.crew_size ?? '—'}
           </p>
         </div>
 
-        {/* Advance + Weekly — now editable, side by side */}
+        {/* ── TYPE TOGGLE ── */}
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '6px' }}>
+            Type
+          </label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {(['permanent', 'updown'] as const).map(t => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setMukkadamType(t)}
+                style={{
+                  flex: 1, padding: '8px', borderRadius: '8px',
+                  fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
+                  border: `1.5px solid ${mukkadamType === t ? '#14b8a6' : '#e5e7eb'}`,
+                  background: mukkadamType === t ? '#f0fdfa' : '#fff',
+                  color: mukkadamType === t ? '#0f766e' : '#9ca3af',
+                  transition: 'all 0.15s',
+                }}
+              >
+                {t === 'permanent' ? '🏠 Permanent' : '📅 Updown'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ── UPDOWN CONFIG ── */}
+        {mukkadamType === 'updown' && (
+          <div style={{
+            background: '#fff7ed', border: '1px solid #fed7aa',
+            borderRadius: '8px', padding: '12px 14px', marginBottom: '16px',
+          }}>
+            <p style={{
+              margin: '0 0 10px', fontSize: '0.72rem', fontWeight: 700,
+              color: '#c2410c', textTransform: 'uppercase', letterSpacing: '0.04em',
+            }}>
+              Updown Availability
+            </p>
+
+            {/* Mode toggle */}
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+              {(['range', 'specific'] as const).map(mode => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setUpdownMode(mode)}
+                  style={{
+                    flex: 1, padding: '6px', borderRadius: '6px',
+                    fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer',
+                    border: `1.5px solid ${updownMode === mode ? '#f97316' : '#e5e7eb'}`,
+                    background: updownMode === mode ? '#fff7ed' : '#fff',
+                    color: updownMode === mode ? '#c2410c' : '#9ca3af',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {mode === 'range' ? '📆 Date Range' : '🗓 Specific Dates'}
+                </button>
+              ))}
+            </div>
+
+            {/* Range mode */}
+            {updownMode === 'range' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '0.72rem', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '3px' }}>
+                    From <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={updownFrom}
+                    onChange={e => setUpdownFrom(e.target.value)}
+                    style={{ ...inputStyle, fontSize: '0.82rem' }}
+                    onFocus={e => (e.currentTarget.style.borderColor = '#f97316')}
+                    onBlur={e => (e.currentTarget.style.borderColor = '#e5e7eb')}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.72rem', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '3px' }}>
+                    To <span style={{ color: '#ef4444' }}>*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={updownTo}
+                    onChange={e => setUpdownTo(e.target.value)}
+                    style={{ ...inputStyle, fontSize: '0.82rem' }}
+                    onFocus={e => (e.currentTarget.style.borderColor = '#f97316')}
+                    onBlur={e => (e.currentTarget.style.borderColor = '#e5e7eb')}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Specific dates mode */}
+            {updownMode === 'specific' && (
+              <div>
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                  <input
+                    type="date"
+                    value={updownDateInput}
+                    onChange={e => setUpdownDateInput(e.target.value)}
+                    style={{ ...inputStyle, flex: 1, fontSize: '0.82rem' }}
+                    onFocus={e => (e.currentTarget.style.borderColor = '#f97316')}
+                    onBlur={e => (e.currentTarget.style.borderColor = '#e5e7eb')}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (updownDateInput && !updownDates.includes(updownDateInput)) {
+                        setUpdownDates(prev => [...prev, updownDateInput].sort());
+                        setUpdownDateInput('');
+                      }
+                    }}
+                    style={{
+                      padding: '8px 14px', borderRadius: '7px', border: 'none',
+                      background: '#f97316', color: '#fff',
+                      fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    + Add
+                  </button>
+                </div>
+                {updownDates.length === 0 ? (
+                  <p style={{ fontSize: '0.75rem', color: '#9ca3af', textAlign: 'center', margin: '4px 0' }}>
+                    No dates added yet
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                    {updownDates.map(d => (
+                      <span key={d} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '4px',
+                        padding: '3px 8px', borderRadius: '999px',
+                        background: '#fed7aa', color: '#c2410c',
+                        fontSize: '0.72rem', fontWeight: 600,
+                      }}>
+                        {d}
+                        <button
+                          type="button"
+                          onClick={() => setUpdownDates(prev => prev.filter(x => x !== d))}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            color: '#c2410c', padding: 0, lineHeight: 1, fontSize: '0.75rem',
+                          }}
+                        >✕</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── PAYMENT CONFIG ── */}
         <div style={{
           background: '#f0fdfa', border: '1px solid #99f6e4',
-          borderRadius: '8px', padding: '12px 14px', marginBottom: '18px',
+          borderRadius: '8px', padding: '12px 14px', marginBottom: '14px',
         }}>
           <p style={{ margin: '0 0 10px', fontSize: '0.72rem', fontWeight: 700, color: '#0f766e', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
             Payment Configuration
@@ -3005,9 +3443,7 @@ function AddToClusterModalM({
                 Advance Amount (₹)
               </label>
               <input
-                type="number"
-                min="0"
-                value={advanceAmount}
+                type="number" min="0" value={advanceAmount}
                 onChange={e => setAdvanceAmount(e.target.value)}
                 style={inputStyle}
                 onFocus={e => (e.currentTarget.style.borderColor = '#14b8a6')}
@@ -3022,9 +3458,7 @@ function AddToClusterModalM({
                 Weekly Payment (₹)
               </label>
               <input
-                type="number"
-                min="0"
-                value={weeklyAmount}
+                type="number" min="0" value={weeklyAmount}
                 onChange={e => setWeeklyAmount(e.target.value)}
                 style={inputStyle}
                 onFocus={e => (e.currentTarget.style.borderColor = '#14b8a6')}
@@ -3043,9 +3477,7 @@ function AddToClusterModalM({
             Transport Price (₹) <span style={{ color: '#ef4444' }}>*</span>
           </label>
           <input
-            autoFocus
-            type="number"
-            min="0"
+            autoFocus type="number" min="0"
             value={transportPrice}
             onChange={e => setTransportPrice(e.target.value)}
             placeholder="e.g. 5000"
@@ -3073,150 +3505,292 @@ function AddToClusterModalM({
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={onCancel} disabled={saving} style={{
-            flex: 1, padding: '9px', borderRadius: '7px',
-            border: '1.5px solid #e5e7eb', background: '#fff',
-            color: '#6b7280', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
-          }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            style={{
+              flex: 1,
+              padding: '9px',
+              borderRadius: '7px',
+              border: '1.5px solid #e5e7eb',
+              background: '#fff',
+              color: '#6b7280',
+              fontSize: '0.85rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={saving || !transportPrice}
             style={{
-              flex: 1, padding: '9px', borderRadius: '7px', border: 'none',
+              flex: 1,
+              padding: '9px',
+              borderRadius: '7px',
+              border: 'none',
               background: saving ? '#99f6e4' : '#14b8a6',
-              color: '#fff', fontSize: '0.85rem', fontWeight: 600,
+              color: '#fff',
+              fontSize: '0.85rem',
+              fontWeight: 600,
               cursor: saving ? 'not-allowed' : 'pointer',
             }}
           >
-            {saving ? 'Adding...' : 'Confirm'}
+            {saving ? (isEdit ? 'Updating...' : 'Adding...') : 'Confirm'}
           </button>
         </div>
       </div>
     </div>
   );
 }
-
 // ─── Mukkadam Add to Cluster Trigger ────────────────────
-function MukkadamAddToCluster({ mukkadam, clusters, onSuccess }: {
+
+type MukkadamAddMode = 'add' | 'edit';
+
+function MukkadamAddToCluster({
+  mukkadam,
+  clusters,
+  onSuccess,
+  mode,
+  clusterToEdit,
+}: {
   mukkadam: Mukkadam;
   clusters: ClusterOption[];
   onSuccess: () => void;
+  mode: MukkadamAddMode;
+  clusterToEdit?: ClusterOption; // required for edit
 }) {
-  const [open, setOpen] = useState(false);
+  const [openDropdown, setOpenDropdown] = useState(false);
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
-  const [selectedCluster, setSelectedCluster] = useState<ClusterOption | null>(null);
+  const [selectedCluster, setSelectedCluster] = useState<ClusterOption | null>(
+    null
+  );
   const btnRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const filtered = clusters.filter(c =>
+  // Edit mode: when clusterToEdit changes, open modal
+  // useEffect(() => {
+  //   if (mode === 'edit' && clusterToEdit) {
+  //     setSelectedCluster(clusterToEdit);
+  //   }
+  // }, [mode, clusterToEdit]);
+
+  const filtered = clusters.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase())
   );
 
   const alreadyInCluster = (clusterId: number) =>
-    mukkadam.clusters.some(c => c.id === clusterId);
+    mukkadam.clusters.some((c) => c.id === clusterId);
 
   const handleClusterSelect = (cluster: ClusterOption) => {
-    if (saving || alreadyInCluster(cluster.id)) return;
-    setOpen(false);
+    if (saving) return;
+    setOpenDropdown(false);
     setSearch('');
-    setSelectedCluster(cluster); // opens modal
+    setSelectedCluster(cluster);
   };
 
-  const handleConfirm = async (transportPrice: number, weeklyPaymentDay: number,advanceAmount:number, weeklyAmount:number) => {
+  const handleConfirm = async (
+    transportPrice: number,
+    weeklyPaymentDay: number,
+    advanceAmount: number,
+    weeklyAmount: number,
+    updownConfig: {
+      mukkadam_type: MukkadamType;
+      updown_mode?: UpdownMode;
+      updown_from_date?: string;
+      updown_to_date?: string;
+      updown_specific_dates?: string[];
+    }
+  ) => {
     if (!selectedCluster) return;
     setSaving(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/cluster/${selectedCluster.id}/add_mukkadam/`, {
-        method: 'POST',
+      const isEdit = mode === 'edit';
+      const url = isEdit
+        ? `${API_BASE_URL}/api/clusters/${selectedCluster.id}/update_mukkadam/`
+        : `${API_BASE_URL}/api/cluster/${selectedCluster.id}/add_mukkadam/`;
+      const method = isEdit ? 'PATCH' : 'POST';
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mukkadam_id: mukkadam.id,
           transport_price: transportPrice,
           weekly_payment_day: weeklyPaymentDay,
-          advance_amount: advanceAmount,   // ← new
-          weekly_amount: weeklyAmount,    
+          advance_amount: advanceAmount,
+          weekly_amount: weeklyAmount,
+          mukkadam_type: updownConfig.mukkadam_type,
+          updown_mode: updownConfig.updown_mode,
+          updown_from_date: updownConfig.updown_from_date,
+          updown_to_date: updownConfig.updown_to_date,
+          updown_specific_dates: updownConfig.updown_specific_dates,
         }),
       });
+ let data: any = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    // non‑JSON error response
+    console.error('Failed to parse JSON', e);
+  }
 
-      const data = await res.json();
-
-      if (res.ok) {
-        toast.success(data.message ?? `${mukkadam.name} → ${selectedCluster.name}`);
-        setSelectedCluster(null);
-        onSuccess();
-      } else {
-        toast.error(data.error ?? 'Failed to add mukkadam');
-      }
-    } catch {
-      toast.error('Network error');
-    } finally {
-      setSaving(false);
-    }
+  if (res.ok) {
+    toast.success(
+      data?.message ||
+        (isEdit
+          ? `Updated ${mukkadam.name} in ${selectedCluster.name}`
+          : `${mukkadam.name} → ${selectedCluster.name}`),
+    );
+    setSelectedCluster(null);
+    onSuccess();
+  } else {
+    console.error('Update error', res.status, data);
+    const msg =
+      data?.detail ||
+      data?.error ||
+      `Failed to save mukkadam assignment (HTTP ${res.status})`;
+    toast.error(msg);
+  }
+} catch (e) {
+  console.error('Network error', e);
+  toast.error('Network error');
+} finally {
+  setSaving(false);
+}
   };
+
+  useEffect(() => {
+    if (openDropdown) {
+      setTimeout(() => {
+        searchRef.current?.focus({ preventScroll: true });
+      }, 0);
+    }
+  }, [openDropdown]);
 
   return (
     <>
-      <div style={{ position: 'relative', display: 'inline-block' }}>
-        <button
-          ref={btnRef}
-          onClick={e => { e.stopPropagation(); setOpen(v => !v); }}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '5px',
-            padding: '3px 10px 3px 8px', borderRadius: '999px',
-            border: `1.5px solid ${open ? '#14b8a6' : '#d1d5db'}`,
-            background: open ? '#f0fdfa' : '#fff',
-            color: open ? '#0f766e' : '#6b7280',
-            fontSize: '0.72rem', fontWeight: 600,
-            cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s',
+      {mode === 'add' && (
+        <div
+          style={{ position: 'relative', display: 'inline-block' }}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
           }}
         >
-          <PlusCircle size={12} />
-          Add to Cluster
-        </button>
-
-        {open && (
-          <PortalDropdown
-            anchorRef={btnRef as React.RefObject<HTMLElement>}
-            onClose={() => { setOpen(false); setSearch(''); }}
+          <button
+            type="button"
+            ref={btnRef}
+            onClick={() => setOpenDropdown((v) => !v)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+              padding: '3px 10px 3px 8px',
+              borderRadius: '999px',
+              border: `1.5px solid ${openDropdown ? '#14b8a6' : '#d1d5db'}`,
+              background: openDropdown ? '#f0fdfa' : '#fff',
+              color: openDropdown ? '#0f766e' : '#6b7280',
+              fontSize: '0.72rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              transition: 'all 0.15s',
+            }}
           >
-            <DropdownHeader label="Add mukkadam to" />
-            <div style={{ padding: '8px 10px', borderBottom: '1px solid #f3f4f6' }}>
-              <input
-                autoFocus
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Search clusters..."
-                style={{
-                  width: '100%', padding: '5px 9px',
-                  border: '1px solid #e5e7eb', borderRadius: '6px',
-                  fontSize: '0.8rem', outline: 'none', boxSizing: 'border-box',
-                }}
-                onFocus={e => (e.currentTarget.style.borderColor = '#14b8a6')}
-                onBlur={e => (e.currentTarget.style.borderColor = '#e5e7eb')}
-              />
-            </div>
-            <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-              {filtered.length === 0 ? (
-                <p style={{ padding: '12px', textAlign: 'center', fontSize: '0.8rem', color: '#9ca3af', margin: 0 }}>
-                  No clusters found
-                </p>
-              ) : filtered.map(c => (
-                <ClusterItem
-                  key={c.id}
-                  name={c.name}
-                  alreadyIn={alreadyInCluster(c.id)}
-                  saving={saving}
-                  onClick={() => handleClusterSelect(c)}
-                />
-              ))}
-            </div>
-          </PortalDropdown>
-        )}
-      </div>
+            <PlusCircle size={12} />
+            Add to Cluster
+          </button>
 
-      {/* Step 2 — Modal */}
+          {openDropdown && (
+            <PortalDropdown
+              anchorRef={btnRef as React.RefObject<HTMLElement>}
+              onClose={() => {
+                setOpenDropdown(false);
+                setSearch('');
+              }}
+            >
+              <DropdownHeader label="Add mukkadam to" />
+              <div
+                style={{
+                  padding: '8px 10px',
+                  borderBottom: '1px solid #f3f4f6',
+                }}
+              >
+                <input
+                  ref={searchRef}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search clusters..."
+                  style={{
+                    width: '100%',
+                    padding: '5px 9px',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    fontSize: '0.8rem',
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                  onFocus={(e) =>
+                    (e.currentTarget.style.borderColor = '#14b8a6')
+                  }
+                  onBlur={(e) =>
+                    (e.currentTarget.style.borderColor = '#e5e7eb')
+                  }
+                />
+              </div>
+              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                {filtered.length === 0 ? (
+                  <p
+                    style={{
+                      padding: '12px',
+                      textAlign: 'center',
+                      fontSize: '0.8rem',
+                      color: '#9ca3af',
+                      margin: 0,
+                    }}
+                  >
+                    No clusters found
+                  </p>
+                ) : (
+                  filtered.map((c) => (
+                    <ClusterItem
+                      key={c.id}
+                      name={c.name}
+                      alreadyIn={alreadyInCluster(c.id)}
+                      saving={saving}
+                      onClick={() => handleClusterSelect(c)}
+                    />
+                  ))
+                )}
+              </div>
+            </PortalDropdown>
+          )}
+        </div>
+      )}
+
+      {mode === 'edit' && (
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (clusterToEdit) {
+        setSelectedCluster(clusterToEdit);   // modal opens only when user clicks ✎
+      }
+    }}
+    style={{ marginLeft: 4, border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '0.7rem', color: '#6b7280' }}
+    title="Edit assignment"
+  >
+    ✎
+  </button>
+)}
+
+
       {selectedCluster && (
         <AddToClusterModalM
           mukkadam={mukkadam}
@@ -3224,8 +3798,110 @@ function MukkadamAddToCluster({ mukkadam, clusters, onSuccess }: {
           onConfirm={handleConfirm}
           onCancel={() => setSelectedCluster(null)}
           saving={saving}
+          isEdit={mode === 'edit'}
         />
       )}
     </>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -12,7 +12,65 @@ from .models import (
     Allocation, ActivityCatalog
 )
 
+   
+import requests
+import logging
 
+logger = logging.getLogger(__name__)
+import concurrent.futures
+PRESIGN_API_URL = 'https://demand.bharatintelligence.ai/chat/presign_obj_api/'
+PRESIGN_TOKEN = 'c432208626a204d2d8de3d00b29f948eae61ebdb'
+from django.core.cache import cache
+def get_presigned_urls_batch(s3_keys):
+    """
+    ✅ Get multiple presigned URLs in parallel
+    Returns: dict {s3_key: presigned_url}
+    """
+    if not s3_keys:
+        return {}
+    
+    urls = {}
+    
+    def fetch_url(key):
+        url = get_presigned_url(key)
+        return (key, url)
+    
+    # Fetch in parallel with max 10 threads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        results = executor.map(fetch_url, s3_keys)
+        urls = dict(results)
+    
+    return urls
+def get_presigned_url(s3_key):
+    if not s3_key:
+        return None
+    
+    # ✅ Check cache first (presigned URLs valid for 60 min)
+    cache_key = f'presign_{s3_key}'
+    cached_url = cache.get(cache_key)
+    if cached_url:
+        return cached_url
+    
+    # Fetch from API
+    try:
+        response = requests.get(
+            PRESIGN_API_URL,
+            params={'key': s3_key},
+            headers={'Authorization': f'Token {PRESIGN_TOKEN}'},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            url = data.get('url') or data
+            
+            # ✅ Cache for 55 minutes (5 min buffer before expiry)
+            cache.set(cache_key, url, 3300)
+            return url
+    except Exception as e:
+        logger.error(f"Error: {e}")
+    
+    return None
 # ============================================================================
 # CAPACITY & AVAILABILITY UTILITIES
 # ============================================================================
@@ -101,27 +159,48 @@ def get_available_mukkadams(date, min_workers=1, activity_id=None):
     
     return available
 
-def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers, skip_strict_check=False):
-    """
-    Check if allocation is possible with PRODUCTIVITY validation
-    
-    Returns: (bool, str, dict) - (can_allocate, error_message, warnings)
+from .models import ClusterMukkadamAssignment
 
-
-    """
-
-    from decimal import Decimal, ROUND_HALF_UP
+def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers, skip_strict_check=False, cluster_id=None):
+    from decimal import Decimal
+    from datetime import date as date_type
 
     area = Decimal(str(area))
     workers = int(workers)
+
     try:
         job_activity = JobActivity.objects.get(id=job_activity_id)
         mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
     except (JobActivity.DoesNotExist, Mukkadam.DoesNotExist):
         return False, "Job activity or mukkadam not found", {}
-    
+
     warnings = {}
-    
+
+    # ── UPDOWN CHECK: only for the specific cluster ──────────────
+    check_date = date if isinstance(date, date_type) else date_type.fromisoformat(str(date))
+    check_date_str = str(check_date)
+
+    if cluster_id:
+        assignment = ClusterMukkadamAssignment.objects.filter(
+            mukkadam=mukkadam,
+            cluster_id=cluster_id,
+            is_active=True,
+        ).first()
+
+        if assignment and assignment.mukkadam_type == 'updown':
+            available = False
+            if assignment.updown_mode == 'range':
+                if assignment.updown_from_date and assignment.updown_to_date:
+                    available = assignment.updown_from_date <= check_date <= assignment.updown_to_date
+            elif assignment.updown_mode == 'specific':
+                available = check_date_str in (assignment.updown_specific_dates or [])
+
+            if not available:
+                return (
+                    False,
+                    f"{mukkadam.mukkadam_name} is not available on {check_date_str} in this cluster",
+                    {},
+                )
     # Check remaining area
     # Check remaining area
     if not skip_strict_check and area > job_activity.remaining_area:

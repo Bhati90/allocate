@@ -1,10 +1,11 @@
 // components/JobsPanel.tsx
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, ChevronDown, ChevronUp, Edit, Trash2, X } from 'lucide-react';
+import { Plus, ChevronDown, ChevronUp, Edit, Trash2, X,Phone } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Job } from '../types/types';
 import { API_BASE_URL } from '@/types/config';
 import './job.css';
+import Dialpad from '@/call';
 
 interface JobsPanelProps {
   jobs: Job[];
@@ -19,10 +20,14 @@ interface FarmerSummary {
   farmerName: string;
   plotCount: number;
   totalActivities: number;
-  doneCount: number; // Add this
+  doneCount: number;
   remainingArea: number;
   nearestDate: string | null;
+  mobileNumber: string;
+  poc: string;
   jobs: Job[];
+
+  totalAcres: number;   // ✅ new
 }
 
 const JobsPanel: React.FC<JobsPanelProps> = ({
@@ -99,6 +104,21 @@ const JobsPanel: React.FC<JobsPanelProps> = ({
       setFarmers(data);
     } catch (e) { console.error(e); }
   };
+
+  const [farmerAcresMap, setFarmerAcresMap] = useState<Record<string, number>>({});
+
+useEffect(() => {
+  const fetchFarmerAcres = async () => {
+    const res = await fetch(`${API_BASE_URL}/api/farmers/?cluster_id=${clusterId}`);
+    const data = await res.json();
+    const map: Record<string, number> = {};
+    data.forEach((f: any) => {
+      map[f.farmer_id] = Number(f.total_acres) || 0;
+    });
+    setFarmerAcresMap(map);
+  };
+  fetchFarmerAcres();
+}, [clusterId]);
 
   const loadFarmerPlots = async (farmerId: string) => {
     try {
@@ -239,6 +259,7 @@ const handlePlotClick = async (plotId: number, plotArea: number, farmerId: strin
         setEditingActivity(null);
         await loadPlotJobs(editingActivity.plotId);
         onRefresh();
+        window.location.reload();
       } else {
         const err = await res.json();
         toast.error(err.error || 'Failed');
@@ -276,6 +297,8 @@ const handlePlotClick = async (plotId: number, plotArea: number, farmerId: strin
         if (!res.ok) throw new Error('Failed to create farmer');
         const f = await res.json();
         farmerId = f.farmer_id;
+
+        window.location.reload();
       }
 
       let plotId: number | null = null;
@@ -298,6 +321,8 @@ const handlePlotClick = async (plotId: number, plotArea: number, farmerId: strin
         if (!res.ok) throw new Error('Failed to create plot');
         const p = await res.json();
         plotId = p.id;
+
+        window.location.reload();
       }
 
       if (!plotId) { toast.error('Could not determine plot'); return; }
@@ -342,6 +367,7 @@ const handlePlotClick = async (plotId: number, plotArea: number, farmerId: strin
         }),
       });
       if (!jobRes.ok) throw new Error('Failed to create job');
+      window.location.reload();
       const jobData = await jobRes.json();
 
       for (const a of activitiesToCreate) {
@@ -357,6 +383,7 @@ const handlePlotClick = async (plotId: number, plotArea: number, farmerId: strin
       setShowAddJob(null);
       setShowNewFarmerModal(false);
       resetJobForm();
+      window.location.reload();
       await loadFarmerPlots(farmerId);
       if (expandedFarmerId === farmerId && plotId) {
         await loadPlotJobs(plotId);
@@ -368,6 +395,61 @@ const handlePlotClick = async (plotId: number, plotArea: number, farmerId: strin
     }
   };
 
+const [dialpadOpen, setDialpadOpen] = useState(false);
+const [dialpadNumber, setDialpadNumber] = useState('');
+  // Add to your component state
+const [mukkadamOptions, setMukkadamOptions] = useState<{id: number; name: string; crew_size: number}[]>([]);
+const [farmerMukkadamMap, setFarmerMukkadamMap] = useState<Record<string, {id: number; name: string} | null>>({});
+const [assigningFarmerId, setAssigningFarmerId] = useState<string | null>(null);
+
+// Fetch on mount alongside existing data
+// useEffect(() => {
+//   fetch(`${API_BASE_URL}/api/cluster/${clusterId}/farmers-mukkadam/`)
+//     .then(r => r.json())
+//     .then(data => {
+//       setMukkadamOptions(data.mukkadam_options);
+//       const map: Record<string, {id: number; name: string} | null> = {};
+//       data.farmers.forEach((f: any) => {
+//         map[f.farmer_id] = f.primary_mukkadam;
+//       });
+//       setFarmerMukkadamMap(map);
+//     });
+// }, [clusterId]);
+
+// In handleAssignMukkadam, after successful assignment:
+const handleAssignMukkadam = async (farmerId: string, mukkadamId: number) => {
+  setAssigningFarmerId(farmerId);
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/cluster/${clusterId}/assign-primary-mukkadam/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ farmer_id: farmerId, mukkadam_id: mukkadamId }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      setFarmerMukkadamMap(prev => ({
+        ...prev,
+        [farmerId]: { id: data.mukkadam_id, name: data.mukkadam_name },
+      }));
+
+
+
+      // ── Trigger auto-allocation after assignment ──
+      fetch(`${API_BASE_URL}/api/cluster/${clusterId}/auto-allocate/`, {
+        method: 'POST',
+      })
+        .then(r => r.json())
+        .then(result => {
+          // Refresh allocations so calendar updates
+          if (result.allocated_count > 0 && onRefresh) onRefresh();
+          window.location.reload();
+        })
+        .catch(() => {});
+    }
+  } finally {
+    setAssigningFarmerId(null);
+  }
+};
   // Build farmer summaries
 const farmerSummaries = useMemo<FarmerSummary[]>(() => {
   if (!jobs || jobs.length === 0) return [];
@@ -379,11 +461,23 @@ const farmerSummaries = useMemo<FarmerSummary[]>(() => {
   const map = new Map<string, FarmerSummary>();
 
   filtered.forEach(job => {
+    const jobTotalAcres = (job as any).farmer?.total_acres ?? (job as any).farmer_total_acres ?? 0;
+
     if (!map.has(job.farmer_id)) {
       map.set(job.farmer_id, { 
-        farmerId: job.farmer_id, farmerName: job.farmer_name, plotCount: 0, 
-        totalActivities: 0, remainingArea: 0, doneCount: 0, nearestDate: null, jobs: [] 
-      });
+        
+  farmerId: job.farmer_id, farmerName: job.farmer_name, plotCount: 0, totalAcres: Number(farmerAcresMap[job.farmer_id]) || 0,
+  totalActivities: 0, remainingArea: 0, doneCount: 0, nearestDate: null, jobs: [],
+  // AFTER — read from farmers state which has phone_number
+mobileNumber: (() => {
+  const farmerData = farmers.find((f: any) => f.farmer_id === job.farmer_id);
+  const raw = farmerData?.phone_number || '';
+  const str = String(raw);
+  return str.startsWith('91') && str.length === 12 ? str.slice(2) : str;
+})(),
+
+  poc: (job as any).point_of_contact || '',
+});
     }
     const s = map.get(job.farmer_id)!;
     s.jobs.push(job);
@@ -419,11 +513,18 @@ const farmerSummaries = useMemo<FarmerSummary[]>(() => {
   });
 
   // Plot count calculation and Sorting
-  map.forEach(s => {
-    const plots = new Set<number>();
-    s.jobs.forEach(j => { if ((j as any).plot) plots.add((j as any).plot); });
-    s.plotCount = plots.size;
+map.forEach(s => {
+  const plots = new Set<number>();
+  s.jobs.forEach(j => {
+    (j.activities || []).forEach((act: any) => {
+      if (act.plot) plots.add(Number(act.plot));
+    });
   });
+  s.plotCount = plots.size;
+});
+
+
+
 
 // Inside farmerSummaries useMemo sort function
 return Array.from(map.values()).sort((a, b) => {
@@ -439,7 +540,7 @@ return Array.from(map.values()).sort((a, b) => {
   // 3. If dates are the same, sort by higher remaining area
   return b.remainingArea - a.remainingArea;
 });
-}, [jobs, searchTerm]);
+}, [jobs, searchTerm, farmerAcresMap,farmers]);
   const JobFormInline: React.FC<{ farmerId: string; existingPlots: any[] }> = ({ farmerId, existingPlots }) => (
     <div className="inline-job-form" onClick={e => e.stopPropagation()}>
       <div className="form-divider">Plot</div>
@@ -581,39 +682,67 @@ return Array.from(map.values()).sort((a, b) => {
               const isExpanded = expandedFarmerId === s.farmerId;
               const plots = farmerPlots[s.farmerId] || [];
               const isActive = s.remainingArea > 0;
+              
+            
+
 
               return (
                 <div key={s.farmerId} className={`farmer-accordion ${isExpanded ? 'expanded' : ''} ${!isActive ? 'completed' : ''}`}>
                   {/* Farmer header row */}
                   <div className="farmer-accordion-header" onClick={() => handleFarmerClick(s.farmerId, s.farmerName)}>
-                    <div className="farmer-header-left">
-                      <span className="farmer-name">👤 {s.farmerName}</span>
-                      {/* <div className="farmer-meta">
-                        <span>{s.plotCount} plot{s.plotCount !== 1 ? 's' : ''}</span>
-                        <span>{s.totalActivities} activities</span>
-                        <span className={isActive ? 'remaining-active' : 'remaining-done'}>
-                          {s.remainingArea.toFixed(2)} ac remaining
-                        </span>
-                      </div> */}
+<div className="farmer-header-left">
+  <span className="farmer-name">👤 {s.farmerName}</span>
 
-<div className="farmer-meta">
-  <span>{s.plotCount} plot{s.plotCount !== 1 ? 's' : ''}</span>
-  {/* <span>{s.doneCount}/{s.totalActivities} done</span> Updated this */}
-  <span>{s.totalActivities} activities</span>
-  {/* <span className={isActive ? 'remaining-active' : 'remaining-done'}>
-    {s.remainingArea.toFixed(2)} ac remaining
-  </span> */}
+  <div className="farmer-meta">
+    <span>
+      {s.plotCount} plot{s.plotCount !== 1 ? 's' : ''}
+    </span>
+     <span>
+    {(farmerAcresMap[s.farmerId] ?? s.totalAcres).toFixed(2)} ac  {/* ✅ UNCOMMENT & FIX */}
+  </span>
+    <span>{s.totalActivities} activities</span>
+  </div>
+
+  <div style={{ display: 'flex', gap: '10px', marginTop: '2px', alignItems: 'center' }}>
+    {s.mobileNumber && (
+      <>
+        <span style={{ fontSize: '0.65rem', color: '#6b7280' }}>
+          📞 {s.mobileNumber}
+        </span>
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation();
+            setDialpadNumber(s.mobileNumber || '');
+            setDialpadOpen(true);
+          }}
+          className="inline-flex items-center px-2 py-1 rounded-md text-xs bg-green-50 text-green-700 border border-green-200 hover:bg-green-100"
+        >
+          <Phone className="w-3 h-3 mr-1" />
+          Call
+        </button>
+      </>
+    )}
+    {s.poc && (
+      <span style={{ fontSize: '0.65rem', color: '#6b7280' }}>
+        🧑‍💼 {s.poc}
+      </span>
+    )}
+  </div>
+
+  {s.nearestDate && (
+    <div className="farmer-date">
+      Next: {new Date(s.nearestDate).toLocaleDateString()}
+    </div>
+  )}
 </div>
-                      {s.nearestDate && (
-                        <div className="farmer-date">
-                          Next: {new Date(s.nearestDate).toLocaleDateString()}
-                        </div>
-                      )}
-                    </div>
-                    <div className="farmer-header-right">
-                      {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </div>
-                  </div>
+
+
+  <div className="farmer-header-right">
+    {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+  </div>
+</div>
+
 
                   {/* Expanded content */}
                   {isExpanded && (
@@ -801,6 +930,12 @@ return Array.from(map.values()).sort((a, b) => {
           </div>
         )}
       </div>
+<Dialpad
+  isOpen={dialpadOpen}
+  number={dialpadNumber}
+  onClose={() => setDialpadOpen(false)}
+  onNumberChange={setDialpadNumber}
+/>
 
       {/* Edit Activity Modal */}
       {editingActivity && (

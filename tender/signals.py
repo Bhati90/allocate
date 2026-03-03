@@ -1,60 +1,49 @@
+import logging
 from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver
-from django.contrib.auth.models import User
-import json
+from django.db import models
+
 from .models import (
     Allocation, AllocationChangeLogTender, FarmerPayment, MukkadamPayment,
-    PaymentChangeLog, JobActivity, MukkadamAvailability
-)
-from .models import (
-    Allocation, AllocationChangeLogTender, FarmerPayment, MukkadamPayment,
-    PaymentChangeLog, JobActivity, MukkadamAvailability, Job  # ← add Job
+    PaymentChangeLog, JobActivity, MukkadamAvailability, Job
 )
 
+logger = logging.getLogger(__name__)
+
+
 # ============================================================================
-# ALLOCATION SIGNALS
+# ALLOCATION SIGNALS — audit log + availability tracking
 # ============================================================================
 
 @receiver(pre_save, sender=Allocation)
 def track_allocation_changes(sender, instance, **kwargs):
-    """
-    Track changes to allocations before saving
-    """
-    if instance.pk:  # Only for updates
+    """Track field changes before saving."""
+    if instance.pk:
         try:
             old_instance = Allocation.objects.get(pk=instance.pk)
-            
-            # Compare fields
             changed_fields = []
-            for field in ['allocated_area', 'allocated_workers', 'allocated_date', 
-                         'farmer_rate', 'mukkadam_rate', 'status']:
+            for field in ['allocated_area', 'allocated_workers', 'allocated_date',
+                          'farmer_rate', 'mukkadam_rate', 'status']:
                 old_value = getattr(old_instance, field)
                 new_value = getattr(instance, field)
-                
                 if old_value != new_value:
                     changed_fields.append({
                         'field': field,
                         'old': str(old_value),
                         'new': str(new_value)
                     })
-            
-            # Store changes for post_save
             instance._changed_fields = changed_fields
-            instance._old_instance = old_instance
-            
+            instance._old_instance   = old_instance
         except Allocation.DoesNotExist:
-            pass
+            instance._changed_fields = []
+            instance._old_instance   = None
 
 
 @receiver(post_save, sender=Allocation)
 def log_allocation_changes(sender, instance, created, **kwargs):
-    """
-    Create audit log after allocation is saved
-    """
+    """Create audit log after allocation is saved."""
     from .serializers import AllocationSerializer
-    
     if created:
-        # New allocation created
         AllocationChangeLogTender.objects.create(
             allocation=instance,
             change_type='created',
@@ -62,7 +51,6 @@ def log_allocation_changes(sender, instance, created, **kwargs):
             allocation_snapshot=AllocationSerializer(instance).data
         )
     else:
-        # Allocation updated
         if hasattr(instance, '_changed_fields') and instance._changed_fields:
             for change in instance._changed_fields:
                 AllocationChangeLogTender.objects.create(
@@ -78,17 +66,14 @@ def log_allocation_changes(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=Allocation)
 def log_allocation_deletion(sender, instance, **kwargs):
-    """
-    Log when allocation is deleted
-    """
     from .serializers import AllocationSerializer
-    
     AllocationChangeLogTender.objects.create(
-        allocation=None,  # Allocation is deleted
+        allocation=None,
         change_type='deleted',
         change_reason=f'Allocation {instance.id} deleted',
         allocation_snapshot=AllocationSerializer(instance).data
     )
+
 
 @receiver(post_save, sender=Allocation)
 def update_job_activity_on_allocation(sender, instance, created, **kwargs):
@@ -97,6 +82,8 @@ def update_job_activity_on_allocation(sender, instance, created, **kwargs):
         JobActivity.objects.filter(pk=job_activity.pk).update(
             allocated_area=models.F('allocated_area') + instance.allocated_area
         )
+
+
 @receiver(post_save, sender=Allocation)
 def update_mukkadam_availability(sender, instance, created, **kwargs):
     if created:
@@ -112,6 +99,8 @@ def update_mukkadam_availability(sender, instance, created, **kwargs):
         MukkadamAvailability.objects.filter(pk=availability.pk).update(
             allocated_workers=models.F('allocated_workers') + instance.allocated_workers
         )
+
+
 @receiver(post_delete, sender=Allocation)
 def restore_capacity_on_deletion(sender, instance, **kwargs):
     JobActivity.objects.filter(pk=instance.job_activity.pk).update(
@@ -121,9 +110,140 @@ def restore_capacity_on_deletion(sender, instance, **kwargs):
         MukkadamAvailability.objects.filter(
             mukkadam=instance.mukkadam,
             date=instance.allocated_date
-        ).update(allocated_workers=models.F('allocated_workers') - instance.allocated_workers)
+        ).update(
+            allocated_workers=models.F('allocated_workers') - instance.allocated_workers
+        )
     except Exception:
         pass
+
+
+# ============================================================================
+# SETTLEMENT TRIGGER
+#
+# RULES:
+#   1. Shoot selection completed + farmer verified  → calculate settlement (first time only)
+#   2. Any other activity verified after shoot done → update gross only, keep all deductions
+#   3. All activities done                          → release deposit + add post-shoot work
+#   4. status='paid'                               → NEVER recalculate deductions
+#   5. farmer_agreed reset to False                → reset stale settlement
+#
+# REMOVED (were wrong):
+#   ✗ trigger_settlement_on_shoot_selection   — date based, not completion based
+#   ✗ recalculate_settlement_on_verification  — fired on ANY activity, no shoot check
+#   ✗ trigger_settlement_after_verification   — duplicate + date based
+# ============================================================================
+
+@receiver(pre_save, sender=Allocation)
+def track_farmer_agreed_change(sender, instance, **kwargs):
+    """Track farmer_agreed and payment_status changes for settlement trigger."""
+    if not instance.pk:
+        instance._farmer_agreed_was     = None
+        instance._payment_status_was    = None
+        instance._farmer_agreed_changed = False
+        return
+    try:
+        old = Allocation.objects.get(pk=instance.pk)
+        instance._farmer_agreed_was     = old.farmer_agreed
+        instance._payment_status_was    = old.payment_status
+        instance._farmer_agreed_changed = (
+            (old.farmer_agreed != instance.farmer_agreed) or
+            (old.payment_status != instance.payment_status)
+        )
+    except Allocation.DoesNotExist:
+        instance._farmer_agreed_was     = None
+        instance._payment_status_was    = None
+        instance._farmer_agreed_changed = False
+
+
+# Prevent re-entrant signal calls
+_settlement_processing = set()
+
+
+@receiver(post_save, sender=Allocation)
+def handle_settlement_on_farmer_verification(sender, instance, **kwargs):
+    """Single correct settlement trigger — see rules above."""
+
+    if not getattr(instance, '_farmer_agreed_changed', False):
+        return  # Nothing changed — skip
+
+    # Re-entrancy guard — prevents infinite loop if settlement.save() triggers this again
+    key = str(instance.pk)
+    if key in _settlement_processing:
+        return
+    _settlement_processing.add(key)
+
+    try:
+        _run_settlement_logic(instance)
+    except Exception as e:
+        logger.error(f"[settlement signal] Unhandled error for allocation {instance.pk}: {e}", exc_info=True)
+    finally:
+        _settlement_processing.discard(key)
+
+
+def _run_settlement_logic(instance):
+    from .ervices.settlement import (
+        is_settlement_triggered,
+        is_all_activities_done,
+        create_or_update_settlement,
+        update_settlement_on_all_done,
+        reset_settlement_if_stale,
+    )
+    from .models import MukkadamJobSettlement
+
+    job      = instance.job_activity.job
+    mukkadam = instance.mukkadam
+    plot     = instance.job_activity.plot    # ← per-plot settlement
+    cluster  = job.clusters.first()
+
+    # Activity name
+    activity_name = (instance.job_activity.activity.name or '').lower()
+    is_shoot = 'shoot selection' in activity_name or 'विरळणी' in activity_name
+
+    is_now_verified = (instance.farmer_agreed is True) or (instance.payment_status == 'done')
+    was_verified    = (instance._farmer_agreed_was is True) or (instance._payment_status_was == 'done')
+
+    # ── CASE A: Farmer just verified ──────────────────────────────────
+    if is_now_verified:
+
+        existing = MukkadamJobSettlement.objects.filter(
+            mukkadam=mukkadam,
+            job=job,
+            plot=plot,                       # ← filter by plot
+        ).first()
+        existing_status = existing.status if existing else None
+
+        if existing_status == 'paid':
+            logger.info(f"[settlement] Job {job.job_id} plot {getattr(plot,'id','?')} already paid — checking all_done only")
+
+        elif is_shoot and existing_status not in ('calculated', 'no_payment_needed'):
+            try:
+                create_or_update_settlement(mukkadam, job, plot, cluster)
+                logger.info(f"[settlement] Shoot billing: mukkadam={mukkadam.mukkadam_name} job={job.job_id} plot={getattr(plot,'id','?')}")
+            except Exception as e:
+                logger.error(f"[settlement signal] Shoot billing error: {e}", exc_info=True)
+
+        elif not is_shoot and existing_status in ('calculated', 'no_payment_needed'):
+            try:
+                create_or_update_settlement(mukkadam, job, plot, cluster)
+                logger.info(f"[settlement] Gross updated: job={job.job_id} plot={getattr(plot,'id','?')}")
+            except Exception as e:
+                logger.error(f"[settlement signal] Gross update error: {e}", exc_info=True)
+
+        if is_all_activities_done(job, mukkadam, plot):
+            try:
+                update_settlement_on_all_done(mukkadam, job, plot, cluster)
+                logger.info(f"[settlement] All done — deposit released: job={job.job_id} plot={getattr(plot,'id','?')}")
+            except Exception as e:
+                logger.error(f"[settlement signal] Deposit release error: {e}", exc_info=True)
+
+    # ── CASE B: Verification reset ─────────────────────────────────────
+    elif was_verified and not is_now_verified:
+        try:
+            reset_settlement_if_stale(mukkadam, job, plot)
+            logger.info(f"[settlement] Stale settlement reset: job={job.job_id} plot={getattr(plot,'id','?')}")
+        except Exception as e:
+            logger.error(f"[settlement signal] Reset error: {e}", exc_info=True)
+
 
 # ============================================================================
 # PAYMENT SIGNALS
@@ -131,20 +251,16 @@ def restore_capacity_on_deletion(sender, instance, **kwargs):
 
 @receiver(pre_save, sender=FarmerPayment)
 def track_farmer_payment_changes(sender, instance, **kwargs):
-    """Track farmer payment changes"""
     if instance.pk:
         try:
-            old_instance = FarmerPayment.objects.get(pk=instance.pk)
-            instance._old_instance = old_instance
+            instance._old_instance = FarmerPayment.objects.get(pk=instance.pk)
         except FarmerPayment.DoesNotExist:
             pass
 
 
 @receiver(post_save, sender=FarmerPayment)
 def log_farmer_payment_changes(sender, instance, created, **kwargs):
-    """Log farmer payment changes"""
     from .serializers import FarmerPaymentSerializer
-    
     if created:
         PaymentChangeLog.objects.create(
             payment_type='farmer',
@@ -155,65 +271,49 @@ def log_farmer_payment_changes(sender, instance, created, **kwargs):
         )
     elif hasattr(instance, '_old_instance'):
         old = instance._old_instance
-        changed = []
-        
         for field in ['amount', 'mode', 'paid_at', 'paid_status']:
-            old_val = getattr(old, field)
-            new_val = getattr(instance, field)
-            if old_val != new_val:
+            if getattr(old, field) != getattr(instance, field):
                 PaymentChangeLog.objects.create(
                     payment_type='farmer',
                     farmer_payment=instance,
                     change_type='updated',
                     field_changed=field,
-                    old_value=str(old_val),
-                    new_value=str(new_val),
+                    old_value=str(getattr(old, field)),
+                    new_value=str(getattr(instance, field)),
                     changed_by=instance.created_by,
                     payment_snapshot=FarmerPaymentSerializer(instance).data
                 )
 
-from django.db import models
 
 @receiver(post_save, sender=FarmerPayment)
 def update_booking_on_payment(sender, instance, created, **kwargs):
-    """Update booking balance when payment is added/updated"""
-    booking = instance.booking
-    
-    # Recalculate advance_paid from all payments
+    """Update booking balance when payment is added/updated."""
+    booking    = instance.booking
     total_paid = booking.payments.filter(paid_status=True).aggregate(
         total=models.Sum('amount')
     )['total'] or 0
-    
     booking.advance_paid = total_paid
-    booking.balance = booking.total_amount - total_paid
-    
-    # Update status
-    if booking.balance <= 0:
-        booking.status = 'PAID'
-    elif booking.advance_paid > 0:
-        booking.status = 'PARTIALLY_PAID'
-    else:
-        booking.status = 'UNPAID'
-    
+    booking.balance      = booking.total_amount - total_paid
+    booking.status = (
+        'PAID'           if booking.balance <= 0 else
+        'PARTIALLY_PAID' if booking.advance_paid > 0 else
+        'UNPAID'
+    )
     booking.save()
 
 
 @receiver(pre_save, sender=MukkadamPayment)
 def track_mukkadam_payment_changes(sender, instance, **kwargs):
-    """Track mukkadam payment changes"""
     if instance.pk:
         try:
-            old_instance = MukkadamPayment.objects.get(pk=instance.pk)
-            instance._old_instance = old_instance
+            instance._old_instance = MukkadamPayment.objects.get(pk=instance.pk)
         except MukkadamPayment.DoesNotExist:
             pass
 
 
 @receiver(post_save, sender=MukkadamPayment)
 def log_mukkadam_payment_changes(sender, instance, created, **kwargs):
-    """Log mukkadam payment changes"""
     from .serializers import MukkadamPaymentSerializer
-    
     if created:
         PaymentChangeLog.objects.create(
             payment_type='mukkadam',
@@ -224,18 +324,15 @@ def log_mukkadam_payment_changes(sender, instance, created, **kwargs):
         )
     elif hasattr(instance, '_old_instance'):
         old = instance._old_instance
-        
         for field in ['amount', 'mode', 'paid_at']:
-            old_val = getattr(old, field)
-            new_val = getattr(instance, field)
-            if old_val != new_val:
+            if getattr(old, field) != getattr(instance, field):
                 PaymentChangeLog.objects.create(
                     payment_type='mukkadam',
                     mukkadam_payment=instance,
                     change_type='updated',
                     field_changed=field,
-                    old_value=str(old_val),
-                    new_value=str(new_val),
+                    old_value=str(getattr(old, field)),
+                    new_value=str(getattr(instance, field)),
                     changed_by=instance.created_by,
                     payment_snapshot=MukkadamPaymentSerializer(instance).data
                 )
@@ -253,195 +350,12 @@ def update_job_total_on_activity_change(sender, instance, **kwargs):
     )['total'] or 0
     Job.objects.filter(pk=instance.job.pk).update(total_activities_amount=total)
 
+
 # ============================================================================
 # AVAILABILITY SIGNALS
-# ============================================================================
-
-@receiver(post_save, sender=MukkadamAvailability)
+@receiver(pre_save, sender=MukkadamAvailability)
 def validate_availability_capacity(sender, instance, **kwargs):
-    """
-    Ensure allocated_workers doesn't exceed available_crew_size
-    """
+    """Ensure is_available is consistent with crew vs allocated."""
     if instance.allocated_workers > instance.available_crew_size:
-        # This should be caught by validation, but as a safety net
         instance.is_available = False
-        instance.save(update_fields=['is_available'])
-
-
-
-# signals.py
-
-from django.db.models.signals import post_save
-from django.dispatch import receiver
-from django.utils import timezone
-from decimal import Decimal
-
-
-# ── 1. Auto-calculate settlement when shoot selection activity is saved ──
-@receiver(post_save, sender='tender.JobActivity')
-def trigger_settlement_on_shoot_selection(sender, instance, **kwargs):
-    """
-    When a JobActivity with 'shoot selection' is saved and its scheduled_date
-    has passed, auto-calculate settlement for all mukkadams on that job.
-    """
-    if 'shoot selection' not in instance.activity.name.lower():
-        return
-
-    today = timezone.localdate()
-    if not instance.scheduled_date or instance.scheduled_date > today:
-        return
-
-    from .ervices.settlement import create_or_update_settlement
-    from .models import Mukkadam
-
-    job = instance.job
-    cluster = job.clusters.first()
-
-    mukkadams = Mukkadam.objects.filter(
-        allocations__job_activity__job=job
-    ).distinct()
-
-    for mukkadam in mukkadams:
-        try:
-            create_or_update_settlement(mukkadam, job, cluster)
-        except Exception as e:
-            print(f"[settlement signal] Error for {mukkadam.mukkadam_name}: {e}")
-
-
-@receiver(pre_save, sender=Allocation)
-def track_farmer_agreed_change(sender, instance, **kwargs):
-    if not instance.pk:
-        instance._farmer_agreed_changed = False
-        return
-    try:
-        old = Allocation.objects.get(pk=instance.pk)
-        instance._farmer_agreed_changed = (old.farmer_agreed != instance.farmer_agreed)
-    except Allocation.DoesNotExist:
-        instance._farmer_agreed_changed = False
-
-
-@receiver(post_save, sender=Allocation)
-def recalculate_settlement_on_verification(sender, instance, **kwargs):
-    if not getattr(instance, '_farmer_agreed_changed', False):
-        return
-    if instance.farmer_agreed is None:
-        return
-
-    from .ervices.settlement import create_or_update_settlement
-    from .models import MukkadamJobSettlement
-
-    job = instance.job_activity.job
-    mukkadam = instance.mukkadam
-    cluster = instance.cluster or job.clusters.first()
-
-    if not MukkadamJobSettlement.objects.filter(mukkadam=mukkadam, job=job).exists():
-        return
-
-    try:
-        create_or_update_settlement(mukkadam, job, cluster)
-    except Exception as e:
-        print(f"[settlement signal] Recalc error: {e}")
-# ── 3. Auto-create weekly payment record on correct weekday ──
-@receiver(post_save, sender='tender.Allocation')
-def generate_weekly_payment_on_allocation(sender, instance, created, **kwargs):
-    """
-    When a new allocation is saved, check if today is the weekly payment day
-    for that mukkadam's assignment. If yes, create the weekly payment record.
-    """
-    if not created:
-        return
-
-    from .models import ClusterMukkadamAssignment, MukkadamWeeklyPayment
-    from datetime import date
-
-    today = date.today()
-    cluster = instance.cluster or instance.job_activity.plot.clusters.first() if instance.job_activity.plot else None
-
-    if not cluster:
-        return
-
-    try:
-        assignment = ClusterMukkadamAssignment.objects.get(
-            mukkadam=instance.mukkadam,
-            cluster=cluster,
-            is_active=True,
-            weekly_payment_day__isnull=False,
-        )
-    except ClusterMukkadamAssignment.DoesNotExist:
-        return
-
-    # Only create if today is the payment weekday
-    if today.weekday() != assignment.weekly_payment_day:
-        return
-
-    # Already exists for today?
-    if MukkadamWeeklyPayment.objects.filter(
-        assignment=assignment,
-        payment_date=today,
-    ).exists():
-        return
-
-    # Has work this week?
-    from datetime import timedelta
-    week_start = today - timedelta(days=today.weekday())
-    week_end = week_start + timedelta(days=6)
-
-    has_work = Allocation.objects.filter(
-        mukkadam=instance.mukkadam,
-        job_activity__plot__clusters=cluster,
-        allocated_date__gte=week_start,
-        allocated_date__lte=week_end,
-    ).exists()
-
-    if not has_work:
-        return
-
-    amount = assignment.get_weekly_payment_amount()
-
-    try:
-        MukkadamWeeklyPayment.objects.create(
-            assignment=assignment,
-            payment_date=today,
-            crew_size_on_date=instance.mukkadam.crew_size or 0,
-            amount=amount,
-            is_auto_generated=True,
-            notes=f"Auto weekly | Week {week_start} to {week_end}",
-        )
-        # Update running total
-        assignment.total_weekly_payments = (
-            assignment.total_weekly_payments or Decimal('0')
-        ) + amount
-        assignment.save(update_fields=['total_weekly_payments', 'updated_at'])
-    except Exception as e:
-        print(f"[weekly payment signal] Error: {e}")
-
-
-
-@receiver(post_save, sender=Allocation)
-def trigger_settlement_after_verification(sender, instance, **kwargs):
-    if not getattr(instance, '_farmer_agreed_changed', False):
-        return
-    if instance.farmer_agreed is None:
-        return
-
-    from .ervices.settlement import create_or_update_settlement
-
-    job = instance.job_activity.job
-    mukkadam = instance.mukkadam
-    cluster = instance.cluster or job.clusters.first()
-
-    # Check if shoot selection date has passed
-    from django.utils import timezone
-    today = timezone.localdate()
-    
-    shoot_selection = job.activities.filter(
-        activity__name__icontains='shoot selection'
-    ).first()
-
-    if not shoot_selection or not shoot_selection.scheduled_date:
-        return
-    
-    if shoot_selection.scheduled_date > today:
-        return  # not yet time
-
-    create_or_update_settlement(mukkadam, job, cluster)
+    # else: leave is_available as-is (don't force True, UI/logic may set holiday)
