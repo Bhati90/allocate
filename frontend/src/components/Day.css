@@ -488,3 +488,16 @@
 
   padding: 1rem;
 }
+
+.modal-content.day-detail-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;        /* ✅ cap modal height */
+  overflow: hidden;         /* ✅ prevent modal itself from growing */
+}
+
+.modal-body-scroll {
+  flex: 1;
+  overflow-y: auto;         /* ✅ only this part scrolls */
+  padding: 16px;
+}

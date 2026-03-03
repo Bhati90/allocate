@@ -154,34 +154,56 @@ class MukkadamJobSettlementInline(admin.TabularInline):
 # ACTIVITY CATALOG
 # ============================================================================
 
+
 @admin.register(ActivityCatalog)
 class ActivityCatalogAdmin(admin.ModelAdmin):
-    list_display = (
-        'name', 'activity_type', 'default_rate_per_acre',
-        'estimated_workers_per_acre', 'default_gap_days',
-        'is_strict_badge', 'source', 'created_at'
-    )
-    list_filter = ('is_strict', 'source', 'activity_type')
-    search_fields = ('name', 'activity_type')
-    list_editable = ('default_rate_per_acre', 'estimated_workers_per_acre', 'default_gap_days')
-    ordering = ('name',)
+    list_display = [
+        "name",
+        "activity_type",
+        "default_rate_per_acre",
+        "default_productivity_per_worker",
+        "estimated_workers_per_acre",
+        "default_gap_days",
+        "is_strict",
+        "source",
+        "updated_at",
+    ]
+    list_editable = [
+        "default_rate_per_acre",
+        "default_productivity_per_worker",
+        "estimated_workers_per_acre",
+        "default_gap_days",
+        "is_strict",
+    ]
+    list_filter = ["activity_type", "is_strict", "source"]
+    search_fields = ["name", "activity_type"]
+    ordering = ["name"]
+    readonly_fields = ["created_at", "updated_at"]
+
     fieldsets = (
-        ('Basic Info', {
-            'fields': ('name', 'activity_type', 'source')
+        ("Basic Info", {
+            "fields": ("name", "activity_type", "source", "is_strict"),
         }),
-        ('Rates & Workers', {
-            'fields': ('default_rate_per_acre', 'estimated_workers_per_acre')
+        ("Rates & Productivity", {
+            "description": (
+                "GLOBAL defaults — used when no cluster-level override exists. "
+                "Override per cluster via ClusterMukkadamActivityRate."
+            ),
+            "fields": (
+                "default_rate_per_acre",
+                "default_productivity_per_worker",
+                "estimated_workers_per_acre",
+            ),
         }),
-        ('Scheduling', {
-            'fields': ('default_gap_days', 'is_strict')
+        ("Scheduling", {
+            "fields": ("default_gap_days",),
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+            "classes": ("collapse",),
         }),
     )
 
-    def is_strict_badge(self, obj):
-        if obj.is_strict:
-            return format_html('<span style="color:red;font-weight:bold;">⚠ Strict</span>')
-        return format_html('<span style="color:green;">Normal</span>')
-    is_strict_badge.short_description = 'Type'
 
 
 @admin.register(ActivityScheduleRule)
@@ -566,42 +588,69 @@ class MukkadamAdmin(admin.ModelAdmin):
         return ', '.join([c.name for c in obj.clusters.all()]) or '-'
     cluster_list.short_description = 'Clusters'
 
+from django.contrib import admin
+from .models import ClusterMukkadamAssignment
+
 
 @admin.register(ClusterMukkadamAssignment)
 class ClusterMukkadamAssignmentAdmin(admin.ModelAdmin):
     list_display = (
-        'mukkadam', 'cluster', 'advance_amount', 'weekly_payment_day_label',
-        'total_weekly_payments', 'transport_price', 'is_active', 'joined_at'
+        'mukkadam',
+        'cluster',
+        'mukkadam_type',
+        'updown_mode',
+        'joined_date',
+        'is_active',
     )
-    list_filter = ('is_active', 'weekly_payment_day', 'cluster')
-    search_fields = ('mukkadam__mukkadam_name', 'cluster__name')
-    readonly_fields = ('joined_at', 'updated_at', 'total_weekly_payments')
-    autocomplete_fields = ['mukkadam', 'cluster']
-    inlines = [MukkadamWeeklyPaymentInline]
+
+    list_filter = (
+        'mukkadam_type',
+        'updown_mode',
+        'is_active',
+        'weekly_payment_day',
+    )
+
+    search_fields = (
+        'mukkadam__mukkadam_name',
+        'cluster__name',
+    )
+
+    readonly_fields = ('joined_at', 'updated_at')
 
     fieldsets = (
-        ('Assignment', {
-            'fields': ('mukkadam', 'cluster', 'is_active')
+        ('Basic Info', {
+            'fields': (
+                'mukkadam',
+                'cluster',
+                'mukkadam_type',
+                'updown_mode',
+                'is_active',
+            )
+        }),
+        ('Updown Availability', {
+            'fields': (
+                'updown_from_date',
+                'updown_to_date',
+                'updown_specific_dates',
+            )
         }),
         ('Financials', {
-            'fields': ('transport_price', 'advance_amount', 'advance_is_manual', 'total_weekly_payments')
-        }),
-        ('Weekly Payment', {
-            'fields': ('weekly_payment_day',)
+            'fields': (
+                'transport_price',
+                'advance_amount',
+                'advance_is_manual',
+                'weekly_payment_day',
+                'total_weekly_payments',
+            )
         }),
         ('Timestamps', {
-            'fields': ('joined_at', 'updated_at'),
-            'classes': ('collapse',)
+            'fields': (
+                'joined_date',
+                'joined_at',
+                'updated_at',
+            )
         }),
     )
-
-    def weekly_payment_day_label(self, obj):
-        if obj.weekly_payment_day is not None:
-            return obj.get_weekly_payment_day_display()
-        return '-'
-    weekly_payment_day_label.short_description = 'Payment Day'
-
-
 @admin.register(MukkadamWeeklyPayment)
 class MukkadamWeeklyPaymentAdmin(admin.ModelAdmin):
     list_display = (

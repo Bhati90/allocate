@@ -4,13 +4,13 @@ from .views import (
     ActivityCatalogViewSet,
     ClusterViewSet,
     JobActivityViewSet,mukkadam_settlement_detail,raise_mukkadam_payment,
-    JobViewSet,
-    LeaveViewSet,ExtraWorkerViewSet,
-    MukkadamViewSet,cluster_payment_dashboard,
+    JobViewSet,MakeCallViews,send_farmer_otp,verify_farmer_otp,
+    LeaveViewSet,ExtraWorkerViewSet,send_start_otp,verify_start_otp,submit_day_end_report,verify_end_otp,resolve_dispute,
+    MukkadamViewSet,cluster_payment_dashboard,get_payment_proof_presign,save_payment_proof,
     AllocationViewSet,FarmerViewSet,mukkadam_all_settlements,mukkadam_misc_cost_delete,mukkadam_misc_costs,
     MukkadamActivityRateViewSet,add_weekly_payment,
     PlanningViewSet,search_farmers_for_cluster,search_mukkadams_for_cluster,add_farmer_plots_to_cluster,add_mukkadam_to_cluster,
-    PlotViewSet,tender_dashboard,list_all_settlements,
+    PlotViewSet,tender_dashboard,list_all_settlements,pay_mukkadam_settlement,add_misc_cost,
     get_cluster_plots,get_districts,get_states,get_talukas,get_villages,
     insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,
     reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,
@@ -19,7 +19,7 @@ from .views import (
 )
 
 from .webhook import booking_webhook,run_mukkadam_sync
-from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history
+from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history,mukkadam_earnings
 # Create router
 router = DefaultRouter()
 
@@ -61,12 +61,32 @@ path('api/settlements/', list_all_settlements, name='list-settlements'),
         mukkadam_settlement_detail,
         name='mukkadam-settlement-detail'
     ),
+path('api/attendance/send-start-otp/',       send_start_otp,       name='send-start-otp'),
+    path('api/attendance/verify-start-otp/',     verify_start_otp,     name='verify-start-otp'),
+    path('api/attendance/submit-day-end-report/', submit_day_end_report, name='submit-day-end-report'),
+    path('api/attendance/verify-end-otp/',       verify_end_otp,       name='verify-end-otp'),
+    path('api/attendance/resolve-dispute/',      resolve_dispute,      name='resolve-dispute'),
+    path('api/payments/proof-presign/',          get_payment_proof_presign, name='proof-presign'),
+    path('api/payments/save-proof/',            save_payment_proof,   name='save-proof'),
+
+path('api/attendance/send-farmer-otp/', send_farmer_otp),
+path('api/attendance/verify-farmer-otp/', verify_farmer_otp),
+    # path('api/attendance/send-otp/',send_otp),
+
+    #     path('api/attendance/end/send-otp/',send_otp_simple),
+    #     path('api/attendance/end/verify-otp/',verify_otp_simple),
+
+    # path('api/attendance/verify-otp/',verify_otp),
+path('api/mukkadams/<int:mukkadam_id>/earnings/', mukkadam_earnings),
+
+
+    path('ap/calls/make/web/', MakeCallViews.as_view(), name='make-call'),
 
 
 
     path('api/mukkadam/future-work/',mukkadam_future_work),
-    path('api/mukkadam/settlements/',mukkadam_settlement_history),
-
+    # path('api/mukkadam/settlements/',mukkadam_settlement_history),
+path('api/mukkadams/<int:mukkadam_id>/settlement-history/',mukkadam_settlement_history),
 path('api/mukkadam/workbook/', mukkadam_workbook, name='mukkadam_workbook'),
 
 path ('api/mukkadam/day-end-report/',mukkadam_day_end_report ),
@@ -84,12 +104,18 @@ path('api/farmer/work-reports/', farmer_work_verification_detail, name='farmer_w
 path('api/cluster/<int:cluster_id>/payment-dashboard/', cluster_payment_dashboard),
 
 
-    path(
-        'api/mukkadam/<int:mukkadam_id>/settlement/<str:job_id>/pay/',
-        raise_mukkadam_payment,
-        name='mukkadam-settlement-pay'
-    ),
-path('api/weekly-payment/add/', add_weekly_payment),
+
+    path('api/mukkadam/<int:mukkadam_id>/settlement/<str:job_id>/pay/',
+     pay_mukkadam_settlement),
+
+# ── Weekly payment (UPDATE — needs mode/notes/proof_s3_key) ─────────────────
+path('api/weekly-payment/add/',                  add_weekly_payment),           # already exists, update view
+
+# ── Misc costs (UPDATE — needs proof_s3_key) ────────────────────────────────
+path('api/mukkadam/<int:mukkadam_id>/job/<str:job_id>/misc/',     add_misc_cost),
+# path('api/mukkadam/<int:mukkadam_id>/job/<str:job_id>/misc/<int:cost_id>/', delete_misc_cost),
+
+# path('api/weekly-payment/add/', add_weekly_payment),
     # List all settlements for a mukkadam (for the new tab)
     path(
         'api/mukkadam/<int:mukkadam_id>/settlements/',

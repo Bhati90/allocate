@@ -24,6 +24,7 @@ import FarmScheduler from "./Farm";
 import MukkadamManagement from "./MukkadamManagement";
 import TenderFront from "./Tender";
 import TenderDashboard from "./TenderDashboard";
+import ClusterPage from "./ClusterPage";
 // import MukkadamPerformanceDashboard from "./analyatics";
 // import ActiveMukkadamsDashboard from "./analyatics";
 const queryClient = new QueryClient();
@@ -50,7 +51,11 @@ const App = () => (
 
           <Route path="/data" element={
            <TenderDashboard />
+
+           
           } />
+
+          <Route path="/cluster/:clusterId" element={<ClusterPage/>} />
 {/* 
           <Route path="/mukkadam" element={
             <AdminRoute><MukkadamManagement /></AdminRoute>

@@ -52,8 +52,6 @@ type MaxWorkRow = {
   maxArea: number;
 };
 
-const maxWorkRows: MaxWorkRow[] = [];
-
 interface DayDetailModalProps {
   date: Date;
   allocations: Allocation[];
@@ -129,6 +127,8 @@ const handleSubmit = async () => {
     if (res.ok) {
       toast.success('Job moved');
       setOpen(false);
+            window.location.reload();
+
       // onSuccess?.();
     } else {
       const err = await res.json();
@@ -249,6 +249,111 @@ const handleSubmit = async () => {
     </>
   );
 }
+
+
+const TeamDropdown: React.FC<{
+  workerRows: any[];
+  act: any;
+  job: any;
+  mukkadams: any[];
+  onStartAllocation: (jobId: any, actId: any, actWithPrefill: any) => void;
+}> = ({ workerRows, act, job, mukkadams, onStartAllocation }) => {
+  const [open, setOpen] = useState(false);
+
+  if (workerRows.length === 0) {
+    return <span className="text-xs text-gray-400 italic">No team data</span>;
+  }
+
+  return (
+    <div className="relative inline-block text-left">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50 flex items-center gap-1"
+      >
+        <span>Teams</span>
+        <span className="text-[10px] text-gray-500">▼</span>
+      </button>
+
+      {open && (
+        <div className="absolute z-10 mt-1 w-56 bg-white border border-gray-200 rounded shadow-lg max-h-60 overflow-auto">
+          <div className="p-1 space-y-1">
+            {workerRows.map((r, i) => {
+              const needed =
+                r.productivity > 0
+                  ? Math.ceil(Number(act.remaining_area) / r.productivity)
+                  : 0;
+
+              const canDo =
+                needed > 0 &&
+                needed <= r.availableWorkers &&
+                r.availableWorkers > 0;
+
+              const handleTeamClick = () => {
+                if (!canDo) return;
+                const mukkadam = mukkadams.find(
+                  mk => mk.mukkadam_id === r.mukkadamId
+                );
+                if (!mukkadam) return;
+                const rate = mukkadam.activity_rates?.find((rt: any) =>
+                  rt.activity_id === act.activity_id ||
+                  rt.activity_name === act.activity_name
+                );
+                const confirmed = window.confirm(
+                  `Allocate ${act.remaining_area} ac of "${act.activity_name}" to ${r.mukkadamName}?\n\n` +
+                    `Workers: ${r.availableWorkers}  |  Rate: ₹${rate?.rate_per_acre || 0}/ac`
+                );
+                if (!confirmed) return;
+
+                const enrichedAct = {
+                  ...act,
+                  __prefill: {
+                    mukkadam_id: r.mukkadamId,
+                    allocated_workers: r.availableWorkers,
+                    allocated_area: Number(act.remaining_area),
+                    mukkadam_rate: Number(rate?.rate_per_acre || 0),
+                  },
+                };
+                onStartAllocation(job.job_id, act.id, enrichedAct);
+                setOpen(false);
+              };
+
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={handleTeamClick}
+                  disabled={!canDo}
+                  className={`w-full flex items-center justify-between px-2 py-1 rounded text-xs text-left ${
+                    canDo
+                      ? 'hover:bg-teal-50 text-teal-800'
+                      : 'text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  <span>{r.mukkadamName}</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      r.availableWorkers === 0
+                        ? 'bg-gray-100 text-gray-400'
+                        : canDo
+                        ? 'bg-green-50 text-green-700'
+                        : 'bg-red-50 text-red-600'
+                    }`}
+                  >
+                    {r.availableWorkers === 0
+                      ? '🏖️ Holiday'
+                      : `${needed} needed / ${r.availableWorkers} avail`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const DayDetailModal: React.FC<DayDetailModalProps> = ({
   date,
   allocations,
@@ -301,10 +406,12 @@ const handleMoveSubmit = async () => {
     const data = await res.json();
     if (!res.ok) {
       toast.error(data.error || 'Failed to move allocation');
+
       return;
     }
     toast.success('Allocation moved successfully');
     setMoveModal(null);
+          window.location.reload();
     setMoveForm({ date: '', area: '' });
     // onLeavesUpdated(); // refresh
   } catch {
@@ -360,6 +467,7 @@ const handleFarmerVerify = async (
         ? '✅ Verified! Allocation adjusted automatically.'
         : '⚠️ Dispute recorded.'
       );
+            window.location.reload();
       // trigger parent refresh
       // if (onAllocationDelete) onAllocationDelete({ id: -1 } as any);
     } else {
@@ -522,12 +630,15 @@ const handleEditAllocation = async () => {
     toast.success('Allocation updated successfully!');
     setShowEditAllocationModal(false);
     setEditingAllocation(null);
+          window.location.reload();
     // onLeavesUpdated(); // Refresh allocations
   } catch (error) {
     toast.error('Failed to update allocation');
     console.error(error);
   }
 };
+
+const [availableMukkadamIds, setAvailableMukkadamIds] = useState<Set<number>>(new Set());
 
 // Add this handler inside DayDetailModal component
 const handleQuickAllocate = async (job: Job, activity: any) => {
@@ -566,6 +677,8 @@ const handleQuickAllocate = async (job: Job, activity: any) => {
     return;
   }
 
+  
+
   // ✅ Allocate whatever is possible today
   const maxAreaToday = parseFloat((availableWorkers * productivity).toFixed(2));
   const areaToAllocate = parseFloat(Math.min(maxAreaToday, remainingArea).toFixed(2));
@@ -599,8 +712,10 @@ const handleQuickAllocate = async (job: Job, activity: any) => {
           `Partially allocated ${areaToAllocate} ac of ${remainingArea} ac ` +
           `to ${mukkadam.mukkadam_name}. ${(remainingArea - areaToAllocate).toFixed(2)} ac remaining for another date.`
         );
+              window.location.reload();
       } else {
         toast.success(`Fully allocated ${areaToAllocate} ac to ${mukkadam.mukkadam_name}`);
+              window.location.reload();
       }
       // onAllocationDelete({ id: -1 } as any);
     } else {
@@ -611,6 +726,28 @@ const handleQuickAllocate = async (job: Job, activity: any) => {
     console.error(e);
   }
 };
+
+useEffect(() => {
+  const fetchAvailable = async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/mukkadams/daily_capacity_all/?date=${isoDate}&cluster_id=${clusterId}`
+      );
+      const data = await res.json();
+      // data = [{mukkadam_id: 1, available_crew_size: 24}, ...]
+      // Only keep mukkadams with available_crew_size > 0
+      const ids = new Set<number>(
+        (data as any[])
+          .filter(d => d.available_crew_size > 0)
+          .map(d => d.mukkadam_id)
+      );
+      setAvailableMukkadamIds(ids);
+    } catch (e) {
+      console.error('Failed to fetch daily capacity', e);
+    }
+  };
+  fetchAvailable();
+}, [isoDate, clusterId]);
 // workers already allocated on this day, per mukkadam
 const usedWorkersByMukkadam = new Map<number, number>();
 
@@ -638,6 +775,7 @@ const handleSaveExtraCrew = async () => {
     if (res.ok) {
       toast.success(`Successfully added workers`);
       setShowExtraCrewModal(false);
+            window.location.reload();
       // Trigger global refresh using the existing pattern
       if (onAllocationDelete) onAllocationDelete({ id: -1 } as any);
     } else {
@@ -651,17 +789,19 @@ const handleSaveExtraCrew = async () => {
 const maxWorkMap = new Map<string, MaxWorkRow>();
 
 mukkadams.forEach((m) => {
+  // ── AVAILABILITY GATE: trust the API ─────────────────────────
+  if (!availableMukkadamIds.has(m.mukkadam_id)) return; // not available today
+  // ─────────────────────────────────────────────────────────────
+
   const baseCrew = (m as any).available_crew_size ?? m.crew_size ?? 0;
   const used = usedWorkersByMukkadam.get(m.mukkadam_id) || 0;
   const remainingWorkers = Math.max(baseCrew - used, 0);
-
-  // ✅ REMOVED: if (remainingWorkers <= 0) return;  ← this was hiding 0-worker mukkadams
 
   (m.activity_rates || []).forEach((rate: any) => {
     const productivity = Number(rate.productivity_per_worker || 0);
     if (!productivity) return;
 
-    const maxArea = remainingWorkers * productivity;  // ✅ will be 0 on holiday
+    const maxArea = remainingWorkers * productivity;
     const key = `${m.mukkadam_id}-${rate.activity_id}`;
 
     if (!maxWorkMap.has(key)) {
@@ -671,13 +811,12 @@ mukkadams.forEach((m) => {
         activityId: rate.activity_id,
         activityName: rate.activity_name,
         productivity,
-        availableWorkers: remainingWorkers,  // ✅ shows 0
-        maxArea,                             // ✅ shows 0
+        availableWorkers: remainingWorkers,
+        maxArea,
       });
     }
   });
 });
-
 const maxWorkRows = Array.from(maxWorkMap.values());
 
 // unique activities for the dropdown
@@ -695,6 +834,8 @@ const visibleMaxWorkRows = selectedMaxWorkActivity
 // total capacity for the selected activity
 const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
 
+const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
+const isBothMode = modes.includes('jobs') && modes.includes('allocations');
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -719,7 +860,11 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
     className={`modal-tab ${activeTab === 'jobs' ? 'active' : ''}`}
     onClick={() => setActiveTab('jobs')}
   >
-    Jobs ({jobsOnThisDay.length})
+    Jobs ({jobsOnThisDay.reduce((sum, job) => 
+    sum + (job.activities?.filter(act => 
+      act.scheduled_date?.slice(0, 10) === isoDate
+    ).length || 0), 0
+  )})
   </button>
 
   {/* <button
@@ -754,610 +899,6 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
 </div>
 
 <div className="modal-body-scroll">
-
-{/* {activeTab === 'allocations' && (
-  <div className="tab-content">
-   
-    {leaves.length > 0 && (
-      <div className="mb-4 space-y-2">
-        <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Attendance Alerts</div>
-        {leaves.map(l => (
-          <div key={l.id} className={`leave-alert-row p-2 rounded border-l-4 ${l.leave_type === 'general' ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-red-50 border-red-400 text-red-700'}`}>
-            {l.leave_type === 'general' ? (
-              <span className="text-sm font-medium">🏖️ Holiday: {l.reason}</span>
-            ) : (
-              <span className="text-sm font-medium">👤 {l.mukkadam_name}: {l.crew_on_leave} workers absent</span>
-            )}
-          </div>
-        ))}
-      </div>
-    )}
-
-
-    <div className="form-divider mb-4">Active Allocations ({filteredAllocations.length})</div>
-
-    {filteredAllocations.length === 0 ? (
-      <p className="empty-text">No allocations made for this day.</p>
-    ) : (
-      <div className="space-y-4">
-        {filteredAllocations.map(a => {
-          const m = mukkadams.find(mk => mk.mukkadam_id === a.mukkadam);
-          const job = (allJobs || jobs).find(j => j.job_id === a.job_id);
-
-          return (
-            <div key={a.id} className="allocation-row card-style border-l-4 border-green-500 hover:shadow-md transition-shadow">
-              <div className="allocation-main">
-                <div className="flex justify-between items-start">
-                  <div className="item-title flex items-center gap-2 text-lg font-bold text-gray-800">
-                    <Tractor size={18} className="text-green-600" /> 
-                    {a.activity_name}
-                  </div>
-                  
-                  <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-[10px] font-bold uppercase">
-                    Allocated
-                  </span>
-                </div>
-                
-       
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] text-gray-400 uppercase font-bold">Farmer & Plot</span>
-                    <div className="text-sm text-gray-700 truncate">
-                      <strong>{job?.farmer_name}</strong> · {job?.plot_name}
-                    </div>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[10px] text-gray-400 uppercase font-bold">Crop Details</span>
-                    <div className="text-sm text-gray-600 italic">
-                      {job?.crop_name} ({job?.variety})
-                    </div>
-                  </div>
-                </div>
-
-               
-                <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100">
-                  <div className="flex items-center gap-1 text-sm font-semibold text-gray-700">
-                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                    {a.allocated_area} ac
-                  </div>
-                  <div className="flex items-center gap-1 text-sm font-semibold text-gray-700">
-                    <Users size={14} className="text-gray-400" />
-                    {a.allocated_workers} Workers
-                  </div>
-                  <div className="ml-auto text-xs text-gray-500 bg-gray-50 px-2 py-1 rounded border border-gray-200">
-                    Team: <span className="font-bold text-gray-700">{m?.mukkadam_name || 'N/A'}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="allocation-actions mt-3 flex justify-end gap-2 border-t pt-2">
-                <button
-                  className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded transition"
-                  onClick={() => {
-                    setEditingAllocation(a);
-                    setEditForm({
-                      mukkadam_id: a.mukkadam,
-                      allocated_date: a.allocated_date,
-                      allocated_workers: a.allocated_workers,
-                      allocated_area: a.allocated_area,
-                      mukkadam_rate: a.mukkadam_rate,
-                    });
-                    setShowEditAllocationModal(true);
-                  }}
-                >
-                  Edit
-                </button>
-                <button 
-                  className="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded transition" 
-                  onClick={() => onAllocationDelete(a)}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          );
-        })}
-
-        {jobsOnThisDay.length > 0 && (
-  <div className="quick-allocate-section" style={{ marginBottom: '1rem' }}>
-    <div className="form-divider">Jobs Scheduled Today</div>
-    {jobsOnThisDay.map(job =>
-      job.activities
-        .filter(act => act.scheduled_date?.slice(0, 10) === isoDate)
-        .map(act => {
-          const isAllocated = Number(act.allocated_area) > 0;
-          const isFullyAllocated = Number(act.allocated_area) >= Number(act.total_area);
-
-          // Find allocation record for this activity (from filteredAllocations)
-          const existingAllocation = allocations.find(
-            a => a.job_id === job.job_id && a.job_activity === act.id
-          );
-
-          const mukkadam = mukkadams.find(m =>
-            m.activity_rates?.some((r: any) =>
-              r.activity_id === act.activity_id ||
-              r.activity_name === act.activity_name
-            )
-          );
-          const rate = mukkadam?.activity_rates?.find((r: any) =>
-            r.activity_id === act.activity_id ||
-            r.activity_name === act.activity_name
-          );
-          const productivity = Number(rate?.productivity_per_worker || 0);
-
-          // ✅ Remaining workers = crew - already allocated workers today
-          const usedWorkers = usedWorkersByMukkadam.get(mukkadam?.mukkadam_id || 0) || 0;
-          const availableWorkers = Math.max((mukkadam?.crew_size || 0) - usedWorkers, 0);
-          const area = parseFloat((availableWorkers * productivity).toFixed(2));
-
-          // Allocated mukkadam details
-          const allocatedMukkadam = existingAllocation
-            ? mukkadams.find(m => m.mukkadam_id === existingAllocation.mukkadam)
-            : null;
-
-          return (
-            <div
-              key={`${job.job_id}-${act.id}`}
-              className="allocation-row card-style"
-              style={{
-                borderLeft: isFullyAllocated
-                  ? '3px solid #10b981'
-                  : isAllocated
-                  ? '3px solid #f59e0b'
-                  : '3px solid #e5e7eb',
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <div className="item-title">{act.activity_name}</div>
-                <div style={{ fontSize: '0.85rem', color: '#475569' }}>
-                  <strong>{job.farmer_name}</strong> · {job.plot_name} · {job.crop_name}
-                </div>
-
-                {isAllocated ? (
-                  // ✅ Show allocation details
-                  <div style={{ marginTop: '4px' }}>
-                    <div className="item-meta" style={{ color: isFullyAllocated ? '#10b981' : '#f59e0b' }}>
-                      {isFullyAllocated ? '✅' : '🔶'} {act.allocated_area}/{act.total_area} ac allocated
-                      {!isFullyAllocated && ` · ${act.remaining_area} ac remaining`}
-                    </div>
-                    {existingAllocation && (
-                      <div className="item-sub" style={{ color: '#475569', fontSize: '0.82rem' }}>
-                        Team: <strong>{allocatedMukkadam?.mukkadam_name || 'N/A'}</strong>
-                        {' · '}{existingAllocation.allocated_workers} workers
-                        {' · '}{existingAllocation.allocated_area} ac
-                        {existingAllocation.mukkadam_rate > 0 && (
-                          <span> · ₹{existingAllocation.mukkadam_rate}/ac</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  
-                  <div className="item-meta" style={{ color: '#6b7280', marginTop: '4px' }}>
-                    Not allocated · {act.remaining_area} ac remaining
-                    {mukkadam && availableWorkers > 0 && area > 0 && (
-                      <span style={{ marginLeft: '0.5rem' }}>
-                        → {mukkadam.mukkadam_name}: {availableWorkers}w × {productivity} = {area} ac
-                      </span>
-                    )}
-                    {mukkadam && availableWorkers === 0 && (
-                      <span style={{ color: '#dc2626', marginLeft: '0.5rem' }}>
-                        · No workers available today
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="allocation-actions">
-                
-                {!isAllocated && (
-                  <button
-                    className="btn-primary"
-                    style={{ whiteSpace: 'nowrap' }}
-                    disabled={!mukkadam || !area || availableWorkers === 0}
-                    onClick={() => handleQuickAllocate(job, act)}
-                    title={!mukkadam ? 'No mukkadam with rate card' : availableWorkers === 0 ? 'No workers available' : ''}
-                  >
-                    ⚡ Allocate
-                  </button>
-                )}
-
-                
-                {isAllocated && existingAllocation && (
-                  <>
-                    <button
-                      className="btn-link"
-                      onClick={() => onAllocationDateChange(job, existingAllocation)}
-                    >
-                      Move
-                    </button>
-                    <button
-                      className="btn-link delete"
-                      onClick={() => onAllocationDelete(existingAllocation)}
-                    >
-                      Remove
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })
-    )}
-  </div>
-)}
-      </div>
-    )}
-  </div>
-)}
-
-
-{showEditAllocationModal && editingAllocation && (
-  <div className="modal-overlay" onClick={() => setShowEditAllocationModal(false)}>
-    <div className="modal-content modal-md" onClick={(e) => e.stopPropagation()}>
-      <div className="modal-header">
-        <h3 className="modal-title">Edit Allocation</h3>
-        <button onClick={() => setShowEditAllocationModal(false)} className="modal-close">
-          <X size={20} />
-        </button>
-      </div>
-
-      <div className="modal-body">
-       
-        <div className="form-group">
-          <label className="form-label">Activity</label>
-          <input
-            type="text"
-            value={editingAllocation.activity_name}
-            className="form-input"
-            disabled
-            style={{ backgroundColor: '#f3f4f6', cursor: 'not-allowed' }}
-          />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Mukkadam *</label>
-          <select
-            className="form-select"
-            value={editForm.mukkadam_id}
-            onChange={(e) => {
-              const id = parseInt(e.target.value);
-              setEditForm({ ...editForm, mukkadam_id: id });
-            }}
-            required
-          >
-            <option value="">Select mukkadam</option>
-            {mukkadams.map((m) => (
-              <option key={m.mukkadam_id} value={m.mukkadam_id}>
-                {m.mukkadam_name} (Crew: {m.crew_size})
-              </option>
-            ))}
-          </select>
-          {Number(editForm.mukkadam_rate) > 0 && (
-  <small className="form-help" style={{ color: '#10b981' }}>
-    Rate: ₹{Number(editForm.mukkadam_rate).toFixed(2)}/acre
-  </small>
-)}
-
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Date *</label>
-          <input
-            type="date"
-            className="form-input"
-            value={editForm.allocated_date}
-            onChange={(e) => setEditForm({ ...editForm, allocated_date: e.target.value })}
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label className="form-label">Workers *</label>
-          <input
-            type="number"
-            className="form-input"
-            value={editForm.allocated_workers}
-            onChange={(e) => {
-              const workers = parseInt(e.target.value) || 0;
-              setEditForm({ ...editForm, allocated_workers: workers });
-            }}
-            required
-          />
-          {availableWorkers !== null && (
-            <small className="form-help">
-              Available on {editForm.allocated_date}: {availableWorkers} workers
-              {editForm.allocated_workers > availableWorkers && (
-                <span style={{ color: '#dc2626', display: 'block' }}>
-                  ⚠️ Exceeds available capacity
-                </span>
-              )}
-            </small>
-          )}
-        </div>
-
-
-        <div className="form-group">
-          <label className="form-label">Area (acres) *</label>
-          <input
-            type="number"
-            step="0.01"
-            className="form-input"
-            value={editForm.allocated_area}
-            onChange={(e) => {
-              const area = parseFloat(e.target.value) || 0;
-              setEditForm({ ...editForm, allocated_area: area });
-            }}
-            required
-          />
-          {maxCapacity !== null && (
-            <small className="form-help">
-              Max capacity with {editForm.allocated_workers} workers: {maxCapacity.toFixed(2)} acres
-              {editForm.allocated_area > maxCapacity && (
-                <span style={{ color: '#dc2626', display: 'block' }}>
-                  ⚠️ Exceeds team capacity
-                </span>
-              )}
-            </small>
-          )}
-        </div>
-
-        <div className="allocation-summary" style={{
-          padding: '1rem',
-          backgroundColor: '#f0f9ff',
-          borderRadius: '8px',
-          marginTop: '1rem'
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <span>Farmer Rate:</span>
-            <strong>₹{editingAllocation.farmer_rate}/acre</strong>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <span>Mukkadam Rate:</span>
-            <strong>
-  ₹{typeof editForm.mukkadam_rate === "number"
-    ? editForm.mukkadam_rate.toFixed(2)
-    : "0.00"}
-  /acre
-</strong>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '0.5rem', borderTop: '1px solid #cbd5e1' }}>
-            <span>Profit Margin:</span>
-            <strong style={{ color: '#10b981' }}>
-              ₹{((editingAllocation.farmer_rate - editForm.mukkadam_rate) * editForm.allocated_area).toFixed(2)}
-            </strong>
-          </div>
-        </div>
-      </div>
-
-      <div className="modal-footer">
-        <button
-          onClick={() => {
-            setShowEditAllocationModal(false);
-            setEditingAllocation(null);
-          }}
-          className="btn-secondary"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={handleEditAllocation}
-          className="btn-primary"
-          disabled={
-            !editForm.mukkadam_id ||
-            !editForm.allocated_date ||
-            editForm.allocated_workers <= 0 ||
-            editForm.allocated_area <= 0 ||
-            (maxCapacity !== null && editForm.allocated_area > maxCapacity) ||
-            (availableWorkers !== null && editForm.allocated_workers > availableWorkers)
-          }
-        >
-          Save Changes
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-
-
-
-{activeTab === 'jobs' && (
-  <div className="tab-content">
-    {jobsOnThisDay.length === 0 ? (
-      <p className="text-sm text-gray-400 italic mt-4">No jobs scheduled.</p>
-    ) : (
-      <div className="mt-2 rounded-xl border border-gray-200 overflow-x-auto">
-        <table className="text-sm" style={{ minWidth: '750px', width: '100%' }}>
-          <thead>
-            <tr className="bg-gray-50 border-b border-gray-200">
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Farmer</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Plot / Crop</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Activity</th>
-              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Area (ac)</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Workers Required</th>
-              {(() => {
-  const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
-  return modes.includes('allocations') || modes.includes('both');
-})() && (
-  <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500">Action</th>
-)}
-            </tr>
-          </thead>
-          <tbody>
-            {(() => {
-              const today = new Date();
-              today.setHours(0, 0, 0, 0);
-              const isPastDay = date < today;
-
-              return jobsOnThisDay.flatMap(job =>
-                job.activities
-                  .filter(act => {
-  if (act.scheduled_date?.slice(0, 10) !== isoDate) return false;
-
-  const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
-  const isManual = (act as any).is_manually_moved === true;
-  if (modes.includes('both' as any)) return true;
-  if (modes.includes('jobs') && modes.includes('allocations')) return true;
-  if (modes.includes('allocations') && !modes.includes('jobs')) return isManual;
-  return !isManual;
-})
-                  .map(act => {
-                    const workerRows = maxWorkRows.filter(r => r.activityName === act.activity_name);
-
-                    return (
-                      <tr key={`${job.job_id}-${act.id}`} className="border-b border-gray-100 hover:bg-gray-50 transition">
-                    
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5">
-                            <User size={13} className="text-gray-400 shrink-0" />
-                            <span className="font-medium text-gray-800">{job.farmer_name}</span>
-                          </div>
-                        </td>
-
-                
-                        <td className="px-4 py-3">
-                          <p className="text-gray-700 font-medium">{job.plot_name || job.job_id}</p>
-                          <p className="text-xs text-gray-400">
-                            {job.crop_name || '—'}{job.variety ? ` • ${job.variety}` : ''}
-                          </p>
-                        </td>
-
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded-full text-xs font-medium">
-                              {act.activity_name}
-                            </span>
-                            {(act as any).is_manually_moved ? (
-                              <span className="px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded text-[10px] font-bold">H</span>
-                            ) : (
-                              <span className="px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-bold">AI</span>
-                            )}
-                          </div>
-                        </td>
-
-                        <td className="px-4 py-3 text-right">
-                          <span className="font-semibold text-gray-800">{act.remaining_area}</span>
-                          <span className="text-xs text-gray-400 ml-1">ac</span>
-                        </td>
-
-         
-                        <td className="px-4 py-3">
-                          {workerRows.length === 0 ? (
-                            <span className="text-xs text-gray-400 italic">No team data</span>
-                          ) : (
-                            <div className="flex flex-col gap-1">
-                              {workerRows.map((r, i) => {
-                                const needed = r.productivity > 0
-                                  ? Math.ceil(Number(act.remaining_area) / r.productivity)
-                                  : '—';
-
-                                const canDo = !isPastDay &&
-                                  typeof needed === 'number' &&
-                                  needed <= r.availableWorkers &&
-                                  r.availableWorkers > 0;
-
-                                const handleTeamClick = () => {
-                                  if (!canDo) return;
-
-                                  const mukkadam = mukkadams.find(m => m.mukkadam_id === r.mukkadamId);
-                                  if (!mukkadam) return;
-
-                                  const rate = mukkadam.activity_rates?.find((rt: any) =>
-                                    rt.activity_id === act.activity_id || rt.activity_name === act.activity_name
-                                  );
-
-                     
-                                  const confirmed = window.confirm(
-                                    `Allocate ${act.remaining_area} ac of "${act.activity_name}" to ${r.mukkadamName}?\n\n` +
-                                    `Workers: ${needed}  |  Rate: ₹${rate?.rate_per_acre || 0}/ac`
-                                  );
-                                  if (!confirmed) return;
-
-                                  const enrichedAct = {
-                                    ...act,
-                                    __prefill: {
-                                      mukkadam_id: r.mukkadamId,
-                                      allocated_workers: needed,
-                                      allocated_area: Number(act.remaining_area),
-                                      mukkadam_rate: Number(rate?.rate_per_acre || 0),
-                                    }
-                                  };
-                                  onStartAllocation(job.job_id, act.id, enrichedAct);
-                                };
-
-                                return (
-                                  <div key={i} className="flex items-center gap-2">
-                                    <button
-                                      type="button"
-                                      disabled={!canDo}
-                                      onClick={handleTeamClick}
-                                      title={
-                                        isPastDay
-                                          ? 'Past date — cannot allocate'
-                                          : r.availableWorkers === 0
-                                          ? 'On holiday'
-                                          : canDo
-                                          ? `Click to allocate ${act.remaining_area} ac to ${r.mukkadamName}`
-                                          : `Not enough workers (need ${needed}, have ${r.availableWorkers})`
-                                      }
-                                      className={`text-xs w-28 truncate text-left transition rounded px-1 py-0.5 ${
-                                        isPastDay || r.availableWorkers === 0 || !canDo
-                                          ? 'text-gray-400 cursor-not-allowed'
-                                          : 'text-teal-700 font-semibold underline underline-offset-2 hover:bg-teal-50 cursor-pointer'
-                                      }`}
-                                    >
-                                      {r.mukkadamName}
-                                    </button>
-
-                                    {r.availableWorkers === 0 ? (
-                                      <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-gray-100 text-gray-400">
-                                        🏖️ Holiday
-                                      </span>
-                                    ) : (
-                                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-                                        isPastDay
-                                          ? 'bg-gray-100 text-gray-400'
-                                          : canDo
-                                          ? 'bg-green-50 text-green-700'
-                                          : 'bg-red-50 text-red-600'
-                                      }`}>
-                                        {needed} needed
-                                      </span>
-                                    )}
-
-                                    <span className="text-xs text-gray-400">/ {r.availableWorkers} avail</span>
-
-                                    {canDo && (
-                                      <span className="text-teal-500 text-xs">⚡</span>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </td>
-
-                       
-                        {(() => {
-  const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
-  return modes.includes('allocations') || modes.includes('both');
-})() && (
-  <td className="px-4 py-3 text-center">
-    {isPastDay ? <span className="text-xs text-gray-300 italic">Past</span> : <MoveJobButton job={job} act={act} />}
-  </td>
-)}
-                      </tr>
-                    );
-                  })
-              );
-            })()}
-          </tbody>
-        </table>
-      </div>
-    )}
-  </div>
-)} */}
 
 
 {/* ══════════════════════════════════════════════════════
@@ -1844,7 +1385,7 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
           <input
             type="date"
             value={moveForm.date}
-            min={new Date().toISOString().slice(0, 10)}
+            // min={new Date().toISOString().slice(0, 10)}
             onChange={e => setMoveForm(f => ({ ...f, date: e.target.value }))}
             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
           />
@@ -1976,21 +1517,51 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
 
                         {/* Activity */}
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded-full text-xs font-medium">
-                              {act.activity_name}
-                            </span>
-                            {(act as any).is_manually_moved ? (
-                              <span className="px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded text-[10px] font-bold">H</span>
-                            ) : (
-                              <span className="px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-bold">AI</span>
-                            )}
-                            {carryForwardAllocs.length > 0 && (
-                              <span className="px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded text-[10px] font-bold">
-                                🔄 CF
-                              </span>
-                            )}
-                          </div>
+                        <div className="flex items-center gap-2">
+  <span className="font-medium">{act.activity_name}</span>
+
+  {/* New copy (on new date) */}
+  {act.is_manually_moved && act.moved_from_activity && act.original_scheduled_date && (
+    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">
+       from {act.original_scheduled_date} → {act.scheduled_date}
+    </span>
+  )}
+
+  {/* {!act.is_manually_moved &&(
+    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">
+       from {act.original_scheduled_date} → {act.scheduled_date}
+    </span>
+  )} */}
+
+  {/* Old copy (shrunk original) – if you ever mark it */}
+  {/* {!act.is_manually_moved && !act.moved_from_activity && act.original_scheduled_date && (
+    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">
+      Part moved from {act.original_scheduled_date} to another date
+    </span>
+  )} */}
+
+  {(act as any).is_manually_moved ? (
+    <span className="px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded text-[10px] font-bold">
+      H
+    </span>
+  ) : (
+    <span className="px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-bold">
+      AI
+    </span>
+  )}
+  {carryForwardAllocs.length > 0 && (
+    <span className="px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded text-[10px] font-bold">
+      🔄 CF
+    </span>
+  )}
+</div>
+
+{act.is_manually_moved && act.move_reason && (
+  <div className="text-[11px] text-gray-500 mt-0.5">
+    Reason: {act.move_reason}
+  </div>
+)}
+
                           {/* Verification status badges */}
                           <div className="flex gap-1 mt-1 flex-wrap">
                             {pendingVerify > 0 && (
@@ -2056,129 +1627,131 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
                         </td>
 
                         {/* Team + status */}
-                        <td className="px-4 py-3">
-                          {actAllocations.length > 0 ? (
-                            <div className="space-y-1">
-                              {actAllocations.map(al => {
-                                const alMukkadam = mukkadams.find(mk => mk.mukkadam_id === al.mukkadam);
-                                const vs = getVerifyStatus(al);
-                                const vstyle = VERIFY_STYLE[vs];
-                                return (
-                                  <div
-                                    key={al.id}
-                                    className="flex items-center gap-2 text-xs"
-                                  >
-                                    <span className="font-medium text-gray-700">
-                                      {alMukkadam?.mukkadam_name || 'N/A'}
-                                    </span>
-                                    <span className="text-gray-400">
-                                      {Number(al.allocated_area).toFixed(2)} ac
-                                    </span>
-                                    {al.is_carry_forward && (
-                                      <span className="text-purple-500 text-[10px]">🔄</span>
-                                    )}
-                                    <span
-                                      className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                                      style={{ background: vstyle.bg, color: vstyle.color }}
-                                    >
-                                      {vstyle.label}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            /* Not yet allocated — show team suggestions */
-                            <div className="space-y-1">
-                              {workerRows.length === 0 ? (
-                                <span className="text-xs text-gray-400 italic">No team data</span>
-                              ) : workerRows.map((r, i) => {
-                                const needed = r.productivity > 0
-                                  ? Math.ceil(Number(act.remaining_area) / r.productivity)
-                                  : 0;
-                                const canDo = !isPastDay &&
-                                  needed > 0 &&
-                                  needed <= r.availableWorkers &&
-                                  r.availableWorkers > 0;
+{isBothMode && (
+  <td className="px-4 py-3">
+    {actAllocations.length > 0 ? (
+      // existing allocated block (no change)
+      <div className="space-y-1">
+        {actAllocations.map(al => {
+          const alMukkadam = mukkadams.find(mk => mk.mukkadam_id === al.mukkadam);
+          const vs = getVerifyStatus(al);
+          const vstyle = VERIFY_STYLE[vs];
+          return (
+            <div
+              key={al.id}
+              className="flex items-center gap-2 text-xs"
+            >
+              <span className="font-medium text-gray-700">
+                {alMukkadam?.mukkadam_name || 'N/A'}
+              </span>
+              <span className="text-gray-400">
+                {Number(al.allocated_area).toFixed(2)} ac
+              </span>
+              {al.is_carry_forward && (
+                <span className="text-purple-500 text-[10px]">🔄</span>
+              )}
+              <span
+                className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+                style={{ background: vstyle.bg, color: vstyle.color }}
+              >
+                {vstyle.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    ) : workerRows.length === 0 ? (
+      <span className="text-xs text-gray-400 italic">No team data</span>
+    ) : (
+      <div className="flex flex-wrap gap-2">
+        {workerRows.map((r, i) => {
+          const needed =
+            r.productivity > 0
+              ? Math.ceil(Number(act.remaining_area) / r.productivity)
+              : 0;
 
-                                const handleTeamClick = () => {
-                                  if (!canDo) return;
-                                  const mukkadam = mukkadams.find(mk => mk.mukkadam_id === r.mukkadamId);
-                                  if (!mukkadam) return;
-                                  const rate = mukkadam.activity_rates?.find((rt: any) =>
-                                    rt.activity_id === act.activity_id || rt.activity_name === act.activity_name
-                                  );
-                                  const confirmed = window.confirm(
-                                    `Allocate ${act.remaining_area} ac of "${act.activity_name}" to ${r.mukkadamName}?\n\n` +
-                                    `Workers: ${needed}  |  Rate: ₹${rate?.rate_per_acre || 0}/ac`
-                                  );
-                                  if (!confirmed) return;
-                                  const enrichedAct = {
-                                    ...act,
-                                    __prefill: {
-                                      mukkadam_id: r.mukkadamId,
-                                      allocated_workers: needed,
-                                      allocated_area: Number(act.remaining_area),
-                                      mukkadam_rate: Number(rate?.rate_per_acre || 0),
-                                    }
-                                  };
-                                  onStartAllocation(job.job_id, act.id, enrichedAct);
-                                };
+          const canDo =
+            needed > 0 &&
+            needed <= r.availableWorkers &&
+            r.availableWorkers > 0;
 
-                                return (
-                                  <div key={i} className="flex items-center gap-1.5">
-                                    <button
-                                      type="button"
-                                      disabled={!canDo}
-                                      onClick={handleTeamClick}
-                                      className={`text-xs text-left transition rounded px-1 py-0.5 ${
-                                        canDo
-                                          ? 'text-teal-700 font-semibold underline underline-offset-2 hover:bg-teal-50 cursor-pointer'
-                                          : 'text-gray-400 cursor-not-allowed'
-                                      }`}
-                                    >
-                                      {r.mukkadamName}
-                                    </button>
-                                    {r.availableWorkers === 0 ? (
-                                      <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-400">
-                                        🏖️ Holiday
-                                      </span>
-                                    ) : (
-                                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                                        canDo ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
-                                      }`}>
-                                        {needed} needed / {r.availableWorkers} avail
-                                      </span>
-                                    )}
-                                    {canDo && <span className="text-teal-500 text-xs">⚡</span>}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </td>
+          const handleTeamClick = () => {
+            if (!canDo) return;
+            const mukkadam = mukkadams.find(
+              mk => mk.mukkadam_id === r.mukkadamId
+            );
+            if (!mukkadam) return;
+            const rate = mukkadam.activity_rates?.find((rt: any) =>
+              rt.activity_id === act.activity_id ||
+              rt.activity_name === act.activity_name
+            );
+            const confirmed = window.confirm(
+              `Allocate ${act.remaining_area} ac of "${act.activity_name}" to ${r.mukkadamName}?\n\n` +
+                `Workers: ${r.availableWorkers}  |  Rate: ₹${rate?.rate_per_acre || 0}/ac`
+            );
+            if (!confirmed) return;
+            const enrichedAct = {
+              ...act,
+              __prefill: {
+                mukkadam_id: r.mukkadamId,
+                allocated_workers: r.availableWorkers,
+                allocated_area: Number(act.remaining_area),
+                mukkadam_rate: Number(rate?.rate_per_acre || 0),
+              },
+            };
+            onStartAllocation(job.job_id, act.id, enrichedAct);
+          };
+
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={handleTeamClick}
+              disabled={!canDo}
+              className={`flex items-center gap-2 px-2 py-1 rounded-full text-xs border ${
+                canDo
+                  ? 'border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100'
+                  : 'border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed'
+              }`}
+            >
+              <span className="font-medium">{r.mukkadamName}</span>
+              <span
+                className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                  r.availableWorkers === 0
+                    ? 'bg-gray-100 text-gray-400'
+                    : canDo
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-red-100 text-red-600'
+                }`}
+              >
+                {r.availableWorkers === 0
+                  ? '🏖️ Holiday'
+                  : `${needed} needed / ${r.availableWorkers} avail`}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    )}
+  </td>
+)}
+
 
                         {/* Action column */}
                         {(() => {
   const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
   const isBothMode = modes.includes('jobs') && modes.includes('allocations');
-  if (!isBothMode && !modes.includes('allocations')) return null;
-  
-  // ✅ Don't show Move if already allocated
+  if (!isBothMode) return null;
+
   const isAllocated = actAllocations.length > 0;
-  
+
   return (
     <td className="px-4 py-3 text-center">
-      {isPastDay ? (
-        <span className="text-xs text-gray-300 italic">Past</span>
-      ) : isAllocated ? (
-        null  // ✅ Already allocated — no move button
-      ) : (
-        <MoveJobButton job={job} act={act} />
-      )}
+      {isAllocated ? null : <MoveJobButton job={job} act={act} />}
     </td>
   );
 })()}
+
                       </tr>
                     );
                   })

@@ -27,6 +27,28 @@ const LeaveModal: React.FC<Props> = ({
   const [reason, setReason] = useState('');
 const [crewOnLeave, setCrewOnLeave] = useState<number>(0);
 
+const [availableWorkers, setAvailableWorkers] = useState<number>(0);
+
+// Fetch available workers when mukkadam is selected
+const fetchAvailableWorkers = async (mukkadamId: number) => {
+  try {
+    const dateStr = formatDate(selectedDate);
+    const res = await fetch(
+      `${API_BASE_URL}/api/mukkadams/daily_capacity_all/?date=${dateStr}&cluster_id=${clusterId}`
+    );
+    const data = await res.json();
+    const entry = (data as any[]).find(d => d.mukkadam_id === mukkadamId);
+    const avail = entry ? entry.available_crew_size : 0;
+    setAvailableWorkers(avail);
+    setCrewOnLeave(avail); // default to all available
+  } catch (e) {
+    // fallback to crew_size
+    const mk = mukkadams.find(m => m.mukkadam_id === mukkadamId);
+    const fallback = mk?.crew_size || 0;
+    setAvailableWorkers(fallback);
+    setCrewOnLeave(fallback);
+  }
+};
 const formatDate = (date: Date): string => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -34,9 +56,23 @@ const formatDate = (date: Date): string => {
   return `${y}-${m}-${d}`;
 };
   // Check existing leaves for this date
-  const existingLeaveForDate = existingLeaves.find(
-    (leave) => leave.date === formatDate(selectedDate)
+const existingLeaveForDate = existingLeaves.find((leave) => {
+  const sameDate = leave.date === formatDate(selectedDate);
+
+  if (!sameDate) return false;
+
+  if (leaveType === 'general') {
+    return leave.leave_type === 'general';
+  }
+
+  // mukkadam-specific: same type + same mukkadam
+  return (
+    leave.leave_type === 'mukkadam' &&
+    selectedMukkadam &&
+    Number(leave.mukkadam) === Number(selectedMukkadam)
   );
+});
+
 
 const handleMarkLeave = async () => {
   if (leaveType === 'mukkadam' && !selectedMukkadam) {
@@ -44,21 +80,34 @@ const handleMarkLeave = async () => {
     return;
   }
 
+  const selected = selectedMukkadam
+    ? mukkadams.find(m => m.mukkadam_id === selectedMukkadam)
+    : null;
+  const maxCrew = selected ? selected.crew_size : 0;
+
+  const safeCrewOnLeave =
+  leaveType === 'mukkadam'
+    ? Math.min(Math.max(0, crewOnLeave || 0), availableWorkers) // ← use availableWorkers
+    : 0;
+
   const payload = {
     date: formatDate(selectedDate),
     leave_type: leaveType,
     mukkadam: leaveType === 'mukkadam' ? selectedMukkadam : null,
     reason: reason || 'Leave marked',
-    crew_on_leave: leaveType === 'mukkadam' ? crewOnLeave : 0,
+    crew_on_leave: safeCrewOnLeave,
     is_active: true,
-    cluster: clusterId, 
+    cluster: clusterId,
   };
 
-  const url = existingLeaveForDate
-    ? `${API_BASE_URL}/api/leaves/${existingLeaveForDate.id}/`
-    : `${API_BASE_URL}/api/leaves/`;
 
-  const method = existingLeaveForDate ? 'PATCH' : 'POST';
+
+
+  const url = existingLeaveForDate
+  ? `${API_BASE_URL}/api/leaves/${existingLeaveForDate.id}/`
+  : `${API_BASE_URL}/api/leaves/`;
+
+const method = existingLeaveForDate ? 'PATCH' : 'POST';
 
   try {
     const response = await fetch(url, {
@@ -74,6 +123,7 @@ const handleMarkLeave = async () => {
           : 'Mukkadam leave saved!'
       );
       onLeaveMarked();
+            window.location.reload();
       onClose();
     } else {
       const err = await response.json().catch(() => null);
@@ -96,6 +146,7 @@ const handleMarkLeave = async () => {
       if (response.ok) {
         toast.success('Leave removed!');
         onLeaveMarked();
+              window.location.reload();
       } else {
         toast.error('Failed to remove leave');
       }
@@ -185,7 +236,8 @@ const handleMarkLeave = async () => {
   value={selectedMukkadam || ''}
   onChange={(e) => {
     const id = Number(e.target.value);
-    setSelectedMukkadam(id);
+  setSelectedMukkadam(id);
+  fetchAvailableWorkers(id);
     const mk = mukkadams.find(m => m.mukkadam_id === id);
     setCrewOnLeave(mk ? mk.crew_size : 0);
   }}
@@ -203,20 +255,29 @@ const handleMarkLeave = async () => {
     </div>
 
     <div className="form-group">
-      <label className="form-label">Workers on leave</label>
-      <input
-        type="number"
-        min={0}
-        max={
-          selectedMukkadam
-            ? (mukkadams.find(m => m.mukkadam_id === selectedMukkadam)?.crew_size || 0)
-            : 0
-        }
-        value={crewOnLeave}
-        onChange={(e) => setCrewOnLeave(Number(e.target.value) || 0)}
-        className="form-input"
-      />
-    </div>
+  <label className="form-label">
+    Workers on leave
+    <span style={{ fontSize: '0.72rem', color: '#6b7280', marginLeft: '6px' }}>
+      (max: {availableWorkers} available today)
+    </span>
+  </label>
+  <input
+    type="number"
+    min={0}
+    max={availableWorkers}
+    value={crewOnLeave}
+    onChange={(e) => {
+      const val = Number(e.target.value) || 0;
+      setCrewOnLeave(Math.min(val, availableWorkers)); // hard cap
+    }}
+    className="form-input"
+  />
+  {crewOnLeave > availableWorkers && (
+    <p style={{ color: '#dc2626', fontSize: '0.72rem', marginTop: '4px' }}>
+      ⚠ Cannot exceed {availableWorkers} available workers
+    </p>
+  )}
+</div>
   </>
 )}
 

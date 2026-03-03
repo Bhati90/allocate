@@ -21,6 +21,8 @@ interface Cluster {
   districts?: string[];
   talukas?: string[];
   villages?: string[];
+  farmer_due: number;    // ← new
+  mukkadam_due: number;
 }
 
 interface StateOption {
@@ -411,6 +413,142 @@ interface AddToClusterModalProps {
   mode: 'farmer' | 'mukkadam';
   onClose: () => void;
 }
+// ─── EditClusterModal ─────────────────────────────────────────────────────────
+interface EditClusterModalProps {
+  cluster: Cluster;
+  onClose: () => void;
+  onSaved: (updated: Cluster) => void;
+}
+
+const EditClusterModal: React.FC<EditClusterModalProps> = ({ cluster, onClose, onSaved }) => {
+  const [name, setName]                       = useState(cluster.name);
+  const [selectedState, setSelectedState]     = useState<string>('MH');
+  const [selectedLocations, setSelectedLocations] = useState<SelectedLocation[]>([]);
+  const [saving, setSaving]                   = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const body: any = { name };
+
+      if (selectedLocations.length > 0) {
+        body.district_codes = [...new Set(selectedLocations.map(l => l.districtCode).filter(Boolean))];
+        body.taluka_codes   = [...new Set(selectedLocations.map(l => l.talukaCode).filter(Boolean))];
+        body.village_codes  = selectedLocations.map(l => l.village.villagecode);
+        body.districts      = [...new Set(selectedLocations.map(l => l.districtName).filter(Boolean))];
+        body.talukas        = [...new Set(selectedLocations.map(l => l.talukaName).filter(Boolean))];
+        body.villages       = selectedLocations.map(l => l.village.villagenameenglish);
+      }
+
+      const res  = await fetch(`${API_BASE_URL}/api/clusters/${cluster.id}/update_locations/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      toast.success('Cluster updated!');
+      onSaved(data);
+      onClose();
+    } catch (e) {
+      toast.error('Failed to update cluster');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e => e.stopPropagation()}
+        style={{ maxWidth: '520px', width: '100%', borderRadius: '16px', padding: '24px' }}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <h3 style={{ fontWeight: 700, fontSize: '1.1rem', color: '#111827' }}>
+            ✏️ Edit Cluster
+          </h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Name */}
+        <label className="form-label">
+          Cluster name
+          <input
+            className="form-input"
+            value={name}
+            onChange={e => setName(e.target.value)}
+          />
+        </label>
+
+        {/* Current villages info */}
+        {cluster.villages && cluster.villages.length > 0 && (
+          <div style={{
+            marginTop: '12px', padding: '10px 14px',
+            background: '#f0f9ff', borderRadius: '10px',
+            fontSize: '0.8rem', color: '#1e40af',
+          }}>
+            <strong>Current villages:</strong>{' '}
+            {Array.isArray(cluster.villages)
+              ? cluster.villages.join(', ')
+              : cluster.villages}
+          </div>
+        )}
+
+        {/* New villages — optional, only updates if selections made */}
+        <label className="form-label" style={{ marginTop: '16px', display: 'block' }}>
+          Replace villages (optional)
+          <p style={{ fontSize: '0.75rem', color: '#9ca3af', margin: '2px 0 6px' }}>
+            Leave empty to keep existing villages. Select new ones to replace all.
+          </p>
+          <select
+            className="form-input"
+            value={selectedState}
+            onChange={e => {
+              setSelectedState(e.target.value);
+              setSelectedLocations([]);
+            }}
+            style={{ marginBottom: '8px' }}
+          >
+            <option value="MH">Maharashtra</option>
+            <option value="KA">Karnataka</option>
+            <option value="UP">Uttar Pradesh</option>
+          </select>
+          <LocationSearch
+            key={selectedState}
+            stateCode={selectedState}
+            onSelectionChange={setSelectedLocations}
+          />
+        </label>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: '10px', marginTop: '24px' }}>
+          <button
+            onClick={onClose}
+            style={{
+              flex: 1, padding: '10px', borderRadius: '10px',
+              border: '1px solid #e5e7eb', background: '#fff',
+              color: '#374151', fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || !name}
+            style={{
+              flex: 1, padding: '10px', borderRadius: '10px',
+              background: saving ? '#93c5fd' : '#2563eb',
+              color: '#fff', fontWeight: 700, cursor: 'pointer', border: 'none',
+            }}
+          >
+            {saving ? 'Saving...' : '💾 Save Changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const AddToClusterModal: React.FC<AddToClusterModalProps> = ({
   clusterId, clusterName, mode, onClose
@@ -925,10 +1063,8 @@ const handleSaveSingleEfficiency = async (rateId: number, index: number) => {
   );
 };
 
-// ─── Main TenderFront ─────────────────────────────────────────────────────────
 const TenderFront: React.FC = () => {
   const [clusters, setClusters] = useState<Cluster[]>([]);
-  const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [newName, setNewName] = useState('Satana');
   const [states, setStates] = useState<StateOption[]>([]);
@@ -937,19 +1073,23 @@ const TenderFront: React.FC = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const [calendarClusterId, setCalendarClusterId] = useState<number | null>(null);
   const [calendarClusterName, setCalendarClusterName] = useState('');
-const navigate = useNavigate();
+
+  const [editModal, setEditModal] = useState<Cluster | null>(null);
 
 
   const [addModal, setAddModal] = useState<{
-  clusterId: number;
-  clusterName: string;
-  mode: 'farmer' | 'mukkadam';
-} | null>(null);
+    clusterId: number;
+    clusterName: string;
+    mode: 'farmer' | 'mukkadam';
+  } | null>(null);
+
+  const navigate = useNavigate();
+
   useEffect(() => {
     const loadClusters = async () => {
       setLoading(true);
       try {
-        const res = await fetch(`${API_BASE_URL}/api/clusters/`);
+        const res  = await fetch(`${API_BASE_URL}/api/clusters/`);
         const data = await res.json();
         setClusters(data);
       } finally {
@@ -957,7 +1097,7 @@ const navigate = useNavigate();
       }
     };
     const loadStates = async () => {
-      const res = await fetch(`${API_BASE_URL}/locations/states/`);
+      const res  = await fetch(`${API_BASE_URL}/locations/states/`);
       const data = await res.json();
       setStates(data);
     };
@@ -971,13 +1111,13 @@ const navigate = useNavigate();
     setLoading(true);
     try {
       const districtNames = [...new Set(selectedLocations.map(l => l.districtName).filter(Boolean))];
-      const talukaNames = [...new Set(selectedLocations.map(l => l.talukaName).filter(Boolean))];
-      const villageNames = selectedLocations.map(l => l.village.villagenameenglish);
+      const talukaNames   = [...new Set(selectedLocations.map(l => l.talukaName).filter(Boolean))];
+      const villageNames  = selectedLocations.map(l => l.village.villagenameenglish);
       const districtCodes = [...new Set(selectedLocations.map(l => l.districtCode).filter(Boolean))];
-      const talukaCodes = [...new Set(selectedLocations.map(l => l.talukaCode).filter(Boolean))];
-      const villageCodes = selectedLocations.map(l => l.village.villagecode);
+      const talukaCodes   = [...new Set(selectedLocations.map(l => l.talukaCode).filter(Boolean))];
+      const villageCodes  = selectedLocations.map(l => l.village.villagecode);
 
-      const res = await fetch(`${API_BASE_URL}/api/clusters/`, {
+      const res     = await fetch(`${API_BASE_URL}/api/clusters/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -993,205 +1133,223 @@ const navigate = useNavigate();
       });
       const cluster = await res.json();
       setClusters(prev => [...prev, cluster]);
-      setSelectedClusterId(cluster.id);
+      // ✅ Navigate directly to new cluster page
+      navigate(`/cluster/${cluster.id}`);
     } finally {
       setLoading(false);
     }
   };
 
-  if (!selectedClusterId) {
-    return (
-      <div className="cluster-page">
-        <button
-  onClick={() => navigate('/data')}
-  className="px-4 py-2 bg-blue-500 text-white text-sm font-semibold rounded-lg hover:bg-blue-600 transition"
->
-  Go to Data
-</button>
-        <header className="cluster-header">
-          <h1>Choose cluster</h1>
-        </header>
+  return (
+    <div className="cluster-page">
+      <button
+        onClick={() => navigate('/data')}
+        className="px-4 py-2 bg-blue-500 text-white text-sm font-semibold rounded-lg hover:bg-blue-600 transition"
+      >
+        Go to Data
+      </button>
 
-        <div className="cluster-layout">
-          <section className="cluster-list-section">
-            {clusters.length === 0 && !loading && (
-              <p className="cluster-empty">No clusters yet.</p>
-            )}
-            {/* {clusters.map(c => (
-              <div key={c.id} className="cluster-card-wrapper">
-                <button className="cluster-card" onClick={() => setSelectedClusterId(c.id)}>
-                  <div className="cluster-card-name">{c.name}</div>
-                  <div className="cluster-card-meta">
-                    {[c.district, c.taluka, c.village].filter(Boolean).join(' · ')}
+      <header className="cluster-header">
+        <h1>Choose cluster</h1>
+      </header>
+
+      <div className="cluster-layout">
+        <section className="cluster-list-section">
+          {clusters.length === 0 && !loading && (
+            <p className="cluster-empty">No clusters yet.</p>
+          )}
+
+          {clusters.map(c => (
+            <div key={c.id} className="cluster-card-wrapper">
+              {/* ✅ Click → navigate to /cluster/:id */}
+              <button
+                className="cluster-card"
+                onClick={() => navigate(`/cluster/${c.id}`)}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div className="cluster-card-name">{c.name}</div>
+                    <div className="cluster-card-meta">
+                      {[c.district, c.taluka, c.village].filter(Boolean).join(' · ')}
+                    </div>
+                    {c.date_range?.start_date && (
+                      <span style={{ fontSize: '0.65rem', color: '#9ca3af', display: 'block', marginTop: '2px' }}>
+                        {c.date_range.start_date} → {c.date_range.end_date || '?'}
+                      </span>
+                    )}
                   </div>
-                </button>
+
+                  {/* Payment status pills */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-end', marginLeft: '8px' }}>
+                    {c.farmer_due > 0.01 && (
+                      <span style={{
+                        fontSize: '0.62rem', fontWeight: 700,
+                        padding: '3px 8px', borderRadius: '999px',
+                        background: '#fef9c3', color: '#b45309',
+                        whiteSpace: 'nowrap', border: '1px solid #fde68a',
+                      }}>
+                        🌾 Collect ₹{c.farmer_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      </span>
+                    )}
+                    {c.mukkadam_due > 0.01 && (
+                      <span style={{
+                        fontSize: '0.62rem', fontWeight: 700,
+                        padding: '3px 8px', borderRadius: '999px',
+                        background: '#fef2f2', color: '#dc2626',
+                        whiteSpace: 'nowrap', border: '1px solid #fecaca',
+                      }}>
+                        👷 Pay ₹{c.mukkadam_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      </span>
+                    )}
+                    {c.farmer_due <= 0.01 && c.mukkadam_due <= 0.01 && (
+                      <span style={{
+                        fontSize: '0.62rem', fontWeight: 600,
+                        padding: '3px 8px', borderRadius: '999px',
+                        background: '#dcfce7', color: '#16a34a',
+                        border: '1px solid #bbf7d0',
+                      }}>
+                        ✓ Clear
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </button>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '8px', marginTop: '12px', padding: '8px',
+                background: '#f8fafc', borderRadius: '12px',
+              }}>
                 <button
-                  className="cluster-card-action"
+                  className="cluster-action-btn"
+                  onClick={() => setAddModal({ clusterId: c.id, clusterName: c.name, mode: 'farmer' })}
+                  title="Add Farmer"
+                >
+                  <div className="icon-wrapper farmer-icon"><User size={18} /></div>
+                  <span>Farmer</span>
+                </button>
+
+                <button
+  className="cluster-action-btn"
+  onClick={() => setEditModal(c)}
+  title="Edit Cluster"
+>
+  <div className="icon-wrapper" style={{ background: '#eff6ff' }}>
+    <Edit2 size={18} color="#2563eb" />
+  </div>
+  <span>Edit</span>
+</button>
+
+                <button
+                  className="cluster-action-btn"
                   onClick={() => {
                     setCalendarClusterId(c.id);
                     setCalendarClusterName(c.name);
                     setShowCalendar(true);
                   }}
                   title="View Activity Calendar"
-                >📅</button>
-              </div>
-            ))} */}
-
-            {clusters.map(c => (
-  <div key={c.id} className="cluster-card-wrapper">
-    <button className="cluster-card" onClick={() => setSelectedClusterId(c.id)}>
-      <div className="cluster-card-name">{c.name}</div>
-      <div className="cluster-card-meta">
-        {[c.district, c.taluka, c.village].filter(Boolean).join(' · ')}
-      </div>
-{c.date_range?.start_date && (
-  <span style={{ fontSize: '0.65rem', color: '#9ca3af', display: 'block', marginTop: '1px' }}>
-    {c.date_range.start_date} → {c.date_range.end_date || '?'}
-  </span>
-)}
-    </button>
-
-{/* Action buttons - Clean Dashboard Style */}
-<div style={{ 
-  display: 'grid', 
-  gridTemplateColumns: 'repeat(3, 1fr)', 
-  gap: '8px', 
-  marginTop: '12px',
-  padding: '8px',
-  background: '#f8fafc',
-  borderRadius: '12px'
-}}>
-  <button
-    className="cluster-action-btn"
-    onClick={() => setAddModal({ clusterId: c.id, clusterName: c.name, mode: 'farmer' })}
-    title="Add Farmer"
-  >
-    <div className="icon-wrapper farmer-icon">
-       <User size={18} />
-    </div>
-    <span>Farmer</span>
-  </button>
-
-  {/* <button
-    className="cluster-action-btn"
-    onClick={() => setAddModal({ clusterId: c.id, clusterName: c.name, mode: 'mukkadam' })}
-    title="Add Mukkadam"
-  >
-    <div className="icon-wrapper mukkadam-icon">
-       <Users size={18} />
-    </div>
-    <span>Mukkadam</span>
-  </button> */}
-
-  <button
-    className="cluster-action-btn"
-    onClick={() => {
-      setCalendarClusterId(c.id);
-      setCalendarClusterName(c.name);
-      setShowCalendar(true);
-    }}
-    title="View Activity Calendar"
-  >
-    <div className="icon-wrapper calendar-icon">
-       <Calendar size={18} />
-    </div>
-    <span>Calendar</span>
-  </button>
-</div>
-  </div>
-))}
-
-          </section>
-
-          <section className="cluster-form-section">
-            <h2>Create new cluster</h2>
-            <form onSubmit={handleCreateCluster} className="cluster-form">
-              <label className="form-label">
-                Cluster name
-                <input
-                  className="form-input"
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                />
-              </label>
-
-              <label className="form-label">
-                State
-                <select
-                  className="form-input"
-                  value={selectedState}
-                  onChange={e => {
-                    setSelectedState(e.target.value);
-                    setSelectedLocations([]);
-                  }}
                 >
-                  <option value="">Select state</option>
-                  {states.map(s => (
-                    <option key={s.state_code} value={s.state_code}>
-                      {s.state_name_english}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <div className="icon-wrapper calendar-icon"><Calendar size={18} /></div>
+                  <span>Calendar</span>
+                </button>
+              </div>
+            </div>
+          ))}
+        </section>
 
-              <label className="form-label">
-                Villages
-                {selectedState ? (
-                  // key=selectedState forces full remount on state change
-                  <LocationSearch
-                    key={selectedState}
-                    stateCode={selectedState}
-                    onSelectionChange={setSelectedLocations}
-                  />
-                ) : (
-                  <p style={{ fontSize: '0.85rem', color: '#9ca3af', marginTop: '0.4rem' }}>
-                    Select a state first
-                  </p>
-                )}
-              </label>
+        <section className="cluster-form-section">
+          <h2>Create new cluster</h2>
+          <form onSubmit={handleCreateCluster} className="cluster-form">
+            <label className="form-label">
+              Cluster name
+              <input
+                className="form-input"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+              />
+            </label>
 
-              <button
-                className="btn-primary full-width"
-                type="submit"
-                disabled={loading || !newName || selectedLocations.length === 0}
+            <label className="form-label">
+              State
+              <select
+                className="form-input"
+                value={selectedState}
+                onChange={e => {
+                  setSelectedState(e.target.value);
+                  setSelectedLocations([]);
+                }}
               >
-                {loading ? 'Creating...' : '+ Create & open'}
-              </button>
-            </form>
-          </section>
-        </div>
+                <option value="">Select state</option>
+                {states.map(s => (
+                  <option key={s.state_code} value={s.state_code}>
+                    {s.state_name_english}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        {showCalendar && calendarClusterId && (
-          <ClusterActivityCalendar
-            clusterId={calendarClusterId}
-            clusterName={calendarClusterName}
-            onClose={() => {
-              setShowCalendar(false);
-              setCalendarClusterId(null);
-              setCalendarClusterName('');
-            }}
-          />
-        )}
+            <label className="form-label">
+              Villages
+              {selectedState ? (
+                <LocationSearch
+                  key={selectedState}
+                  stateCode={selectedState}
+                  onSelectionChange={setSelectedLocations}
+                />
+              ) : (
+                <p style={{ fontSize: '0.85rem', color: '#9ca3af', marginTop: '0.4rem' }}>
+                  Select a state first
+                </p>
+              )}
+            </label>
 
+            <button
+              className="btn-primary full-width"
+              type="submit"
+              disabled={loading || !newName || selectedLocations.length === 0}
+            >
+              {loading ? 'Creating...' : '+ Create & open'}
+            </button>
+          </form>
+        </section>
+      </div>
 
-        {addModal && (
-  <AddToClusterModal
-    clusterId={addModal.clusterId}
-    clusterName={addModal.clusterName}
-    mode={addModal.mode}
-    onClose={() => setAddModal(null)}
+      {showCalendar && calendarClusterId && (
+        <ClusterActivityCalendar
+          clusterId={calendarClusterId}
+          clusterName={calendarClusterName}
+          onClose={() => {
+            setShowCalendar(false);
+            setCalendarClusterId(null);
+            setCalendarClusterName('');
+          }}
+        />
+      )}
+
+     
+{editModal && (
+  <EditClusterModal
+    cluster={editModal}
+    onClose={() => setEditModal(null)}
+    onSaved={(updated) => {
+      setClusters(prev => prev.map(c => c.id === updated.id ? updated : c));
+      setEditModal(null);
+    }}
   />
 )}
-      </div>
-    );
-  }
 
-  return (
-    <FarmScheduler
-      clusterId={selectedClusterId}
-      onBackToClusters={() => setSelectedClusterId(null)}
-    />
+      {addModal && (
+        <AddToClusterModal
+          clusterId={addModal.clusterId}
+          clusterName={addModal.clusterName}
+          mode={addModal.mode}
+          onClose={() => setAddModal(null)}
+        />
+      )}
+    </div>
   );
 };
+
 
 export default TenderFront;

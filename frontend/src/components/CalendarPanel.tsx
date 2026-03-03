@@ -165,6 +165,7 @@ setFilters,
 
     alert('Allocation moved successfully');
     onLeavesUpdated();
+          window.location.reload();
     
   } catch (e) {
     console.error(e);
@@ -182,6 +183,7 @@ const handleAllocationDelete = async (allocation: Allocation) => {
 
     if (res.ok) {
       onLeavesUpdated();
+            window.location.reload();
     } else {
       alert('Failed to delete allocation');
     }

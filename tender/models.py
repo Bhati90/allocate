@@ -32,6 +32,14 @@ class ActivityCatalog(models.Model):
         validators=[MinValueValidator(1)],
         help_text="Estimated workers needed per acre"
     )
+
+    # In your migrations
+    default_productivity_per_worker = models.DecimalField(
+        max_digits=5,
+        decimal_places=3,
+        default=Decimal('0.150'),
+        help_text="Global default: acres per worker per day"
+    )
     source = models.CharField(
         max_length=20,
         choices=[('api', 'From API'), ('custom', 'Custom Added')],
@@ -200,6 +208,170 @@ class ClusterActivityRate(models.Model):
     
     def __str__(self):
         return f"{self.cluster.name} - {self.activity.name}: ₹{self.rate_per_acre}/ac"
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+import requests
+
+class FarmerCall(models.Model):
+    """Track calls made to farmers/mukadams"""
+    CALL_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('queued', 'Queued'),
+        ('ringing', 'Ringing'),
+        ('in-progress', 'In Progress'),
+        ('answered', 'Answered'),
+        ('completed', 'Completed'),
+        ('terminal', 'Terminal'),
+        ('failed', 'Failed'),
+        ('busy', 'Busy'),
+        ('no-answer', 'No Answer'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    CALL_PURPOSE_CHOICES = [
+        ('new_job', 'New Job Available'),
+        ('payment', 'Payment Notification'),
+        ('reminder', 'Work Reminder'),
+        ('verification', 'Verification'),
+        ('follow_up', 'Follow Up'),
+        ('general', 'General'),
+        ('web_dialpad','Web')
+    ]
+    
+    # Primary identifiers
+    call_sid = models.CharField(max_length=100, unique=True, db_index=True)
+    user_id = models.CharField(max_length=100, blank=True, default='system')
+    mobile_number = models.CharField(max_length=15)
+    from_number = models.CharField(max_length=20)
+    
+    # Call metadata
+    purpose = models.CharField(max_length=20, choices=CALL_PURPOSE_CHOICES, default='general')
+    status = models.CharField(max_length=20, choices=CALL_STATUS_CHOICES, default='pending')
+    direction = models.CharField(max_length=20, default='outbound')
+    state = models.CharField(max_length=20, blank=True)
+    
+    # Call metrics
+    duration = models.IntegerField(null=True, blank=True, help_text="Total duration in seconds")
+    talk_time = models.IntegerField(null=True, blank=True, help_text="Actual talk time in seconds")
+    price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    
+    # Recording
+    recording_url = models.URLField(blank=True, null=True)
+    recording_urls = models.JSONField(default=list, blank=True, help_text="Array of recording URLs")
+    s3_key = models.CharField(max_length=500, blank=True, null=True, help_text="S3 key for recording")  # ✅ NEW
+    
+    # Timestamps
+    initiated_at = models.DateTimeField(auto_now_add=True)
+    answered_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_time = models.DateTimeField(null=True, blank=True)
+    updated_time = models.DateTimeField(null=True, blank=True)
+    
+    # Exotel specific
+    virtual_number = models.CharField(max_length=20, blank=True)
+    custom_field = models.CharField(max_length=255, blank=True)
+    legs_url = models.CharField(max_length=500, blank=True)
+    
+    # Extra context
+    job_id = models.CharField(max_length=100, blank=True)
+    notes = models.TextField(blank=True)
+    webhook_data = models.JSONField(default=dict, blank=True, help_text="Full webhook response")
+    
+    # User relationship
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    
+    class Meta:
+        db_table = "tender_farmer_calls"
+        ordering = ['-initiated_at']
+        indexes = [
+            models.Index(fields=['call_sid']),
+            models.Index(fields=['mobile_number']),
+            models.Index(fields=['status']),
+            models.Index(fields=['-initiated_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.purpose} - {self.mobile_number} - {self.status}"
+    
+    @property
+    def has_recording(self):
+        """Check if call has any recordings"""
+        return bool(self.recording_url or self.recording_urls or self.s3_key)  # ✅ UPDATED
+    
+    @property
+    def primary_recording_url(self):
+        """Get the primary recording URL"""
+        if self.recording_url:
+            return self.recording_url
+        if self.recording_urls and len(self.recording_urls) > 0:
+            return self.recording_urls[0]
+        return None
+    
+    def _get_presigned_url(self, s3_key):
+        """Internal helper to fetch presigned URL from external service"""
+        if not s3_key:
+            return None
+        
+        try:
+            presign_url = 'https://demand.bharatintelligence.ai/chat/presign_obj_api/'
+            response = requests.get(
+                presign_url,
+                params={'key': s3_key},
+                # Note: Consider moving this token to settings.py for security
+                headers={'Authorization': 'Token c432208626a204d2d8de3d00b29f948eae61ebdb'},
+                timeout=10 # Reduced timeout for better UX
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Handle both dictionary response or direct string
+                return data.get('url') if isinstance(data, dict) else data
+            return None
+                
+        except Exception as e:
+            logger.error(f"Error getting presigned URL for {s3_key}: {e}")
+            return None
+
+    @property
+    def audio_url(self):
+        """
+        The dynamic property for the frontend.
+        Priority: 1. Presigned S3 Link, 2. Direct Recording URL
+        """
+        if self.s3_key:
+            return self._get_presigned_url(self.s3_key)
+        return self.primary_recording_url
+# allocation_app/models.py
+
+class MukkadamOTPRequest(models.Model):
+    mukkadam     = models.ForeignKey('Mukkadam', on_delete=models.CASCADE)
+    phone        = models.CharField(max_length=15)
+    crew_size    = models.PositiveIntegerField(null=True, blank=True)
+    allocation   = models.ForeignKey('Allocation', on_delete=models.SET_NULL, null=True, blank=True)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    is_used      = models.BooleanField(default=False)
+
+    otp_type = models.CharField(
+        max_length=10,
+        choices=[('start', 'Start Work'), ('end', 'End Work')],
+        default='start'
+    )
+
+    class Meta:
+        ordering = ['-requested_at']
+
+    def is_expired(self):
+        from django.utils import timezone
+        return (timezone.now() - self.requested_at).seconds > 600
+
 
 class Job(models.Model):
     job_id = models.CharField(max_length=50, unique=True, primary_key=True)
@@ -331,6 +503,15 @@ class JobActivity(models.Model):
     other_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
+    moved_from_activity = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='moved_children'
+    )
+    move_reason = models.TextField(blank=True)
+
     allocation_status = models.CharField(
         max_length=20,
         choices=[
@@ -352,6 +533,17 @@ class JobActivity(models.Model):
 
     api_activity_id = models.CharField(max_length=50, blank=True)
 
+    source = models.CharField(
+        max_length=10,
+        choices=[('ai', 'AI'), ('manual', 'Manual')],
+        default='ai',
+    )
+    original_source = models.CharField(      # 🔹 new
+        max_length=10,
+        choices=[('ai', 'AI'), ('manual', 'Manual')],
+        default='ai',
+    )
+    original_scheduled_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -445,22 +637,26 @@ class FarmerPayment(models.Model):
     payment_id = models.BigIntegerField(unique=True)
     
     mode = models.CharField(
-        max_length=50,
-        choices=[
-            ('CASH', 'Cash'),
-            ('UPI', 'UPI'),
-            ('BANK_TRANSFER', 'Bank Transfer'),
-            ('CHEQUE', 'Cheque'),
-            ('WILL_PAY_LATER', 'Will Pay Later'),
-            ('OTHER', 'Other'),
-        ],
-        default='CASH'
-    )
+    max_length=50,
+    choices=[
+        ('CASH', 'Cash'),
+        ('UPI', 'UPI'),
+        ('ZOHO_PAYMENT', 'Zoho Payment'),   # ← ADD THIS
+        ('BANK_TRANSFER', 'Bank Transfer'),
+        ('CHEQUE', 'Cheque'),
+        ('WILL_PAY_LATER', 'Will Pay Later'),
+        ('OTHER', 'Other'),
+    ],
+    default='CASH'
+)
     
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     notes = models.TextField(blank=True)
     paid_status = models.BooleanField(default=True)
     paid_at = models.DateTimeField()
+    proof_s3_key = models.CharField(max_length=500, blank=True, null=True,
+                                     help_text='S3 key of payment proof image/PDF')
+
     
     # Audit
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
@@ -859,6 +1055,36 @@ class Allocation(models.Model):
         decimal_places=2,
         help_text="Profit/Loss (farmer_amount - mukkadam_amount)"
     )
+
+    WORK_STATUS_CHOICES = [
+    ('work_not_started', 'Work Not Started'),
+    ('in_progress',      'In Progress'),
+    ('completed',        'Completed'),
+    ]
+
+    PAYMENT_STATUS_CHOICES = [
+        ('pending',  'Pending'),      # not yet completed
+        ('dispute',  'Dispute'),      # completed but farmer didn't verify
+        ('done',     'Done'),         # farmer verified via OTP
+        ('settled',  'Settled'),      # final payment raised
+    ]
+
+    work_status          = models.CharField(max_length=20, choices=WORK_STATUS_CHOICES,
+                                        default='work_not_started')
+    payment_status       = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES,
+                                            default='pending')
+    mukkadam_claimed_area = models.DecimalField(max_digits=10, decimal_places=2,
+                                                null=True, blank=True,
+                                                help_text="Area claimed by mukkadam at day end")
+    admin_override_area  = models.DecimalField(max_digits=10, decimal_places=2,
+                                                null=True, blank=True,
+                                                help_text="Team override after dispute resolution")
+    dispute_reason       = models.TextField(blank=True, null=True,
+                                            help_text="Farmer's reason filled by team on call")
+    dispute_resolved_at  = models.DateTimeField(null=True, blank=True)
+    dispute_resolved_by  = models.ForeignKey('auth.User', null=True, blank=True, on_delete=models.SET_NULL,
+                                          related_name='resolved_disputes')
+            
     
     # Status tracking
     status = models.CharField(
@@ -902,6 +1128,11 @@ class Allocation(models.Model):
     is_carry_forward = models.BooleanField(
         default=False,
         help_text='Auto-created by carry-forward service when farmer agrees actual < allocated'
+    )
+    # models.py — Allocation model, add this field
+    is_auto_allocated = models.BooleanField(
+        default=False,
+        help_text="True = created by auto-allocation engine"
     )
     carry_forward_from = models.ForeignKey(
         'self',
@@ -947,45 +1178,61 @@ class Allocation(models.Model):
         
         super().save(*args, **kwargs)
 
+PAYMENT_PROOF_TYPE_CHOICES = [
+    ('farmer',   'Farmer Payment'),
+    ('mukkadam', 'Mukkadam Payment'),
+    ('weekly',   'Weekly Payment'),
+]
+class PaymentProof(models.Model):
+    proof_type   = models.CharField(max_length=20, choices=PAYMENT_PROOF_TYPE_CHOICES)
+    reference_id = models.IntegerField(help_text="FarmerPayment.id or MukkadamPayment.id or WeeklyPayment.id")
+    s3_key       = models.CharField(max_length=500)
+    s3_url       = models.URLField(max_length=1000, blank=True)
+    file_name    = models.CharField(max_length=255)
+    uploaded_at  = models.DateTimeField(auto_now_add=True)
+    uploaded_by  = models.ForeignKey('auth.User', null=True, blank=True,
+                                      on_delete=models.SET_NULL)
+
+    class Meta:
+        db_table = 'payment_proof'
+
+    def __str__(self):
+        return f"{self.proof_type} proof for ref {self.reference_id}"
+    
 
 class MukkadamPayment(models.Model):
-    """
-    Payments made to mukkadam (can be for one or multiple allocations)
-    """
     mukkadam = models.ForeignKey(Mukkadam, on_delete=models.CASCADE, related_name='payments')
+    settlement = models.ForeignKey(
+        'MukkadamJobSettlement', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='payments'
+    )
     allocations = models.ManyToManyField(Allocation, related_name='mukkadam_payments', blank=True)
-    
+    PAYMENT_MODES = [
+        ('CASH', 'Cash'),
+        ('UPI', 'UPI'),
+        ('BANK_TRANSFER', 'Bank Transfer'),
+        ('CHEQUE', 'Cheque'),
+        ('OTHER', 'Other'),
+    ]
     payment_id = models.CharField(max_length=50, unique=True)
-    
     mode = models.CharField(
-        max_length=50,
-        choices=[
-            ('CASH', 'Cash'),
-            ('UPI', 'UPI'),
-            ('BANK_TRANSFER', 'Bank Transfer'),
-            ('CHEQUE', 'Cheque'),
-            ('WILL_PAY_LATER', 'Will Pay Later'),
-            ('OTHER', 'Other'),
-        ],
+        max_length=50, 
+        choices=PAYMENT_MODES, # ✅ Corrected from [...]
         default='CASH'
     )
-    
+    proof_s3_key = models.CharField(max_length=500, blank=True, null=True)  # NEW
+
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     notes = models.TextField(blank=True)
-    
     paid_at = models.DateTimeField()
-    
-    # Audit
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         db_table = 'mukkadam_payments'
         ordering = ['-paid_at']
-    
-    def __str__(self):
-        return f"₹{self.amount} to {self.mukkadam.mukkadam_name} - {self.paid_at.date()}"
+
 
 # models.py
 class ActivityLogTender(models.Model):
@@ -1064,7 +1311,13 @@ class AllocationChangeLogTender(models.Model):
     """
     Detailed audit log for all allocation changes
     """
-    allocation = models.ForeignKey(Allocation, on_delete=models.CASCADE, related_name='change_logs')
+    allocation = models.ForeignKey(
+        Allocation, 
+        on_delete=models.SET_NULL, # Essential for keeping logs after deletion
+        null=True, 
+        blank=True,
+        related_name='change_logs'
+    )
     
     change_type = models.CharField(
         max_length=20,
@@ -1153,109 +1406,89 @@ class PaymentChangeLog(models.Model):
         return f"{self.payment_type} {self.change_type} at {self.changed_at}"
 
 # models.py
+from django.db.models import CharField, DateField, JSONField
+from django.db import models
+from decimal import Decimal
 
-class WebhookLog(models.Model):
-    """Log all webhook attempts for debugging"""
-    
-    STATUS_CHOICES = [
-        ('success', 'Success'),
-        ('partial', 'Partial Success'),
-        ('failed', 'Failed'),
-    ]
-    
-    webhook_data = models.JSONField()
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
-    error_type = models.CharField(max_length=100, blank=True, null=True)
-    error_message = models.TextField(blank=True, null=True)
-    
-    # What was processed
-    farmer_id = models.CharField(max_length=50, blank=True, null=True)
-    job_id = models.CharField(max_length=100, blank=True, null=True)
-    cluster_matched = models.BooleanField(default=False)
-    cluster_id = models.IntegerField(blank=True, null=True)
-    
-    # Processing details
-    activities_processed = models.IntegerField(default=0)
-    activities_failed = models.IntegerField(default=0)
-    plots_created = models.IntegerField(default=0)
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        db_table = 'webhook_log'
-        ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['status', '-created_at']),
-            models.Index(fields=['farmer_id']),
-            models.Index(fields=['job_id']),
-        ]
-    
-    def __str__(self):
-        return f"Webhook {self.status} - {self.created_at.strftime('%Y-%m-%d %H:%M')}"
-# ============================================================================
-# HELPER/UTILITY MODELS
-# ============================================================================
 
-class SystemConfiguration(models.Model):
-    """
-    System-wide configuration and settings
-    """
-    key = models.CharField(max_length=100, unique=True)
-    value = models.JSONField()
-    description = models.TextField(blank=True)
-    
-    updated_at = models.DateTimeField(auto_now=True)
-    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
-    
-    class Meta:
-        db_table = 'system_configuration'
-    
-    def __str__(self):
-        return self.key
 class ClusterMukkadamAssignment(models.Model):
-    """
-    Through model for Mukkadam <-> Cluster with financial details
-    """
-    mukkadam = models.ForeignKey(Mukkadam, on_delete=models.CASCADE, related_name='cluster_assignments')
-    cluster = models.ForeignKey(Cluster, on_delete=models.CASCADE, related_name='mukkadam_assignments')
+    mukkadam = models.ForeignKey(
+        Mukkadam,
+        on_delete=models.CASCADE,
+        related_name='cluster_assignments'
+    )
+    cluster = models.ForeignKey(
+        Cluster,
+        on_delete=models.CASCADE,
+        related_name='mukkadam_assignments'
+    )
 
-    # Transport cost paid when mukkadam joins this cluster
+    weekly_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        help_text="Weekly payment amount agreed for this mukkadam in this cluster"
+    )
+
     transport_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-    # Advance given at joining — auto-set based on crew size
     advance_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    # For audit: was advance auto-calculated or manually overridden?
     advance_is_manual = models.BooleanField(default=False)
 
-    # Day of week (0=Monday ... 6=Sunday) on which weekly payment is added
     WEEKDAY_CHOICES = [
         (0, 'Monday'), (1, 'Tuesday'), (2, 'Wednesday'),
         (3, 'Thursday'), (4, 'Friday'), (5, 'Saturday'), (6, 'Sunday'),
     ]
-    weekly_payment_day = models.IntegerField(choices=WEEKDAY_CHOICES, null=True, blank=True)
 
-    # Track total weekly payments added so far (running total)
+    weekly_payment_day = models.IntegerField(choices=WEEKDAY_CHOICES, null=True, blank=True)
     total_weekly_payments = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     is_active = models.BooleanField(default=True)
+
+    joined_date = models.DateField(null=True, blank=True)
     joined_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    MUKKADAM_TYPE_CHOICES = [
+        ('permanent', 'Permanent'),
+        ('updown', 'Updown'),
+    ]
+
+    mukkadam_type = models.CharField(
+        max_length=20,
+        choices=MUKKADAM_TYPE_CHOICES,
+        default='permanent'
+    )
+
+    UPDOWN_MODE_CHOICES = [
+        ('range', 'Range'),
+        ('specific', 'Specific Dates'),
+    ]
+
+    updown_mode = models.CharField(
+        max_length=20,
+        choices=UPDOWN_MODE_CHOICES,
+        null=True,
+        blank=True
+    )
+
+    updown_from_date = models.DateField(null=True, blank=True)
+    updown_to_date = models.DateField(null=True, blank=True)
+
+    updown_specific_dates = models.JSONField(default=list, blank=True)
 
     class Meta:
         db_table = 'cluster_mukkadam_assignments'
         unique_together = ['mukkadam', 'cluster']
 
     def get_advance_amount(self):
-        """Calculate advance based on crew size tiers"""
         crew = self.mukkadam.crew_size
         if crew <= 25:
             return Decimal('20000')
         elif crew <= 40:
             return Decimal('30000')
-        return Decimal('30000')  # or extend tiers
+        return Decimal('30000')
 
     def get_weekly_payment_amount(self):
-        """Calculate weekly payment based on crew size tiers"""
         crew = self.mukkadam.crew_size
         if crew <= 25:
             return Decimal('10000')
@@ -1266,8 +1499,49 @@ class ClusterMukkadamAssignment(models.Model):
     def save(self, *args, **kwargs):
         if not self.advance_is_manual:
             self.advance_amount = self.get_advance_amount()
+
+        if not self.joined_date and self.joined_at:
+            self.joined_date = self.joined_at.date()
+
         super().save(*args, **kwargs)
 
+
+    def check_and_deactivate_if_expired(self):
+        """
+        Call this on read. If updown has passed its last date → set is_active=False.
+        No cron needed.
+        """
+        from django.utils import timezone
+        if self.mukkadam_type != 'updown' or not self.is_active:
+            return
+        today = timezone.localdate()
+        expired = False
+        if self.updown_mode == 'range':
+            if self.updown_to_date and today > self.updown_to_date:
+                expired = True
+        elif self.updown_mode == 'specific':
+            if self.updown_specific_dates:
+                from datetime import date
+                last = max(date.fromisoformat(d) for d in self.updown_specific_dates)
+                if today > last:
+                    expired = True
+        if expired:
+            self.is_active = False
+            self.save(update_fields=['is_active'])
+
+    # ✅ FIXED: remove @property because it needs parameter
+    def is_available_on(self, date):
+        if self.mukkadam_type == 'permanent':
+            return True
+
+        if self.updown_mode == 'range':
+            if self.updown_from_date and self.updown_to_date:
+                return self.updown_from_date <= date <= self.updown_to_date
+
+        if self.updown_mode == 'specific':
+            return str(date) in self.updown_specific_dates
+
+        return False
 
 class MukkadamWeeklyPayment(models.Model):
     """
@@ -1281,7 +1555,14 @@ class MukkadamWeeklyPayment(models.Model):
     payment_date = models.DateField()
     crew_size_on_date = models.IntegerField()  # snapshot of crew size at time of payment
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    
+    mode = models.CharField(max_length=50, choices=[           # NEW
+        ('CASH', 'Cash'), ('UPI', 'UPI'),
+        ('ZOHO_PAYMENT', 'Zoho Payment'),
+        ('BANK_TRANSFER', 'Bank Transfer'), ('CHEQUE', 'Cheque'),
+    ], default='CASH')
+    proof_s3_key = models.CharField(max_length=500, blank=True, null=True)  # NEW
+
+
     # Was this auto-generated by the weekly job or manually added?
     is_auto_generated = models.BooleanField(default=True)
     notes = models.TextField(blank=True)
@@ -1299,6 +1580,7 @@ class MukkadamMiscCost(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     reason = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+    proof_s3_key = models.CharField(max_length=500, blank=True, null=True)  # NEW
 
     class Meta:
         db_table = 'mukkadam_misc_costs'
@@ -1306,6 +1588,9 @@ class MukkadamMiscCost(models.Model):
 
     def __str__(self):
         return f"{self.mukkadam.mukkadam_name} - ₹{self.amount} - {self.reason}"
+
+
+
 class MukkadamJobSettlement(models.Model):
     """
     Tracks financial settlement for a mukkadam per job.
@@ -1376,6 +1661,11 @@ class MukkadamJobSettlement(models.Model):
         blank=True,
         related_name='settlements'
     )
+    plot = models.ForeignKey(
+        'Plot', null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='mukkadam_settlements'
+    )
 
     calculated_at = models.DateTimeField(null=True, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
@@ -1386,11 +1676,117 @@ class MukkadamJobSettlement(models.Model):
 
     class Meta:
         db_table = 'mukkadam_job_settlements'
-        unique_together = ['mukkadam', 'job']
+        unique_together = ['mukkadam', 'job', 'plot']
         ordering = ['-created_at']
 
     def __str__(self):
         return f"{self.mukkadam.mukkadam_name} | {self.job.job_id} | ₹{self.net_payable}"
+    
+
+    
+    @property
+    def deposit_held(self):
+        """
+        10% deposit held from gross.
+        Returns 0 if all activities done (payable_amount = gross = 100%).
+        """
+        if not self.gross_amount:
+            return Decimal('0')
+        # If payable_amount == gross_amount → deposit was released (all activities done)
+        if self.payable_amount >= self.gross_amount:
+            return Decimal('0')
+        pct = self.deposit_percent or Decimal('10')
+        return (self.gross_amount * pct / 100).quantize(Decimal('0.01'))
+
+
+
+class FarmerClusterMukkadamAssignment(models.Model):
+    """
+    Primary mukkadam assigned to a farmer within a cluster.
+    Used for auto-allocation and backup logic.
+    """
+    farmer = models.ForeignKey(
+        Farmer, on_delete=models.CASCADE,
+        related_name='mukkadam_assignments'
+    )
+    cluster = models.ForeignKey(
+        Cluster, on_delete=models.CASCADE,
+        related_name='farmer_mukkadam_assignments'
+    )
+    primary_mukkadam = models.ForeignKey(
+        Mukkadam, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='primary_farmer_assignments'
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'farmer_cluster_mukkadam_assignments'
+        unique_together = ['farmer', 'cluster']
+
+    def __str__(self):
+        return f"{self.farmer.farmer_name} → {self.primary_mukkadam.mukkadam_name if self.primary_mukkadam else 'Unassigned'} [{self.cluster.name}]"
+    
+
+class WebhookLog(models.Model):
+    """Log all webhook attempts for debugging"""
+    
+    STATUS_CHOICES = [
+        ('success', 'Success'),
+        ('partial', 'Partial Success'),
+        ('failed', 'Failed'),
+    ]
+    
+    webhook_data = models.JSONField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    error_type = models.CharField(max_length=100, blank=True, null=True)
+    error_message = models.TextField(blank=True, null=True)
+    
+    # What was processed
+    farmer_id = models.CharField(max_length=50, blank=True, null=True)
+    job_id = models.CharField(max_length=100, blank=True, null=True)
+    cluster_matched = models.BooleanField(default=False)
+    cluster_id = models.IntegerField(blank=True, null=True)
+    
+    # Processing details
+    activities_processed = models.IntegerField(default=0)
+    activities_failed = models.IntegerField(default=0)
+    plots_created = models.IntegerField(default=0)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'webhook_log'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['farmer_id']),
+            models.Index(fields=['job_id']),
+        ]
+    
+    def __str__(self):
+        return f"Webhook {self.status} - {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+# ============================================================================
+# HELPER/UTILITY MODELS
+# ============================================================================
+
+class SystemConfiguration(models.Model):
+    """
+    System-wide configuration and settings
+    """
+    key = models.CharField(max_length=100, unique=True)
+    value = models.JSONField()
+    description = models.TextField(blank=True)
+    
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    
+    class Meta:
+        db_table = 'system_configuration'
+    
+    def __str__(self):
+        return self.key
 class APISync(models.Model):
     """
     Track API synchronization status

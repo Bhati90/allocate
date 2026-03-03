@@ -123,22 +123,23 @@ class AddClusterActivitySerializer(serializers.Serializer):
 # =============================================================================
 # FARMER & JOB SERIALIZERS
 # =============================================================================
+from rest_framework import serializers
+from django.db.models import Sum, Count, Avg, F, Q
 class FarmerSerializer(serializers.ModelSerializer):
     clusters = serializers.PrimaryKeyRelatedField(
         queryset=Cluster.objects.all(), many=True, required=False
     )
-
-    # derive from first cluster
     village = serializers.SerializerMethodField(read_only=True)
     taluka = serializers.SerializerMethodField(read_only=True)
     district = serializers.SerializerMethodField(read_only=True)
+    total_acres = serializers.SerializerMethodField()  # ✅ ADD
 
     class Meta:
         model = Farmer
         fields = [
             'farmer_id',
             'farmer_name',
-            'clusters',        # ✅ was 'cluster'
+            'clusters',
             'phone_number',
             'village',
             'taluka',
@@ -146,8 +147,14 @@ class FarmerSerializer(serializers.ModelSerializer):
             'location',
             'latitude',
             'longitude',
+            'total_acres',   # ✅ ADD
         ]
-        read_only_fields = ['village', 'taluka', 'district']
+        read_only_fields = ['village', 'taluka', 'district', 'total_acres']
+
+    def get_total_acres(self, obj):
+        total = obj.plots.aggregate(total=Sum('area_acres'))['total']
+        return float(total) if total else 0.0
+
 
     def get_village(self, obj):
         first = obj.clusters.first()
@@ -160,7 +167,6 @@ class FarmerSerializer(serializers.ModelSerializer):
     def get_district(self, obj):
         first = obj.clusters.first()
         return first.district if first else ''
-
 
 class JobActivitySerializer(serializers.ModelSerializer):
     activity_id = serializers.IntegerField(source='activity.id', read_only=True)
@@ -194,12 +200,16 @@ class JobActivitySerializer(serializers.ModelSerializer):
             'other_cost',
             'plot',
             'plot_name',
+            'original_scheduled_date',
             'subtotal',
             'allocation_status',
             'is_fully_allocated',
             'is_manually_edited',
             'is_lost',
             'lost_reason',
+            'is_manually_moved',
+    'moved_from_activity',
+    'move_reason',
             'location'
         ]
         read_only_fields = ['remaining_area', 'allocation_status', 'is_fully_allocated']
@@ -391,6 +401,8 @@ class JobActivityCreateUpdateSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+from rest_framework import serializers
+from django.db import models
 class LeaveSerializer(serializers.ModelSerializer):
     mukkadam_name = serializers.CharField(
         source='mukkadam.mukkadam_name',
@@ -409,9 +421,38 @@ class LeaveSerializer(serializers.ModelSerializer):
             'reason',
             'is_active',
             'created_at',
-            'cluster',          # ⬅️ add this
+            'cluster',
         ]
         read_only_fields = ['created_at']
+
+    def validate(self, attrs):
+        from .models import Mukkadam, Leave
+
+        leave_type = attrs.get('leave_type', getattr(self.instance, 'leave_type', None))
+        mukkadam = attrs.get('mukkadam', getattr(self.instance, 'mukkadam', None))
+        date = attrs.get('date', getattr(self.instance, 'date', None))
+        crew_on_leave = attrs.get('crew_on_leave', getattr(self.instance, 'crew_on_leave', 0))
+
+        if leave_type == 'mukkadam' and mukkadam and date:
+          # sum of other leaves
+          qs = Leave.objects.filter(
+              leave_type='mukkadam',
+              mukkadam=mukkadam,
+              date=date,
+              is_active=True,
+          )
+          if self.instance:
+              qs = qs.exclude(pk=self.instance.pk)
+
+          existing_total = qs.aggregate(total=models.Sum('crew_on_leave'))['total'] or 0
+          total_after = existing_total + (crew_on_leave or 0)
+
+          if total_after > mukkadam.crew_size:
+              raise serializers.ValidationError(
+                  {'crew_on_leave': f'Only {max(mukkadam.crew_size - existing_total, 0)} workers can be marked on leave for this mukkadam on this date.'}
+              )
+
+        return attrs
 
 class AllocationSerializer(serializers.ModelSerializer):
     job_id = serializers.CharField(source='job_activity.job.job_id', read_only=True)
@@ -446,6 +487,78 @@ class AllocationSerializer(serializers.ModelSerializer):
             
             'created_at', 'updated_at',
         ]
+
+class AllocationDetailSerializer(serializers.ModelSerializer):
+    job_activity = serializers.SerializerMethodField()
+    mukkadam = serializers.SerializerMethodField()
+    cluster = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Allocation
+        fields = [
+            "id",
+            "allocated_date",
+            "allocated_area",
+            "allocated_workers",
+            "farmer_rate",
+            "mukkadam_rate",
+            "status",
+            "created_at",
+            "job_activity",
+            "mukkadam",
+            "cluster",
+        ]
+
+    def get_job_activity(self, obj):
+        ja = obj.job_activity
+        job = ja.job
+        plot = job.plot
+        farmer = job.farmer
+        return {
+            "id": ja.id,
+            "activity_name": ja.activity.name,
+            "scheduled_date": ja.scheduled_date,
+            "total_area": ja.total_area,
+            "allocated_area": ja.allocated_area,
+            "job": {
+                "id": job.id,
+                "job_number": job.job_number,
+                "crop": job.crop.name if job.crop else None,
+                "variety": job.variety,
+            },
+            "plot": {
+                "id": plot.id,
+                "name": plot.name,
+                "area_acres": plot.area_acres,
+            },
+            "farmer": {
+                "id": farmer.id,
+                "farmer_id": farmer.farmer_id,
+                "name": farmer.farmer_name,
+                "mobile": farmer.phone_number,
+            },
+        }
+
+    def get_mukkadam(self, obj):
+        m = obj.mukkadam
+        return {
+            "id": m.id,
+            "mukkadam_id": m.mukkadam_id,
+            "name": m.name,
+            "mobile_numbers": m.mobile_numbers,
+            "crew_size": m.crew_size,
+        }
+
+    def get_cluster(self, obj):
+        c = obj.cluster
+        return {
+            "id": c.id,
+            "name": c.name,
+            "village": c.village,
+            "taluka": c.taluka,
+            "district": c.district,
+        }
+
 class MukkadamPaymentSerializer(serializers.ModelSerializer):
     mukkadam_name = serializers.CharField(source='mukkadam.mukkadam_name', read_only=True)
     allocation_count = serializers.IntegerField(source='allocations.count', read_only=True)

@@ -32,11 +32,18 @@ export interface JobActivity {
   estimated_workers: number;
   rate_per_acre: number;
   total_price: number;
-  is_manually_moved?: boolean;
+
+  original_scheduled_date : string;
+
+  is_manually_moved?: boolean;              // already there
+  moved_from_activity?: number | null;      // 🔹 id of original activity
+  move_reason?: string | null;              // 🔹 why it was moved
+
   source?: 'ai' | 'manual';
   allocation_status: string;
   is_fully_allocated: boolean;
 }
+
 
 
 
