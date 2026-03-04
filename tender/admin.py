@@ -591,12 +591,16 @@ class MukkadamAdmin(admin.ModelAdmin):
 from django.contrib import admin
 from .models import ClusterMukkadamAssignment
 
+from django.contrib import admin
+
 
 @admin.register(ClusterMukkadamAssignment)
 class ClusterMukkadamAssignmentAdmin(admin.ModelAdmin):
+
     list_display = (
         'mukkadam',
         'cluster',
+        'weekly_amount',
         'mukkadam_type',
         'updown_mode',
         'joined_date',
@@ -622,6 +626,7 @@ class ClusterMukkadamAssignmentAdmin(admin.ModelAdmin):
             'fields': (
                 'mukkadam',
                 'cluster',
+                'weekly_amount',
                 'mukkadam_type',
                 'updown_mode',
                 'is_active',
@@ -651,6 +656,8 @@ class ClusterMukkadamAssignmentAdmin(admin.ModelAdmin):
             )
         }),
     )
+
+
 @admin.register(MukkadamWeeklyPayment)
 class MukkadamWeeklyPaymentAdmin(admin.ModelAdmin):
     list_display = (
