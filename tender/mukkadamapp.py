@@ -1873,6 +1873,7 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'total_paid_out':    total_paid_out,
             'remaining':         round(total_net - total_paid_out, 2),
             'closing_balance':   round(running, 2),
+            'allocation_count':  all_earned_allocs.count(), 
             # Acres
             'acres': {
                 'total_allocated_acres': round(all_alloc_acres, 2),
