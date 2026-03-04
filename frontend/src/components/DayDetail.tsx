@@ -1507,13 +1507,16 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
                         </td>
 
                         {/* Plot / Crop */}
-                        <td className="px-4 py-3">
-                          <p className="text-gray-700 font-medium">{job.plot_name || job.job_id}</p>
-                          <p className="text-xs text-gray-400">
-                            {job.crop_name || '—'}
-                            {job.variety ? ` • ${job.variety}` : ''}
-                          </p>
-                        </td>
+                        {/* Plot / Crop */}
+<td className="px-4 py-3">
+  <p className="text-gray-700 font-medium">
+    {(act as any).plot_name || (act as any).plot_code || job.plot_name || job.job_id}
+  </p>
+  <p className="text-xs text-gray-400">
+    {job.crop_name || '—'}
+    {job.variety ? ` • ${job.variety}` : ''}
+  </p>
+</td>
 
                         {/* Activity */}
                         <td className="px-4 py-3">
