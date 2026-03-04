@@ -498,11 +498,11 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
         is_complex=job.activities.count() > 1,
         total_activities_amount=sum(a.total_price for a in job.activities.all())
     )
-ALLOCATION_API_BASE_URL = "http://localhost:8000"  # your other backend
+# ALLOCATION_API_BASE_URL = "http://localhost:8000"  # your other backend
 
-# ALLOCATION_API_BASE_URL = "https://supply.bharatintelligence.ai"
-# ALLOCATION_API_TOKEN = "Token 55d78dc15410726cbf90b3350690937f4e85ddf8"
-ALLOCATION_API_TOKEN = "Token b5920d610d85bff62bb0ab70f971ed6a44eb1b8c"
+ALLOCATION_API_BASE_URL = "https://supply.bharatintelligence.ai"
+ALLOCATION_API_TOKEN = "Token 55d78dc15410726cbf90b3350690937f4e85ddf8"
+# ALLOCATION_API_TOKEN = "Token b5920d610d85bff62bb0ab70f971ed6a44eb1b8c"
 from tender.models import Mukkadam, MukkadamActivityRate, ActivityCatalog
 
 def sync_tender_mukkadams():

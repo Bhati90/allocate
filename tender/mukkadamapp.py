@@ -495,6 +495,7 @@ def mukkadam_future_work(request):
     return Response({
         'mukkadam_id':             mukkadam.mukkadam_id,
         'mukkadam_name':           mukkadam.mukkadam_name,
+        'CENTRAL_PHONE' : '+918047361465',
         'total_future_jobs':       len(jobs_map),
         'total_projected_earning': round(sum(j['projected_earnings'] for j in jobs_map.values()), 2),
         'jobs':                    list(jobs_map.values()),
@@ -1860,7 +1861,7 @@ def mukkadam_settlement_history(request, mukkadam_id):
         'mukkadam_name': mukkadam.mukkadam_name,
         'mobile':        mukkadam.mobile_numbers,
         'assignments':   assignments_list,
-        'assignment':    primary_assignment_data,  # backward compat
+        # 'assignment':    primary_assignment_data,  # backward compat
 
         'summary': {
             'gross_earned':      total_gross,

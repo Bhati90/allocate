@@ -243,14 +243,24 @@ const getDayHasCarryForward = (date: Date | null) => {
     (a as any).is_carry_forward === true
   );
 };
+// ─────────────────────────────────────────────────────────────────────────────
+// DROP-IN REPLACEMENT for calculateDayCapacity inside CalendarPanel.tsx
+//
+// KEY FIX: When there are 0 allocations but scheduled job-activities exist,
+// run the "1 mukkadam = 1 activity" feasibility check against the JOB data
+// (not just allocations). This catches the case where 2 activities are
+// AI-scheduled for the same day but only 1 mukkadam is suggested.
+// ─────────────────────────────────────────────────────────────────────────────
+
 const calculateDayCapacity = (date: Date | null) => {
-  if (!date) return { status: 'empty', used: 0, total: 0, percentage: 0, conflicts: [], mukkadamsOnLeave: 0 };
+  if (!date)
+    return { status: 'empty', used: 0, total: 0, percentage: 0, conflicts: [], mukkadamsOnLeave: 0 };
 
   const dateStr = formatDate(date);
   const dayAllocations = getDayAllocations(date);
   const dayLeaves = getDayLeaves(date);
 
-  // 1) General holiday
+  // ── 1. General holiday ────────────────────────────────────────────────────
   const generalHoliday = dayLeaves.find((l) => l.leave_type === 'general');
   if (generalHoliday) {
     return {
@@ -264,116 +274,253 @@ const calculateDayCapacity = (date: Date | null) => {
     };
   }
 
-  // 2) Sum leaves per mukkadam for this day
+  // ── 2. Per-mukkadam leave counts ──────────────────────────────────────────
   const leaveByMukkadam = new Map<number, number>();
   dayLeaves
     .filter((l) => l.leave_type === 'mukkadam')
     .forEach((l) => {
-      // adjust key name if your API returns mukkadam_id instead of mukkadam
       const id = l.mukkadam;
-      const current = leaveByMukkadam.get(id) || 0;
-      leaveByMukkadam.set(id, current + (l.crew_on_leave || 0));
+      leaveByMukkadam.set(id, (leaveByMukkadam.get(id) || 0) + (l.crew_on_leave || 0));
     });
 
   const mukkadamsOnLeaveIds = Array.from(leaveByMukkadam.keys());
 
-  // 3) Build per-mukkadam-per-activity capacity using EFFECTIVE crew
-  const mukkadamActivityMap = new Map<
-    string,
-    {
-      mukkadam: Mukkadam;
-      activity: string;
-      allocations: Allocation[];
-      totalArea: number;
-      maxCapacity: number;
-      efficiency: number;
-      effectiveCrew: number;
+  const conflicts: any[] = [];
+
+  // ── 3A. ALLOCATION-BASED check (when allocations exist) ──────────────────
+  if (dayAllocations.length > 0) {
+    const activityNames: string[] = [
+      ...new Set(dayAllocations.map((a) => a.activity_name)),
+    ];
+
+    const referencedMukkadamIds: number[] = [
+      ...new Set(dayAllocations.map((a) => a.mukkadam)),
+    ];
+
+    const availableMukkadams = referencedMukkadamIds
+      .map((id) => mukkadams.find((m) => m.mukkadam_id === id))
+      .filter(Boolean)
+      .filter((m) => {
+        const leaveCount = leaveByMukkadam.get(m!.mukkadam_id) || 0;
+        return m!.crew_size - leaveCount > 0;
+      })
+      .map((m) => ({
+        mukkadam: m!,
+        canDo: new Set<string>(
+          (m!.activity_rates || []).map((r: any) => r.activity_name as string)
+        ),
+      }));
+
+    // Activities with no capable mukkadam
+    const uncoverable = activityNames.filter(
+      (act) => !availableMukkadams.some((am) => am.canDo.has(act))
+    );
+    uncoverable.forEach((act) => {
+      conflicts.push({
+        type: 'no_capable_mukkadam',
+        activity: act,
+        message: `No available mukkadam can perform "${act}"`,
+      });
+    });
+
+    // More activities than mukkadams
+    if (activityNames.length > availableMukkadams.length) {
+      conflicts.push({
+        type: 'activity_overload',
+        activitiesCount: activityNames.length,
+        mukkadamsCount: availableMukkadams.length,
+        message: `${activityNames.length} activities but only ${availableMukkadams.length} mukkadam team(s) — each team does 1 activity only`,
+      });
+    } else if (uncoverable.length === 0) {
+      // Greedy assignment check
+      const sorted = [...activityNames].sort(
+        (a, b) =>
+          availableMukkadams.filter((am) => am.canDo.has(a)).length -
+          availableMukkadams.filter((am) => am.canDo.has(b)).length
+      );
+
+      const assignedMukkadamIds = new Set<number>();
+      const unassigned: string[] = [];
+
+      for (const act of sorted) {
+        const candidate = availableMukkadams.find(
+          (am) =>
+            am.canDo.has(act) &&
+            !assignedMukkadamIds.has(am.mukkadam.mukkadam_id)
+        );
+        if (candidate) {
+          assignedMukkadamIds.add(candidate.mukkadam.mukkadam_id);
+        } else {
+          unassigned.push(act);
+        }
+      }
+
+      unassigned.forEach((act) => {
+        conflicts.push({
+          type: 'assignment_conflict',
+          activity: act,
+          message: `Cannot assign a free mukkadam to "${act}" — all capable teams already occupied`,
+        });
+      });
     }
-  >();
 
-  dayAllocations.forEach((alloc) => {
-    const mukkadam = mukkadams.find((m) => m.mukkadam_id === alloc.mukkadam);
+    // Same mukkadam assigned to multiple activities
+    const mukkadamActivities = new Map<number, string[]>();
+    dayAllocations.forEach((alloc) => {
+      if (!mukkadamActivities.has(alloc.mukkadam))
+        mukkadamActivities.set(alloc.mukkadam, []);
+      if (!mukkadamActivities.get(alloc.mukkadam)!.includes(alloc.activity_name))
+        mukkadamActivities.get(alloc.mukkadam)!.push(alloc.activity_name);
+    });
+    mukkadamActivities.forEach((activities, mukkadamId) => {
+      if (activities.length > 1) {
+        const mukkadam = mukkadams.find((m) => m.mukkadam_id === mukkadamId);
+        conflicts.push({
+          type: 'multiple_activities',
+          mukkadam: mukkadam?.mukkadam_name || 'Unknown',
+          activities,
+          message: `Same team assigned to ${activities.length} activities`,
+        });
+      }
+    });
+
+  } else {
+    // ── 3B. JOB-BASED check (no allocations yet — AI scheduled activities) ──
+    // Collect all non-manually-moved activities scheduled for this date
+    const scheduledActivities = (allJobs || jobs).flatMap((job) =>
+      (job.activities || []).filter(
+        (act) =>
+          act.scheduled_date?.slice(0, 10) === dateStr &&
+          !(act as any).is_manually_moved
+      ).map((act) => ({
+        activityName: act.activity_name as string,
+        // suggested mukkadam ids — stored as recommended_mukkadam_id or similar
+        // Check common field names your API might return:
+        suggestedMukkadamId:
+          (act as any).recommended_mukkadam_id ??
+          (act as any).suggested_mukkadam ??
+          (act as any).mukkadam_id ??
+          null,
+      }))
+    );
+
+    if (scheduledActivities.length > 0) {
+      // Distinct activity types scheduled today
+      const distinctActivities = [...new Set(scheduledActivities.map((a) => a.activityName))];
+
+      // Distinct mukkadams suggested for today's activities
+      const suggestedMukkadamIds = [
+        ...new Set(
+          scheduledActivities
+            .map((a) => a.suggestedMukkadamId)
+            .filter((id): id is number => id != null)
+        ),
+      ];
+
+      // Available mukkadams from the full cluster mukkadams list
+      // Filter out those fully on leave
+      const availableClusterMukkadams = mukkadams.filter((m) => {
+        const leaveCount = leaveByMukkadam.get(m.mukkadam_id) || 0;
+        return m.crew_size - leaveCount > 0;
+      });
+
+      // If we have suggested mukkadams, use them; otherwise fall back to cluster
+      const effectiveMukkadams =
+        suggestedMukkadamIds.length > 0
+          ? availableClusterMukkadams.filter((m) =>
+              suggestedMukkadamIds.includes(m.mukkadam_id)
+            )
+          : availableClusterMukkadams;
+
+      // Core rule: activities > available mukkadams → RED
+      if (distinctActivities.length > effectiveMukkadams.length) {
+        conflicts.push({
+          type: 'activity_overload',
+          activitiesCount: distinctActivities.length,
+          mukkadamsCount: effectiveMukkadams.length,
+          message: `${distinctActivities.length} activities scheduled but only ${effectiveMukkadams.length} mukkadam team(s) available — each team does 1 activity only`,
+        });
+      } else if (effectiveMukkadams.length > 0) {
+        // Greedy capability check using job-level activity names
+        const availWithCap = effectiveMukkadams.map((m) => ({
+          mukkadam: m,
+          canDo: new Set<string>(
+            (m.activity_rates || []).map((r: any) => r.activity_name as string)
+          ),
+        }));
+
+        const uncoverable = distinctActivities.filter(
+          (act) => !availWithCap.some((am) => am.canDo.has(act))
+        );
+        uncoverable.forEach((act) => {
+          conflicts.push({
+            type: 'no_capable_mukkadam',
+            activity: act,
+            message: `No available mukkadam can perform "${act}"`,
+          });
+        });
+
+        if (uncoverable.length === 0) {
+          const sorted = [...distinctActivities].sort(
+            (a, b) =>
+              availWithCap.filter((am) => am.canDo.has(a)).length -
+              availWithCap.filter((am) => am.canDo.has(b)).length
+          );
+
+          const assignedIds = new Set<number>();
+          const unassigned: string[] = [];
+
+          for (const act of sorted) {
+            const candidate = availWithCap.find(
+              (am) => am.canDo.has(act) && !assignedIds.has(am.mukkadam.mukkadam_id)
+            );
+            if (candidate) {
+              assignedIds.add(candidate.mukkadam.mukkadam_id);
+            } else {
+              unassigned.push(act);
+            }
+          }
+
+          unassigned.forEach((act) => {
+            conflicts.push({
+              type: 'assignment_conflict',
+              activity: act,
+              message: `Cannot assign a free mukkadam to "${act}" — all capable teams already occupied`,
+            });
+          });
+        }
+      }
+    }
+  }
+
+  // ── 4. Worker-hour utilisation (for warning/caution) ─────────────────────
+  let totalUsedPercentage = 0;
+  const referencedMukkadamIds: number[] = [
+    ...new Set(dayAllocations.map((a) => a.mukkadam)),
+  ];
+
+  referencedMukkadamIds.forEach((id) => {
+    const mukkadam = mukkadams.find((m) => m.mukkadam_id === id);
     if (!mukkadam) return;
-
-    const leaveCount = leaveByMukkadam.get(mukkadam.mukkadam_id) || 0;
+    const leaveCount = leaveByMukkadam.get(id) || 0;
     const effectiveCrew = Math.max(mukkadam.crew_size - leaveCount, 0);
 
-    const key = `${alloc.mukkadam}-${alloc.activity_name}`;
-
-    if (!mukkadamActivityMap.has(key)) {
-      // productivity for this activity
-      const activityRate = mukkadam.activity_rates?.find(
-        (r: any) => r.activity_name === alloc.activity_name
-      );
-      const efficiency = activityRate?.productivity_per_worker || 0.15;
-
-      // max capacity for THIS allocation set: use effective crew, not allocated_workers
-      const maxCapacity = effectiveCrew * efficiency;
-
-      mukkadamActivityMap.set(key, {
-        mukkadam,
-        activity: alloc.activity_name,
-        allocations: [alloc],
-        totalArea: alloc.allocated_area,
-        maxCapacity,
-        efficiency,
-        effectiveCrew,
+    dayAllocations
+      .filter((a) => a.mukkadam === id)
+      .forEach((alloc) => {
+        const activityRate = mukkadam.activity_rates?.find(
+          (r: any) => r.activity_name === alloc.activity_name
+        );
+        const efficiency = activityRate?.productivity_per_worker || 0.15;
+        const maxCapacity = effectiveCrew * efficiency;
+        const usagePercent = maxCapacity > 0 ? (alloc.allocated_area / maxCapacity) * 100 : 0;
+        totalUsedPercentage += usagePercent;
       });
-    } else {
-      const entry = mukkadamActivityMap.get(key)!;
-      entry.allocations.push(alloc);
-      entry.totalArea += alloc.allocated_area;
-    }
   });
 
-  // 4) Conflicts and overloads
-  const conflicts: any[] = [];
-  let totalUsedPercentage = 0;
-
-  mukkadamActivityMap.forEach((entry) => {
-    const { mukkadam, activity, totalArea, maxCapacity, allocations } = entry;
-
-    if (totalArea > maxCapacity) {
-      conflicts.push({
-        type: 'overload',
-        mukkadam: mukkadam.mukkadam_name,
-        activity,
-        needed: totalArea,
-        available: maxCapacity,
-        deficit: totalArea - maxCapacity,
-        allocations,
-      });
-    }
-
-    const usagePercent = maxCapacity > 0 ? (totalArea / maxCapacity) * 100 : 0;
-    totalUsedPercentage += usagePercent;
-  });
-
-  // 5) Same mukkadam doing multiple activities
-  const mukkadamActivities = new Map<number, string[]>();
-  dayAllocations.forEach((alloc) => {
-    if (!mukkadamActivities.has(alloc.mukkadam)) {
-      mukkadamActivities.set(alloc.mukkadam, []);
-    }
-    if (!mukkadamActivities.get(alloc.mukkadam)!.includes(alloc.activity_name)) {
-      mukkadamActivities.get(alloc.mukkadam)!.push(alloc.activity_name);
-    }
-  });
-
-  mukkadamActivities.forEach((activities, mukkadamId) => {
-    if (activities.length > 1) {
-      const mukkadam = mukkadams.find((m) => m.mukkadam_id === mukkadamId);
-      conflicts.push({
-        type: 'multiple_activities',
-        mukkadam: mukkadam?.mukkadam_name || 'Unknown',
-        activities,
-        message: `Same team assigned to ${activities.length} activities`,
-      });
-    }
-  });
-
-  // 6) Status
+  // ── 5. Final status ───────────────────────────────────────────────────────
   let status: 'good' | 'warning' | 'caution' | 'error' | 'empty' = 'good';
+
   if (conflicts.length > 0) {
     status = 'error';
   } else if (totalUsedPercentage >= 90) {
@@ -382,16 +529,10 @@ const calculateDayCapacity = (date: Date | null) => {
     status = 'caution';
   }
 
-  // 7) Total capacity and used workers (both consider leaves)
-// 7) Total capacity and used workers (both consider leaves)
-// Use precomputed per-day total from backend, fallback to 0
-const totalCapacity = dayTotals[dateStr] ?? 0;
-
-
-
+  const totalCapacity = dayTotals[dateStr] ?? 0;
   const usedWorkers = dayAllocations.reduce((sum, a) => sum + a.allocated_workers, 0);
 
-  if (dayAllocations.length === 0 && totalCapacity === 0) {
+  if (dayAllocations.length === 0 && totalCapacity === 0 && conflicts.length === 0) {
     status = 'empty';
   }
 
@@ -404,7 +545,6 @@ const totalCapacity = dayTotals[dateStr] ?? 0;
     mukkadamsOnLeave: mukkadamsOnLeaveIds.length,
   };
 };
-
 const [prefillData, setPrefillData] = useState<{jobId: string, activityId: number} | null>(null);
 
 // 2. Define the function
@@ -565,14 +705,14 @@ return (
           )}
 
           {/* Conflicts */}
-          {capacity.conflicts.length > 0 && (
+          {/* {capacity.conflicts.length > 0 && (
             <span
               className="mini-conflict"
               title={`${capacity.conflicts.length} conflicts`}
             >
               ⚠️{capacity.conflicts.length}
             </span>
-          )}
+          )} */}
         </div>
       </div>
 
