@@ -545,20 +545,6 @@ const calculateDayCapacity = (date: Date | null) => {
     mukkadamsOnLeave: mukkadamsOnLeaveIds.length,
   };
 };
-const [prefillData, setPrefillData] = useState<{jobId: string, activityId: number} | null>(null);
-
-// 2. Define the function
-const handleStartAllocation = (jobId: string, activityId: number) => {
-  // Save the specific job and activity IDs to pre-fill the form
-  setPrefillData({ jobId, activityId }); 
-  
-  // Close the current day details view
-  setShowDayDetail(false); 
-  
-  // Open the allocation form
-  // setShowAllocationModal(true); 
-};
-
 
 const fetchDayTotal = async (date: Date) => {
   const key = formatDate(date);
@@ -735,12 +721,7 @@ return (
     </div>
   ) : null;
 })()}
-      {/* Potential badge – show in Jobs + Potential views */}
-      {/* {(viewMode === 'jobs' )  && (
-        <div className="capacity-badge potential-badge">
-          {dayPotential.length} potential
-        </div>
-      )} */}
+
 
       {(viewModes.includes('potential')) && hasPotential && (
         <div className="capacity-badge potential-badge">

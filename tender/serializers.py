@@ -175,7 +175,12 @@ class JobActivitySerializer(serializers.ModelSerializer):
     is_strict = serializers.BooleanField(read_only=False)
     plot = serializers.PrimaryKeyRelatedField(read_only=True)
     plot_name = serializers.CharField(source='plot.name', read_only=True)
-    
+    moved_to_date = serializers.SerializerMethodField()   # ← ADD
+
+    def get_moved_to_date(self, obj):                     # ← ADD
+        child = obj.moved_children.order_by('scheduled_date').first()
+        return str(child.scheduled_date) if child else None
+
     class Meta:
         model = JobActivity
         fields = [
@@ -186,10 +191,8 @@ class JobActivitySerializer(serializers.ModelSerializer):
             'is_strict',
             'is_manually_moved',
             'total_area',
-            
             'allocated_area',
             'remaining_area',
-            
             'crop_bundles',
             'scheduled_date',
             'scheduled_time',
@@ -201,6 +204,7 @@ class JobActivitySerializer(serializers.ModelSerializer):
             'plot',
             'plot_name',
             'original_scheduled_date',
+            'moved_to_date',           # ← ADD
             'subtotal',
             'allocation_status',
             'is_fully_allocated',
@@ -208,13 +212,11 @@ class JobActivitySerializer(serializers.ModelSerializer):
             'is_lost',
             'lost_reason',
             'is_manually_moved',
-    'moved_from_activity',
-    'move_reason',
+            'moved_from_activity',
+            'move_reason',
             'location'
         ]
         read_only_fields = ['remaining_area', 'allocation_status', 'is_fully_allocated']
-
-
 class FarmerPaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = FarmerPayment
@@ -462,32 +464,34 @@ class AllocationSerializer(serializers.ModelSerializer):
     activity_name = serializers.CharField(source='job_activity.activity.name', read_only=True)
     is_strict = serializers.BooleanField(source='job_activity.activity.is_strict', read_only=True)
     mukkadam_name = serializers.CharField(source='mukkadam.mukkadam_name', read_only=True)
-    
+
     class Meta:
         model = Allocation
-        fields = ['activity_id',
+        fields = [
+            'activity_id',
             'id', 'job_activity', 'job_activity_id', 'mukkadam', 'mukkadam_id',
-            'cluster','farmer_id','mukkadam_name','is_strict','activity_name','farmer_name','job_id', 'allocated_date', 'allocated_area', 'allocated_workers',
+            'cluster', 'farmer_id', 'mukkadam_name', 'is_strict', 'activity_name',
+            'farmer_name', 'job_id', 'allocated_date', 'allocated_area', 'allocated_workers',
             'farmer_rate', 'mukkadam_rate', 'farmer_amount', 'mukkadam_amount',
             'profit', 'status', 'notes', 'is_carry_forward', 'carry_forward_from',
-            
-            # ✅ Day-end report fields
+            'allows_second_job',           # ✅ ADD THIS — needed by frontend to skip capacity deduction
+
+            # Day-end report fields
             'report_submitted',
             'report_submitted_at',
             'actual_start_time',
             'actual_end_time',
             'actual_crew_size',
             'actual_area_done',
-            
-            # ✅ Farmer verification fields
+
+            # Farmer verification fields
             'farmer_agreed',
             'farmer_response_at',
             'farmer_dispute_reason',
             'use_actual_for_settlement',
-            
+
             'created_at', 'updated_at',
         ]
-
 class AllocationDetailSerializer(serializers.ModelSerializer):
     job_activity = serializers.SerializerMethodField()
     mukkadam = serializers.SerializerMethodField()
