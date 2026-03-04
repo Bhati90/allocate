@@ -985,6 +985,13 @@ class Allocation(models.Model):
         validators=[MinValueValidator(1)],
         help_text="Number of workers from this mukkadam's crew"
     )
+
+    allows_second_job = models.BooleanField(
+    default=False,
+    help_text="If True, this allocation's workers are NOT subtracted from daily "
+              "capacity — the mukkadam can take a second job in the other half of the day."
+)
+
     
     # Pricing
     farmer_rate = models.DecimalField(

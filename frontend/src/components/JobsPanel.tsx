@@ -1,6 +1,6 @@
 // components/JobsPanel.tsx
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, ChevronDown, ChevronUp, Edit, Trash2, X,Phone } from 'lucide-react';
+import { Plus,MapPin, ChevronDown, ChevronUp, Edit, Trash2, X,Phone } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Job } from '../types/types';
 import { API_BASE_URL } from '@/types/config';
@@ -225,17 +225,6 @@ const handlePlotClick = async (plotId: number, plotArea: number, farmerId: strin
     await loadPlotJobs(plotId);  // ✅ always reload, remove the if(!plotJobs[plotId]) check
 };
 
-  const handleDeleteActivity = async (activityId: number, plotId: number) => {
-    if (!confirm('Delete this activity?')) return;
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/job-activities/${activityId}/`, { method: 'DELETE' });
-      if (res.ok) {
-        toast.success('Deleted');
-        await loadPlotJobs(plotId);
-        onRefresh();
-      } else { toast.error('Failed'); }
-    } catch (e) { toast.error('Failed'); }
-  };
 
   const handleEditActivity = async () => {
     if (!editingActivity) return;
@@ -402,19 +391,6 @@ const [mukkadamOptions, setMukkadamOptions] = useState<{id: number; name: string
 const [farmerMukkadamMap, setFarmerMukkadamMap] = useState<Record<string, {id: number; name: string} | null>>({});
 const [assigningFarmerId, setAssigningFarmerId] = useState<string | null>(null);
 
-// Fetch on mount alongside existing data
-// useEffect(() => {
-//   fetch(`${API_BASE_URL}/api/cluster/${clusterId}/farmers-mukkadam/`)
-//     .then(r => r.json())
-//     .then(data => {
-//       setMukkadamOptions(data.mukkadam_options);
-//       const map: Record<string, {id: number; name: string} | null> = {};
-//       data.farmers.forEach((f: any) => {
-//         map[f.farmer_id] = f.primary_mukkadam;
-//       });
-//       setFarmerMukkadamMap(map);
-//     });
-// }, [clusterId]);
 
 // In handleAssignMukkadam, after successful assignment:
 const handleAssignMukkadam = async (farmerId: string, mukkadamId: number) => {
@@ -678,255 +654,306 @@ return Array.from(map.values()).sort((a, b) => {
           <div className="empty-state"><div className="empty-state-icon">📋</div><p className="empty-state-text">No farmers found</p></div>
         ) : (
           <div className="jobs-list">
-            {farmerSummaries.map(s => {
-              const isExpanded = expandedFarmerId === s.farmerId;
-              const plots = farmerPlots[s.farmerId] || [];
-              const isActive = s.remainingArea > 0;
-              
-            
 
+{farmerSummaries.map(s => {
+  const isExpanded = expandedFarmerId === s.farmerId;
+  const plots = farmerPlots[s.farmerId] || [];
+  const isActive = s.remainingArea > 0;
+  const todayStr = new Date().toISOString().split('T')[0];
 
-              return (
-                <div key={s.farmerId} className={`farmer-accordion ${isExpanded ? 'expanded' : ''} ${!isActive ? 'completed' : ''}`}>
-                  {/* Farmer header row */}
-                  <div className="farmer-accordion-header" onClick={() => handleFarmerClick(s.farmerId, s.farmerName)}>
-<div className="farmer-header-left">
-  <span className="farmer-name">👤 {s.farmerName}</span>
+  // Initials avatar
+  const initials = (s.farmerName || '')
+    .split(' ')
+    .slice(0, 2)
+    .map((n: string) => n[0])
+    .join('')
+    .toUpperCase();
 
-  <div className="farmer-meta">
-    <span>
-      {s.plotCount} plot{s.plotCount !== 1 ? 's' : ''}
-    </span>
-     <span>
-    {(farmerAcresMap[s.farmerId] ?? s.totalAcres).toFixed(2)} ac  {/* ✅ UNCOMMENT & FIX */}
-  </span>
-    <span>{s.totalActivities} activities</span>
-  </div>
+  return (
+    <div
+      key={s.farmerId}
+      className={`rounded-xl border transition-all duration-200 overflow-hidden ${
+        isExpanded
+          ? 'border-emerald-400 bg-emerald-50/50 shadow-sm shadow-emerald-100'
+          : 'border-stone-200 bg-white hover:border-stone-300 hover:shadow-sm'
+      }`}
+      style={{ marginBottom: '8px' }}
+    >
+      {/* ── FARMER HEADER ── */}
+      <button
+        onClick={() => handleFarmerClick(s.farmerId, s.farmerName)}
+        className="w-full text-left p-3 group"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+          {/* Initials avatar */}
+          <div style={{
+            width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '0.7rem', fontWeight: 700,
+            background: isExpanded ? '#059669' : '#f5f5f4',
+            color: isExpanded ? '#fff' : '#78716c',
+            transition: 'all 0.15s',
+            boxShadow: isExpanded ? '0 1px 4px rgba(5,150,105,0.25)' : 'none',
+          }}>
+            {initials}
+          </div>
 
-  <div style={{ display: 'flex', gap: '10px', marginTop: '2px', alignItems: 'center' }}>
-    {s.mobileNumber && (
-      <>
-        <span style={{ fontSize: '0.65rem', color: '#6b7280' }}>
-          📞 {s.mobileNumber}
-        </span>
-        <button
-          type="button"
-          onClick={e => {
-            e.stopPropagation();
-            setDialpadNumber(s.mobileNumber || '');
-            setDialpadOpen(true);
-          }}
-          className="inline-flex items-center px-2 py-1 rounded-md text-xs bg-green-50 text-green-700 border border-green-200 hover:bg-green-100"
-        >
-          <Phone className="w-3 h-3 mr-1" />
-          Call
-        </button>
-      </>
-    )}
-    {s.poc && (
-      <span style={{ fontSize: '0.65rem', color: '#6b7280' }}>
-        🧑‍💼 {s.poc}
-      </span>
-    )}
-  </div>
+          {/* Name + meta */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ fontWeight: 600, fontSize: '0.875rem', color: '#1c1917', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2, margin: 0 }}>
+              {s.farmerName}
+            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.72rem', color: '#a8a29e' }}>{s.plotCount} plot{s.plotCount !== 1 ? 's' : ''}</span>
+              <span style={{ color: '#d4cdc9', fontSize: '0.65rem' }}>·</span>
+              <span style={{ fontSize: '0.72rem', color: '#a8a29e' }}>
+                {(farmerAcresMap?.[s.farmerId] ?? s.totalAcres ?? 0).toFixed(2)} ac
+              </span>
+              <span style={{ color: '#d4cdc9', fontSize: '0.65rem' }}>·</span>
+              <span style={{ fontSize: '0.72rem', color: '#a8a29e' }}>{s.totalActivities} tasks</span>
+            </div>
+          </div>
 
-  {s.nearestDate && (
-    <div className="farmer-date">
-      Next: {new Date(s.nearestDate).toLocaleDateString()}
-    </div>
-  )}
-</div>
-
-
-  <div className="farmer-header-right">
-    {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-  </div>
-</div>
-
-
-                  {/* Expanded content */}
-                  {isExpanded && (
-                    <div className="farmer-accordion-body">
-  {plots.length === 0 ? (
-    <p style={{ fontSize: '0.85rem', color: '#9ca3af', padding: '0.5rem 0' }}>No plots yet</p>
-  ) : (
-    (() => {
-      const todayStr = new Date().toISOString().split('T')[0];
-
-      // 1. Logic to sort PLOTS based on Priority (Nearest Date first, then highest remaining)
-      const sortedPlots = [...plots].sort((a, b) => {
-        const getPlotMeta = (plotObj: any) => {
-          const pJobs = s.jobs.filter((j: any) => Number(j.plot) === Number(plotObj.id));
-          let nearest: string | null = null;
-          let rem = 0;
-
-          pJobs.forEach(j => j.activities?.forEach((act: any) => {
-            if (act.scheduled_date && act.scheduled_date >= todayStr) {
-              if (!nearest || act.scheduled_date < nearest) nearest = act.scheduled_date;
+          {/* Chevron */}
+          <div style={{ flexShrink: 0, marginTop: '6px' }}>
+            {isExpanded
+              ? <ChevronUp size={14} style={{ color: '#10b981' }} />
+              : <ChevronDown size={14} style={{ color: '#d4cdc9' }} />
             }
-            // Sum remaining for backlog or immediate next job
-            if (act.allocated_area < act.total_area && (act.scheduled_date <= (nearest || todayStr))) {
-              rem += (Number(act.total_area) - Number(act.allocated_area));
-            }
-          }));
-          return { nearest, rem };
-        };
+          </div>
+        </div>
 
-        const dataA = getPlotMeta(a);
-        const dataB = getPlotMeta(b);
+        {/* Phone + Next + Call button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '8px', marginLeft: '46px', flexWrap: 'wrap' }}>
+          {s.mobileNumber && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Phone size={10} style={{ color: '#d4cdc9' }} />
+              <span style={{ fontSize: '0.72rem', color: '#a8a29e', fontVariantNumeric: 'tabular-nums' }}>{s.mobileNumber}</span>
+            </div>
+          )}
+          {s.nearestDate && (
+            <span style={{ fontSize: '0.72rem', color: '#a8a29e', whiteSpace: 'nowrap' }}>
+              Next: {new Date(s.nearestDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+            </span>
+          )}
+          {s.poc && (
+            <span style={{ fontSize: '0.68rem', color: '#a8a29e' }}>🧑‍💼 {s.poc}</span>
+          )}
+          {s.mobileNumber && (
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                setDialpadNumber(s.mobileNumber || '');
+                setDialpadOpen(true);
+              }}
+              style={{
+                marginLeft: 'auto',
+                display: 'inline-flex', alignItems: 'center', gap: '4px',
+                fontSize: '0.72rem', fontWeight: 600,
+                padding: '4px 10px', borderRadius: '8px',
+                background: '#059669', color: '#fff', border: 'none',
+                cursor: 'pointer', boxShadow: '0 1px 3px rgba(5,150,105,0.3)',
+              }}
+            >
+              <Phone size={10} /> Call
+            </button>
+          )}
+        </div>
+      </button>
 
-        if (dataA.nearest !== dataB.nearest) {
-          if (!dataA.nearest) return 1;
-          if (!dataB.nearest) return -1;
-          return dataA.nearest < dataB.nearest ? -1 : 1;
-        }
-        return dataB.rem - dataA.rem;
-      });
+      {/* ── EXPANDED: PLOTS ── */}
+      {isExpanded && (
+        <div style={{ padding: '0 12px 12px', borderTop: '1px solid rgba(167,243,208,0.4)' }}>
+          <div style={{ paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {plots.length === 0 ? (
+              <p style={{ fontSize: '0.83rem', color: '#a8a29e', padding: '6px 0' }}>No plots yet</p>
+            ) : (() => {
+              const sortedPlots = [...plots].sort((a: any, b: any) => {
+                const getMeta = (plotObj: any) => {
+                  const pJobs = s.jobs.filter((j: any) => Number(j.plot) === Number(plotObj.id));
+                  let nearest: string | null = null;
+                  let rem = 0;
+                  pJobs.forEach((j: any) => (j.activities || []).forEach((act: any) => {
+                    if (act.scheduled_date && act.scheduled_date >= todayStr) {
+                      if (!nearest || act.scheduled_date < nearest) nearest = act.scheduled_date;
+                    }
+                    if (act.allocated_area < act.total_area && (act.scheduled_date <= (nearest || todayStr))) {
+                      rem += (Number(act.total_area) - Number(act.allocated_area));
+                    }
+                  }));
+                  return { nearest, rem };
+                };
+                const dA = getMeta(a), dB = getMeta(b);
+                if (dA.nearest !== dB.nearest) {
+                  if (!dA.nearest) return 1; if (!dB.nearest) return -1;
+                  return dA.nearest < dB.nearest ? -1 : 1;
+                }
+                return dB.rem - dA.rem;
+              });
 
-      return sortedPlots.map(plot => {
-        const isPlotExpanded = expandedPlotId === plot.id;
-        const currentPlotJobs = isPlotExpanded
-  ? (plotJobs[plot.id] || s.jobs.filter((j: any) => 
-      Number(j.plot) === Number(plot.id) || 
-      (j.activities || []).some((a: any) => Number(a.plot) === Number(plot.id))
-    ))
-  : s.jobs.filter((j: any) => Number(j.plot) === Number(plot.id));
-        // Find nearest date for this specific plot header
-        let plotNearestDate: string | null = null;
-        currentPlotJobs.forEach(j => j.activities?.forEach((a: any) => {
-          if (a.scheduled_date >= todayStr) {
-            if (!plotNearestDate || a.scheduled_date < plotNearestDate) plotNearestDate = a.scheduled_date;
-          }
-        }));
+              return sortedPlots.map((plot: any) => {
+                const isPlotExpanded = expandedPlotId === plot.id;
+                const currentPlotJobs = isPlotExpanded
+                  ? (plotJobs[plot.id] || s.jobs.filter((j: any) =>
+                      Number(j.plot) === Number(plot.id) ||
+                      (j.activities || []).some((a: any) => Number(a.plot) === Number(plot.id))
+                    ))
+                  : s.jobs.filter((j: any) => Number(j.plot) === Number(plot.id));
 
-        // Calculate Remaining Acres (Backlog + Next)
-        const plotRemaining = currentPlotJobs.reduce((acc, job) => {
-          return acc + (job.activities || []).reduce((aAcc: number, act: any) => {
-            const isUnallocated = Number(act.allocated_area) < Number(act.total_area);
-            if (isUnallocated && (act.scheduled_date < todayStr || act.scheduled_date === plotNearestDate)) {
-              return aAcc + (Number(act.total_area) - Number(act.allocated_area));
-            }
-            return aAcc;
-          }, 0);
-        }, 0);
+                let plotNearestDate: string | null = null;
+                currentPlotJobs.forEach((j: any) => (j.activities || []).forEach((a: any) => {
+                  if (a.scheduled_date >= todayStr) {
+                    if (!plotNearestDate || a.scheduled_date < plotNearestDate) plotNearestDate = a.scheduled_date;
+                  }
+                }));
 
-        return (
-          <div key={plot.id} className="plot-accordion">
-            <div className="plot-accordion-header" onClick={() => handlePlotClick(plot.id, plot.area_acres, s.farmerId)}>
-              <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                <span className="plot-name">📍 {plot.name}</span>
-                {plotRemaining > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', marginTop: '2px' }}>
-                    <span style={{ fontSize: '0.75rem', color: '#2563eb', fontWeight: 'bold' }}>
-                      {plotRemaining.toFixed(2)} ac (previous + Next)
-                    </span>
-                    {plotNearestDate && (
-                      <span style={{ fontSize: '0.65rem', color: '#1e40af', opacity: 0.8 }}>
-                        Next Job: {new Date(plotNearestDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                      </span>
+                const plotRemaining = currentPlotJobs.reduce((acc: number, job: any) =>
+                  acc + (job.activities || []).reduce((aAcc: number, act: any) => {
+                    const isUnallocated = Number(act.allocated_area) < Number(act.total_area);
+                    if (isUnallocated && (act.scheduled_date < todayStr || act.scheduled_date === plotNearestDate))
+                      return aAcc + (Number(act.total_area) - Number(act.allocated_area));
+                    return aAcc;
+                  }, 0), 0
+                );
+
+                return (
+                  <div key={plot.id} style={{ background: '#fff', borderRadius: '10px', border: '1px solid #e7e5e4', overflow: 'hidden', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
+                    {/* Plot header */}
+                    <button
+                      onClick={() => handlePlotClick(plot.id, plot.area_acres, s.farmerId)}
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px', background: 'none', border: 'none', cursor: 'pointer' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                        {/* MapPin icon box */}
+                        <div style={{ width: '26px', height: '26px', borderRadius: '7px', background: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <MapPin size={13} style={{ color: '#f87171' }} />
+                        </div>
+                        <div style={{ textAlign: 'left' }}>
+                          <p style={{ fontSize: '0.82rem', fontWeight: 700, color: '#44403c', margin: 0, lineHeight: 1.2 }}>
+                            {plot.name}
+                          </p>
+                          {plot.crop_name && (
+                            <p style={{ fontSize: '0.68rem', color: '#a8a29e', margin: '1px 0 0' }}>
+                              {plot.crop_name}{plot.variety ? ` · ${plot.variety}` : ''}
+                            </p>
+                          )}
+                          {plotRemaining > 0 && (
+                            <div style={{ marginTop: '2px' }}>
+                              <span style={{ fontSize: '0.7rem', color: '#2563eb', fontWeight: 700 }}>
+                                {plotRemaining.toFixed(2)} ac remaining
+                              </span>
+                              {plotNearestDate && (
+                                <span style={{ fontSize: '0.65rem', color: '#3b82f6', marginLeft: '6px' }}>
+                                  Next: {new Date(plotNearestDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '2px 8px', borderRadius: '6px' }}>
+                          {plot.area_acres} ac
+                        </span>
+                        {isPlotExpanded
+                          ? <ChevronUp size={12} style={{ color: '#a8a29e' }} />
+                          : <ChevronDown size={12} style={{ color: '#d4cdc9' }} />
+                        }
+                      </div>
+                    </button>
+
+                    {/* Plot tasks */}
+                    {isPlotExpanded && (
+                      <div style={{ borderTop: '1px solid #f5f5f4' }}>
+                        {currentPlotJobs.length === 0 ? (
+                          <p style={{ fontSize: '0.83rem', color: '#a8a29e', padding: '10px' }}>No jobs</p>
+                        ) : currentPlotJobs.map((job: any) => (
+                          <div key={job.job_id}>
+                            {/* Crop header */}
+                            <div style={{ padding: '6px 12px 2px', background: '#fafaf9' }}>
+                              <span style={{ fontSize: '0.75rem', color: '#78716c', fontWeight: 600 }}>
+                                {job.crop_name}{job.variety ? ` · ${job.variety}` : ''}
+                              </span>
+                            </div>
+
+                            {/* Activities */}
+                            {[...(job.activities || [])].sort((a: any, b: any) => {
+                              const isAB = a.scheduled_date < todayStr && a.allocated_area < a.total_area;
+                              const isBB = b.scheduled_date < todayStr && b.allocated_area < b.total_area;
+                              const isAN = a.scheduled_date === plotNearestDate;
+                              const isBN = b.scheduled_date === plotNearestDate;
+                              if (isAB && !isBB) return -1; if (!isAB && isBB) return 1;
+                              if (isAN && !isBN) return -1; if (!isAN && isBN) return 1;
+                              return (a.scheduled_date || '').localeCompare(b.scheduled_date || '');
+                            }).map((act: any, ti: number, arr: any[]) => {
+                              const isNextJob = act.scheduled_date === plotNearestDate;
+                              const isBacklog = act.scheduled_date < todayStr && act.allocated_area < act.total_area;
+                              return (
+                                <div
+                                  key={act.id}
+                                  style={{
+                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                    padding: '9px 12px',
+                                    borderTop: ti > 0 ? '1px solid #f5f5f4' : 'none',
+                                    background: isNextJob ? '#f0fdf4' : isBacklog ? '#fef2f2' : '#fff',
+                                    transition: 'background 0.1s',
+                                  }}
+                                >
+                                  <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                                      <span style={{ fontSize: '0.78rem', color: '#44403c', fontWeight: isNextJob ? 700 : 500 }}>
+                                        {act.activity_name}
+                                      </span>
+                                      {isNextJob && (
+                                        <span style={{ fontSize: '0.58rem', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: '#059669', color: '#fff', letterSpacing: '0.04em' }}>
+                                          NEXT
+                                        </span>
+                                      )}
+                                      {isBacklog && (
+                                        <span style={{ fontSize: '0.58rem', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: '#fee2e2', color: '#dc2626', letterSpacing: '0.04em' }}>
+                                          BACKLOG
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span style={{ fontSize: '0.7rem', color: '#a8a29e' }}>{act.total_area} ac</span>
+                                  </div>
+                                  {act.scheduled_date && (
+                                    <span style={{
+                                      fontSize: '0.7rem', color: isNextJob ? '#059669' : isBacklog ? '#ef4444' : '#a8a29e',
+                                      fontWeight: isNextJob || isBacklog ? 600 : 400,
+                                      background: '#f5f5f4', padding: '2px 7px', borderRadius: '5px',
+                                      fontVariantNumeric: 'tabular-nums', flexShrink: 0, marginLeft: '8px',
+                                    }}>
+                                      {new Date(act.scheduled_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+
+                            {/* Next job footer */}
+                            {plotNearestDate && (
+                              <div style={{ padding: '6px 12px', background: '#f5f5f4', borderTop: '1px solid #e7e5e4', fontSize: '0.7rem', color: '#78716c', fontWeight: 500 }}>
+                                Next job: {new Date(plotNearestDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
-                )}
-              </div>
-              <span className="plot-area">{plot.area_acres} ac</span>
-              {isPlotExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </div>
-
-            {isPlotExpanded && (
-              <div className="plot-accordion-body">
-                {currentPlotJobs.length === 0 ? (
-                  <p style={{ fontSize: '0.83rem', color: '#9ca3af', padding: '10px' }}>No jobs</p>
-                ) : (
-                  currentPlotJobs.map(job => (
-                    <div key={job.job_id} className="job-inline-card">
-                      <div className="job-inline-header">
-                        <span style={{ fontSize: '0.82rem', color: '#475569', fontWeight: 600 }}>
-                          {job.crop_name} {job.variety ? `· ${job.variety}` : ''}
-                        </span>
-                      </div>
-                      
-                      {/* ✅ 2. Logic to sort ACTIVITIES: Backlog > Next > Others */}
-                      {[...(job.activities || [])].sort((a, b) => {
-                        const isA_Backlog = a.scheduled_date < todayStr && a.allocated_area < a.total_area;
-                        const isB_Backlog = b.scheduled_date < todayStr && b.allocated_area < b.total_area;
-                        const isA_Next = a.scheduled_date === plotNearestDate;
-                        const isB_Next = b.scheduled_date === plotNearestDate;
-
-                        if (isA_Backlog && !isB_Backlog) return -1;
-                        if (!isA_Backlog && isB_Backlog) return 1;
-                        if (isA_Next && !isB_Next) return -1;
-                        if (!isA_Next && isB_Next) return 1;
-                        return (a.scheduled_date || '').localeCompare(b.scheduled_date || '');
-                      }).map((act: any) => {
-                        const isNextJob = act.scheduled_date === plotNearestDate; 
-                        const isBacklog = act.scheduled_date < todayStr && act.allocated_area < act.total_area;
-
-                        return (
-                          <div key={act.id} className={`activity-inline-row ${isNextJob ? 'next-job-highlight' : ''}`}>
-                            <div className="activity-inline-info">
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
-                                <span className="activity-inline-name" style={{ fontWeight: isNextJob ? 700 : 500 }}>
-                                  {act.activity_name}
-                                </span>
-                                {isNextJob && <span className="badge-next">NEXT JOB</span>}
-                                {isBacklog && <span className="badge-backlog"></span>}
-                              </div>
-                              <div className="activity-inline-meta">
-                                {/* <span>{act.allocated_area}/{act.total_area} ac</span> */}
-                                <span>{act.total_area} ac</span>
-                                {act.scheduled_date && (
-                                  <span style={{ color: isNextJob ? '#2563eb' : (isBacklog ? '#ef4444' : 'inherit') }}>
-                                    📅 {new Date(act.scheduled_date).toLocaleDateString()}
-                                  </span>
-                                )}
-                              </div>
-                              {/* <div className="progress-bar" style={{ marginTop: 4 }}>
-                                <div 
-                                  className="progress-fill" 
-                                  style={{ 
-                                    width: `${(act.allocated_area / act.total_area) * 100}%`,
-                                    background: isNextJob ? '#3b82f6' : (isBacklog ? '#ef4444' : '#10b981')
-                                  }} 
-                                />
-                              </div> */}
-                            </div>
-                            {/* <div className="activity-inline-actions">
-                              <button className="icon-btn edit" onClick={e => { e.stopPropagation(); setEditingActivity({ ...act, plotId: plot.id }); }}><Edit size={13} /></button>
-                              <button className="icon-btn danger" onClick={e => { e.stopPropagation(); handleDeleteActivity(act.id, plot.id); }}><Trash2 size={13} /></button>
-                            </div> */}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
+                );
+              });
+            })()}
           </div>
-        );
-      });
-    })()
-  )}
-
-  {/* Add Job button remains at the bottom of body */}
-  {/* {showAddJob === s.farmerId ? (
-    <JobFormInline farmerId={s.farmerId} existingPlots={plots} />
-  ) : (
-    // <button className="btn-secondary btn-sm add-job-btn" onClick={e => {
-    //   e.stopPropagation();
-    //   resetJobForm();
-    //   setIsNewFarmer(false);
-    //   setPlotMode(plots.length > 0 ? 'existing' : 'new');
-    //   setShowAddJob(s.farmerId);
-    // }}>
-    //   <Plus size={13} /> Add Job
-    // </button>
-  )} */}
-</div>
-                  )}
-                </div>
-              );
-            })}
+        </div>
+      )}
+    </div>
+  );
+})}
           </div>
         )}
       </div>

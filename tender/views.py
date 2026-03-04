@@ -1877,8 +1877,6 @@ class MukkadamViewSet(viewsets.ModelViewSet):
             )
         
         return Response(financials)
-    
-    
     @action(detail=False, methods=['get'])
     def daily_capacity_all(self, request):
         date_str = request.query_params.get('date')
@@ -1923,6 +1921,7 @@ class MukkadamViewSet(viewsets.ModelViewSet):
             used_across_all = Allocation.objects.filter(
                 mukkadam=mukkadam,
                 allocated_date=date,
+                allows_second_job=False,          # ✅ skip half-day allocations
                 status__in=['scheduled', 'in_progress'],
             ).aggregate(total=models.Sum('allocated_workers'))['total'] or 0
 
@@ -1971,7 +1970,7 @@ class MukkadamViewSet(viewsets.ModelViewSet):
 
         total = 0
         for assignment in assignments:
-            # 🔹 updown check (you were missing this)
+            # 🔹 updown check
             if assignment.mukkadam_type == 'updown':
                 available = False
                 if assignment.updown_mode == 'range':
@@ -1988,6 +1987,7 @@ class MukkadamViewSet(viewsets.ModelViewSet):
             used_across_all = Allocation.objects.filter(
                 mukkadam=mukkadam,
                 allocated_date=date,
+                allows_second_job=False,          # ✅ skip half-day allocations
                 status__in=['scheduled', 'in_progress'],
             ).aggregate(total=models.Sum('allocated_workers'))['total'] or 0
 
@@ -2002,8 +2002,6 @@ class MukkadamViewSet(viewsets.ModelViewSet):
             total += remaining
 
         return Response({'date': date_str, 'total_capacity': total})
-
-
     @action(detail=True, methods=['get'])
     def available_activities(self, request, pk=None):
         """
@@ -2472,8 +2470,8 @@ class ClusterViewSet(viewsets.ModelViewSet):
                         mukkadam_due += net
 
             serialized                 = self.get_serializer(c).data
-            serialized['farmer_due']   = float(farmer_due)
-            serialized['mukkadam_due'] = float(mukkadam_due)
+            serialized['farmer_due']   = '0'
+            serialized['mukkadam_due'] = '0'
             result.append(serialized)
 
         return Response(result)
@@ -2963,6 +2961,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
         # 3) Create allocation + update related models atomically
         try:
             with transaction.atomic():
+                # 1) Parse the new flag (add after existing Decimal/int parsing):
+                allows_second_job = bool(request.data.get('allows_second_job', False))
+
+                # 2) Pass to Allocation.objects.create() (add alongside existing fields):
                 allocation = Allocation.objects.create(
                     job_activity=job_activity,
                     mukkadam=mukkadam,
@@ -2972,9 +2974,11 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     farmer_rate=farmer_rate,
                     mukkadam_rate=mukkadam_rate,
                     status='scheduled',
-                    cluster=cluster,  # 👈 store cluster
+                    cluster=cluster,
+                    allows_second_job=allows_second_job,   # ← NEW
                     created_by=request.user if request.user.is_authenticated else None,
                 )
+
 
                 # job_activity.allocated_area += allocated_area
                 # job_activity.save()
@@ -3649,6 +3653,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
             {'success': True, 'message': 'Allocation deleted'},
             status=status.HTTP_204_NO_CONTENT,
         )
+
+
 
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -5281,200 +5287,6 @@ def example_allocation_flow(request):
     # POST /api/allocations/create_allocation/ (Day 2: 0.5 acres)
     
     return response
-
-
-# @api_view(['POST'])
-# @permission_classes([AllowAny])
-# def send_otp_simple(request):
-#     """
-#     POST /api/attendance/send-otp-simple/
-#     Body: {
-#         "phone_number": "9965377088"
-#     }
-#     """
-#     phone = request.data.get('phone_number', '').strip()
-
-#     if not phone:
-#         return Response({'error': 'phone_number is required'}, status=400)
-
-#     phone_normalized = phone if phone.startswith('91') else f'91{phone}'
-
-#     DEMAND_HEADERS = {
-#         'Authorization': 'Token e8fa8310c9af344ca22ec6bd23960d609b09c704',
-#         'Content-Type':  'application/json',
-#     }
-
-#     try:
-#         resp = requests.post(
-#             'https://demand.bharatintelligence.ai/otp/test/api/send-otp/',
-#             json={'phone_number': phone_normalized},
-#             headers=DEMAND_HEADERS,
-#             timeout=10
-#         )
-#         resp.raise_for_status()
-#     except Exception as e:
-#         return Response({'error': f'OTP service failed: {str(e)}'}, status=503)
-
-#     return Response({
-#         'success': True,
-#         'message': f'OTP sent to {phone}',
-#     })
-# @api_view(['POST'])
-# @permission_classes([AllowAny])
-# def send_otp(request):
-#     """
-#     POST /api/attendance/send-otp/
-#     Body: {
-#         "phone_number": "9965377088",
-#         "allocation_id": 456,
-#         "crew_size": 12
-#     }
-#     """
-#     phone         = request.data.get('phone_number', '').strip()
-#     allocation_id = request.data.get('allocation_id')
-#     crew_size     = request.data.get('crew_size')
-
-#     if not phone or not allocation_id or not crew_size:
-#         return Response({'error': 'phone_number, allocation_id and crew_size required'}, status=400)
-
-#     try:
-#         allocation = Allocation.objects.get(id=allocation_id)
-#     except Allocation.DoesNotExist:
-#         return Response({'error': 'Allocation not found'}, status=404)
-
-#     phone_normalized = phone if phone.startswith('91') else f'91{phone}'
-#     DEMAND_HEADERS = {
-#     'Authorization': f'Token e8fa8310c9af344ca22ec6bd23960d609b09c704',
-#     'Content-Type':  'application/json',
-#     }
-#     # Fire OTP
-#     try:
-#         resp = requests.post(
-#             'https://demand.bharatintelligence.ai/otp/test/api/send-otp/',
-#             json={'phone_number': phone_normalized},
-#             headers=DEMAND_HEADERS, 
-#             timeout=10
-#         )
-#         resp.raise_for_status()
-#     except Exception as e:
-#         return Response({'error': f'OTP service failed: {str(e)}'}, status=503)
-
-#     # ✅ Hold details temporarily — don't touch Allocation yet
-#     MukkadamOTPRequest.objects.create(
-#         mukkadam   = allocation.mukkadam,
-#         phone      = phone_normalized,
-#         crew_size  = crew_size,
-#         allocation = allocation,
-#     )
-
-#     return Response({
-#         'success':       True,
-#         'message':       f'OTP sent to {phone}',
-#         'allocation_id': allocation_id,
-#         'mukkadam_name': allocation.mukkadam.mukkadam_name,
-#     })
-
-
-# @api_view(['POST'])
-# @permission_classes([AllowAny])
-# def verify_otp(request):
-#     """
-#     POST /api/attendance/verify-otp/
-#     Body: {
-#         "phone_number": "9965377088",
-#         "otp": "1234"
-#     }
-#     """
-#     phone = request.data.get('phone_number', '').strip()
-#     otp   = request.data.get('otp', '').strip()
-
-#     if not phone or not otp:
-#         return Response({'error': 'phone_number and otp required'}, status=400)
-
-#     phone_normalized = phone if phone.startswith('91') else f'91{phone}'
-
-#     # Get latest unused OTP request
-#     otp_request = MukkadamOTPRequest.objects.filter(
-#         phone   = phone_normalized,
-#         is_used = False,
-#     ).order_by('-requested_at').first()
-
-#     if not otp_request:
-#         return Response({'error': 'No OTP request found'}, status=400)
-
-#     if otp_request.is_expired():
-#         return Response({'error': 'OTP expired, please request again'}, status=400)
-#     DEMAND_HEADERS = {
-#     'Authorization': f'Token e8fa8310c9af344ca22ec6bd23960d609b09c704',
-#     'Content-Type':  'application/json',
-#     }
-#     # Verify with demand API
-#     try:
-#         resp = requests.post(
-#             'https://demand.bharatintelligence.ai/otp/test/api/verify-otp/',
-#             json={'phone_number': phone_normalized, 'otp': otp},
-#             headers=DEMAND_HEADERS, 
-#             timeout=10
-#         )
-#         data = resp.json()
-#     except Exception as e:
-#         return Response({'error': f'OTP service failed: {str(e)}'}, status=503)
-
-#     if resp.status_code != 200 or not data.get('success'):
-#         return Response({'error': 'Invalid OTP', 'detail': data}, status=400)
-
-#     # Mark OTP used
-#     otp_request.is_used = True
-#     otp_request.save(update_fields=['is_used'])
-
-#     # ✅ NOW write to Allocation after verified
-#     allocation = otp_request.allocation
-#     allocation.actual_start_time = timezone.now()
-#     allocation.actual_crew_size  = otp_request.crew_size
-#     allocation.status            = 'in_progress'
-#     allocation.save(update_fields=['actual_start_time', 'actual_crew_size', 'status'])
-
-#     return Response({
-#         'success':           True,
-#         'allocation_id':     allocation.id,
-#         'mukkadam_name':     allocation.mukkadam.mukkadam_name,
-#         'actual_start_time': allocation.actual_start_time.isoformat(),
-#         'actual_crew_size':  allocation.actual_crew_size,
-#         'allocated_date':    allocation.allocated_date.isoformat(),
-#     })
-
-
-# @api_view(['POST'])
-# @permission_classes([AllowAny])
-# def verify_otp_simple(request):
-#     phone = request.data.get('phone_number', '').strip()
-#     otp   = request.data.get('otp', '').strip()
-
-#     if not phone or not otp:
-#         return Response({'error': 'phone_number and otp required'}, status=400)
-
-#     phone_normalized = phone if phone.startswith('91') else f'91{phone}'
-
-#     try:
-#         DEMAND_HEADERS = {
-#     'Authorization': f'Token e8fa8310c9af344ca22ec6bd23960d609b09c704',
-#     'Content-Type':  'application/json',
-#     }
-#         resp = requests.post(
-#             f'https://demand.bharatintelligence.ai/otp/test/api/verify-otp/',
-#             json={'phone_number': phone_normalized, 'otp': otp},
-#             headers=DEMAND_HEADERS,
-#             timeout=10
-#         )
-#         data = resp.json()
-#     except Exception as e:
-#         return Response({'error': f'OTP service failed: {str(e)}'}, status=503)
-
-#     if resp.status_code != 200 or not data.get('success'):
-#         return Response({'error': 'Invalid OTP', 'detail': data}, status=400)
-
-#     return Response({'success': True, 'message': 'OTP verified successfully'})
-
 
 
 import uuid

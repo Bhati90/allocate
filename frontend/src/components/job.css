@@ -1041,3 +1041,290 @@
 .activity-inline-row.backlog-highlight {
   border-left: 3px solid #ef4444; /* Red indicator for backlog */
 }
+
+
+/* ─── Farmer Card Styles (matching screenshot) ─── */
+
+/* Panel wrapper */
+.jobs-panel {
+  background: #f5f5f0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Search bar */
+.panel-header {
+  padding: 12px 16px 8px;
+  background: #f5f5f0;
+}
+
+.panel-header .form-input {
+  width: 100%;
+  padding: 10px 14px 10px 36px;
+  border: 1.5px solid #e5e5e0;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  background: #fafaf8 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%239ca3af' stroke-width='2' viewBox='0 0 24 24'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E") no-repeat 12px center;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.panel-header .form-input:focus {
+  border-color: #a3b899;
+}
+
+/* Farmer count label */
+.farmer-count-label {
+  padding: 4px 16px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  text-transform: uppercase;
+}
+
+/* Scrollable list */
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 16px;
+}
+
+.jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ─── Farmer Card ─── */
+.farmer-accordion {
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.07), 0 0 0 1px rgba(0,0,0,0.04);
+  overflow: hidden;
+  transition: box-shadow 0.15s;
+}
+
+.farmer-accordion:hover {
+  box-shadow: 0 3px 10px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.05);
+}
+
+.farmer-accordion.completed {
+  opacity: 0.75;
+}
+
+/* Card header click area */
+.farmer-accordion-header {
+  padding: 14px 14px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  user-select: none;
+}
+
+/* Avatar circle */
+.farmer-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #e8ede5;
+  color: #4a6741;
+  font-size: 0.78rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+}
+
+/* Card body (name + meta) */
+.farmer-header-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.farmer-name {
+  font-size: 0.97rem;
+  font-weight: 700;
+  color: #111827;
+  display: block;
+  margin-bottom: 4px;
+  line-height: 1.2;
+}
+
+/* plots · acres · tasks row */
+.farmer-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 5px;
+}
+
+.farmer-meta span {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.farmer-meta .dot {
+  color: #d1d5db;
+  font-size: 0.6rem;
+}
+
+/* Phone + Next row */
+.farmer-contact-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.farmer-phone {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: #6b7280;
+}
+
+.farmer-next-date {
+  font-size: 0.72rem;
+  color: #6b7280;
+}
+
+/* Call button */
+.btn-call {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  background: #22c55e;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-top: 6px;
+  margin-left: auto;
+}
+
+.btn-call:hover {
+  background: #16a34a;
+}
+
+/* Call button row (bottom of card) */
+.farmer-card-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 14px 12px;
+}
+
+/* Chevron */
+.farmer-header-right {
+  color: #9ca3af;
+  padding-top: 2px;
+  flex-shrink: 0;
+}
+
+/* ─── Expanded body ─── */
+.farmer-accordion-body {
+  border-top: 1px solid #f3f4f6;
+  padding: 10px 14px 14px;
+}
+
+/* Plot accordion */
+.plot-accordion {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+.plot-accordion-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.plot-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #374151;
+  flex: 1;
+}
+
+.plot-area {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.plot-accordion-body {
+  border-top: 1px solid #e5e7eb;
+  padding: 8px 12px;
+}
+
+/* Job inline card */
+.job-inline-card {
+  margin-bottom: 8px;
+}
+
+.job-inline-header {
+  margin-bottom: 4px;
+}
+
+/* Activity row */
+.activity-inline-row {
+  padding: 5px 8px;
+  border-radius: 6px;
+  margin-bottom: 3px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+}
+
+.activity-inline-row.next-job-highlight {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.activity-inline-name {
+  font-size: 0.8rem;
+  color: #374151;
+}
+
+.activity-inline-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.badge-next {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  background: #3b82f6;
+  color: #fff;
+  border-radius: 4px;
+  letter-spacing: 0.03em;
+}
+
+.badge-backlog {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  background: #ef4444;
+  color: #fff;
+  border-radius: 4px;
+}

@@ -513,6 +513,82 @@ const filteredAllocations = allocations.filter(alloc => {
 
 
 
+// ── State ─────────────────────────────────────────────────────────────────────
+const [halfDayDialog, setHalfDayDialog] = useState<{
+  open: boolean;
+  jobId: string;
+  act: any;
+  mukkadam: any;
+  rate: any;
+  availableWorkers: number;
+  neededWorkers: number;
+  remainingArea: number;
+  isSecondJob: boolean;   // ← ADD THIS
+} | null>(null);
+
+
+const [allowsSecondJob, setAllowsSecondJob] = useState(false);
+
+// ── Confirm handler (fires when user clicks "Allocate" in the dialog) ─────────
+const handleConfirmHalfDay = async () => {
+  if (!halfDayDialog) return;
+  const { jobId, act, mukkadam, rate, availableWorkers, remainingArea } = halfDayDialog;
+
+  const areaToAllocate = remainingArea;
+  const maxArea = availableWorkers * Number(rate?.productivity_per_worker || 0);
+  const isPartial = maxArea < remainingArea && maxArea > 0;
+  const finalArea = isPartial ? maxArea : areaToAllocate;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        job_activity_id: act.id,
+        mukkadam_id: mukkadam.mukkadam_id,
+        allocated_date: isoDate,
+        allocated_area: finalArea,
+        allocated_workers: availableWorkers,
+        farmer_rate: act.rate_per_acre,
+        mukkadam_rate: Number(rate?.rate_per_acre || 0),
+        cluster_id: clusterId,
+        skip_strict_check: false,
+        allows_second_job: halfDayDialog.isSecondJob ? false : allowsSecondJob,  // ← send flag
+      }),
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+      toast.success(
+        allowsSecondJob
+          ? `Allocated to ${mukkadam.mukkadam_name} (½ day — available for 1 more job)`
+          : `Allocated to ${mukkadam.mukkadam_name}`
+      );
+      setHalfDayDialog(null);
+      setAllowsSecondJob(false);
+      window.location.reload();
+    } else {
+      toast.error(data.error || 'Allocation failed');
+    }
+  } catch (e) {
+    toast.error('Allocation failed');
+    console.error(e);
+  }
+};
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PART C — Half-day confirm dialog JSX
+// Place this ANYWHERE inside your DayDetailModal return(), e.g. just before
+// the closing </div> of the modal.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PART D — CalendarCell: add ½ badge
+// In your CalendarCell days.map() block, add this derived value and badge chip.
+// ══════════════════════════════════════════════════════════════════════════════
+
 // Add to DayDetailModal state
 const [showEditAllocationModal, setShowEditAllocationModal] = useState(false);
 const [editingAllocation, setEditingAllocation] = useState<Allocation | null>(null);
@@ -523,6 +599,8 @@ const [editForm, setEditForm] = useState({
   allocated_area: 0,
   mukkadam_rate: 0,
 });
+
+
 
 const [showLeaveModal, setShowLeaveModal] = useState(false);
 const [onLeavesUpdatedTrigger, setOnLeavesUpdatedTrigger] = useState(0); // To refresh internal UI if needed
@@ -748,14 +826,21 @@ useEffect(() => {
   };
   fetchAvailable();
 }, [isoDate, clusterId]);
-// workers already allocated on this day, per mukkadam
-const usedWorkersByMukkadam = new Map<number, number>();
+// // workers already allocated on this day, per mukkadam
+// const usedWorkersByMukkadam = new Map<number, number>();
 
+// allocations.forEach(a => {
+//   const current = usedWorkersByMukkadam.get(a.mukkadam) || 0;
+//   usedWorkersByMukkadam.set(a.mukkadam, current + (a.allocated_workers || 0));
+// });
+
+// ✅ NEW — skip allocations where allows_second_job is true:
+const usedWorkersByMukkadam = new Map<number, number>();
 allocations.forEach(a => {
+  if ((a as any).allows_second_job === true) return;  // ← half-day, still free
   const current = usedWorkersByMukkadam.get(a.mukkadam) || 0;
   usedWorkersByMukkadam.set(a.mukkadam, current + (a.allocated_workers || 0));
 });
-
 
 const handleSaveExtraCrew = async () => {
   if (!selectedMukkadamForExtra) return;
@@ -1346,6 +1431,124 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
   </div>
 )}
 
+
+{halfDayDialog?.open && ReactDOM.createPortal(
+  <div
+    style={{
+      position: 'fixed', inset: 0, zIndex: 99999,
+      background: 'rgba(0,0,0,0.5)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}
+    onClick={() => { setHalfDayDialog(null); setAllowsSecondJob(false); }}
+  >
+    <div
+      style={{
+        background: '#fff', borderRadius: '16px', padding: '24px',
+        width: '360px', boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+      }}
+      onClick={e => e.stopPropagation()}
+    >
+      {/* Header */}
+      <div style={{ marginBottom: '16px' }}>
+        <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#111827' }}>
+          Confirm Allocation
+        </h3>
+        <p style={{ margin: '4px 0 0', fontSize: '0.8rem', color: '#6b7280' }}>
+          {halfDayDialog.act.activity_name} → {halfDayDialog.mukkadam.mukkadam_name}
+        </p>
+      </div>
+
+      {/* Summary rows */}
+      <div style={{
+        background: '#f9fafb', borderRadius: '10px', padding: '12px',
+        fontSize: '0.8rem', color: '#374151', marginBottom: '16px',
+        display: 'flex', flexDirection: 'column', gap: '6px',
+      }}>
+        {[
+          ['Area', `${halfDayDialog.remainingArea.toFixed(2)} ac`],
+          ['Workers available', `${halfDayDialog.availableWorkers} workers`],
+          ['Workers needed', `${halfDayDialog.neededWorkers} workers`],
+          ['Rate', `₹${Number(halfDayDialog.rate?.rate_per_acre || 0).toFixed(0)}/ac`],
+        ].map(([label, value]) => (
+          <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: '#6b7280' }}>{label}</span>
+            <span style={{ fontWeight: 700 }}>{value}</span>
+          </div>
+        ))}
+      </div>
+
+      {halfDayDialog.isSecondJob ? (
+  <div style={{
+    display: 'flex', alignItems: 'flex-start', gap: '10px',
+    padding: '12px', borderRadius: '10px',
+    border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: '16px',
+  }}>
+    <span style={{ fontSize: '1rem', flexShrink: 0 }}>½</span>
+    <div>
+      <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#0369a1' }}>
+        2nd job — full day allocation
+      </p>
+      <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#0284c7', lineHeight: 1.5 }}>
+        {halfDayDialog.mukkadam.mukkadam_name} already has a ½ day job today.
+        This will be allocated as the 2nd job for the remaining half.
+      </p>
+    </div>
+  </div>
+) : (
+  <label style={{
+    display: 'flex', alignItems: 'flex-start', gap: '10px',
+    padding: '12px', borderRadius: '10px', cursor: 'pointer',
+    border: allowsSecondJob ? '2px solid #10b981' : '2px solid #e5e7eb',
+    background: allowsSecondJob ? '#f0fdf4' : '#fff',
+    marginBottom: '16px', transition: 'all 0.15s',
+  }}>
+    <input type="checkbox" checked={allowsSecondJob}
+      onChange={e => setAllowsSecondJob(e.target.checked)}
+      style={{ marginTop: '2px', accentColor: '#10b981', width: '16px', height: '16px', flexShrink: 0 }} />
+    <div>
+      <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#065f46' }}>
+        ½ Can do 1 more job today
+      </p>
+      <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#6b7280', lineHeight: 1.5 }}>
+        Workers stay available for a second job. This job runs in the first half of the day —
+        worker count will <strong>not</strong> be deducted from daily capacity.
+      </p>
+    </div>
+  </label>
+)}
+
+      {/* Buttons */}
+      <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          onClick={() => { setHalfDayDialog(null); setAllowsSecondJob(false); }}
+          style={{
+            padding: '8px 18px', borderRadius: '8px',
+            border: '1px solid #e5e7eb', background: '#fff',
+            color: '#374151', fontSize: '0.82rem', cursor: 'pointer',
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={handleConfirmHalfDay}
+          style={{
+            padding: '8px 18px', borderRadius: '8px', border: 'none',
+            background: allowsSecondJob ? '#10b981' : '#2563eb',
+            color: '#fff', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
+            transition: 'background 0.15s',
+          }}
+        >
+          {allowsSecondJob ? '½ Allocate' : 'Allocate'}
+        </button>
+      </div>
+    </div>
+  </div>,
+  document.body
+)}
+
+
 {/* ── Move Allocation Modal ── */}
 {moveModal && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -1468,6 +1671,7 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
                     const carryForwardAllocs = actAllocations.filter(al => al.is_carry_forward);
                     const normalAllocs = actAllocations.filter(al => !al.is_carry_forward);
 
+
                     // Verification summary across all allocations
                     const pendingVerify = actAllocations.filter(
                       al => al.report_submitted && al.farmer_agreed == null
@@ -1524,24 +1728,22 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
   <span className="font-medium">{act.activity_name}</span>
 
   {/* New copy (on new date) */}
-  {act.is_manually_moved && act.moved_from_activity && act.original_scheduled_date && (
-    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">
-       from {act.original_scheduled_date} → {act.scheduled_date}
-    </span>
-  )}
-
+{(act as any).is_manually_moved && (act as any).original_scheduled_date && (
+  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-600 border border-orange-200">
+    ↩ from {new Date((act as any).original_scheduled_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+  </span>
+)}
   {/* {!act.is_manually_moved &&(
     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">
        from {act.original_scheduled_date} → {act.scheduled_date}
     </span>
   )} */}
 
-  {/* Old copy (shrunk original) – if you ever mark it */}
-  {/* {!act.is_manually_moved && !act.moved_from_activity && act.original_scheduled_date && (
-    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">
-      Part moved from {act.original_scheduled_date} to another date
-    </span>
-  )} */}
+{!(act as any).is_manually_moved && (act as any).moved_to_date && (
+  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-200">
+    ↪ part to {new Date((act as any).moved_to_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+  </span>
+)}
 
   {(act as any).is_manually_moved ? (
     <span className="px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded text-[10px] font-bold">
@@ -1678,32 +1880,30 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
             needed <= r.availableWorkers &&
             r.availableWorkers > 0;
 
-          const handleTeamClick = () => {
-            if (!canDo) return;
-            const mukkadam = mukkadams.find(
-              mk => mk.mukkadam_id === r.mukkadamId
-            );
-            if (!mukkadam) return;
-            const rate = mukkadam.activity_rates?.find((rt: any) =>
-              rt.activity_id === act.activity_id ||
-              rt.activity_name === act.activity_name
-            );
-            const confirmed = window.confirm(
-              `Allocate ${act.remaining_area} ac of "${act.activity_name}" to ${r.mukkadamName}?\n\n` +
-                `Workers: ${r.availableWorkers}  |  Rate: ₹${rate?.rate_per_acre || 0}/ac`
-            );
-            if (!confirmed) return;
-            const enrichedAct = {
-              ...act,
-              __prefill: {
-                mukkadam_id: r.mukkadamId,
-                allocated_workers: r.availableWorkers,
-                allocated_area: Number(act.remaining_area),
-                mukkadam_rate: Number(rate?.rate_per_acre || 0),
-              },
-            };
-            onStartAllocation(job.job_id, act.id, enrichedAct);
-          };
+          
+const handleTeamClick = () => {
+  if (!canDo) return;
+  const mukkadam = mukkadams.find(mk => mk.mukkadam_id === r.mukkadamId);
+  if (!mukkadam) return;
+  const rate = mukkadam.activity_rates?.find((rt: any) =>
+    rt.activity_id === act.activity_id ||
+    rt.activity_name === act.activity_name
+  );
+
+const alreadyHasHalfDay = allocations.some(
+  a => a.mukkadam === r.mukkadamId && (a as any).allows_second_job === true
+);
+setHalfDayDialog({
+    open: true,
+    jobId: job.job_id,
+    act,
+    mukkadam,
+    rate,
+    availableWorkers: r.availableWorkers,
+    neededWorkers: needed,
+    remainingArea: Number(act.remaining_area),
+    isSecondJob: alreadyHasHalfDay,   // ← NEW
+  });}
 
           return (
             <button

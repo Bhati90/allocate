@@ -902,299 +902,311 @@ const [weeklyModal, setWeeklyModal] = useState<{
       <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
 
         {/* ════ FARMERS TAB ════ */}
-        {tab === 'farmers' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {data.farmers.filter((f: any) => {
-                const allAllocs = (f.jobs || [f]).flatMap((j: any) => (j.activities || []).flatMap((a: any) => a.allocations || []));
-                if (allAllocs.length === 0) return true;
-                return allAllocs.some((a: any) => a.work_status !== 'work_not_started');
-              }).length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '48px', color: '#9ca3af', fontSize: '0.82rem' }}>
-                No active farmer jobs (all work not started yet)
+
+{tab === 'farmers' && (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+    {data.farmers.length === 0 ? (
+      <div style={{ textAlign: 'center', padding: '48px', color: '#9ca3af', fontSize: '0.82rem' }}>
+        No farmers in this cluster yet
+      </div>
+    ) : data.farmers.map((f: any) => {
+      const jobs = f.jobs || [f];
+
+      // ── Aggregated financials across ALL jobs ──
+      const aggTotalJob  = jobs.reduce((s: number, j: any) => s + (j.total_job_amount || j.booking_total || 0), 0);
+      const aggBilled    = jobs.reduce((s: number, j: any) => s + (j.summary?.total_billable_so_far || 0), 0);
+      const aggPaid      = jobs.reduce((s: number, j: any) => s + (j.summary?.total_paid || 0), 0);
+      const aggDue       = jobs.reduce((s: number, j: any) => s + (j.summary?.balance_due || 0), 0);
+
+      const firstDate = jobs.reduce((d: string | null, j: any) => {
+        const fd = j.first_activity_date || j.activities?.[0]?.scheduled_date;
+        return (!d || (fd && fd < d)) ? fd : d;
+      }, null as string | null);
+      const lastDate = jobs.reduce((d: string | null, j: any) => {
+        const ld = j.last_activity_date || j.activities?.[j.activities?.length - 1]?.scheduled_date;
+        return (!d || (ld && ld > d)) ? ld : d;
+      }, null as string | null);
+
+      const hasBalance = aggDue > 0.01;
+
+      // Pending verifications across all jobs
+      const pendingVerify = jobs.reduce((n: number, j: any) =>
+        n + (j.activities || []).filter((a: any) =>
+          a.report_submitted && a.farmer_agreed === null
+        ).length, 0);
+
+      // Dispute count
+      const disputeCount = jobs.reduce((n: number, j: any) =>
+        n + (j.activities || []).flatMap((a: any) => a.allocations || []).filter((a: any) =>
+          a.payment_status === 'dispute'
+        ).length, 0);
+
+      const expandKey = `farmer-${f.farmer_id}`;
+      const isOpen = expandedKey === expandKey;
+
+      return (
+        <div key={expandKey} style={{
+          border: `1.5px solid ${disputeCount > 0 ? '#fecaca' : pendingVerify > 0 ? '#fde68a' : hasBalance ? '#fde68a' : '#e5e7eb'}`,
+          borderRadius: '12px', background: '#fff', overflow: 'hidden',
+        }}>
+
+          {/* ── COLLAPSED HEADER ── */}
+          <div
+            onClick={() => setExpandedKey(isOpen ? null : expandKey)}
+            style={{ padding: '12px 16px', cursor: 'pointer' }}
+          >
+            {/* Row 1: name + badges + collect button */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#111827' }}>{f.farmer_name}</span>
+                  <span style={{ fontSize: '0.65rem', color: '#9ca3af' }}>{f.farmer_id}</span>
+                  <span style={{
+                    fontSize: '0.62rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 600,
+                    background: hasBalance ? '#fef9c3' : '#dcfce7',
+                    color: hasBalance ? '#b45309' : '#16a34a',
+                  }}>
+                    {hasBalance ? '⚠ Balance Due' : '✓ Clear'}
+                  </span>
+                  {disputeCount > 0 && (
+                    <span style={{ fontSize: '0.62rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: '#fef2f2', color: '#dc2626' }}>
+                      🚨 {disputeCount} Dispute{disputeCount > 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {pendingVerify > 0 && (
+                    <span style={{ fontSize: '0.62rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: '#fef9c3', color: '#b45309' }}>
+                      👀 {pendingVerify} Verify Pending
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.68rem', color: '#6b7280', marginTop: '3px' }}>
+                  📞 {f.phone_number || f.mobile_number || '—'}
+                </div>
+                {(firstDate || lastDate) && (
+                  <div style={{ fontSize: '0.65rem', color: '#9ca3af', marginTop: '2px' }}>
+                    📅 {firstDate || '—'} → {lastDate || '—'}
+                  </div>
+                )}
               </div>
-            ) : data.farmers.filter((f: any) => {
-                // Hide farmers where NO allocation has started work yet
-                const allAllocs = (f.jobs || [f]).flatMap((j: any) =>
-                  (j.activities || []).flatMap((a: any) => a.allocations || [])
-                );
-                if (allAllocs.length === 0) return true; // no allocs yet — show anyway
-                return allAllocs.some((a: any) => a.work_status !== 'work_not_started');
-              }).map((f: any) => {
-              // Support both old flat structure (f.summary) and new grouped structure (f.jobs)
-              const jobs = f.jobs || [f];
-              const totalBalance = jobs.reduce((s: number, j: any) => s + (j.summary?.balance_due || 0), 0);
-              const totalAmount  = jobs.reduce((s: number, j: any) => s + (j.total_job_amount || j.booking_total || 0), 0);
-              const firstDate    = jobs.reduce((d: string | null, j: any) => {
-                const fd = j.first_activity_date || j.activities?.[0]?.scheduled_date;
-                return (!d || (fd && fd < d)) ? fd : d;
-              }, null as string | null);
-              const lastDate     = jobs.reduce((d: string | null, j: any) => {
-                const ld = j.last_activity_date || j.activities?.[j.activities?.length - 1]?.scheduled_date;
-                return (!d || (ld && ld > d)) ? ld : d;
-              }, null as string | null);
 
-              const hasBalance = totalBalance > 0.01;
-
-              // Pending verifications across all jobs
-              const pendingVerify = jobs.reduce((n: number, j: any) =>
-                n + (j.activities || []).filter((a: any) =>
-                  a.report_submitted && a.farmer_agreed === null
-                ).length, 0);
-
-              // Dispute count
-              const disputeCount = jobs.reduce((n: number, j: any) =>
-                n + (j.activities || []).flatMap((a: any) => a.allocations || []).filter((a: any) =>
-                  a.payment_status === 'dispute'
-                ).length, 0);
-
-              const expandKey = `farmer-${f.farmer_id}`;
-              const isOpen = expandedKey === expandKey;
-
-              return (
-                <div key={expandKey} style={{
-                  border: `1.5px solid ${disputeCount > 0 ? '#fecaca' : pendingVerify > 0 ? '#fde68a' : hasBalance ? '#fde68a' : '#e5e7eb'}`,
-                  borderRadius: '12px', background: '#fff', overflow: 'hidden',
-                }}>
-                  {/* ── COLLAPSED HEADER ── */}
-                  <div
-                    onClick={() => setExpandedKey(isOpen ? null : expandKey)}
-                    style={{ padding: '12px 16px', cursor: 'pointer' }}
-                  >
-                    {/* Row 1: name + badges + collect button */}
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '8px' }}>
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#111827' }}>{f.farmer_name}</span>
-                          <span style={{ fontSize: '0.65rem', color: '#9ca3af' }}>{f.farmer_id}</span>
-                          <span style={{
-                            fontSize: '0.62rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 600,
-                            background: hasBalance ? '#fef9c3' : '#dcfce7',
-                            color: hasBalance ? '#b45309' : '#16a34a',
-                          }}>
-                            {hasBalance ? '⚠ Balance Due' : '✓ Clear'}
-                          </span>
-                          {disputeCount > 0 && (
-                            <span style={{ fontSize: '0.62rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: '#fef2f2', color: '#dc2626' }}>
-                              🚨 {disputeCount} Dispute{disputeCount > 1 ? 's' : ''}
-                            </span>
-                          )}
-                          {pendingVerify > 0 && (
-                            <span style={{ fontSize: '0.62rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: '#fef9c3', color: '#b45309' }}>
-                              👀 {pendingVerify} Verify Pending
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: '0.68rem', color: '#6b7280', marginTop: '3px' }}>
-                          📞 {f.phone_number || f.mobile_number || '—'}
-                        </div>
-                        {(firstDate || lastDate) && (
-                          <div style={{ fontSize: '0.65rem', color: '#9ca3af', marginTop: '2px' }}>
-                            📅 {firstDate || '—'} → {lastDate || '—'}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Right: financial summary grid + collect button */}
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }} onClick={e => e.stopPropagation()}>
-                        {/* 3-number summary */}
-                        <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end' }}>
-                          {jobs.map((j: any) => {
-                            const s = j.summary;
-                            if (!s) return null;
-                            const advance = s.advance_paid || 0;
-                            const billed = s.total_billable_so_far || 0;
-                            const toCollect = s.balance_due || 0;
-                            const totalJob = j.total_job_amount || 0;
-                            return (
-                              <div key={j.job_id} style={{ display: 'flex', gap: '14px' }}>
-                                <div style={{ textAlign: 'right' }}>
-                                  <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Total Job</div>
-                                  <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#374151' }}>₹{totalJob.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
-                                </div>
-                                <div style={{ textAlign: 'right' }}>
-                                  <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Billed</div>
-                                  <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0f766e' }}>₹{billed.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
-                                </div>
-                                <div style={{ textAlign: 'right' }}>
-                                  <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Collected</div>
-                                  <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#16a34a' }}>₹{(s.total_paid || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
-                                </div>
-                                <div style={{ textAlign: 'right' }}>
-                                  <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>To Collect</div>
-                                  <div style={{ fontWeight: 800, fontSize: '0.92rem', color: toCollect > 0.01 ? '#dc2626' : '#16a34a' }}>
-                                    {toCollect > 0.01 ? `₹${toCollect.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '✓ Clear'}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        {/* Collect button(s) */}
-                        {jobs.map((j: any) => {
-                          const s = j.summary;
-                          if (!s || s.balance_due <= 0.01) return null;
-                          return (
-                            <button
-                              key={j.job_id}
-                              onClick={() => {
-                                setPayModal({ farmerId: f.farmer_id, jobId: j.job_id, amount: Math.round(s.balance_due), farmerName: f.farmer_name, existingPayments: j.payment_history || [] });
-                                setPayAmount(String(Math.round(s.balance_due)));
-                                setPayMode('CASH'); setPayNotes(''); setProofFile(null);
-                              }}
-                              style={{ padding: '5px 14px', borderRadius: '7px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
-                            >
-                              + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Row 2: per-job work status counts */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                      {jobs.map((j: any) => {
-                        const allAllocs = (j.activities || []).flatMap((a: any) => a.allocations || []);
-                        const counts: Record<string, number> = {};
-                        allAllocs.forEach((a: any) => {
-                          const ws = a.work_status || 'work_not_started';
-                          counts[ws] = (counts[ws] || 0) + 1;
-                        });
-                        return (
-                          <div key={j.job_id} style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                            <span style={{ fontSize: '0.6rem', color: '#9ca3af', fontFamily: 'monospace' }}>#{j.job_id}</span>
-                            {counts.work_not_started > 0 && <span style={{ fontSize: '0.6rem', background: '#f3f4f6', color: '#6b7280', padding: '1px 5px', borderRadius: '999px' }}>{counts.work_not_started} not started</span>}
-                            {counts.in_progress > 0 && <span style={{ fontSize: '0.6rem', background: '#dbeafe', color: '#1d4ed8', padding: '1px 5px', borderRadius: '999px' }}>{counts.in_progress} in progress</span>}
-                            {counts.completed > 0 && <span style={{ fontSize: '0.6rem', background: '#dcfce7', color: '#16a34a', padding: '1px 5px', borderRadius: '999px' }}>{counts.completed} completed</span>}
-                          </div>
-                        );
-                      })}
-                      <span style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: '0.65rem' }}>{isOpen ? '▲' : '▼'}</span>
+              {/* Right: AGGREGATED financial summary + collect button */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }} onClick={e => e.stopPropagation()}>
+                {/* Aggregated 4-number summary */}
+                <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end' }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Total Job</div>
+                    <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#374151' }}>
+                      {aggTotalJob > 0 ? `₹${aggTotalJob.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—'}
                     </div>
                   </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Billed</div>
+                    <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#0f766e' }}>
+                      {aggBilled > 0 ? `₹${aggBilled.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—'}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>Collected</div>
+                    <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#16a34a' }}>
+                      ₹{aggPaid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>To Collect</div>
+                    <div style={{ fontWeight: 800, fontSize: '0.92rem', color: aggDue > 0.01 ? '#dc2626' : '#16a34a' }}>
+                      {aggDue > 0.01 ? `₹${aggDue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '✓ Clear'}
+                    </div>
+                  </div>
+                </div>
 
-                  {/* ── EXPANDED ── */}
-                  {isOpen && jobs.map((j: any) => {
-                    const s = j.summary;
-                    const hasJobBalance = s && s.balance_due > 0.01;
+                {/* Collect button — only when due */}
+                {aggDue > 0.01 && jobs.map((j: any) => {
+                  const s = j.summary;
+                  if (!s || s.balance_due <= 0.01) return null;
+                  return (
+                    <button
+                      key={j.job_id}
+                      onClick={() => {
+                        setPayModal({ farmerId: f.farmer_id, jobId: j.job_id, amount: Math.round(s.balance_due), farmerName: f.farmer_name, existingPayments: j.payment_history || [] });
+                        setPayAmount(String(Math.round(s.balance_due)));
+                        setPayMode('CASH'); setPayNotes(''); setProofFile(null);
+                      }}
+                      style={{ padding: '5px 14px', borderRadius: '7px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                    >
+                      + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-                    return (
-                      <div key={j.job_id} style={{ borderTop: '1px solid #e5e7eb', background: '#fafafa', padding: '14px 16px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-                          <div>
-                            <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#374151' }}>{j.crop_name}</span>
-                            {j.variety && <span style={{ fontSize: '0.72rem', color: '#9ca3af', marginLeft: '6px' }}>({j.variety})</span>}
-                            {j.plot_name && <span style={{ fontSize: '0.72rem', color: '#6b7280', marginLeft: '6px' }}>{j.plot_name}</span>}
+            {/* Row 2: per-job work status counts */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              {jobs.map((j: any) => {
+                const allAllocs = (j.activities || []).flatMap((a: any) => a.allocations || []);
+                const counts: Record<string, number> = {};
+                allAllocs.forEach((a: any) => {
+                  const ws = a.work_status || 'work_not_started';
+                  counts[ws] = (counts[ws] || 0) + 1;
+                });
+                return (
+                  <div key={j.job_id} style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.6rem', color: '#9ca3af', fontFamily: 'monospace' }}>#{j.job_id}</span>
+                    {/* Plot name shown in header row too */}
+                    {j.plot_name && (
+                      <span style={{ fontSize: '0.6rem', color: '#374151', fontWeight: 700 }}>{j.plot_name}</span>
+                    )}
+                    {counts.work_not_started > 0 && (
+                      <span style={{ fontSize: '0.6rem', background: '#f3f4f6', color: '#6b7280', padding: '1px 5px', borderRadius: '999px' }}>
+                        {counts.work_not_started} not started
+                      </span>
+                    )}
+                    {counts.in_progress > 0 && (
+                      <span style={{ fontSize: '0.6rem', background: '#dbeafe', color: '#1d4ed8', padding: '1px 5px', borderRadius: '999px' }}>
+                        {counts.in_progress} in progress
+                      </span>
+                    )}
+                    {counts.completed > 0 && (
+                      <span style={{ fontSize: '0.6rem', background: '#dcfce7', color: '#16a34a', padding: '1px 5px', borderRadius: '999px' }}>
+                        {counts.completed} completed
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+              <span style={{ marginLeft: 'auto', color: '#9ca3af', fontSize: '0.65rem' }}>{isOpen ? '▲' : '▼'}</span>
+            </div>
+          </div>
+
+          {/* ── EXPANDED ── */}
+          {isOpen && jobs.map((j: any) => {
+            const s = j.summary;
+            const hasJobBalance = s && s.balance_due > 0.01;
+
+            return (
+              <div key={j.job_id} style={{ borderTop: '1px solid #e5e7eb', background: '#fafafa', padding: '14px 16px' }}>
+                {/* Job title row */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                  <div>
+                    <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#374151' }}>{j.crop_name}</span>
+                    {j.variety && <span style={{ fontSize: '0.72rem', color: '#9ca3af', marginLeft: '6px' }}>({j.variety})</span>}
+                    {/* ── BOLD PLOT NAME ── */}
+                    {j.plot_name && (
+                      <span style={{ fontSize: '0.78rem', color: '#111827', marginLeft: '8px', fontWeight: 700 }}>
+                        {j.plot_name}
+                      </span>
+                    )}
+                  </div>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: '#9ca3af' }}>#{j.job_id}</span>
+                </div>
+
+                {/* ── PAYMENT SECTION ── */}
+                {s && (
+                  <div style={{ background: '#fff', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '12px 14px', marginBottom: '14px' }}>
+                    <p style={{ margin: '0 0 10px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>💰 Payment Summary</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+
+                      {/* Calculation */}
+                      <div style={{ background: '#f9fafb', borderRadius: '8px', padding: '10px 12px', fontSize: '0.74rem' }}>
+                        {[
+                          { label: 'Total Billed So Far', val: `₹${s.total_billable_so_far.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e' },
+                          { label: '− Total Collected',   val: `−₹${s.total_paid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#16a34a' },
+                        ].map((row, ri) => (
+                          <div key={ri} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                            <span style={{ color: '#6b7280' }}>{row.label}</span>
+                            <span style={{ fontWeight: 700, color: row.color }}>{row.val}</span>
                           </div>
-                          <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: '#9ca3af' }}>#{j.job_id}</span>
+                        ))}
+                        <div style={{ borderTop: '1.5px solid #e5e7eb', paddingTop: '6px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+                          <span style={{ color: '#111827' }}>Balance Due</span>
+                          <span style={{ color: hasJobBalance ? '#dc2626' : '#16a34a', fontSize: '0.9rem' }}>
+                            {hasJobBalance ? `₹${s.balance_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '✓ Clear'}
+                          </span>
                         </div>
-
-                        {/* ── PAYMENT SECTION FIRST ── */}
-                        {s && (
-                          <div style={{ background: '#fff', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '12px 14px', marginBottom: '14px' }}>
-                            <p style={{ margin: '0 0 10px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>💰 Payment Summary</p>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-
-                              {/* Calculation */}
-                              <div style={{ background: '#f9fafb', borderRadius: '8px', padding: '10px 12px', fontSize: '0.74rem' }}>
-                                {[
-                                  { label: 'Total Billed So Far', val: `₹${s.total_billable_so_far.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e' },
-                                  { label: '− Total Collected',   val: `−₹${s.total_paid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#16a34a' },
-                                ].map((row, ri) => (
-                                  <div key={ri} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                                    <span style={{ color: '#6b7280' }}>{row.label}</span>
-                                    <span style={{ fontWeight: 700, color: row.color }}>{row.val}</span>
-                                  </div>
-                                ))}
-                                <div style={{ borderTop: '1.5px solid #e5e7eb', paddingTop: '6px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
-                                  <span style={{ color: '#111827' }}>Balance Due</span>
-                                  <span style={{ color: hasJobBalance ? '#dc2626' : '#16a34a', fontSize: '0.9rem' }}>
-                                    {hasJobBalance ? `₹${s.balance_due.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '✓ Clear'}
-                                  </span>
-                                </div>
-                                {s.all_activities_past && s.final_gap > 0 && (
-                                  <div style={{ marginTop: '6px', padding: '6px 8px', borderRadius: '6px', background: '#fef2f2', border: '1px solid #fecaca', fontSize: '0.68rem', color: '#dc2626', fontWeight: 700 }}>
-                                    ⚠ All done — ₹{s.final_gap.toLocaleString('en-IN', { maximumFractionDigits: 0 })} vs booking total
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Payment history */}
-                              <div style={{ background: '#f9fafb', borderRadius: '8px', padding: '10px 12px', fontSize: '0.74rem' }}>
-                                <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📅 History</p>
-                                {(j.payment_history || []).length === 0 ? (
-                                  <p style={{ color: '#9ca3af', fontSize: '0.72rem', margin: 0 }}>No payments recorded</p>
-                                ) : (
-                                  <>
-                                    {(j.payment_history || []).map((p: any, pi: number) => (
-                                      <div key={pi} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '4px', marginBottom: '4px', borderBottom: pi < j.payment_history.length - 1 ? '1px solid #f3f4f6' : 'none' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
-                                          <span style={{ fontSize: '0.6rem', padding: '1px 5px', borderRadius: '999px', background: p.type === 'advance' ? '#eff6ff' : '#f0fdf4', color: p.type === 'advance' ? '#1d4ed8' : '#16a34a', fontWeight: 600 }}>{p.mode}</span>
-                                          <span style={{ color: '#9ca3af', fontSize: '0.64rem' }}>{p.date}</span>
-                                          {p.proof_url && (
-                                            <a href={p.proof_url} target="_blank" rel="noreferrer"
-                                              style={{ fontSize: '0.58rem', color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: '3px', padding: '0px 5px', background: '#eff6ff', cursor: 'pointer' }}
-                                              title="View payment proof">
-                                              📎 View
-                                            </a>
-                                          )}
-                                        </div>
-                                        <span style={{ fontWeight: 700, color: '#16a34a' }}>₹{Number(p.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-                                      </div>
-                                    ))}
-                                    <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '5px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
-                                      <span>Total</span>
-                                      <span style={{ color: '#16a34a' }}>₹{s.total_paid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-
-                            {hasJobBalance && (
-                              <button
-                                onClick={() => {
-                                  setPayModal({ farmerId: f.farmer_id, jobId: j.job_id, amount: Math.round(s.balance_due), farmerName: f.farmer_name, existingPayments: j.payment_history || [] });
-                                  setPayAmount(String(Math.round(s.balance_due)));
-                                  setPayMode('CASH'); setPayNotes(''); setProofFile(null);
-                                }}
-                                style={{ width: '100%', padding: '10px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}
-                              >
-                                + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')} from {f.farmer_name}
-                              </button>
-                            )}
+                        {s.all_activities_past && s.final_gap > 0 && (
+                          <div style={{ marginTop: '6px', padding: '6px 8px', borderRadius: '6px', background: '#fef2f2', border: '1px solid #fecaca', fontSize: '0.68rem', color: '#dc2626', fontWeight: 700 }}>
+                            ⚠ All done — ₹{s.final_gap.toLocaleString('en-IN', { maximumFractionDigits: 0 })} vs booking total
                           </div>
-                        )}
-
-                        {/* ── WORK ALLOCATIONS BELOW PAYMENT ── */}
-                        <p style={{ margin: '0 0 8px', fontSize: '0.68rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                          📋 Work Allocations & Verification
-                        </p>
-                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 1fr 1fr 1fr auto', gap: '8px', padding: '4px 12px', fontSize: '0.6rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>
-                          <span>Activity / Status</span>
-                          <span style={{ textAlign: 'center' }}>Date</span>
-                          <span style={{ textAlign: 'center' }}>BI Assigned</span>
-                          <span style={{ textAlign: 'center' }}>Mukkadam</span>
-                          <span style={{ textAlign: 'center' }}>Farmer</span>
-                          <span />
-                        </div>
-
-                        {(j.activities || []).flatMap((act: any) =>
-                          (act.allocations || [{ ...act, allocation_id: act.activity_id }]).map((alloc: any) => (
-                            <AllocReportCard
-                              key={alloc.allocation_id}
-                              act={{ ...act, ...alloc }}
-                              farmerId={f.farmer_id}
-                            />
-                          ))
                         )}
                       </div>
-                    );
-                  })}
+
+                      {/* Payment history */}
+                      <div style={{ background: '#f9fafb', borderRadius: '8px', padding: '10px 12px', fontSize: '0.74rem' }}>
+                        <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📅 History</p>
+                        {(j.payment_history || []).length === 0 ? (
+                          <p style={{ color: '#9ca3af', fontSize: '0.72rem', margin: 0 }}>No payments recorded</p>
+                        ) : (
+                          <>
+                            {(j.payment_history || []).map((p: any, pi: number) => (
+                              <div key={pi} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '4px', marginBottom: '4px', borderBottom: pi < j.payment_history.length - 1 ? '1px solid #f3f4f6' : 'none' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                                  <span style={{ fontSize: '0.6rem', padding: '1px 5px', borderRadius: '999px', background: p.type === 'advance' ? '#eff6ff' : '#f0fdf4', color: p.type === 'advance' ? '#1d4ed8' : '#16a34a', fontWeight: 600 }}>{p.mode}</span>
+                                  <span style={{ color: '#9ca3af', fontSize: '0.64rem' }}>{p.date}</span>
+                                  {p.proof_url && (
+                                    <a href={p.proof_url} target="_blank" rel="noreferrer"
+                                      style={{ fontSize: '0.58rem', color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: '3px', padding: '0px 5px', background: '#eff6ff', cursor: 'pointer' }}
+                                      title="View payment proof">
+                                      📎 View
+                                    </a>
+                                  )}
+                                </div>
+                                <span style={{ fontWeight: 700, color: '#16a34a' }}>₹{Number(p.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                              </div>
+                            ))}
+                            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '5px', display: 'flex', justifyContent: 'space-between', fontWeight: 800 }}>
+                              <span>Total</span>
+                              <span style={{ color: '#16a34a' }}>₹{s.total_paid.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {hasJobBalance && (
+                      <button
+                        onClick={() => {
+                          setPayModal({ farmerId: f.farmer_id, jobId: j.job_id, amount: Math.round(s.balance_due), farmerName: f.farmer_name, existingPayments: j.payment_history || [] });
+                          setPayAmount(String(Math.round(s.balance_due)));
+                          setPayMode('CASH'); setPayNotes(''); setProofFile(null);
+                        }}
+                        style={{ width: '100%', padding: '10px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}
+                      >
+                        + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')} from {f.farmer_name}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* ── WORK ALLOCATIONS ── */}
+                <p style={{ margin: '0 0 8px', fontSize: '0.68rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  📋 Work Allocations & Verification
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr 1fr 1fr 1fr auto', gap: '8px', padding: '4px 12px', fontSize: '0.6rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase' }}>
+                  <span>Activity / Status</span>
+                  <span style={{ textAlign: 'center' }}>Date</span>
+                  <span style={{ textAlign: 'center' }}>BI Assigned</span>
+                  <span style={{ textAlign: 'center' }}>Mukkadam</span>
+                  <span style={{ textAlign: 'center' }}>Farmer</span>
+                  <span />
                 </div>
-              );
-            })}
-          </div>
-        )}
+
+                {(j.activities || []).flatMap((act: any) =>
+                  (act.allocations || [{ ...act, allocation_id: act.activity_id }]).map((alloc: any) => (
+                    <AllocReportCard
+                      key={alloc.allocation_id}
+                      act={{ ...act, ...alloc }}
+                      farmerId={f.farmer_id}
+                    />
+                  ))
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
+    })}
+  </div>
+)}
 
         {/* ════ MUKKADAMS TAB ════ */}
         {tab === 'mukkadams' && (
@@ -2309,7 +2321,7 @@ const [potentialByDate, setPotentialByDate] = useState<PotentialByDate>({});
   const [showProductivityWarning, setShowProductivityWarning] = useState(false);
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [pendingAllocation, setPendingAllocation] = useState<any>(null);
-const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential'| 'payments')[]>(['jobs']);
+const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential' | 'payments')[]>(['jobs', 'allocations']);
 
   // Load initial data
 useEffect(() => {
@@ -3021,8 +3033,9 @@ const handleRefreshAll = async () => {
 //   : 'jobs';
 
 const VIEW_OPTIONS: { value: 'jobs' | 'allocations' | 'both' | 'payments'; label: string }[] = [
-  { value: 'jobs',        label: 'AI' },
+  
   { value: 'both', label: 'Allocations ' },
+  { value: 'jobs',        label: 'AI' },
   // { value: 'both',        label: 'AI + Allocations' },
   { value: 'payments',    label: '💰 Payments' },
 ];
