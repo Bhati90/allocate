@@ -718,93 +718,6 @@ const handleEditAllocation = async () => {
 
 const [availableMukkadamIds, setAvailableMukkadamIds] = useState<Set<number>>(new Set());
 
-// Add this handler inside DayDetailModal component
-const handleQuickAllocate = async (job: Job, activity: any) => {
-  if (!activity) return;
-
-  const mukkadam = mukkadams.find(m =>
-    m.activity_rates?.some((r: any) =>
-      r.activity_id === activity.activity_id ||
-      r.activity_name === activity.activity_name
-    )
-  );
-
-  if (!mukkadam) {
-    toast.error('No mukkadam found with rate card for this activity');
-    return;
-  }
-
-  const rate = mukkadam.activity_rates?.find((r: any) =>
-    r.activity_id === activity.activity_id ||
-    r.activity_name === activity.activity_name
-  );
-
-  const productivity = Number(rate?.productivity_per_worker || 0);
-  const remainingArea = Number(activity.remaining_area || 0);
-
-  if (!productivity || !remainingArea) {
-    toast.error('Cannot calculate allocation. Check productivity and remaining area.');
-    return;
-  }
-
-  const usedWorkers = usedWorkersByMukkadam.get(mukkadam.mukkadam_id) || 0;
-  const availableWorkers = Math.max((mukkadam.crew_size || 0) - usedWorkers, 0);
-
-  if (availableWorkers === 0) {
-    toast.error(`No workers available today for ${mukkadam.mukkadam_name}`);
-    return;
-  }
-
-  
-
-  // ✅ Allocate whatever is possible today
-  const maxAreaToday = parseFloat((availableWorkers * productivity).toFixed(2));
-  const areaToAllocate = parseFloat(Math.min(maxAreaToday, remainingArea).toFixed(2));
-  const workersNeeded = Math.ceil(areaToAllocate / productivity);
-  const workers = Math.min(workersNeeded, availableWorkers);
-
-  const isPartial = areaToAllocate < remainingArea;
-
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        job_activity_id: activity.id,
-        mukkadam_id: mukkadam.mukkadam_id,
-        allocated_date: isoDate,
-        allocated_area: areaToAllocate,  // ✅ what's possible, not full area
-        allocated_workers: workers,
-        farmer_rate: activity.rate_per_acre,
-        mukkadam_rate: Number(rate?.rate_per_acre || 0),
-        cluster_id: clusterId,
-        skip_strict_check: false,
-      }),
-    });
-
-    const data = await res.json();
-
-    if (res.ok) {
-      if (isPartial) {
-        toast.success(
-          `Partially allocated ${areaToAllocate} ac of ${remainingArea} ac ` +
-          `to ${mukkadam.mukkadam_name}. ${(remainingArea - areaToAllocate).toFixed(2)} ac remaining for another date.`
-        );
-              window.location.reload();
-      } else {
-        toast.success(`Fully allocated ${areaToAllocate} ac to ${mukkadam.mukkadam_name}`);
-              window.location.reload();
-      }
-      // onAllocationDelete({ id: -1 } as any);
-    } else {
-      toast.error(data.error || 'Allocation failed');
-    }
-  } catch (e) {
-    toast.error('Allocation failed');
-    console.error(e);
-  }
-};
-
 useEffect(() => {
   const fetchAvailable = async () => {
     try {
@@ -833,6 +746,8 @@ useEffect(() => {
 //   const current = usedWorkersByMukkadam.get(a.mukkadam) || 0;
 //   usedWorkersByMukkadam.set(a.mukkadam, current + (a.allocated_workers || 0));
 // });
+
+
 
 // ✅ NEW — skip allocations where allows_second_job is true:
 const usedWorkersByMukkadam = new Map<number, number>();

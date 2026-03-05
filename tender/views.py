@@ -3747,6 +3747,87 @@ def search_farmers_for_cluster(request, cluster_id):
     
     return Response(result)
 
+from datetime import timedelta
+from datetime import timedelta
+
+def get_activity_gap_days(activity: ActivityCatalog, cluster: Cluster | None) -> int:
+    # 1) Cluster-specific override
+    if cluster is not None:
+        override = ClusterActivityScheduleRule.objects.filter(
+            cluster=cluster,
+            activity=activity,
+        ).first()
+        if override:
+            return override.gap_days
+
+    # 2) Global default
+    global_rule = ActivityScheduleRule.objects.filter(
+        activity=activity
+    ).first()
+    if global_rule:
+        return global_rule.gap_days
+
+    # 3) Fallback (do not shift)
+    return 0
+from datetime import timedelta
+
+def get_pruning_base_date(job: Job, plot: Plot | None):
+    """
+    For this job/plot, find pruning JobActivity and use its scheduled_date as base.
+    Adjust PRUNING_ACTIVITY_NAME to match your catalog.
+    """
+    PRUNING_ACTIVITY_NAME = "Pruning (छाटणी)"  # <- change if needed
+
+    pruning_act = ActivityCatalog.objects.filter(
+        name=PRUNING_ACTIVITY_NAME
+    ).first()
+    if not pruning_act:
+        return None
+
+    qs = JobActivity.objects.filter(
+        job=job,
+        plot=plot,
+        activity=pruning_act,
+        scheduled_date__isnull=False,
+    ).order_by("scheduled_date")
+
+    pruning_ja = qs.first()
+    return pruning_ja.scheduled_date if pruning_ja else None
+
+
+def adjust_job_activities_for_cluster(job: Job, cluster: Cluster):
+    """
+    Called when job is newly attached to cluster.
+    For each JobActivity:
+      - Base date = pruning.scheduled_date for that job+plot
+      - scheduled_date = pruning_date + gap_days (cluster/global)
+    """
+
+    # cache pruning base per plot
+    base_date_cache: dict[int | None, date | None] = {}
+
+    for ja in job.activities.all():
+        plot = ja.plot  # may be None
+        plot_key = plot.id if plot else None
+
+        if plot_key not in base_date_cache:
+            base_date_cache[plot_key] = get_pruning_base_date(job, plot)
+
+        pruning_date = base_date_cache[plot_key]
+        if not pruning_date:
+            # no pruning base for this job/plot
+            continue
+
+        gap_days = get_activity_gap_days(ja.activity, cluster)
+        if gap_days == 0:
+            continue  # no rule -> keep as is
+
+        new_date = pruning_date + timedelta(days=gap_days)
+        if ja.scheduled_date == new_date:
+            continue  # already correct
+
+        ja.scheduled_date = new_date
+        ja.save(update_fields=["scheduled_date"])
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -3767,10 +3848,14 @@ def add_farmer_plots_to_cluster(request, cluster_id):
             plot.clusters.add(cluster)
             added_plots.append(plot.name)
 
-            # ✅ Fix all jobs on this plot with no cluster
+            # ✅ Fix all jobs on this plot
             jobs_on_plot = Job.objects.filter(plot=plot)
             for job in jobs_on_plot:
                 job.clusters.add(cluster)
+
+                # 🔹 adjust all its activities for this cluster
+                adjust_job_activities_for_cluster(job, cluster)
+
             fixed_jobs += jobs_on_plot.count()
 
         except Plot.DoesNotExist:
@@ -3783,6 +3868,8 @@ def add_farmer_plots_to_cluster(request, cluster_id):
         'plots_added': added_plots,
         'jobs_fixed': fixed_jobs,
     })
+
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
