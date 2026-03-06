@@ -7,7 +7,7 @@ import { Tractor, User, AlertCircle } from 'lucide-react';
 import { useState } from 'react';
 // import { toast } from './ui/sonner';
 import { toast } from './ui/sonner';
-import { API_BASE_URL } from '@/types/config';
+import { API_BASE_URL, triggerRefresh } from '@/types/config';
 type PotentialStatus = 'PARTIAL' | 'NONE';
 import { createPortal } from "react-dom";
 
@@ -127,7 +127,7 @@ const handleSubmit = async () => {
     if (res.ok) {
       toast.success('Job moved');
       setOpen(false);
-            window.location.reload();
+            triggerRefresh();
 
       // onSuccess?.();
     } else {
@@ -290,7 +290,7 @@ const TeamDropdown: React.FC<{
                 r.availableWorkers > 0;
 
               const handleTeamClick = () => {
-                if (!canDo) return;
+                // if (!canDo) return;
                 const mukkadam = mukkadams.find(
                   mk => mk.mukkadam_id === r.mukkadamId
                 );
@@ -319,17 +319,17 @@ const TeamDropdown: React.FC<{
               };
 
               return (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={handleTeamClick}
-                  disabled={!canDo}
-                  className={`w-full flex items-center justify-between px-2 py-1 rounded text-xs text-left ${
-                    canDo
-                      ? 'hover:bg-teal-50 text-teal-800'
-                      : 'text-gray-400 cursor-not-allowed'
-                  }`}
-                >
+               <button
+  key={i}
+  type="button"
+  onClick={handleTeamClick}
+  className={`flex items-center gap-2 px-2 py-1 rounded-full text-xs border ${
+    canDo
+      ? 'border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100'
+      : 'border-gray-200 bg-gray-50 text-gray-400' // keep grey, but clickable
+  }`}
+>
+
                   <span>{r.mukkadamName}</span>
                   <span
                     className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -411,7 +411,7 @@ const handleMoveSubmit = async () => {
     }
     toast.success('Allocation moved successfully');
     setMoveModal(null);
-          window.location.reload();
+         triggerRefresh();
     setMoveForm({ date: '', area: '' });
     // onLeavesUpdated(); // refresh
   } catch {
@@ -467,7 +467,7 @@ const handleFarmerVerify = async (
         ? '✅ Verified! Allocation adjusted automatically.'
         : '⚠️ Dispute recorded.'
       );
-            window.location.reload();
+            triggerRefresh();
       // trigger parent refresh
       // if (onAllocationDelete) onAllocationDelete({ id: -1 } as any);
     } else {
@@ -567,7 +567,7 @@ const handleConfirmHalfDay = async () => {
       );
       setHalfDayDialog(null);
       setAllowsSecondJob(false);
-      window.location.reload();
+      triggerRefresh();
     } else {
       toast.error(data.error || 'Allocation failed');
     }
@@ -708,7 +708,7 @@ const handleEditAllocation = async () => {
     toast.success('Allocation updated successfully!');
     setShowEditAllocationModal(false);
     setEditingAllocation(null);
-          window.location.reload();
+          triggerRefresh();
     // onLeavesUpdated(); // Refresh allocations
   } catch (error) {
     toast.error('Failed to update allocation');
@@ -775,7 +775,7 @@ const handleSaveExtraCrew = async () => {
     if (res.ok) {
       toast.success(`Successfully added workers`);
       setShowExtraCrewModal(false);
-            window.location.reload();
+            triggerRefresh();
       // Trigger global refresh using the existing pattern
       if (onAllocationDelete) onAllocationDelete({ id: -1 } as any);
     } else {
@@ -1797,7 +1797,7 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
 
           
 const handleTeamClick = () => {
-  if (!canDo) return;
+
   const mukkadam = mukkadams.find(mk => mk.mukkadam_id === r.mukkadamId);
   if (!mukkadam) return;
   const rate = mukkadam.activity_rates?.find((rt: any) =>
@@ -1822,16 +1822,16 @@ setHalfDayDialog({
 
           return (
             <button
-              key={i}
-              type="button"
-              onClick={handleTeamClick}
-              disabled={!canDo}
-              className={`flex items-center gap-2 px-2 py-1 rounded-full text-xs border ${
-                canDo
-                  ? 'border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100'
-                  : 'border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed'
-              }`}
-            >
+  key={i}
+  type="button"
+  onClick={handleTeamClick}
+  className={`flex items-center gap-2 px-2 py-1 rounded-full text-xs border ${
+    canDo
+      ? 'border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100'
+      : 'border-gray-200 bg-gray-50 text-gray-400' // keep grey, but clickable
+  }`}
+>
+
               <span className="font-medium">{r.mukkadamName}</span>
               <span
                 className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${

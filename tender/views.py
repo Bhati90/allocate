@@ -2344,27 +2344,39 @@ from .models import Cluster
 from .serializers import ClusterSerializer
 from datetime import date, timedelta, datetime as dt
 
+from django.db.models import Q
+
 class ClusterViewSet(viewsets.ModelViewSet):
     queryset = Cluster.objects.all().order_by('name').prefetch_related(
-        'jobs__activities'  # prefetch for date_range calculation
+        'jobs__activities'
     )
     serializer_class = ClusterSerializer
     permission_classes = [permissions.AllowAny]
 
-    # optional: simple filter by state/district etc.
     def get_queryset(self):
         qs = Cluster.objects.all().order_by('name').prefetch_related(
             'jobs__activities__plot',
             'jobs__booking',
         )
+
         state_code = self.request.query_params.get('state_code')
         district_code = self.request.query_params.get('district_code')
+        q = self.request.query_params.get('q', '').strip()
+
         if state_code:
             qs = qs.filter(state_code=state_code)
         if district_code:
             qs = qs.filter(district_code=district_code)
+
+        if q:
+            qs = qs.filter(
+                Q(name__icontains=q) |
+                Q(farmers__farmer_name__icontains=q) |
+                Q(mukkadams__mukkadam_name__icontains=q)
+            ).distinct()
+
         return qs
-    
+
     def list(self, request, *args, **kwargs):
         from datetime import date
         from decimal import Decimal
@@ -2910,7 +2922,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def create_allocation(self, request):
         """
-        Create allocation with productivity validation.
+        Create allocation with productivity + remaining-area validation.
         """
 
         job_activity_id = request.data.get('job_activity_id')
@@ -2924,22 +2936,21 @@ class AllocationViewSet(viewsets.ModelViewSet):
         farmer_rate = Decimal(str(request.data.get('farmer_rate', '0')))
         mukkadam_rate = Decimal(str(request.data.get('mukkadam_rate', '0')))
         force = bool(request.data.get('force', False))
-        skip_strict_check = bool(request.data.get('skip_strict_check', False))  # 👈 ADD THIS
+        skip_strict_check = bool(request.data.get('skip_strict_check', False))
 
-        # Optional: basic cluster check
         if not cluster_id:
             return Response({'error': 'cluster_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 1) Validate
+        # 1) Business validation (productivity, availability etc.)
         can_allocate, message, warnings = check_can_allocate(
-    job_activity_id,
-    mukkadam_id,
-    allocated_date,
-    float(allocated_area),
-    allocated_workers,
-    skip_strict_check=skip_strict_check,
-    cluster_id=cluster_id,  # ← ADD
-)
+            job_activity_id,
+            mukkadam_id,
+            allocated_date,
+            float(allocated_area),
+            allocated_workers,
+            skip_strict_check=skip_strict_check,
+            cluster_id=cluster_id,
+        )
 
         if not can_allocate:
             productivity_warning = warnings.get('productivity_warning', {})
@@ -2949,22 +2960,42 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-
-        # 2) Load objects
-        try:
-            job_activity = JobActivity.objects.get(id=job_activity_id)
-            mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
-            cluster = Cluster.objects.get(id=cluster_id)  # 👈
-        except (JobActivity.DoesNotExist, Mukkadam.DoesNotExist, Cluster.DoesNotExist) as e:
-            return Response({'error': str(e)}, status=status.HTTP_404_NOT_FOUND)
-
-        # 3) Create allocation + update related models atomically
         try:
             with transaction.atomic():
-                # 1) Parse the new flag (add after existing Decimal/int parsing):
+                # 2) Load objects WITH row lock on JobActivity
+                try:
+                    job_activity = JobActivity.objects.select_for_update().get(id=job_activity_id)
+                    mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
+                    cluster = Cluster.objects.get(id=cluster_id)
+                except (JobActivity.DoesNotExist, Mukkadam.DoesNotExist, Cluster.DoesNotExist) as e:
+                    return Response({'error': str(e)}, status=status.HTTP_404_NOT_FOUND)
+
+                # 3) Remaining-area guard (backend as source of truth)
+                remaining = (job_activity.total_area - job_activity.allocated_area).quantize(
+                    Decimal('0.0001'),
+                    rounding=ROUND_HALF_UP,
+                )
+
+                if remaining <= Decimal('0'):
+                    return Response(
+                        {
+                            'error': 'This activity is already fully allocated.',
+                            'remaining_area': float(remaining),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                if allocated_area > remaining and not force:
+                    return Response(
+                        {
+                            'error': 'Allocated area exceeds remaining area.',
+                            'remaining_area': float(remaining),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
                 allows_second_job = bool(request.data.get('allows_second_job', False))
 
-                # 2) Pass to Allocation.objects.create() (add alongside existing fields):
                 allocation = Allocation.objects.create(
                     job_activity=job_activity,
                     mukkadam=mukkadam,
@@ -2975,111 +3006,31 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     mukkadam_rate=mukkadam_rate,
                     status='scheduled',
                     cluster=cluster,
-                    allows_second_job=allows_second_job,   # ← NEW
+                    allows_second_job=allows_second_job,
                     created_by=request.user if request.user.is_authenticated else None,
                 )
 
-
-                # job_activity.allocated_area += allocated_area
-                # job_activity.save()
-
-                # availability, _ = MukkadamAvailability.objects.get_or_create(
-                #     mukkadam=mukkadam,
-                #     date=allocated_date,
-                #     defaults={
-                #         'available_crew_size': mukkadam.crew_size,
-                #         'is_available': True,
-                #         'allocated_workers': 0,
-                #     },
-                # )
-                # availability.allocated_workers += allocated_workers
-                # availability.save()
-
                 serializer = self.get_serializer(allocation)
+                from django.db.models import Sum
+                total_allocated = Allocation.objects.filter(
+                    job_activity=job_activity,
+                    status__in=['scheduled', 'in_progress', 'completed']
+                ).aggregate(total=Sum('allocated_area'))['total'] or 0
 
-                # When job is allocated:
-                # When job is allocated:
-    #             notify_mukkadam(
-    # mobile_number=mukkadam.mobile_numbers,
-    # title="नवीन काम मिळाले",
-    # body=f"{job_activity.activity.name} - {allocation.allocated_date}",
-#     data={
-#         "type": "allocation_created",
-#         "allocation_id": str(allocation.id),
-
-#         # allocation core
-#         "allocated_date": str(allocation.allocated_date),
-#         "allocated_area": float(allocation.allocated_area),
-#         "allocated_workers": allocation.allocated_workers,
-#         "farmer_rate": float(allocation.farmer_rate),
-#         "mukkadam_rate": float(allocation.mukkadam_rate),
-#         "status": allocation.status,
-
-#         # job activity
-#         "job_activity": {
-#             "id": job_activity.id,
-#             "activity_name": job_activity.activity.name,
-#             "scheduled_date": str(job_activity.scheduled_date) if job_activity.scheduled_date else None,
-#             "total_area": float(job_activity.total_area),
-#             "allocated_area": float(job_activity.allocated_area),
-#         },
-
-#         # job
-#         "job": {
-#             "id": job_activity.job.id,
-#             "job_number": job_activity.job.job_number,
-#             "crop": job_activity.job.crop.name if job_activity.job.crop else None,
-#             "variety": job_activity.job.variety,
-#         },
-
-#         # plot
-#         "plot": {
-#             "id": job_activity.job.plot.id,
-#             "name": job_activity.job.plot.name,
-#             "area_acres": float(job_activity.job.plot.area_acres or 0),
-#         },
-
-#         # farmer
-#         "farmer": {
-#             "id": job_activity.job.farmer.id,
-#             "farmer_id": job_activity.job.farmer.farmer_id,
-#             "name": job_activity.job.farmer.farmer_name,
-#             "mobile": job_activity.job.farmer.phone_number,
-#         },
-
-#         # mukkadam
-#         "mukkadam": {
-#             "id": mukkadam.id,
-#             "mukkadam_id": mukkadam.mukkadam_id,
-#             "name": mukkadam.name,
-#             "mobile_numbers": mukkadam.mobile_numbers,
-#             "crew_size": mukkadam.crew_size,
-#         },
-
-#         # cluster
-#         "cluster": {
-#             "id": cluster.id,
-#             "name": cluster.name,
-#             "village": cluster.village,
-#             "taluka": cluster.taluka,
-#             "district": cluster.district,
-#         },
-#     },
-# )
+                job_activity.allocated_area = total_allocated
+                # remaining_area and allocation_status are auto-calculated in save()
+                job_activity.save()
 
                 notify_mukkadam(
                     mobile_number=mukkadam.mobile_numbers,
                     title="नवीन काम मिळाले",
                     body=f"{job_activity.activity.name} - {allocation.allocated_date}",
                     data={
-                        "type": "job_detail",                    # ✅ fixed type
-                        "allocation_id": str(allocation.id),     # ✅ id as string
-                        "date": str(allocation.allocated_date),  # ✅ e.g. "2026-03-01"
+                        "type": "job_detail",
+                        "allocation_id": str(allocation.id),
+                        "date": str(allocation.allocated_date),
                     },
                 )
-
-
-
 
                 response_data = {
                     'success': True,
@@ -3105,17 +3056,17 @@ class AllocationViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def validate_allocation(self, request):
         """
-        Validate allocation BEFORE creating it
-        Returns detailed warnings about productivity, capacity, etc.
-        
-        Frontend calls this FIRST to check if allocation is possible
+        Validate allocation BEFORE creating it.
+        Returns detailed warnings about productivity, capacity, remaining area, etc.
+        Frontend calls this FIRST to check if allocation is possible.
         """
+
         job_activity_id = request.data.get('job_activity_id')
         mukkadam_id = request.data.get('mukkadam_id')
         allocated_area = float(request.data.get('allocated_area', 0))
         allocated_workers = int(request.data.get('allocated_workers', 0))
-        skip_strict_check = bool(request.data.get('skip_strict_check', False))  # 👈 NEW
-        
+        skip_strict_check = bool(request.data.get('skip_strict_check', False))
+
         allocated_date_str = request.data.get('allocated_date')
 
         try:
@@ -3128,6 +3079,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
         cluster_id = request.data.get('cluster_id')
 
+        # First do the same business validation
         result = check_can_allocate(
             job_activity_id,
             mukkadam_id,
@@ -3135,10 +3087,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
             allocated_area,
             allocated_workers,
             skip_strict_check=skip_strict_check,
-            cluster_id=cluster_id,  # ← ADD
+            cluster_id=cluster_id,
         )
 
-        # Unpack the result
         if not result or len(result) != 3:
             return Response(
                 {
@@ -3151,32 +3102,75 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
         can_allocate, message, warnings = result
 
-        # If validation failed, return error
+        # Extra: Remaining-area validation for preview
+        try:
+            job_activity = JobActivity.objects.get(id=job_activity_id)
+
+            remaining = float(job_activity.total_area - job_activity.allocated_area)
+            if remaining <= 0:
+                return Response(
+                    {
+                        'can_allocate': False,
+                        'error': 'This activity is already fully allocated.',
+                        'warnings': {
+                            **warnings,
+                            'remaining_area': {'value': remaining, 'severity': 'error'},
+                        },
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if allocated_area > remaining:
+                return Response(
+                    {
+                        'can_allocate': False,
+                        'error': 'Allocated area exceeds remaining area.',
+                        'warnings': {
+                            **warnings,
+                            'remaining_area': {
+                                'value': remaining,
+                                'severity': 'error',
+                                'message': 'Requested area is more than remaining area.',
+                            },
+                        },
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except JobActivity.DoesNotExist:
+            return Response(
+                {
+                    'can_allocate': False,
+                    'error': 'JobActivity not found',
+                    'warnings': {},
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # If validation failed earlier
         if not can_allocate:
             return Response({
                 'can_allocate': False,
                 'error': message,
                 'warnings': warnings
             }, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Get rate information for preview
         try:
-            job_activity = JobActivity.objects.get(id=job_activity_id)
             mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
-            
+
             mukkadam_rate_obj = mukkadam.activity_rates.get(
                 activity=job_activity.activity,
                 is_active=True
             )
-            
+
             farmer_rate = float(job_activity.rate_per_acre)
             mukkadam_rate = float(mukkadam_rate_obj.rate_per_acre)
-            
-            # Calculate amounts
+
             farmer_amount = allocated_area * farmer_rate
             mukkadam_amount = allocated_area * mukkadam_rate
             profit = farmer_amount - mukkadam_amount
-            
+
             return Response({
                 'can_allocate': True,
                 'message': message,
@@ -3201,8 +3195,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     }
                 }
             })
-            
+
         except Exception as e:
+            # Even if preview fails, main validation passed
             return Response({
                 'can_allocate': True,
                 'message': message,

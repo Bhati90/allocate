@@ -61,6 +61,7 @@ interface CalendarPanelProps {
   onAllocationClick: (allocation: Allocation) => void;
   onLeavesUpdated: () => void;
   filters: CalendarFilters;
+  refreshKey?: number;
   setFilters: React.Dispatch<React.SetStateAction<CalendarFilters>>;
   viewModes: ('jobs' | 'allocations' | 'potential'| 'payments')[];
   jobsByDate?: Record<string, Job[]>;
@@ -77,7 +78,7 @@ const CalendarPanel: React.FC<CalendarPanelProps> = ({
   allocations,
   mukkadams,
   allJobs,
-filters,
+filters,refreshKey,
 setFilters,
   leaves,
   jobs,
@@ -174,7 +175,8 @@ setFilters,
 
     alert('Allocation moved successfully');
     onLeavesUpdated();
-          window.location.reload();
+
+
     
   } catch (e) {
     console.error(e);
@@ -192,7 +194,7 @@ const handleAllocationDelete = async (allocation: Allocation) => {
 
     if (res.ok) {
       onLeavesUpdated();
-            window.location.reload();
+
     } else {
       alert('Failed to delete allocation');
     }
@@ -256,7 +258,11 @@ const getDayHasCarryForward = (date: Date | null) => {
 
 // Real daily availability from API: /mukkadams/daily_capacity_all/
 const [availableMukkadamIds, setAvailableMukkadamIds] = useState<Set<number>>(new Set());
+// ✅ CORRECT - explicit type annotation separate from initial value
+const [availableByDate, setAvailableByDate] = useState<Record<string, Set<number>>>({});
 
+
+// 2. Fix fetch — merge into map, never overwrite
 const fetchAvailableMukkadamsForDate = async (date: Date) => {
   const key = formatDate(date);
   try {
@@ -265,28 +271,50 @@ const fetchAvailableMukkadamsForDate = async (date: Date) => {
     );
     const data = await res.json();
     const ids = new Set<number>(
-  (data as any[]).filter(d => d.available_crew_size > 0).map(d => d.mukkadam_id)
-);
-
-    setAvailableMukkadamIds(ids);
-
-    console.log('[CAPACITY-API]', key, 'daily_capacity_all:', data);
-    console.log('[CAPACITY-API] availableMukkadamIds:', Array.from(ids));
+      (data as any[])
+        .filter(d => d.available_crew_size > 0)
+        .map(d => d.mukkadam_id)
+    );
+    // ✅ Merge into map keyed by date — safe with parallel fetches
+    setAvailableByDate(prev => ({ ...prev, [key]: ids }));
   } catch (e) {
     console.error('Failed to fetch daily capacity_all', e);
   }
 };
 
+// 3. Fix reset effect — clear the map, not a Set
+// CalendarPanel.tsx
+// CalendarPanel.tsx — split into TWO separate effects
 
+// Effect 1: Month change — full wipe and re-fetch everything
 useEffect(() => {
-  // prefetch for current month
+  setDayTotals({});
+  setAvailableByDate({});
   days.forEach((d) => {
     if (d) {
+      fetchAvailableMukkadamsForDate(d);
       fetchDayTotal(d);
-      fetchAvailableMukkadamsForDate(d);  // ← NEW
     }
   });
-}, [currentMonth]);
+}, [currentMonth]); // ← ONLY currentMonth, no refreshKey
+
+// Effect 2: Refresh (after allocation) — DON'T wipe, just re-fetch
+// capacity data is stable (workers don't change), only allocations change
+// So we don't need to re-fetch availableByDate at all on refresh
+useEffect(() => {
+  if (!refreshKey) return; // skip on initial mount (refreshKey starts at 0)
+  // Only re-fetch day totals, NOT availableByDate
+  // availableByDate is stable — it's based on leaves/crew which rarely change
+  days.forEach((d) => {
+    if (d) fetchDayTotal(d);
+  });
+}, [refreshKey]);
+// 4. Fix clusterId reset
+useEffect(() => {
+  setDayTotals({});
+  setAvailableByDate({});
+}, [clusterId]);
+//              ↑ ADD THESE — triggers re-fetch after create/delete
 const usedWorkersByMukkadam = new Map<number, number>();
 allocations.forEach(a => {
   if ((a as any).allows_second_job === true) return;  // ← half-day, still free
@@ -330,17 +358,8 @@ mukkadams.forEach(m => {
 
 const maxWorkRows = Array.from(maxWorkMap.values());
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DROP-IN REPLACEMENT for calculateDayCapacity inside CalendarPanel.tsx
-//
-// KEY FIX: When there are 0 allocations but scheduled job-activities exist,
-// run the "1 mukkadam = 1 activity" feasibility check against the JOB data
-// (not just allocations). This catches the case where 2 activities are
-// AI-scheduled for the same day but only 1 mukkadam is suggested.
-// ─────────────────────────────────────────────────────────────────────────────
 const calculateDayCapacity = (date: Date | null) => {
   if (!date) {
-    console.log('[CAPACITY] No date → empty');
     return {
       status: 'empty',
       used: 0,
@@ -352,6 +371,10 @@ const calculateDayCapacity = (date: Date | null) => {
   }
 
   const dateStr = formatDate(date);
+
+  // ✅ Per-date available mukkadams — no shared global Set
+  const availableMukkadamIds = availableByDate[dateStr] ?? new Set<number>();
+
   const dayAllocations = getDayAllocations(date);
   const dayLeaves = getDayLeaves(date);
 
@@ -363,7 +386,6 @@ const calculateDayCapacity = (date: Date | null) => {
   // 1. General holiday
   const generalHoliday = dayLeaves.find((l) => l.leave_type === 'general');
   if (generalHoliday) {
-    console.log('[CAPACITY] General holiday found:', generalHoliday);
     return {
       status: 'holiday',
       used: 0,
@@ -385,43 +407,71 @@ const calculateDayCapacity = (date: Date | null) => {
     });
 
   const mukkadamsOnLeaveIds = Array.from(leaveByMukkadam.keys());
-  console.log('[CAPACITY] LeaveByMukkadam:', Object.fromEntries(leaveByMukkadam));
 
-  // 3. AVAILABLE WORKERS per mukkadam – from daily_capacity_all API
-  // availableMukkadamIds is a Set<number> built from daily_capacity_all
+  // 3. Available workers per mukkadam for THIS date
   const availableClusterMukkadams = mukkadams.filter((m: any) =>
     availableMukkadamIds.has(m.mukkadam_id)
   );
 
   const availableWorkersByMukkadam = new Map<number, number>();
   availableClusterMukkadams.forEach((m: any) => {
-  const apiAvail = (m as any).available_crew_size;
-  let avail: number;
+    const apiAvail = (m as any).available_crew_size;
+    let avail: number;
 
-  if (typeof apiAvail === 'number') {
-    avail = apiAvail;
-  } else {
-    const leaveCount = leaveByMukkadam.get(m.mukkadam_id) || 0;
-    avail = Math.max((m.crew_size || 0) - leaveCount, 0);
-  }
+    if (typeof apiAvail === 'number') {
+      avail = apiAvail;
+    } else {
+      const leaveCount = leaveByMukkadam.get(m.mukkadam_id) || 0;
+      avail = Math.max((m.crew_size || 0) - leaveCount, 0);
+    }
 
-  // 🔴 skip mukkadams with 0 available workers
-  if (avail <= 0) return;
+    if (avail <= 0) return;
+    availableWorkersByMukkadam.set(m.mukkadam_id, avail);
+  });
 
-  availableWorkersByMukkadam.set(m.mukkadam_id, avail);
-});
+  // 4. ✅ Build maxWorkRows scoped to THIS date's available mukkadams
+  const usedWorkersByMukkadam = new Map<number, number>();
+  allocations.forEach(a => {
+    if ((a as any).allows_second_job === true) return;
+    const current = usedWorkersByMukkadam.get(a.mukkadam) || 0;
+    usedWorkersByMukkadam.set(a.mukkadam, current + (a.allocated_workers || 0));
+  });
 
+  const maxWorkMap = new Map<string, MaxWorkRow>();
+  mukkadams.forEach(m => {
+    if (!availableMukkadamIds.has(m.mukkadam_id)) return;
 
-  console.log(
-    '[CAPACITY] availableClusterMukkadams (from API IDs):',
-    availableClusterMukkadams
-  );
-  console.log(
-    '[CAPACITY] availableWorkersByMukkadam:',
-    Object.fromEntries(availableWorkersByMukkadam)
-  );
+    const baseCrew = (m as any).available_crew_size ?? m.crew_size ?? 0;
+    const used = usedWorkersByMukkadam.get(m.mukkadam_id) || 0;
+    const remainingWorkers = Math.max(baseCrew - used, 0);
 
-  // 4. NEEDED WORKERS per mukkadam based on Jobs tab (AI tasks, non‑zero remaining area)
+    m.activity_rates.forEach((rate: any) => {
+      const productivity = Number(rate.productivity_per_worker || 0);
+      if (!productivity) return;
+
+      const maxArea = remainingWorkers * productivity;
+      if (maxArea <= 0) return;
+
+      const key = `${m.mukkadam_id}-${rate.activity_id}`;
+      if (!maxWorkMap.has(key)) {
+        maxWorkMap.set(key, {
+          mukkadamId: m.mukkadam_id,
+          mukkadamName: m.mukkadam_name,
+          activityId: rate.activity_id,
+          activityName: rate.activity_name,
+          productivity,
+          availableWorkers: remainingWorkers,
+          maxArea,
+        });
+      }
+    });
+  });
+
+  const maxWorkRows = Array.from(maxWorkMap.values());
+
+  console.log('[CAPACITY] availableWorkersByMukkadam:', Object.fromEntries(availableWorkersByMukkadam));
+
+  // 5. Needed workers per mukkadam from scheduled jobs
   const jobsSource = allJobs || jobs;
   const neededWorkersByMukkadam = new Map<number, number>();
   const perTaskDebug: any[] = [];
@@ -431,33 +481,21 @@ const calculateDayCapacity = (date: Date | null) => {
       const isThisDay = act.scheduled_date?.slice(0, 10) === dateStr;
       if (!isThisDay) return;
 
-      // Only AI side (same as Jobs tab when not in allocations mode)
       if ((act as any).is_manually_moved) return;
 
       const remainingArea = Number(
-        act.remaining_area ??
-          act.total_area ??
-          (act as any).total_area ??
-          0
+        act.remaining_area ?? act.total_area ?? (act as any).total_area ?? 0
       );
-      if (remainingArea <= 0) return; // ignore 0 ac
+      if (remainingArea <= 0) return;
 
-      // Build workerRows like in DayDetailModal: all mukkadams that can do this activity
-      const workerRows =
-        (maxWorkRows || []).filter(
-          (r: any) => r.activityName === act.activity_name
-        ) || [];
+      const workerRows = maxWorkRows.filter(
+        (r: any) => r.activityName === act.activity_name
+      );
 
       workerRows.forEach((r: any) => {
         const mukkadamId = r.mukkadamId;
-        const availableWorkers =
-          availableWorkersByMukkadam.get(mukkadamId) || 0;
         const productivity = Number(r.productivity || 0);
-
-        const needed =
-          productivity > 0
-            ? Math.ceil(remainingArea / productivity)
-            : 0;
+        const needed = productivity > 0 ? Math.ceil(remainingArea / productivity) : 0;
 
         perTaskDebug.push({
           job_id: job.job_id,
@@ -467,7 +505,7 @@ const calculateDayCapacity = (date: Date | null) => {
           remainingArea,
           productivity,
           needed,
-          availableWorkers,
+          availableWorkers: availableWorkersByMukkadam.get(mukkadamId) || 0,
         });
 
         const prev = neededWorkersByMukkadam.get(mukkadamId) || 0;
@@ -477,50 +515,28 @@ const calculateDayCapacity = (date: Date | null) => {
   });
 
   console.log('[CAPACITY] perTaskDebug:', perTaskDebug);
-  console.log(
-    '[CAPACITY] neededWorkersByMukkadam:',
-    Object.fromEntries(neededWorkersByMukkadam)
-  );
+  console.log('[CAPACITY] neededWorkersByMukkadam:', Object.fromEntries(neededWorkersByMukkadam));
 
-  // 5. Check overload: any mukkadam has needed > available
+  // 6. Check overload
   const conflicts: any[] = [];
-
   neededWorkersByMukkadam.forEach((needed, mukkadamId) => {
     const available = availableWorkersByMukkadam.get(mukkadamId) || 0;
     if (needed > available) {
       const m = mukkadams.find((mk) => mk.mukkadam_id === mukkadamId);
-      console.log(
-        '[CAPACITY] OVERLOAD for mukkadam',
-        mukkadamId,
-        'needed',
-        needed,
-        'available',
-        available
-      );
       conflicts.push({
         type: 'worker_overload',
         mukkadamId,
         mukkadamName: m?.mukkadam_name || String(mukkadamId),
         neededWorkers: needed,
         availableWorkers: available,
-        message: `${needed} workers needed for ${
-          m?.mukkadam_name || 'team'
-        } but only ${available} available`,
+        message: `${needed} workers needed for ${m?.mukkadam_name || 'team'} but only ${available} available`,
       });
     }
   });
 
-  if (conflicts.length === 0) {
-    console.log(
-      '[CAPACITY] NO OVERLOAD: all mukkadams have needed ≤ available'
-    );
-  }
-
-  // 6. Worker‑hour utilisation (existing logic, kept as‑is)
+  // 7. Worker-hour utilisation
   let totalUsedPercentage = 0;
-  const referencedMukkadamIds: number[] = [
-    ...new Set(dayAllocations.map((a) => a.mukkadam)),
-  ];
+  const referencedMukkadamIds = [...new Set(dayAllocations.map((a) => a.mukkadam))];
 
   referencedMukkadamIds.forEach((id) => {
     const mukkadam = mukkadams.find((m) => m.mukkadam_id === id);
@@ -536,62 +552,45 @@ const calculateDayCapacity = (date: Date | null) => {
         );
         const efficiency = activityRate?.productivity_per_worker || 0.15;
         const maxCapacity = effectiveCrew * efficiency;
-        const usagePercent =
-          maxCapacity > 0 ? (alloc.allocated_area / maxCapacity) * 100 : 0;
+        const usagePercent = maxCapacity > 0 ? (alloc.allocated_area / maxCapacity) * 100 : 0;
         totalUsedPercentage += usagePercent;
       });
   });
 
   const totalCapacity = dayTotals[dateStr] ?? 0;
-  const usedWorkers = dayAllocations.reduce(
-    (sum, a) => sum + a.allocated_workers,
-    0
-  );
+  const usedWorkers = dayAllocations.reduce((sum, a) => sum + a.allocated_workers, 0);
 
-  // 7. Final status mapping
+  // 8. Final status
   let status: 'good' | 'warning' | 'caution' | 'error' | 'empty' = 'good';
 
   if (conflicts.length > 0) {
-    status = 'error'; // RED
+    status = 'error';
   } else if (totalUsedPercentage >= 90) {
     status = 'warning';
   } else if (totalUsedPercentage >= 70) {
     status = 'caution';
   }
 
-  if (
-    dayAllocations.length === 0 &&
-    totalCapacity === 0 &&
-    conflicts.length === 0
-  ) {
+  if (dayAllocations.length === 0 && totalCapacity === 0 && conflicts.length === 0) {
     status = 'empty';
   }
 
-  console.log('[CAPACITY] FINAL → status:', status);
-  console.log('[CAPACITY] conflicts:', conflicts);
-  console.log(
-    '[CAPACITY] usedWorkers:',
-    usedWorkers,
-    'totalCapacity:',
-    totalCapacity
-  );
+  console.log('[CAPACITY] FINAL → status:', status, '| conflicts:', conflicts.length, '| used:', usedWorkers, '/', totalCapacity);
   console.log('──────────────────────────────');
 
   return {
     status,
     used: usedWorkers,
     total: totalCapacity,
-    percentage:
-      totalCapacity > 0 ? (usedWorkers / totalCapacity) * 100 : 0,
+    percentage: totalCapacity > 0 ? (usedWorkers / totalCapacity) * 100 : 0,
     conflicts,
     mukkadamsOnLeave: mukkadamsOnLeaveIds.length,
   };
 };
 
-
 const fetchDayTotal = async (date: Date) => {
   const key = formatDate(date);
-  if (dayTotals[key] != null) return;
+
 
   try {
     const res = await fetch(
@@ -611,10 +610,6 @@ const formatDate = (date: Date): string => {
   return `${y}-${m}-${d}`;
 };
 
-useEffect(() => {
-  // prefetch for current month
-  days.forEach(d => { if (d) fetchDayTotal(d); });
-}, [currentMonth]);
 
   const handlePrevMonth = () => {
     const newDate = new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1);
@@ -651,13 +646,10 @@ const handleDateClick = (date: Date | null) => {
 
   const days = getDaysInMonth();
 
-
 useEffect(() => {
-  // prefetch for current month
-  days.forEach((d) => {
-    if (d) fetchDayTotal(d);
-  });
-}, [currentMonth]);
+  setDayTotals({});
+  setAvailableMukkadamIds(new Set());
+}, [clusterId]);
 
   return (
     <div className="calendar-panel">
