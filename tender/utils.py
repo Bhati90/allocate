@@ -288,7 +288,7 @@ def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers,
 
         available_crew = eff_crew - on_leave
         combined_needed = half_day_needed_total + this_needed
-        available_crew = available_crew * 1.20
+        available_crew = available_crew * 2.20
 
         if combined_needed > available_crew:
             return (
