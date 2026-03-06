@@ -1487,27 +1487,10 @@ class ClusterMukkadamAssignment(models.Model):
         db_table = 'cluster_mukkadam_assignments'
         unique_together = ['mukkadam', 'cluster']
 
-    def get_advance_amount(self):
-        crew = self.mukkadam.crew_size
-        if crew <= 25:
-            return Decimal('20000')
-        elif crew <= 40:
-            return Decimal('30000')
-        return Decimal('30000')
 
-    def get_weekly_payment_amount(self):
-        crew = self.mukkadam.crew_size
-        if crew <= 25:
-            return Decimal('10000')
-        elif crew <= 40:
-            return Decimal('15000')
-        return Decimal('15000')
 
     def save(self, *args, **kwargs):
-        if not self.advance_is_manual:
-            self.advance_amount = self.get_advance_amount()
-
-        if not self.joined_date and self.joined_at:
+       if not self.joined_date and self.joined_at:
             self.joined_date = self.joined_at.date()
 
         super().save(*args, **kwargs)
