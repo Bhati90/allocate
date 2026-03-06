@@ -1,8 +1,8 @@
 // components/DayDetailModal.tsx
 import React, { useEffect } from 'react';
-import { X,Plus,Users } from 'lucide-react';
+import { X,Plus,Users,AlertTriangle } from 'lucide-react';
 import { Allocation, Job, Mukkadam } from '../types/types';
-import './Day.css';
+// import './Day.css';
 import { Tractor, User, AlertCircle } from 'lucide-react';
 import { useState } from 'react';
 // import { toast } from './ui/sonner';
@@ -81,6 +81,7 @@ onAllocationDelete: (allocation: Allocation) => void;
 // ── helper types ──────────────────────────────────────────────────────────────
 interface AllocationWithReport extends Allocation {
   report_submitted?: boolean;
+  allows_second_job?:boolean;
   actual_area_done?: number | null;
   actual_crew_size?: number | null;
   actual_start_time?: string | null;
@@ -93,6 +94,27 @@ interface AllocationWithReport extends Allocation {
   is_carry_forward?: boolean;
   notes?: string;
 }
+// simple example implementation
+type CapBarProps = {
+  used: number;
+  total: number;
+  size?: 'sm' | 'md';
+  showLabel?: boolean;
+};
+
+const CapBar: React.FC<CapBarProps> = ({ used, total, size = 'md', showLabel = true }) => {
+  const pct = total > 0 ? Math.min((used / total) * 100, 120) : 0;
+  const heightClass = size === 'sm' ? 'h-1.5' : 'h-2.5';
+
+  return (
+    <div className={`w-full ${heightClass} rounded-full bg-stone-100 overflow-hidden`}>
+      <div
+        className={`${heightClass} rounded-full bg-emerald-500 transition-all`}
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+};
 
 
 
@@ -512,6 +534,17 @@ const filteredAllocations = allocations.filter(alloc => {
 });
 
 
+// map of mukkadamId -> has any half-day allocation on this date
+const hasHalfDayByMukkadam = new Map<number, boolean>();
+
+allocations.forEach((a: any) => {
+  if (a.allocated_date?.slice(0, 10) !== isoDate) return;
+  if (a.allows_second_job === true) {
+    hasHalfDayByMukkadam.set(a.mukkadam, true);
+  }
+});
+
+
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const [halfDayDialog, setHalfDayDialog] = useState<{
@@ -523,7 +556,8 @@ const [halfDayDialog, setHalfDayDialog] = useState<{
   availableWorkers: number;
   neededWorkers: number;
   remainingArea: number;
-  isSecondJob: boolean;   // ← ADD THIS
+  isSecondJob: boolean; 
+  targetDate: string;  // ← ADD THIS
 } | null>(null);
 
 
@@ -837,69 +871,253 @@ const totalMaxArea = visibleMaxWorkRows.reduce((sum, r) => sum + r.maxArea, 0);
 const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
 const isBothMode = modes.includes('jobs') && modes.includes('allocations');
 
+
+{/* Summary bar like DayModal: acres + slots */}
+const dayPlannedAc = jobsOnThisDay.reduce((sum, job) => {
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content day-detail-modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
+    sum +
+    (job.activities || []).reduce((s, act) => {
+      if (act.scheduled_date?.slice(0, 10) !== isoDate) return s;
+      return s + Number(act.total_area || 0);
+    }, 0)
+  );
+}, 0);
+
+const dayAllocatedAc = allocations.reduce(
+  (s, a) => s + Number((a as any).allocated_area || 0),
+  0,
+);
+
+// slots: used = same logic as calendar (allows_second_job 2/1 with cap 2 per (mukkadam,job))
+// total = available teams * 2 using availableMukkadamIds you already fetch in DayDetailModal
+const slotsByKey = new Map<string, any[]>();
+allocations.forEach((a: any) => {
+  const key = `${a.mukkadam}-${a.job_id}`;
+  const arr = slotsByKey.get(key) || [];
+  arr.push(a);
+  slotsByKey.set(key, arr);
+});
+
+let usedSlotsSummary = 0;
+slotsByKey.forEach((list) => {
+  let slotsForJob = 0;
+  list.forEach((a) => {
+    const add = a.allows_second_job === true ? 1 : 2;
+    slotsForJob += add;
+  });
+  if (slotsForJob > 2) slotsForJob = 2;
+  usedSlotsSummary += slotsForJob;
+});
+
+const totalSlotsSummary = availableMukkadamIds.size * 2;
+// acres still to do today
+// needed: only jobs not yet fully allocated on this day
+const neededAcToday = jobsOnThisDay.reduce((sum, job) => {
+  return (
+    sum +
+    (job.activities || []).reduce((s, act: any) => {
+      if (act.scheduled_date?.slice(0, 10) !== isoDate) return s;
+
+      const total = Number(act.total_area || 0);
+      const allocatedHere = allocations
+        .filter(
+          (a) =>
+            a.job_id === job.job_id && a.job_activity === act.id,
+        )
+        .reduce(
+          (x, a) => x + Number((a as any).allocated_area || 0),
+          0,
+        );
+
+      const remainingForDay = Math.max(total - allocatedHere, 0);
+      return s + remainingForDay;
+    }, 0)
+  );
+}, 0);
+
+// can-do: per mukkadam, remaining workers * best productivity,
+// with 40% reduction if any half-day allocation
+let canDoAcToday = 0;
+
+mukkadams.forEach((m: any) => {
+  if (!availableMukkadamIds.has(m.mukkadam_id)) return;
+
+  const baseCrew =
+    (m as any).available_crew_size ?? m.crew_size ?? 0;
+  const used = usedWorkersByMukkadam.get(m.mukkadam_id) || 0;
+  const remainingWorkers = Math.max(baseCrew - used, 0);
+  if (remainingWorkers <= 0) return;
+
+  // best productivity across activities
+  const bestProd = (m.activity_rates || []).reduce(
+    (best: number, rate: any) => {
+      const p = Number(rate.productivity_per_worker || 0);
+      return p > best ? p : best;
+    },
+    0,
+  );
+  if (bestProd <= 0) return;
+
+  // check if mukkadam has any half‑day allocation today
+  const hasHalfDay = allocations.some(
+    (a: any) =>
+      a.mukkadam === m.mukkadam_id &&
+      a.allocated_date?.slice(0, 10) === isoDate &&
+      a.allows_second_job === true,
+  );
+
+  let maxAc = remainingWorkers * bestProd;
+
+  // reduce capacity by 40% if doing any half-day job
+  if (hasHalfDay) {
+    maxAc = maxAc * 0.6; // 60% of full
+  }
+
+  canDoAcToday += maxAc;
+});
+
+
+
+return (
+  <div
+    className="fixed inset-0 z-[99999] flex items-start justify-center pt-10"
+    onClick={onClose}
+  >
+    <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
+
+    <div
+      className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[85vh] flex flex-col overflow-hidden"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Header */}
+      <div className="px-6 pt-5 pb-3 border-b border-stone-100">
+        <div className="flex items-center justify-between">
           <div>
-            <h3 className="modal-title">{dateStr}</h3>
-            <p className="modal-subtitle">Capacity: {capacitySummary.used}/{capacitySummary.total} workers</p>
+            <h3 className="text-lg font-bold text-stone-800">{dateStr}</h3>
+            <div className="flex items-center gap-3 mt-1">
+              <span className="text-xs font-medium text-stone-500">
+                Capacity:{' '}
+                <span className="tabular-nums">
+                  {capacitySummary.used}/{capacitySummary.total} workers
+                </span>
+              </span>
+              {capacitySummary.conflicts?.length > 0 && (
+                <>
+                  <span className="text-stone-300 text-xs">·</span>
+                  <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600">
+                    <AlertTriangle size={12} />
+                    {capacitySummary.conflicts.length} conflicts
+                  </span>
+                </>
+              )}
+            </div>
           </div>
-          <button onClick={onClose} className="modal-close"><X size={20} /></button>
+
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-stone-100 text-stone-400"
+          >
+            <X size={18} />
+          </button>
         </div>
 
-<div className="modal-tabs">
-  <button
-    className={`modal-tab ${activeTab === 'allocations' ? 'active' : ''}`}
-    onClick={() => setActiveTab('allocations')}
-  >
-    Allocations ({filteredAllocations.length})
-  </button>
+<div className="mt-2 px-4 py-2 rounded-lg bg-stone-50 border border-stone-100">
+  <div className="flex items-center justify-between">
+    <span className="text-[11px] font-medium text-stone-500">
+      Active workload
+    </span>
+    <span
+      className={`text-[11px] font-bold tabular-nums ${
+        neededAcToday > canDoAcToday ? 'text-red-600' : 'text-stone-700'
+      }`}
+    >
+      {neededAcToday.toFixed(2)} / {canDoAcToday.toFixed(2)} ac
+    </span>
+  </div>
 
-  <button
-    className={`modal-tab ${activeTab === 'jobs' ? 'active' : ''}`}
-    onClick={() => setActiveTab('jobs')}
-  >
-    Jobs ({jobsOnThisDay.reduce((sum, job) => 
-    sum + (job.activities?.filter(act => 
-      act.scheduled_date?.slice(0, 10) === isoDate
-    ).length || 0), 0
-  )})
-  </button>
+  {/* thinner bar, tight margin */}
+  <div className="mt-1">
+    <CapBar
+      used={neededAcToday}
+      total={canDoAcToday || 1}
+      size="sm"
+      showLabel={false}
+    />
+  </div>
 
-  {/* <button
-    className={`modal-tab ${activeTab === 'conflicts' ? 'active' : ''}`}
-    onClick={() => setActiveTab('conflicts')}
-  >
-    Conflicts ({
-      capacitySummary.conflicts.length +
-      overloads.filter((o: any) => o.overloaded).length
-    })
-  </button> */}
-
-  {/* <button
-    className={`modal-tab ${activeTab === 'potential' ? 'active' : ''}`}
-    onClick={() => setActiveTab('potential')}
-  >
-    Potential ({potentialJobs ? potentialJobs.length : 0})
-  </button> */}
-  <button
-    className={`modal-tab ${activeTab === 'maxwork' ? 'active' : ''}`}
-    onClick={() => setActiveTab('maxwork')}
-  >
-    Max work
-  </button>
-
-<button
-  className={`modal-tab ${activeTab === 'leaves' ? 'active' : ''}`}
-  onClick={() => setActiveTab('leaves')}
->
-  Attendance ({leaves.length})
-</button>
+  <div className="mt-1 flex items-center justify-between">
+    <span className="text-[10px] text-stone-400">
+      Slots: {usedSlotsSummary}/{totalSlotsSummary}
+    </span>
+    {neededAcToday > canDoAcToday && (
+      <span className="text-[10px] text-red-500 font-medium flex items-center gap-1">
+        <AlertTriangle size={9} /> Over by{' '}
+        {(neededAcToday - canDoAcToday).toFixed(2)} ac
+      </span>
+    )}
+  </div>
 </div>
 
-<div className="modal-body-scroll">
 
+        {/* Tabs */}
+        <div className="mt-3 flex gap-0 -mb-3">
+          <button
+            className={`px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'allocations'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-stone-400 hover:text-stone-600'
+            }`}
+            onClick={() => setActiveTab('allocations')}
+          >
+            Allocations ({filteredAllocations.length})
+          </button>
+
+          <button
+            className={`px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'jobs'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-stone-400 hover:text-stone-600'
+            }`}
+            onClick={() => setActiveTab('jobs')}
+          >
+            Jobs (
+            {jobsOnThisDay.reduce(
+              (sum, job) =>
+                sum +
+                (job.activities?.filter(
+                  (act) => act.scheduled_date?.slice(0, 10) === isoDate,
+                ).length || 0),
+              0,
+            )}
+            )
+          </button>
+
+          <button
+            className={`px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'maxwork'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-stone-400 hover:text-stone-600'
+            }`}
+            onClick={() => setActiveTab('maxwork')}
+          >
+            Max work
+          </button>
+
+          <button
+            className={`px-4 py-2 text-xs sm:text-sm font-medium border-b-2 transition-colors ${
+              activeTab === 'leaves'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-stone-400 hover:text-stone-600'
+            }`}
+            onClick={() => setActiveTab('leaves')}
+          >
+            Attendance ({leaves.length})
+          </button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-auto px-6 py-4 modal-body-scroll">
 
 {/* ══════════════════════════════════════════════════════
     TAB 1 — ALLOCATIONS  (with day-end reports + verify)
@@ -999,6 +1217,11 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
                 )
               : null;
 
+
+          const mukkadamHasHalfDay =
+  hasHalfDayByMukkadam.get(a.mukkadam) === true;
+
+
           return (
             <div
               key={a.id}
@@ -1016,22 +1239,32 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
               {/* ── Card header ── */}
               <div className="px-4 py-3 flex items-start justify-between gap-3">
                 <div className="flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-gray-900 text-sm">
-                      {a.activity_name}
-                    </span>
-                    {a.is_carry_forward && (
-                      <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full">
-                        🔄 Carry-forward
-                      </span>
-                    )}
-                    <span
-                      className="px-2 py-0.5 text-[10px] font-bold rounded-full"
-                      style={{ background: vstyle.bg, color: vstyle.color }}
-                    >
-                      {vstyle.label}
-                    </span>
-                  </div>
+<div className="flex items-center gap-2 flex-wrap">
+  <span className="font-bold text-gray-900 text-sm">
+    {a.activity_name}
+  </span>
+
+  {/* mukkadam-level ½‑day indicator: show on ALL jobs of this mukkadam today */}
+  {mukkadamHasHalfDay && (
+    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200">
+      ½ day
+    </span>
+  )}
+
+  {a.is_carry_forward && (
+    <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full">
+      🔄 Carry-forward
+    </span>
+  )}
+  <span
+    className="px-2 py-0.5 text-[10px] font-bold rounded-full"
+    style={{ background: vstyle.bg, color: vstyle.color }}
+  >
+    {vstyle.label}
+  </span>
+</div>
+
+
                   <p className="text-xs text-gray-500 mt-0.5">
                     Team: <strong className="text-gray-700">{m?.mukkadam_name || 'N/A'}</strong>
                     Farmer: <strong className="text-gray-700">{a?.farmer_name || 'N/A'}</strong>
@@ -1048,14 +1281,20 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
 
                 {/* Planned area pill */}
                 <div className="text-right shrink-0">
-                  <p className="text-xs text-gray-400">Planned</p>
-                  <p className="font-bold text-gray-800">
-                    {Number(a.allocated_area).toFixed(2)} ac
-                  </p>
-                  <p className="text-xs text-gray-400">
-                    {a.allocated_workers} workers
-                  </p>
-                </div>
+  <p className="text-xs text-gray-400">Planned</p>
+  <p className="font-bold text-gray-800">
+    {Number(a.allocated_area).toFixed(2)} ac
+  </p>
+  <p className="text-xs text-gray-400">
+    {a.allocated_workers} workers
+  </p>
+  {a.allows_second_job === true && (
+    <p className="text-[10px] font-semibold text-emerald-600 mt-0.5">
+      ½ day allocation
+    </p>
+  )}
+</div>
+
               </div>
 
               {/* ── Planned vs Actual comparison ── */}
@@ -1529,352 +1768,411 @@ const isBothMode = modes.includes('jobs') && modes.includes('allocations');
   </div>
 )}
 {/* ══════════════════════════════════════════════════════
-    TAB 2 — JOBS  (with inline allocation status + carry-forward indicator)
+    TAB 2 — JOBS (styled like the demo DayModal table)
+══════════════════════════════════════════════════════ */}
+{/* ══════════════════════════════════════════════════════
+    TAB 2 — JOBS (DayModal style, acres-based)
 ══════════════════════════════════════════════════════ */}
 {activeTab === 'jobs' && (
-  <div className="tab-content">
+  <div className="flex-1">
     {jobsOnThisDay.length === 0 ? (
-      <p className="text-sm text-gray-400 italic mt-4">No jobs scheduled.</p>
+      <p className="text-sm text-stone-400 italic mt-4">
+        No jobs scheduled.
+      </p>
     ) : (
-      <div className="mt-2 rounded-xl border border-gray-200 overflow-x-auto">
-        <table className="text-sm" style={{ minWidth: '820px', width: '100%' }}>
+      <div className="mt-3 rounded-xl border border-stone-200 bg-white overflow-x-auto">
+        <table className="w-full text-sm" style={{ minWidth: '880px' }}>
           <thead>
-            <tr className="bg-gray-50 border-b border-gray-200">
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Farmer</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Plot / Crop</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Activity</th>
-              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Planned</th>
-              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500">Actual</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Team / Status</th>
-              {(() => {
-  const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
-  const isBothMode = modes.includes('jobs') && modes.includes('allocations');
-  return (isBothMode || modes.includes('allocations'))
-    ? <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500">Action</th>
-    : null;
-})()}
+            <tr className="border-b border-stone-100 bg-stone-50/60">
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                Farmer
+              </th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                Activity
+              </th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                Status
+              </th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                Team / Capacity
+              </th>
+              <th className="text-right px-4 py-2.5 text-xs font-semibold text-stone-400 uppercase tracking-wider">
+                Action
+              </th>
             </tr>
           </thead>
+
           <tbody>
-            {(() => {
-              const today = new Date();
-              today.setHours(0, 0, 0, 0);
-              const isPastDay = date < today;
+            {jobsOnThisDay.flatMap((job) =>
+              (job.activities || [])
+                .filter((act) => {
+                  if (act.scheduled_date?.slice(0, 10) !== isoDate)
+                    return false;
 
-              return jobsOnThisDay.flatMap(job =>
-                job.activities
-                  .filter(act => {
-                    if (act.scheduled_date?.slice(0, 10) !== isoDate) return false;
-                    
-                    const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
-                    const isManual = (act as any).is_manually_moved === true;
-                    
-                    const isBothMode = modes.includes('jobs') && modes.includes('allocations');
-                    
-                    if (isBothMode) return true;                                          // ✅ Both → show all
-                    if (modes.includes('allocations') && !modes.includes('jobs')) return isManual;  // Allocations only → manual only
-                    return !isManual;                                                     // Jobs only → AI only
-                  })
-                  .map(act => {
-                    const workerRows = maxWorkRows.filter(r => r.activityName === act.activity_name);
+                  const modes = Array.isArray(viewMode)
+                    ? viewMode
+                    : [viewMode];
+                  const isManual =
+                    (act as any).is_manually_moved === true;
+                  const isBothMode =
+                    modes.includes('jobs') &&
+                    modes.includes('allocations');
 
-                    // Find all allocations for this activity today
-                    const actAllocations = filteredAllocations.filter(
-                      al => al.job_id === job.job_id && al.job_activity === act.id
-                    ) as AllocationWithReport[];
+                  if (isBothMode) return true;
+                  if (
+                    modes.includes('allocations') &&
+                    !modes.includes('jobs')
+                  ) {
+                    return isManual;
+                  }
+                  return !isManual;
+                })
+                .map((act) => {
+                  const workerRows = maxWorkRows.filter(
+                    (r) => r.activityName === act.activity_name,
+                  );
 
-                    const carryForwardAllocs = actAllocations.filter(al => al.is_carry_forward);
-                    const normalAllocs = actAllocations.filter(al => !al.is_carry_forward);
+                  const actAllocations = filteredAllocations.filter(
+  (al) => al.job_id === job.job_id && al.job_activity === act.id,
+) as AllocationWithReport[];
 
 
-                    // Verification summary across all allocations
-                    const pendingVerify = actAllocations.filter(
-                      al => al.report_submitted && al.farmer_agreed == null
-                    ).length;
-                    const disputedCount = actAllocations.filter(
-                      al => al.farmer_agreed === false
-                    ).length;
+const primaryAlloc = actAllocations[0];
+const primaryMukkadamId = primaryAlloc?.mukkadam;
 
-                    // Total actual done today
-                    const totalActual = actAllocations
-                      .filter(al => al.actual_area_done != null)
-                      .reduce((s, al) => s + Number(al.actual_area_done), 0);
+const mukkadamHasHalfDay =
+  primaryMukkadamId != null &&
+  hasHalfDayByMukkadam.get(primaryMukkadamId) === true;
 
-                    const isAllocated = Number(act.allocated_area) > 0;
-                    const isFullyAllocated =
-                      Number(act.allocated_area) >= Number(act.total_area);
 
-                    // Row border color
-                    const rowBorder =
-                      disputedCount > 0 ? '#fca5a5' :
-                      pendingVerify > 0 ? '#fde68a' :
-                      isFullyAllocated ? '#86efac' :
-                      isAllocated ? '#fcd34d' : '#e5e7eb';
+                  const carryForwardAllocs = actAllocations.filter(
+                    (al) => al.is_carry_forward,
+                  );
+                  const pendingVerify = actAllocations.filter(
+                    (al) =>
+                      al.report_submitted &&
+                      al.farmer_agreed == null,
+                  ).length;
+                  const disputedCount = actAllocations.filter(
+                    (al) => al.farmer_agreed === false,
+                  ).length;
 
-                    return (
-                      <tr
-                        key={`${job.job_id}-${act.id}`}
-                        className="border-b border-gray-100 hover:bg-gray-50 transition"
-                        style={{ borderLeft: `4px solid ${rowBorder}` }}
-                      >
-                        {/* Farmer */}
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5">
-                            <User size={13} className="text-gray-400 shrink-0" />
-                            <span className="font-medium text-gray-800">{job.farmer_name}</span>
-                          </div>
-                        </td>
+                  const totalActual = actAllocations
+                    .filter((al) => al.actual_area_done != null)
+                    .reduce(
+                      (s, al) =>
+                        s + Number(al.actual_area_done),
+                      0,
+                    );
 
-                        {/* Plot / Crop */}
-                        {/* Plot / Crop */}
-<td className="px-4 py-3">
-  <p className="text-gray-700 font-medium">
-    {(act as any).plot_name || (act as any).plot_code || job.plot_name || job.job_id}
-  </p>
-  <p className="text-xs text-gray-400">
-    {job.crop_name || '—'}
-    {job.variety ? ` • ${job.variety}` : ''}
-  </p>
-</td>
+                  const isAllocated =
+                    Number(act.allocated_area) > 0;
+                  const isFullyAllocated =
+                    Number(act.allocated_area) >=
+                    Number(act.total_area);
 
-                        {/* Activity */}
-                        <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-  <span className="font-medium">{act.activity_name}</span>
+                  const rowBorder =
+                    disputedCount > 0
+                      ? '#fca5a5'
+                      : pendingVerify > 0
+                      ? '#fde68a'
+                      : isFullyAllocated
+                      ? '#86efac'
+                      : isAllocated
+                      ? '#fcd34d'
+                      : '#e5e7eb';
 
-  {/* New copy (on new date) */}
-{(act as any).is_manually_moved && (act as any).original_scheduled_date && (
-  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-600 border border-orange-200">
-    ↩ from {new Date((act as any).original_scheduled_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-  </span>
-)}
-  {/* {!act.is_manually_moved &&(
-    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">
-       from {act.original_scheduled_date} → {act.scheduled_date}
-    </span>
-  )} */}
+                  const remainingArea = Number(
+                    act.remaining_area ?? 0,
+                  );
 
-{!(act as any).is_manually_moved && (act as any).moved_to_date && (
-  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-200">
-    ↪ part to {new Date((act as any).moved_to_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-  </span>
-)}
+                  const modes = Array.isArray(viewMode)
+                    ? viewMode
+                    : [viewMode];
+                  const isBothMode =
+                    modes.includes('jobs') &&
+                    modes.includes('allocations');
 
-  {(act as any).is_manually_moved ? (
-    <span className="px-1.5 py-0.5 bg-orange-100 text-orange-600 rounded text-[10px] font-bold">
-      H
-    </span>
-  ) : (
-    <span className="px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-bold">
-      AI
-    </span>
-  )}
-  {carryForwardAllocs.length > 0 && (
-    <span className="px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded text-[10px] font-bold">
-      🔄 CF
-    </span>
-  )}
-</div>
+                  // total planned ac for display
+                  const plannedTotal = Number(
+                    act.total_area || 0,
+                  );
 
-{act.is_manually_moved && act.move_reason && (
-  <div className="text-[11px] text-gray-500 mt-0.5">
-    Reason: {act.move_reason}
-  </div>
-)}
+                  return (
+                    <tr
+                      key={`${job.job_id}-${act.id}`}
+                      className="border-b border-stone-50 hover:bg-stone-50/60 transition-colors"
+                      style={{
+                        borderLeft: `4px solid ${rowBorder}`,
+                      }}
+                    >
+                      {/* Farmer + plot/crop/variety */}
+                      <td className="px-4 py-3 align-top">
+                        <p className="text-sm font-medium text-stone-700">
+                          {job.farmer_name}
+                        </p>
+                        <p className="text-xs text-stone-400">
+                          {(act as any).plot_name ||
+                            (act as any).plot_code ||
+                            job.plot_name ||
+                            job.job_id}
+                          {' · '}
+                          {job.crop_name || '—'}
+                          {job.variety
+                            ? ` • ${job.variety}`
+                            : ''}
+                        </p>
+                      </td>
 
-                          {/* Verification status badges */}
-                          <div className="flex gap-1 mt-1 flex-wrap">
-                            {pendingVerify > 0 && (
-                              <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-bold">
-                                👀 {pendingVerify} pending
-                              </span>
-                            )}
-                            {disputedCount > 0 && (
-                              <span className="px-1.5 py-0.5 bg-red-100 text-red-600 rounded text-[10px] font-bold">
-                                ❌ {disputedCount} disputed
-                              </span>
-                            )}
-                          </div>
-                        </td>
+                      {/* Activity + acres (like DayModal) */}
+                      <td className="px-4 py-3 align-top">
+                        <p className="text-sm text-stone-700">
+                          {act.activity_name}
+                        </p>
+                        <p className="text-xs text-stone-500 font-semibold">
+                          {plannedTotal.toFixed(2)} ac
+                        </p>
+                      </td>
 
-                        {/* Planned area */}
-                        <td className="px-4 py-3 text-right">
-                          <p className="font-semibold text-gray-800">
-                            {Number(act.allocated_area).toFixed(2)}
-                            <span className="text-xs text-gray-400 ml-0.5">ac</span>
-                          </p>
-                          <p className="text-xs text-gray-400">
-                            of {Number(act.total_area).toFixed(2)} ac
-                          </p>
-                          {Number(act.remaining_area) > 0.01 && (
-                            <p className="text-xs text-amber-600 font-medium">
-                              {Number(act.remaining_area).toFixed(2)} remaining
-                            </p>
+                      {/* Status: AI/H, moved, CF, pending/disputed */}
+                      <td className="px-4 py-3 align-top">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {(act as any).is_manually_moved &&
+                            (act as any)
+                              .original_scheduled_date && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200">
+                              ↩ from{' '}
+                              {new Date(
+                                (act as any)
+                                  .original_scheduled_date,
+                              ).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                              })}
+                            </span>
                           )}
-                        </td>
 
-                        {/* Actual done */}
-                        <td className="px-4 py-3 text-right">
-                          {totalActual > 0 ? (
-                            <>
-                              <p
-                                className="font-bold"
-                                style={{
-                                  color: totalActual < Number(act.allocated_area)
-                                    ? '#dc2626'
-                                    : totalActual > Number(act.allocated_area)
-                                    ? '#16a34a'
-                                    : '#374151'
-                                }}
-                              >
-                                {totalActual.toFixed(2)}
-                                <span className="text-xs font-normal ml-0.5">ac</span>
-                              </p>
-                              <p
-                                className="text-xs"
-                                style={{
-                                  color: totalActual < Number(act.allocated_area)
-                                    ? '#dc2626' : '#16a34a'
-                                }}
-                              >
-                                {(totalActual - Number(act.allocated_area) > 0 ? '+' : '')}
-                                {(totalActual - Number(act.allocated_area)).toFixed(2)} ac
-                              </p>
-                            </>
+                          {!(act as any).is_manually_moved &&
+                            (act as any).moved_to_date && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-200">
+                                ↪ to{' '}
+                                {new Date(
+                                  (act as any).moved_to_date,
+                                ).toLocaleDateString('en-IN', {
+                                  day: 'numeric',
+                                  month: 'short',
+                                })}
+                              </span>
+                            )}
+                            
+
+                          {(act as any).is_manually_moved ? (
+                            <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded-md text-[10px] font-bold">
+                              H
+                            </span>
                           ) : (
-                            <span className="text-xs text-gray-300">—</span>
+                            <span className="px-1.5 py-0.5 bg-sky-100 text-sky-700 rounded-md text-[10px] font-bold">
+                              AI
+                            </span>
                           )}
-                        </td>
 
-                        {/* Team + status */}
-{isBothMode && (
-  <td className="px-4 py-3">
-    {actAllocations.length > 0 ? (
-      // existing allocated block (no change)
-      <div className="space-y-1">
-        {actAllocations.map(al => {
-          const alMukkadam = mukkadams.find(mk => mk.mukkadam_id === al.mukkadam);
-          const vs = getVerifyStatus(al);
-          const vstyle = VERIFY_STYLE[vs];
-          return (
-            <div
-              key={al.id}
-              className="flex items-center gap-2 text-xs"
-            >
-              <span className="font-medium text-gray-700">
-                {alMukkadam?.mukkadam_name || 'N/A'}
-              </span>
-              <span className="text-gray-400">
-                {Number(al.allocated_area).toFixed(2)} ac
-              </span>
-              {al.is_carry_forward && (
-                <span className="text-purple-500 text-[10px]">🔄</span>
-              )}
-              <span
-                className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
-                style={{ background: vstyle.bg, color: vstyle.color }}
-              >
-                {vstyle.label}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    ) : workerRows.length === 0 ? (
-      <span className="text-xs text-gray-400 italic">No team data</span>
-    ) : (
-      <div className="flex flex-wrap gap-2">
-        {workerRows.map((r, i) => {
-          const needed =
-            r.productivity > 0
-              ? Math.ceil(Number(act.remaining_area) / r.productivity)
-              : 0;
+                          {carryForwardAllocs.length > 0 && (
+                            <span className="px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded-md text-[10px] font-bold">
+                              🔄 CF
+                            </span>
+                          )}
 
-          const canDo =
-            needed > 0 &&
-            needed <= r.availableWorkers &&
-            r.availableWorkers > 0;
+                          
+                        </div>
 
-          
-const handleTeamClick = () => {
-  if (!canDo) return;
-  const mukkadam = mukkadams.find(mk => mk.mukkadam_id === r.mukkadamId);
-  if (!mukkadam) return;
-  const rate = mukkadam.activity_rates?.find((rt: any) =>
-    rt.activity_id === act.activity_id ||
-    rt.activity_name === act.activity_name
+                        {(act as any).is_manually_moved &&
+                          (act as any).move_reason && (
+                            <div className="text-[11px] text-stone-500 mt-0.5">
+                              Reason:{' '}
+                              {(act as any).move_reason}
+                            </div>
+                          )}
+
+                        <div className="flex gap-1 mt-1 flex-wrap">
+                          {pendingVerify > 0 && (
+                            <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded-md text-[10px] font-bold">
+                              👀 {pendingVerify} pending
+                            </span>
+                          )}
+                          {disputedCount > 0 && (
+                            <span className="px-1.5 py-0.5 bg-red-100 text-red-600 rounded-md text-[10px] font-bold">
+                              ❌ {disputedCount} disputed
+                            </span>
+                          )}
+                          
+                        </div>
+
+                        
+                      </td>
+
+                      {/* Team / Capacity (needed ac / can do ac) */}
+                      <td className="px-4 py-3 align-top">
+                        {isBothMode && actAllocations.length > 0 ? (
+                          <div className="space-y-1">
+                            {actAllocations.map((al) => {
+  const alMukkadam = mukkadams.find(
+    (mk) => mk.mukkadam_id === al.mukkadam,
   );
-
-const alreadyHasHalfDay = allocations.some(
-  a => a.mukkadam === r.mukkadamId && (a as any).allows_second_job === true
-);
-setHalfDayDialog({
-    open: true,
-    jobId: job.job_id,
-    act,
-    mukkadam,
-    rate,
-    availableWorkers: r.availableWorkers,
-    neededWorkers: needed,
-    remainingArea: Number(act.remaining_area),
-    isSecondJob: alreadyHasHalfDay,   // ← NEW
-  });}
-
-          return (
-            <button
-              key={i}
-              type="button"
-              onClick={handleTeamClick}
-              disabled={!canDo}
-              className={`flex items-center gap-2 px-2 py-1 rounded-full text-xs border ${
-                canDo
-                  ? 'border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100'
-                  : 'border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed'
-              }`}
-            >
-              <span className="font-medium">{r.mukkadamName}</span>
-              <span
-                className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                  r.availableWorkers === 0
-                    ? 'bg-gray-100 text-gray-400'
-                    : canDo
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-red-100 text-red-600'
-                }`}
-              >
-                {r.availableWorkers === 0
-                  ? '🏖️ Holiday'
-                  : `${needed} needed / ${r.availableWorkers} avail`}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    )}
-  </td>
-)}
-
-
-                        {/* Action column */}
-                        {(() => {
-  const modes = Array.isArray(viewMode) ? viewMode : [viewMode];
-  const isBothMode = modes.includes('jobs') && modes.includes('allocations');
-  if (!isBothMode) return null;
-
-  const isAllocated = actAllocations.length > 0;
+  const vs = getVerifyStatus(al);
+  const vstyle = VERIFY_STYLE[vs];
+  const isHalfDay = (al as any).allows_second_job === true;
 
   return (
-    <td className="px-4 py-3 text-center">
-      {isAllocated ? null : <MoveJobButton job={job} act={act} />}
-    </td>
-  );
-})()}
+    <div
+      key={al.id}
+      className="flex items-center gap-2 text-xs"
+    >
+      <span className="font-medium text-stone-700">
+        {alMukkadam?.mukkadam_name || 'N/A'}
+      </span>
+      <span className="text-stone-400 tabular-nums">
+        {Number(al.allocated_area).toFixed(2)} ac
+      </span>
 
-                      </tr>
-                    );
-                  })
-              );
-            })()}
+     {/* activity-level ½ day info */}
+{mukkadamHasHalfDay && (
+  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold mt-1">
+    ½ day job
+  </span>
+)}
+
+
+      {al.is_carry_forward && (
+        <span className="text-violet-500 text-[10px]">🔄</span>
+      )}
+      <span
+        className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
+        style={{ background: vstyle.bg, color: vstyle.color }}
+      >
+        {vstyle.label}
+      </span>
+    </div>
+  );
+})}
+
+                          </div>
+                        ) : workerRows.length === 0 ? (
+                          <span className="text-xs text-stone-400 italic">
+                            No team data
+                          </span>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            {workerRows.map((r, i) => {
+                              const canDoAc = Number(
+                                r.maxArea || 0,
+                              );
+                              const fits =
+                                remainingArea >
+                                  0 && canDoAc >= remainingArea;
+
+                              const handleTeamClick =
+                                () => {
+                                  if (!fits) return;
+                                  const mukkadam =
+                                    mukkadams.find(
+                                      (mk) =>
+                                        mk.mukkadam_id ===
+                                        r.mukkadamId,
+                                    );
+                                  if (!mukkadam) return;
+                                  const rate =
+                                    mukkadam
+                                      .activity_rates?.find(
+                                        (rt: any) =>
+                                          rt.activity_id ===
+                                            act.activity_id ||
+                                          rt.activity_name ===
+                                            act.activity_name,
+                                      );
+
+                                  const alreadyHasHalfDay =
+                                    allocations.some(
+                                      (a) =>
+                                        a.mukkadam ===
+                                          r.mukkadamId &&
+                                        (a as any)
+                                          .allows_second_job ===
+                                          true,
+                                    );
+
+                                  setHalfDayDialog({
+                                    open: true,
+                                    jobId: job.job_id,
+                                    act,
+                                    mukkadam,
+                                    rate,
+                                    availableWorkers:
+                                      r.availableWorkers,
+                                    neededWorkers: 0,
+                                    remainingArea:
+                                      remainingArea,
+                                    isSecondJob:
+                                      alreadyHasHalfDay,
+                                    targetDate: isoDate,
+                                  });
+                                };
+
+                              return (
+                                <button
+                                  key={i}
+                                  type="button"
+                                  onClick={handleTeamClick}
+                                  disabled={!fits}
+                                  className={[
+                                    'flex items-center gap-2 px-2 py-1 rounded-full text-xs border',
+                                    fits
+                                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                                      : 'border-stone-200 bg-stone-50 text-stone-400 cursor-not-allowed',
+                                  ].join(' ')}
+                                >
+                                  <span className="font-medium">
+                                    {r.mukkadamName}
+                                  </span>
+                                  <span
+                                    className={[
+                                      'px-1.5 py-0.5 rounded-full text-[10px] font-bold',
+                                      canDoAc === 0
+                                        ? 'bg-stone-100 text-stone-400'
+                                        : fits
+                                        ? 'bg-emerald-100 text-emerald-700'
+                                        : 'bg-red-100 text-red-600',
+                                    ].join(' ')}
+                                  >
+                                    {canDoAc === 0
+                                      ? '🏖️ Holiday'
+                                      : `${remainingArea.toFixed(
+                                          2,
+                                        )} needed / ${canDoAc.toFixed(
+                                          2,
+                                        )} can do`}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Action column (Move button for unallocated) */}
+                      <td className="px-4 py-3 text-right align-top">
+                        <div className="flex flex-col items-end gap-1">
+                          {actAllocations.length === 0 && (
+                            <MoveJobButton
+                              job={job}
+                              act={act}
+                            />
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }),
+            )}
           </tbody>
         </table>
       </div>

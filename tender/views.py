@@ -2344,27 +2344,39 @@ from .models import Cluster
 from .serializers import ClusterSerializer
 from datetime import date, timedelta, datetime as dt
 
+from django.db.models import Q
+
 class ClusterViewSet(viewsets.ModelViewSet):
     queryset = Cluster.objects.all().order_by('name').prefetch_related(
-        'jobs__activities'  # prefetch for date_range calculation
+        'jobs__activities'
     )
     serializer_class = ClusterSerializer
     permission_classes = [permissions.AllowAny]
 
-    # optional: simple filter by state/district etc.
     def get_queryset(self):
         qs = Cluster.objects.all().order_by('name').prefetch_related(
             'jobs__activities__plot',
             'jobs__booking',
         )
+
         state_code = self.request.query_params.get('state_code')
         district_code = self.request.query_params.get('district_code')
+        q = self.request.query_params.get('q', '').strip()
+
         if state_code:
             qs = qs.filter(state_code=state_code)
         if district_code:
             qs = qs.filter(district_code=district_code)
+
+        if q:
+            qs = qs.filter(
+                Q(name__icontains=q) |
+                Q(farmers__farmer_name__icontains=q) |
+                Q(mukkadams__mukkadam_name__icontains=q)
+            ).distinct()
+
         return qs
-    
+
     def list(self, request, *args, **kwargs):
         from datetime import date
         from decimal import Decimal
