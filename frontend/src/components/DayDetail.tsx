@@ -529,15 +529,28 @@ const [halfDayDialog, setHalfDayDialog] = useState<{
 
 const [allowsSecondJob, setAllowsSecondJob] = useState(false);
 
-// ── Confirm handler (fires when user clicks "Allocate" in the dialog) ─────────
 const handleConfirmHalfDay = async () => {
   if (!halfDayDialog) return;
   const { jobId, act, mukkadam, rate, availableWorkers, remainingArea } = halfDayDialog;
 
-  const areaToAllocate = remainingArea;
-  const maxArea = availableWorkers * Number(rate?.productivity_per_worker || 0);
-  const isPartial = maxArea < remainingArea && maxArea > 0;
-  const finalArea = isPartial ? maxArea : areaToAllocate;
+  const productivity = Number(rate?.productivity_per_worker || 0);
+
+  // 1) productivity-based capacity for this crew (1x)
+  const baseCap = availableWorkers * productivity;        // e.g. 2 ac
+
+  // 2) extended capacity (2x)
+  const extendedCap = baseCap * 2;                        // e.g. 4 ac
+
+  // 3) final cap: if remaining <= extendedCap, use remaining; else extendedCap
+  const maxAllowedArea = remainingArea <= extendedCap ? remainingArea : extendedCap;
+
+  // 4) guard
+  if (!maxAllowedArea || maxAllowedArea <= 0 || !Number.isFinite(maxAllowedArea)) {
+    toast.error('Cannot allocate: invalid area with current crew/productivity');
+    return;
+  }
+
+  const finalArea = maxAllowedArea;
 
   try {
     const res = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {
@@ -553,7 +566,7 @@ const handleConfirmHalfDay = async () => {
         mukkadam_rate: Number(rate?.rate_per_acre || 0),
         cluster_id: clusterId,
         skip_strict_check: false,
-        allows_second_job: halfDayDialog.isSecondJob ? false : allowsSecondJob,  // ← send flag
+        allows_second_job: halfDayDialog.isSecondJob ? false : allowsSecondJob,
       }),
     });
 

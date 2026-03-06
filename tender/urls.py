@@ -21,6 +21,8 @@ from .views import (
 from .webhook import booking_webhook,run_mukkadam_sync
 from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history,mukkadam_earnings
 # Create router
+
+from .insight import ClusterInsightsView
 router = DefaultRouter()
 
 # Register ViewSets
@@ -140,6 +142,11 @@ path('api/cluster/<int:cluster_id>/search_farmers/', search_farmers_for_cluster)
 path('api/cluster/<int:cluster_id>/add_farmer/', add_farmer_plots_to_cluster),
 path('api/cluster/<int:cluster_id>/search_mukkadams/', search_mukkadams_for_cluster),
 path('api/cluster/<int:cluster_id>/add_mukkadam/', add_mukkadam_to_cluster),
+
+
+path('api/clusters/<int:cluster_id>/insights/', ClusterInsightsView.as_view(),
+         name='cluster-insights'),
+
 
   path('webhook/booking/', booking_webhook, name='booking_webhook'),
   

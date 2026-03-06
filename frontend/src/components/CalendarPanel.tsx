@@ -63,7 +63,7 @@ interface CalendarPanelProps {
   filters: CalendarFilters;
   refreshKey?: number;
   setFilters: React.Dispatch<React.SetStateAction<CalendarFilters>>;
-  viewModes: ('jobs' | 'allocations' | 'potential'| 'payments')[];
+  viewModes: ('jobs' | 'allocations' | 'potential'| 'payments' | 'insights')[];
   jobsByDate?: Record<string, Job[]>;
   jobs: Job[]; // pass all jobs for the month to show in day detail
   clusterId: number;

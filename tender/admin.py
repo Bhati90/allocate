@@ -465,7 +465,13 @@ class JobActivityAdmin(admin.ModelAdmin):
         'is_lost', 'is_manually_edited', 'is_manually_moved', 'activity'
     )
     search_fields = ('job__job_id', 'job__farmer__farmer_name', 'activity__name')
-    readonly_fields = ('remaining_area', 'total_price', 'subtotal', 'is_fully_allocated', 'allocation_status', 'created_at', 'updated_at')
+    
+    # ✅ Remove allocation_status and is_fully_allocated from readonly
+    readonly_fields = (
+        'remaining_area', 'total_price', 'subtotal',
+        'created_at', 'updated_at'
+    )
+    
     date_hierarchy = 'scheduled_date'
     autocomplete_fields = ['job', 'activity', 'plot']
     inlines = [AllocationInline]
@@ -484,7 +490,9 @@ class JobActivityAdmin(admin.ModelAdmin):
             'fields': ('rate_per_acre', 'total_price', 'transport_cost', 'other_cost', 'subtotal')
         }),
         ('Status', {
-            'fields': ('allocation_status', 'is_fully_allocated', 'is_strict', 'is_manually_edited', 'is_manually_moved')
+            # ✅ Now editable
+            'fields': ('allocation_status', 'is_fully_allocated', 'is_strict', 'is_manually_edited', 'is_manually_moved'),
+            'description': '⚠️ Manually overriding status will not recalculate remaining_area. Use with caution.'
         }),
         ('Lost', {
             'fields': ('is_lost', 'lost_reason'),
@@ -499,6 +507,7 @@ class JobActivityAdmin(admin.ModelAdmin):
         }),
     )
 
+
     def allocation_status_badge(self, obj):
         colors = {
             'pending': '#f59e0b', 'partially_allocated': '#3b82f6',
@@ -511,7 +520,23 @@ class JobActivityAdmin(admin.ModelAdmin):
         )
     allocation_status_badge.short_description = 'Alloc. Status'
 
+    # ✅ Add admin action to reset status based on actual allocated_area
+    actions = ['recalculate_status']
 
+    def recalculate_status(self, request, queryset):
+        updated = 0
+        for obj in queryset:
+            # Recalculate from DB truth — sum of all allocations
+            from django.db.models import Sum
+            total = obj.allocations.filter(
+                status__in=['scheduled', 'in_progress', 'completed']
+            ).aggregate(total=Sum('allocated_area'))['total'] or 0
+
+            obj.allocated_area = total
+            obj.save()  # triggers remaining_area recalc in model.save()
+            updated += 1
+        self.message_user(request, f'✅ Recalculated status for {updated} activities.')
+    recalculate_status.short_description = '🔄 Recalculate status from actual allocations'
 @admin.register(JobBooking)
 class JobBookingAdmin(admin.ModelAdmin):
     list_display = ('booking_id', 'job', 'status', 'total_amount', 'advance_paid', 'balance', 'assignee_number')

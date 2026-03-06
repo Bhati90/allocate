@@ -15,7 +15,13 @@ import { RefreshCw } from 'lucide-react';
 import MukkadamDetailPanel from './components/MukkadamDetail';
 import Dialpad from './call';
 import { getFileExtension, uploadFileToS3 } from './utils/s3';
+import { ClusterInsightsResponse } from './types/insights';
 type PotentialStatus = 'PARTIAL' | 'NONE';
+
+import * as XLSX from 'xlsx';
+export function formatDate(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
 
 interface PotentialJob {
   date: string;      
@@ -41,6 +47,746 @@ type PotentialByDate = Record<string, PotentialJob[]>;
 
 interface FarmSchedulerProps {clusterId: number;onBackToClusters: () => void;
   onOpenDialpadWithNumber: (phone: string) => void;}
+
+
+
+
+export function useClusterInsights(
+  clusterId: number | null,
+  startDate: string,
+  endDate: string,
+  enabled: boolean
+) {
+  const [data, setData] = useState<ClusterInsightsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !clusterId) {
+      setData(null);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function load() {
+      try {
+        setLoading(true);
+        setError(null);
+        const params = new URLSearchParams({
+          start_date: startDate,
+          end_date: endDate,
+        });
+        const res = await fetch(
+          `${API_BASE_URL}/api/clusters/${clusterId}/insights/?${params.toString()}`,
+          {
+            credentials: 'include',
+            signal: controller.signal,
+          }
+        );
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const json = (await res.json()) as ClusterInsightsResponse;
+        setData(json);
+      } catch (e: any) {
+        if (e.name !== 'AbortError') {
+          setError(e.message || 'Failed to load insights');
+        }
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    load();
+    return () => controller.abort();
+  }, [clusterId, startDate, endDate, enabled]);
+
+  return { data, loading, error };
+}
+
+
+
+
+interface InsightsPanelProps {
+  clusterId: number;
+  startDate: string;
+  endDate: string;
+}
+
+export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelProps) {
+  const { data, loading, error } = useClusterInsights(
+    clusterId,
+    startDate,
+    endDate,
+    true
+  );
+
+  const [activeTab, setActiveTab] = useState<
+    'overview' | 'mukkadam' | 'farmer' | 'capacity' | 'moves'
+  >('overview');
+
+  if (loading) {
+    return (
+      <div className="p-8 text-center text-gray-500">
+        Loading insights...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-8 text-center text-red-600">
+        Error: {error}
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const { summary, by_day, by_mukkadam, by_activity, mukkadam_work, farmer_work, capacity_demand, move_suggestions } = data;
+
+  // Excel export handler
+  const handleExportToExcel = () => {
+    const wb = XLSX.utils.book_new();
+
+    
+
+    // Summary sheet
+    const summaryData = [
+      ['Metric', 'Value'],
+      ['Total Jobs', summary.total_jobs],
+      ['Total Activities', summary.total_activities],
+      ['Total Area Allocated (ac)', summary.total_area_allocated.toFixed(2)],
+      ['Total Area Completed (ac)', summary.total_area_completed.toFixed(2)],
+      ['Total Workers Allocated', summary.total_allocated_workers],
+      ['Effective Capacity Workers', summary.effective_capacity_workers],
+      ['Crew Utilization %', summary.crew_utilization_percent.toFixed(1)],
+      ['Slot Utilization %', summary.slot_utilization_percent.toFixed(1)],
+      ['Farmer Amount (₹)', summary.farmer_amount.toFixed(2)],
+      ['Mukkadam Amount (₹)', summary.mukkadam_amount.toFixed(2)],
+      ['Profit (₹)', summary.profit.toFixed(2)],
+      ['Profit per Acre (₹)', summary.profit_per_acre.toFixed(2)],
+      ['Loss Allocations', summary.loss_allocations],
+      ['Dispute Count', summary.dispute_count],
+      ['Dispute Rate %', summary.dispute_rate_percent.toFixed(1)],
+      ['Avg Efficiency Score', summary.avg_efficiency_score.toFixed(1)],
+    ];
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+    // By Day sheet
+    const byDayData = [
+      ['Date', 'Area Alloc', 'Area Done', 'Workers', 'Capacity', 'Crew Util %', 'Slot Util %', 'Profit', 'Jobs Sched', 'Jobs Done', 'Disputes'],
+      ...by_day.map(d => [
+        d.date,
+        d.total_area_allocated.toFixed(2),
+        d.total_area_completed.toFixed(2),
+        d.allocated_workers,
+        d.effective_capacity_workers,
+        d.crew_utilization_percent.toFixed(1),
+        d.slot_utilization_percent.toFixed(1),
+        d.profit.toFixed(2),
+        d.jobs_scheduled,
+        d.jobs_completed,
+        d.disputes,
+      ])
+    ];
+    const wsByDay = XLSX.utils.aoa_to_sheet(byDayData);
+    XLSX.utils.book_append_sheet(wb, wsByDay, 'By Day');
+
+    // By Mukkadam sheet
+    const byMukkadamData = [
+      ['Mukkadam ID', 'Name', 'Crew Size', 'Allocations', 'Workers Total', 'Capacity', 'Util %', 'Area Alloc', 'Area Done', 'Eff Score', 'Profit', 'Disputes'],
+      ...by_mukkadam.map(m => [
+        m.mukkadam_id,
+        m.name,
+        m.crew_size,
+        m.allocations,
+        m.allocated_workers_total,
+        m.effective_capacity_workers,
+        m.crew_utilization_percent.toFixed(1),
+        m.total_area_allocated.toFixed(2),
+        m.total_area_completed.toFixed(2),
+        m.avg_efficiency_score.toFixed(1),
+        m.profit.toFixed(2),
+        m.disputes,
+      ])
+    ];
+    const wsByMukkadam = XLSX.utils.aoa_to_sheet(byMukkadamData);
+    XLSX.utils.book_append_sheet(wb, wsByMukkadam, 'By Mukkadam');
+
+    // By Activity sheet
+    const byActivityData = [
+      ['Activity ID', 'Activity Name', 'Allocations', 'Area Alloc', 'Area Done', 'Avg Farmer Rate', 'Avg Mukkadam Rate', 'Profit/ac', 'Profit', 'Loss Alloc'],
+      ...by_activity.map(a => [
+        a.activity_id,
+        a.activity_name,
+        a.allocations,
+        a.total_area_allocated.toFixed(2),
+        a.total_area_completed.toFixed(2),
+        a.avg_farmer_rate.toFixed(2),
+        a.avg_mukkadam_rate.toFixed(2),
+        a.avg_profit_per_acre.toFixed(2),
+        a.profit.toFixed(2),
+        a.loss_allocations,
+      ])
+    ];
+    const wsByActivity = XLSX.utils.aoa_to_sheet(byActivityData);
+    XLSX.utils.book_append_sheet(wb, wsByActivity, 'By Activity');
+
+    // Mukkadam Work Detail sheet
+    const mukkadamWorkData = [
+      ['Mukkadam ID', 'Mukkadam Name', 'Date', 'Job ID', 'Farmer', 'Plot', 'Activity', 'Area', 'Area Done', 'Workers', 'Status', 'Payment', 'Profit', '2nd Job', 'Carry Fwd', 'Auto'],
+    ];
+    mukkadam_work.forEach(mw => {
+      mw.allocations.forEach(a => {
+        mukkadamWorkData.push([
+          mw.mukkadam_id,
+          mw.name,
+          a.date,
+          a.job_id,
+          a.farmer_name,
+          a.plot_name || '',
+          a.activity_name,
+          a.allocated_area.toFixed(2),
+          a.actual_area_completed.toFixed(2),
+          a.allocated_workers,
+          a.work_status,
+          a.payment_status,
+          a.profit.toFixed(2),
+          a.allows_second_job ? 'Yes' : 'No',
+          a.is_carry_forward ? 'Yes' : 'No',
+          a.is_auto_allocated ? 'Yes' : 'No',
+        ]);
+      });
+    });
+    const wsMukkadamWork = XLSX.utils.aoa_to_sheet(mukkadamWorkData);
+    XLSX.utils.book_append_sheet(wb, wsMukkadamWork, 'Mukkadam Work');
+
+    // Farmer Work Detail sheet
+    const farmerWorkData = [
+      ['Farmer ID', 'Farmer Name', 'Job ID', 'Plot', 'Activity', 'Sched Date', 'Total Area', 'Alloc Area', 'Remain Area', 'Status', 'Mukkadam', 'Alloc Date', 'Alloc Area', 'Workers'],
+    ];
+    farmer_work.forEach(fw => {
+      fw.activities.forEach(act => {
+        if (act.allocations.length === 0) {
+          farmerWorkData.push([
+            fw.farmer_id,
+            fw.farmer_name,
+            act.job_id,
+            act.plot_name || '',
+            act.activity_name,
+            act.scheduled_date || '',
+            act.total_area.toFixed(2),
+            act.allocated_area.toFixed(2),
+            act.remaining_area.toFixed(2),
+            act.allocation_status,
+            'NOT ALLOCATED',
+            '',
+            '',
+            '',
+          ]);
+        } else {
+          act.allocations.forEach(alloc => {
+            farmerWorkData.push([
+              fw.farmer_id,
+              fw.farmer_name,
+              act.job_id,
+              act.plot_name || '',
+              act.activity_name,
+              act.scheduled_date || '',
+              act.total_area.toFixed(2),
+              act.allocated_area.toFixed(2),
+              act.remaining_area.toFixed(2),
+              act.allocation_status,
+              alloc.mukkadam_name,
+              alloc.date,
+              alloc.allocated_area.toFixed(2),
+              alloc.allocated_workers,
+            ]);
+          });
+        }
+      });
+    });
+    const wsFarmerWork = XLSX.utils.aoa_to_sheet(farmerWorkData);
+    XLSX.utils.book_append_sheet(wb, wsFarmerWork, 'Farmer Work');
+
+    // Capacity Demand sheet
+    const capacityDemandData = [
+      ['Date', 'Capacity', 'Demand', 'Shortage', 'Overbooked'],
+      ...capacity_demand.map(cd => [
+        cd.date,
+        cd.capacity_workers,
+        cd.demand_workers,
+        cd.shortage_workers,
+        cd.is_overbooked ? 'YES' : 'No',
+      ])
+    ];
+    const wsCapacityDemand = XLSX.utils.aoa_to_sheet(capacityDemandData);
+    XLSX.utils.book_append_sheet(wb, wsCapacityDemand, 'Capacity Demand');
+
+    // Move Suggestions sheet
+    const moveSuggestionsData = [
+      ['Overbooked Date', 'Target Date', 'Free Workers', 'Job ID', 'Farmer', 'Activity', 'Remain Area'],
+    ];
+    move_suggestions.forEach(ms => {
+      ms.flexible_activities.forEach(act => {
+        moveSuggestionsData.push([
+          ms.overbooked_date,
+          ms.target_date,
+          ms.free_workers_on_target,
+          act.job_id,
+          act.farmer_name,
+          act.activity_name,
+          act.remaining_area.toFixed(2),
+        ]);
+      });
+    });
+    const wsMoveSuggestions = XLSX.utils.aoa_to_sheet(moveSuggestionsData);
+    XLSX.utils.book_append_sheet(wb, wsMoveSuggestions, 'Move Suggestions');
+
+    // Write file
+    const fileName = `Cluster_${data.cluster.name}_Insights_${data.date_range.start}_to_${data.date_range.end}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+  };
+
+  return (
+    <div className="p-4 bg-gray-50">
+      {/* Header with Export button */}
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-semibold text-gray-800">
+          📊 {data.cluster.name} Insights
+        </h2>
+        <button
+          onClick={handleExportToExcel}
+          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm font-medium flex items-center gap-2"
+        >
+          <span>📥</span>
+          Export to Excel
+        </button>
+      </div>
+
+      {/* KPI Strip */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 mb-6">
+        <KpiCard label="Area Alloc" value={`${summary.total_area_allocated.toFixed(1)} ac`} />
+        <KpiCard label="Area Done" value={`${summary.total_area_completed.toFixed(1)} ac`} />
+        <KpiCard label="Crew Util" value={`${summary.crew_utilization_percent.toFixed(1)}%`} color={summary.crew_utilization_percent > 90 ? 'red' : summary.crew_utilization_percent > 75 ? 'yellow' : 'green'} />
+        <KpiCard label="Slot Util" value={`${summary.slot_utilization_percent.toFixed(1)}%`} />
+        <KpiCard label="Profit" value={`₹${(summary.profit / 1000).toFixed(1)}K`} color={summary.profit < 0 ? 'red' : 'green'} />
+        <KpiCard label="Profit/ac" value={`₹${summary.profit_per_acre.toFixed(0)}`} />
+        <KpiCard label="Disputes" value={`${summary.dispute_count} (${summary.dispute_rate_percent.toFixed(1)}%)`} color={summary.dispute_rate_percent > 5 ? 'red' : 'green'} />
+        <KpiCard label="Efficiency" value={`${summary.avg_efficiency_score.toFixed(1)}%`} />
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2 mb-4 border-b border-gray-300">
+        {[
+          { key: 'overview', label: 'Overview' },
+          { key: 'mukkadam', label: 'Teams' },
+          { key: 'farmer', label: 'Farmers' },
+          { key: 'capacity', label: 'Capacity' },
+          { key: 'moves', label: 'Smart Moves' },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key as any)}
+            className={`px-4 py-2 text-sm font-medium ${
+              activeTab === tab.key
+                ? 'border-b-2 border-blue-600 text-blue-600'
+                : 'text-gray-600 hover:text-gray-800'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab Content */}
+      <div className="bg-white rounded shadow p-4">
+        {activeTab === 'overview' && <OverviewTab data={data} />}
+        {activeTab === 'mukkadam' && <MukkadamTab data={data} />}
+        {activeTab === 'farmer' && <FarmerTab data={data} />}
+        {activeTab === 'capacity' && <CapacityTab data={data} />}
+        {activeTab === 'moves' && <MovesTab data={data} />}
+      </div>
+    </div>
+  );
+}
+
+function KpiCard({ label, value, color }: { label: string; value: string; color?: 'green' | 'yellow' | 'red' }) {
+  const bgColor = color === 'red' ? 'bg-red-50' : color === 'yellow' ? 'bg-yellow-50' : color === 'green' ? 'bg-green-50' : 'bg-white';
+  const textColor = color === 'red' ? 'text-red-700' : color === 'yellow' ? 'text-yellow-700' : color === 'green' ? 'text-green-700' : 'text-gray-800';
+  
+  return (
+    <div className={`${bgColor} border border-gray-200 rounded p-3`}>
+      <div className="text-[10px] text-gray-500 uppercase mb-1">{label}</div>
+      <div className={`text-base font-semibold ${textColor}`}>{value}</div>
+    </div>
+  );
+}
+
+function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
+  return (
+    <div className="space-y-6">
+      {/* By Day Chart (simple bar) */}
+      <div>
+        <h3 className="font-semibold text-gray-700 mb-3">Daily Breakdown</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs border">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="border px-2 py-1">Date</th>
+                <th className="border px-2 py-1">Area Alloc</th>
+                <th className="border px-2 py-1">Workers</th>
+                <th className="border px-2 py-1">Capacity</th>
+                <th className="border px-2 py-1">Util %</th>
+                <th className="border px-2 py-1">Profit</th>
+                <th className="border px-2 py-1">Jobs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.by_day.map(d => (
+                <tr key={d.date} className="hover:bg-gray-50">
+                  <td className="border px-2 py-1">{d.date}</td>
+                  <td className="border px-2 py-1 text-right">{d.total_area_allocated.toFixed(1)}</td>
+                  <td className="border px-2 py-1 text-right">{d.allocated_workers}</td>
+                  <td className="border px-2 py-1 text-right">{d.effective_capacity_workers}</td>
+                  <td className={`border px-2 py-1 text-right font-medium ${d.crew_utilization_percent > 100 ? 'text-red-600' : 'text-green-600'}`}>
+                    {d.crew_utilization_percent.toFixed(1)}%
+                  </td>
+                  <td className={`border px-2 py-1 text-right ${d.profit < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    {d.profit.toFixed(0)}
+                  </td>
+                  <td className="border px-2 py-1 text-right">{d.jobs_scheduled}/{d.jobs_completed}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* By Activity */}
+      <div>
+        <h3 className="font-semibold text-gray-700 mb-3">By Activity</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs border">
+            <thead className="bg-gray-100">
+              <tr>
+                <th className="border px-2 py-1">Activity</th>
+                <th className="border px-2 py-1">Allocations</th>
+                <th className="border px-2 py-1">Area</th>
+                <th className="border px-2 py-1">Farmer Rate</th>
+                <th className="border px-2 py-1">Mukkadam Rate</th>
+                <th className="border px-2 py-1">Profit/ac</th>
+                <th className="border px-2 py-1">Profit</th>
+                <th className="border px-2 py-1">Loss #</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.by_activity.map(a => (
+                <tr key={a.activity_id} className="hover:bg-gray-50">
+                  <td className="border px-2 py-1 font-medium">{a.activity_name}</td>
+                  <td className="border px-2 py-1 text-right">{a.allocations}</td>
+                  <td className="border px-2 py-1 text-right">{a.total_area_allocated.toFixed(1)}</td>
+                  <td className="border px-2 py-1 text-right">{a.avg_farmer_rate.toFixed(0)}</td>
+                  <td className="border px-2 py-1 text-right">{a.avg_mukkadam_rate.toFixed(0)}</td>
+                  <td className="border px-2 py-1 text-right">{a.avg_profit_per_acre.toFixed(0)}</td>
+                  <td className={`border px-2 py-1 text-right font-medium ${a.profit < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    {a.profit.toFixed(0)}
+                  </td>
+                  <td className="border px-2 py-1 text-right">{a.loss_allocations > 0 ? <span className="text-red-600">{a.loss_allocations}</span> : '0'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MukkadamTab({ data }: { data: ClusterInsightsResponse }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  return (
+    <div className="space-y-4">
+      <h3 className="font-semibold text-gray-700">Team Workload & Performance</h3>
+      <div className="space-y-2">
+        {data.mukkadam_work.map(mw => (
+          <div key={mw.mukkadam_id} className="border rounded">
+            <button
+              onClick={() => setExpandedId(expandedId === mw.mukkadam_id ? null : mw.mukkadam_id)}
+              className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50"
+            >
+              <div className="flex items-center gap-3">
+                <span className="font-medium text-gray-800">{mw.name}</span>
+                <span className="text-xs text-gray-500">
+                  {mw.allocations.length} allocations
+                </span>
+              </div>
+              <span className="text-gray-400">{expandedId === mw.mukkadam_id ? '▲' : '▼'}</span>
+            </button>
+
+            {expandedId === mw.mukkadam_id && (
+              <div className="px-4 pb-4">
+                <table className="w-full text-xs border mt-2">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="border px-2 py-1">Date</th>
+                      <th className="border px-2 py-1">Farmer</th>
+                      <th className="border px-2 py-1">Plot</th>
+                      <th className="border px-2 py-1">Activity</th>
+                      <th className="border px-2 py-1">Area</th>
+                      <th className="border px-2 py-1">Workers</th>
+                      <th className="border px-2 py-1">Status</th>
+                      <th className="border px-2 py-1">Profit</th>
+                      <th className="border px-2 py-1">Tags</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mw.allocations.map(a => (
+                      <tr key={a.allocation_id} className="hover:bg-gray-50">
+                        <td className="border px-2 py-1">{a.date}</td>
+                        <td className="border px-2 py-1">{a.farmer_name}</td>
+                        <td className="border px-2 py-1">{a.plot_name || '-'}</td>
+                        <td className="border px-2 py-1">{a.activity_name}</td>
+                        <td className="border px-2 py-1 text-right">{a.allocated_area.toFixed(1)}</td>
+                        <td className="border px-2 py-1 text-right">{a.allocated_workers}</td>
+                        <td className="border px-2 py-1 text-center">
+                          <span className={`px-1 py-0.5 rounded text-[10px] ${
+                            a.work_status === 'completed' ? 'bg-green-100 text-green-700' :
+                            a.work_status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                            'bg-gray-100 text-gray-700'
+                          }`}>
+                            {a.work_status}
+                          </span>
+                        </td>
+                        <td className={`border px-2 py-1 text-right ${a.profit < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {a.profit.toFixed(0)}
+                        </td>
+                        <td className="border px-2 py-1">
+                          <div className="flex gap-1 flex-wrap">
+                            {a.allows_second_job && <span className="px-1 bg-blue-100 text-blue-700 text-[9px] rounded">2nd</span>}
+                            {a.is_carry_forward && <span className="px-1 bg-orange-100 text-orange-700 text-[9px] rounded">CF</span>}
+                            {a.is_auto_allocated && <span className="px-1 bg-purple-100 text-purple-700 text-[9px] rounded">Auto</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FarmerTab({ data }: { data: ClusterInsightsResponse }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  return (
+    <div className="space-y-4">
+      <h3 className="font-semibold text-gray-700">Farmer Work & Allocation Status</h3>
+      <div className="space-y-2">
+        {data.farmer_work.map(fw => {
+          const unallocatedCount = fw.activities.filter(a => a.remaining_area > 0).length;
+          return (
+            <div key={fw.farmer_id} className="border rounded">
+              <button
+                onClick={() => setExpandedId(expandedId === fw.farmer_id ? null : fw.farmer_id)}
+                className="w-full px-4 py-3 flex justify-between items-center hover:bg-gray-50"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="font-medium text-gray-800">{fw.farmer_name}</span>
+                  <span className="text-xs text-gray-500">
+                    {fw.activities.length} activities
+                  </span>
+                  {unallocatedCount > 0 && (
+                    <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded">
+                      {unallocatedCount} unallocated
+                    </span>
+                  )}
+                </div>
+                <span className="text-gray-400">{expandedId === fw.farmer_id ? '▲' : '▼'}</span>
+              </button>
+
+              {expandedId === fw.farmer_id && (
+                <div className="px-4 pb-4">
+                  {fw.activities.map(act => (
+                    <div key={`${act.job_id}-${act.activity_id}`} className="mb-4 border-l-2 border-gray-300 pl-3">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <div className="font-medium text-sm text-gray-800">{act.activity_name}</div>
+                          <div className="text-xs text-gray-500">
+                            {act.plot_name} • {act.scheduled_date || 'Not scheduled'}
+                          </div>
+                          <div className="text-xs text-gray-600 mt-1">
+                            Total: {act.total_area.toFixed(1)} ac • 
+                            Allocated: {act.allocated_area.toFixed(1)} ac • 
+                            <span className={act.remaining_area > 0 ? 'text-red-600 font-medium' : 'text-green-600'}>
+                              {' '}Remaining: {act.remaining_area.toFixed(1)} ac
+                            </span>
+                          </div>
+                        </div>
+                        <span className={`px-2 py-1 rounded text-[10px] ${
+                          act.allocation_status === 'fully_allocated' ? 'bg-green-100 text-green-700' :
+                          act.allocation_status === 'partially_allocated' ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-red-100 text-red-700'
+                        }`}>
+                          {act.allocation_status}
+                        </span>
+                      </div>
+
+                      {act.allocations.length > 0 ? (
+                        <table className="w-full text-xs border mt-2">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="border px-2 py-1">Date</th>
+                              <th className="border px-2 py-1">Mukkadam</th>
+                              <th className="border px-2 py-1">Area</th>
+                              <th className="border px-2 py-1">Workers</th>
+                              <th className="border px-2 py-1">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {act.allocations.map(alloc => (
+                              <tr key={alloc.allocation_id} className="hover:bg-gray-50">
+                                <td className="border px-2 py-1">{alloc.date}</td>
+                                <td className="border px-2 py-1">{alloc.mukkadam_name}</td>
+                                <td className="border px-2 py-1 text-right">{alloc.allocated_area.toFixed(1)}</td>
+                                <td className="border px-2 py-1 text-right">{alloc.allocated_workers}</td>
+                                <td className="border px-2 py-1 text-center">
+                                  <span className={`px-1 py-0.5 rounded text-[10px] ${
+                                    alloc.work_status === 'completed' ? 'bg-green-100 text-green-700' :
+                                    alloc.work_status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                                    'bg-gray-100 text-gray-700'
+                                  }`}>
+                                    {alloc.work_status}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="text-xs text-red-600 bg-red-50 p-2 rounded mt-2">
+                          ⚠️ Not allocated yet
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CapacityTab({ data }: { data: ClusterInsightsResponse }) {
+  return (
+    <div className="space-y-4">
+      <h3 className="font-semibold text-gray-700">Capacity vs Demand</h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs border">
+          <thead className="bg-gray-100">
+            <tr>
+              <th className="border px-2 py-1">Date</th>
+              <th className="border px-2 py-1">Capacity</th>
+              <th className="border px-2 py-1">Demand</th>
+              <th className="border px-2 py-1">Shortage</th>
+              <th className="border px-2 py-1">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.capacity_demand.map(cd => (
+              <tr key={cd.date} className={cd.is_overbooked ? 'bg-red-50' : 'hover:bg-gray-50'}>
+                <td className="border px-2 py-1 font-medium">{cd.date}</td>
+                <td className="border px-2 py-1 text-right">{cd.capacity_workers}</td>
+                <td className="border px-2 py-1 text-right">{cd.demand_workers}</td>
+                <td className={`border px-2 py-1 text-right font-medium ${cd.shortage_workers > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  {cd.shortage_workers}
+                </td>
+                <td className="border px-2 py-1 text-center">
+                  {cd.is_overbooked ? (
+                    <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded font-medium">
+                      OVERBOOKED
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 bg-green-100 text-green-700 text-[10px] rounded">
+                      OK
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function MovesTab({ data }: { data: ClusterInsightsResponse }) {
+  if (data.move_suggestions.length === 0) {
+    return (
+      <div className="text-center py-8 text-gray-500">
+        ✅ No overbooked days or all handled. No move suggestions needed.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <h3 className="font-semibold text-gray-700">Smart Move Suggestions</h3>
+      <div className="space-y-3">
+        {data.move_suggestions.map((ms, idx) => (
+          <div key={idx} className="border rounded p-4 bg-yellow-50">
+            <div className="flex justify-between items-start mb-3">
+              <div>
+                <div className="font-medium text-gray-800">
+                  Overbooked: <span className="text-red-600">{ms.overbooked_date}</span>
+                </div>
+                <div className="text-sm text-gray-600">
+                  → Move to: <span className="text-green-600 font-medium">{ms.target_date}</span>
+                  {' '}(has {ms.free_workers_on_target} free workers)
+                </div>
+              </div>
+            </div>
+
+            <div className="text-xs text-gray-700 mb-2 font-medium">
+              Flexible activities that can be moved:
+            </div>
+            <div className="space-y-2">
+              {ms.flexible_activities.map((act, i) => (
+                <div key={i} className="bg-white border rounded p-2 flex justify-between items-center">
+                  <div>
+                    <div className="font-medium text-gray-800">{act.activity_name}</div>
+                    <div className="text-xs text-gray-500">
+                      {act.farmer_name} • Job: {act.job_id}
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    Remaining: {act.remaining_area.toFixed(1)} ac
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+
 function PaymentDashboard({ clusterId }: { clusterId: number }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -2321,7 +3067,6 @@ const [potentialByDate, setPotentialByDate] = useState<PotentialByDate>({});
   const [showProductivityWarning, setShowProductivityWarning] = useState(false);
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [pendingAllocation, setPendingAllocation] = useState<any>(null);
-const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential' | 'payments')[]>(['jobs', 'allocations']);
 
 // when cluster changes → reload base data for that cluster & current month
 useEffect(() => {
@@ -2339,6 +3084,8 @@ useEffect(() => {
   };
   run();
 }, [clusterId]); // only clusterId, not currentMonth
+const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+const endOfMonth   = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0);
 
 
 const [leaves, setLeaves] = useState<any[]>([]);
@@ -3011,36 +3758,20 @@ useEffect(() => {
   window.addEventListener('farm-scheduler-refresh', handler);
   return () => window.removeEventListener('farm-scheduler-refresh', handler);
 }, [currentMonth, filters.plotId]); // deps so handleRefreshAll uses fresh values
-// const setViewMode = (mode: 'jobs' | 'allocations' | 'both' | 'payments') => {
-//   if (mode === 'both') {
-//     setViewModes(['jobs', 'allocations']);
-//   } else if (mode === 'payments') {
-//     setViewModes(['payments']);
-//   } else {
-//     setViewModes([mode]);
-//   }
-// };
 
-// const currentMode = viewModes.includes('payments')
-//   ? 'payments'
-//   : viewModes.includes('jobs') && viewModes.includes('allocations')
-//   ? 'both'
-//   : viewModes.includes('allocations')
-//   ? 'allocations'
-//   : 'jobs';
-
-const VIEW_OPTIONS: { value: 'jobs' | 'allocations' | 'both' | 'payments'; label: string }[] = [
-  
-  { value: 'both', label: 'Allocations ' },
-  { value: 'jobs',        label: 'AI' },
-  // { value: 'both',        label: 'AI + Allocations' },
-  { value: 'payments',    label: '💰 Payments' },
+const VIEW_OPTIONS: { value: 'jobs' | 'allocations' | 'both' | 'payments' | 'insights'; label: string }[] = [
+  { value: 'both', label: 'Allocations' },
+  { value: 'jobs', label: 'AI' },
+  { value: 'payments', label: '💰 Payments' },
+  // { value: 'insights', label: '📊 Insights' },  // ✅ NEW
 ];
+const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential' | 'payments' | 'insights')[]>(['jobs', 'allocations']);
 
-// const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential' | 'payments')[]>(['jobs']);
 
 const currentMode =
-  viewModes.includes('payments')
+  viewModes.includes('insights')
+    ? 'insights'  // ✅ NEW
+    : viewModes.includes('payments')
     ? 'payments'
     : viewModes.includes('jobs') && viewModes.includes('allocations')
     ? 'both'
@@ -3048,15 +3779,19 @@ const currentMode =
     ? 'allocations'
     : 'jobs';
 
-const setViewMode = (mode: 'jobs' | 'allocations' | 'both' | 'payments') => {
+const setViewMode = (mode: 'jobs' | 'allocations' | 'both' | 'payments' | 'insights') => {
   if (mode === 'both') {
     setViewModes(['jobs', 'allocations']);
   } else if (mode === 'payments') {
     setViewModes(['payments']);
+  } else if (mode === 'insights') {  // ✅ NEW
+    setViewModes(['insights']);
   } else {
     setViewModes([mode]);
   }
 };
+
+
 const selected = VIEW_OPTIONS.find(o => o.value === currentMode) ?? VIEW_OPTIONS[0];
 const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
 
@@ -3416,39 +4151,42 @@ const varietyOptions = [
 
         {/* Center Panel - Calendar */}
         <div className="center-panel">
+
 {
-
-currentMode === 'payments' ? (
+  currentMode === 'payments' ? (
     <PaymentDashboard clusterId={clusterId} />
-  ) 
-  
-  
-  : (
+  ) : currentMode === 'insights' ? (
+    <InsightsPanel
+      clusterId={clusterId}
+      startDate={formatDate(startOfMonth)}
+      endDate={formatDate(endOfMonth)}
+    />
+  ) : (
+    <CalendarPanel
+      currentMonth={currentMonth}
+      selectedDate={selectedDate}
+      jobs={filteredJobs}
+      allJobs={jobs}
+      allocations={filteredAllocations}
+      mukkadams={adjustedMukkadams}
+      leaves={leaves}
+      jobsByDate={jobsByDate}
+      viewModes={viewModes}
+      filters={filters}
+      setFilters={setFilters}
+      onMonthChange={setCurrentMonth}
+      onDateSelect={setSelectedDate}
+      onAllocationClick={(allocation) => console.log('Allocation clicked:', allocation)}
+      onLeavesUpdated={handleRefreshAll}
+      refreshKey={refreshKey}
+      clusterId={clusterId}
+      overloadMap={overloadMap}
+      potentialByDate={filteredPotentialByDate}
+      onStartAllocation={handleStartAllocationFromDay}
+    />
+  )
+}
 
-<CalendarPanel
-  currentMonth={currentMonth}
-  selectedDate={selectedDate}
-  jobs={filteredJobs}  
-  allJobs={jobs}     
-  allocations={filteredAllocations}
-  mukkadams={adjustedMukkadams}   // ✅ use adjusted, not mukkadams
-  leaves={leaves}
-  jobsByDate={jobsByDate}
-  viewModes={viewModes}
-  filters={filters}
-  setFilters={setFilters}
-  // setViewMode={setViewMode}
-  onMonthChange={setCurrentMonth}
-  onDateSelect={setSelectedDate}
-  onAllocationClick={(allocation) => console.log('Allocation clicked:', allocation)}
-   onLeavesUpdated={handleRefreshAll}
-   refreshKey={refreshKey}
-  clusterId={clusterId}
-  overloadMap={overloadMap}
-  potentialByDate={filteredPotentialByDate}
-  onStartAllocation={handleStartAllocationFromDay}  
-/>
-  )}
 
 
         </div>
