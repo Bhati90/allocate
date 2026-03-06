@@ -1490,7 +1490,7 @@ class ClusterMukkadamAssignment(models.Model):
 
 
     def save(self, *args, **kwargs):
-       if not self.joined_date and self.joined_at:
+        if not self.joined_date and self.joined_at:
             self.joined_date = self.joined_at.date()
 
         super().save(*args, **kwargs)
