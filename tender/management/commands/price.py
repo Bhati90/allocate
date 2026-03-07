@@ -1,16 +1,46 @@
-# tender/management/commands/recalc_allocation_farmer_rates.py
+# tender/management/commands/recalc_activity_rates.py
 
-from contextlib import nullcontext  # if Python <3.11, see note below
-from django.core.management.base import BaseCommand
+from decimal import Decimal
+from contextlib import nullcontext  # Python 3.11+; for lower versions, see note below
+
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from tender.models import Allocation  # adjust to your app path
+from tender.models import JobActivity, ActivityCatalog  # adjust to your app paths
+
+
+# Your rate card mapped by ActivityCatalog.name
+RATE_CARD = {
+    "Pruning (छाटणी)": Decimal("4000"),
+    "Shoot Selection (विरळणी)": Decimal("3000"),
+    "1st Lateral Removal (बगल काढणे)": Decimal("2500"),
+    "Shenda Stopping (शेंडा स्टॉपिंग)": Decimal("2000"),
+    "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)": Decimal("4000"),
+
+    "One Time Subcane (सबकेन)": Decimal("2500"),
+    "1st Subcane (पहिली सबकेन)": Decimal("1500"),
+    "2nd Subcane (दुसरी सबकेन)": Decimal("1500"),
+    "3rd Subcane (तिसरी सबकेन)": Decimal("1500"),
+
+    "Hand Pasting (पेस्टींग)": Decimal("2000"),
+    "Cordan Tying (सुटलेले ओलांढे बांधणे)": Decimal("500"),
+    "Full Cordan Tying (सरसकट ओलांढे बांधणे)": Decimal("1500"),
+
+    "Cane Tying with Clips (काडी बांधणे - क्लिप्स)": Decimal("7500"),
+    "Cane Selection (काडी निवड)": Decimal("2500"),
+    "Cane Tying with Strings/Thread (सुतळीने काडी बांधणे)": Decimal("5500"),
+
+    "Extra Leaf removal (पाने काढणे)": Decimal("2500"),
+    "1st Round Extra Leaf removal": Decimal("2500"),
+    "2nd Round Extra Leaf removal": Decimal("2500"),
+    "3rd Round Extra Leaf removal": Decimal("2500"),
+}
 
 
 class Command(BaseCommand):
     help = (
-        "Sync Allocation.farmer_rate with JobActivity.rate_per_acre "
-        "and recalculate farmer_amount, mukkadam_amount, profit via save()."
+        "Update JobActivity.rate_per_acre from the rate card (by ActivityCatalog.name) "
+        "and recalculate total_price & subtotal via JobActivity.save()."
     )
 
     def add_arguments(self, parser):
@@ -20,73 +50,78 @@ class Command(BaseCommand):
             help="Show what would be updated without saving.",
         )
         parser.add_argument(
-            "--activity-id",
-            type=int,
+            "--activity-name",
+            type=str,
             nargs="*",
-            help="Optional: limit to allocations of specific JobActivity IDs.",
-        )
-        parser.add_argument(
-            "--cluster-id",
-            type=int,
-            nargs="*",
-            help="Optional: limit to specific cluster IDs.",
+            help="Optional: limit to specific activity names (ActivityCatalog.name).",
         )
 
     def handle(self, *args, **options):
         dry_run = options["dry_run"]
-        activity_ids = options.get("activity_id")
-        cluster_ids = options.get("cluster_id")
+        activity_names = options.get("activity_name")
 
-        qs = Allocation.objects.select_related("job_activity", "job_activity__activity")
+        if not RATE_CARD:
+            raise CommandError("RATE_CARD is empty.")
 
-        if activity_ids:
-            qs = qs.filter(job_activity_id__in=activity_ids)
-        if cluster_ids:
-            qs = qs.filter(cluster_id__in=cluster_ids)
+        # Base queryset
+        qs = JobActivity.objects.select_related("activity")
+
+        # Restrict to given names (if passed)
+        if activity_names:
+            qs = qs.filter(activity__name__in=activity_names)
+
+        # Restrict to names present in RATE_CARD
+        qs = qs.filter(activity__name__in=RATE_CARD.keys())
 
         total = qs.count()
         if total == 0:
-            self.stdout.write(self.style.WARNING("No Allocation rows to update."))
+            self.stdout.write(self.style.WARNING("No JobActivity records to update."))
             return
 
-        self.stdout.write(f"Found {total} Allocation rows to update.")
+        self.stdout.write(f"Found {total} JobActivity rows to update.")
 
         updated = 0
         ctx = transaction.atomic() if not dry_run else nullcontext()
 
         with ctx:
-            for alloc in qs.iterator(chunk_size=500):
-                ja = alloc.job_activity
-                new_farmer_rate = ja.rate_per_acre
+            for ja in qs.iterator(chunk_size=500):
+                name = ja.activity.name
+                new_rate = RATE_CARD.get(name)
+                if new_rate is None:
+                    # Should not happen because of the filter, but be safe
+                    if options["verbosity"] >= 2:
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"Skipping JobActivity {ja.id}: no rate found for '{name}'."
+                            )
+                        )
+                    continue
 
-                old_farmer_rate = alloc.farmer_rate
-                old_farmer_amount = alloc.farmer_amount
-                old_mukkadam_amount = alloc.mukkadam_amount
-                old_profit = alloc.profit
+                old_rate = ja.rate_per_acre
+                old_total_price = ja.total_price
+                old_subtotal = ja.subtotal
 
-                # Sync farmer_rate from JobActivity
-                alloc.farmer_rate = new_farmer_rate
-                # save() will recalc farmer_amount, mukkadam_amount, profit
-                alloc.save()
+                ja.rate_per_acre = new_rate
+                # Triggers your save() which recomputes total_price and subtotal
+                ja.save()
 
                 updated += 1
 
                 if options["verbosity"] >= 2:
                     self.stdout.write(
-                        f"Allocation {alloc.id} (JA {ja.id} / {ja.activity.name}): "
-                        f"farmer_rate {old_farmer_rate} -> {alloc.farmer_rate}, "
-                        f"farmer_amount {old_farmer_amount} -> {alloc.farmer_amount}, "
-                        f"mukkadam_amount {old_mukkadam_amount} -> {alloc.mukkadam_amount}, "
-                        f"profit {old_profit} -> {alloc.profit}"
+                        f"JobActivity {ja.id} [{name}]: "
+                        f"rate_per_acre {old_rate} -> {ja.rate_per_acre}, "
+                        f"total_price {old_total_price} -> {ja.total_price}, "
+                        f"subtotal {old_subtotal} -> {ja.subtotal}"
                     )
 
             if dry_run:
                 self.stdout.write(
                     self.style.WARNING(
-                        f"[DRY RUN] Would update {updated} Allocation rows; no changes saved."
+                        f"[DRY RUN] Would update {updated} JobActivity rows; no changes saved."
                     )
                 )
             else:
                 self.stdout.write(
-                    self.style.SUCCESS(f"Updated {updated} Allocation rows.")
+                    self.style.SUCCESS(f"Updated {updated} JobActivity rows.")
                 )
