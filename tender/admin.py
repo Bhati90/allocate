@@ -7,7 +7,7 @@ from django import forms
 from decimal import Decimal
 
 from .models import (
-    ActivityCatalog, Cluster, Farmer, Plot, ClusterActivityRate,
+    ActivityCatalog, Cluster, Farmer, Plot, ClusterActivityRate,MukkadamLedgerEntry,
     ClusterMukkadamAssignment, Job, JobActivity, JobBooking, FarmerPayment,
     ActivityScheduleRule, ClusterActivityScheduleRule,
     Mukkadam, ClusterMukkadamActivityRate, MukkadamActivityRate,
@@ -618,70 +618,77 @@ from .models import ClusterMukkadamAssignment
 
 from django.contrib import admin
 
-
 @admin.register(ClusterMukkadamAssignment)
 class ClusterMukkadamAssignmentAdmin(admin.ModelAdmin):
-
-    list_display = (
-        'mukkadam',
-        'cluster',
+    search_fields = ('mukkadam__mukkadam_name', 'cluster__name')  # ← required for autocomplete_fields
+    list_display = ('mukkadam', 'cluster', 'is_active', 'advance_amount', 'weekly_amount')
+    list_editable = (
+        'advance_amount',   # ✅ edit directly from list
         'weekly_amount',
-        'mukkadam_type',
-        'updown_mode',
-        'joined_date',
         'is_active',
     )
-
-    list_filter = (
-        'mukkadam_type',
-        'updown_mode',
-        'is_active',
-        'weekly_payment_day',
-    )
-
-    search_fields = (
-        'mukkadam__mukkadam_name',
-        'cluster__name',
-    )
-
+    list_filter = ('mukkadam_type', 'updown_mode', 'is_active', 'weekly_payment_day')
+    search_fields = ('mukkadam__mukkadam_name', 'cluster__name')
     readonly_fields = ('joined_at', 'updated_at')
 
     fieldsets = (
         ('Basic Info', {
-            'fields': (
-                'mukkadam',
-                'cluster',
-                'weekly_amount',
-                'mukkadam_type',
-                'updown_mode',
-                'is_active',
-            )
+            'fields': ('mukkadam', 'cluster', 'weekly_amount', 'mukkadam_type', 'updown_mode', 'is_active')
         }),
         ('Updown Availability', {
-            'fields': (
-                'updown_from_date',
-                'updown_to_date',
-                'updown_specific_dates',
-            )
+            'fields': ('updown_from_date', 'updown_to_date', 'updown_specific_dates')
         }),
         ('Financials', {
             'fields': (
                 'transport_price',
-                'advance_amount',
+                'advance_amount',        # ✅ fully editable
                 'advance_is_manual',
                 'weekly_payment_day',
                 'total_weekly_payments',
             )
         }),
         ('Timestamps', {
-            'fields': (
-                'joined_date',
-                'joined_at',
-                'updated_at',
-            )
+            'fields': ('joined_date', 'joined_at', 'updated_at')
         }),
     )
 
+
+# admin.py
+
+@admin.register(MukkadamLedgerEntry)
+class MukkadamLedgerEntryAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'mukkadam', 'cluster', 'payment_type',
+        'farmer_name', 'activity_name', 'acres',
+        'amount', 'job_date', 'payment_date',
+        'payment_status', 'remark'
+    )
+    list_filter = ('payment_type', 'payment_status', 'cluster', 'mukkadam')
+    search_fields = ('mukkadam__mukkadam_name', 'farmer_name', 'activity_name', 'remark')
+    list_editable = ('payment_status', 'remark')
+    date_hierarchy = 'payment_date'
+    autocomplete_fields = ['mukkadam', 'cluster', 'job', 'job_activity']
+
+    fieldsets = (
+        ('Who', {
+            'fields': ('mukkadam', 'cluster')
+        }),
+        ('Farmer & Job (optional)', {
+            'fields': ('farmer_name', 'farmer_contact', 'job', 'job_activity', 'activity_name'),
+            'description': 'Leave blank for advance/transport/weekly payments'
+        }),
+        ('Payment', {
+            'fields': ('payment_type', 'acres', 'amount', 'job_date', 'payment_date')
+        }),
+        ('Status', {
+            'fields': ('payment_status', 'remark', 'proof_s3_key')
+        }),
+        ('Audit', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    readonly_fields = ('created_at', 'updated_at')
 
 @admin.register(MukkadamWeeklyPayment)
 class MukkadamWeeklyPaymentAdmin(admin.ModelAdmin):
@@ -690,7 +697,7 @@ class MukkadamWeeklyPaymentAdmin(admin.ModelAdmin):
         'crew_size_on_date', 'is_auto_generated', 'notes', 'created_at'
     )
     list_filter = ('is_auto_generated', 'assignment__cluster')
-    search_fields = ('assignment__mukkadam__mukkadam_name', 'assignment__cluster__name')
+
     date_hierarchy = 'payment_date'
     autocomplete_fields = ['assignment']
 
@@ -728,22 +735,34 @@ class MukkadamJobSettlementAdmin(admin.ModelAdmin):
     )
     list_filter = ('status', 'cluster')
     search_fields = ('mukkadam__mukkadam_name', 'job__job_id')
-    readonly_fields = ('created_at', 'updated_at', 'calculated_at', 'net_payable', 'gross_amount', 'payable_amount')
+    
+    # ✅ Only keep true auto-fields as readonly
+    readonly_fields = ('created_at', 'updated_at')
+    
     filter_horizontal = ('weekly_payments_applied',)
-    autocomplete_fields = ['mukkadam', 'job', 'cluster']
+    autocomplete_fields = ['mukkadam', 'job', 'cluster', 'plot']
 
     fieldsets = (
         ('Core', {
-            'fields': ('mukkadam', 'job', 'cluster', 'status')
+            'fields': ('mukkadam', 'job', 'plot', 'cluster', 'status')
         }),
         ('Gross Calculation', {
-            'fields': ('gross_amount', 'deposit_percent', 'payable_amount', 'deposit_carried_forward')
+            'fields': (
+                'gross_amount',        # ✅ now editable
+                'deposit_percent',
+                'payable_amount',      # ✅ now editable
+                'deposit_carried_forward',
+                'credit_carried_forward',
+            )
         }),
         ('Deductions', {
-            'fields': ('advance_deducted', 'weekly_payments_deducted', 'credit_carried_forward')
+            'fields': (
+                'advance_deducted',           # ✅ now editable
+                'weekly_payments_deducted',   # ✅ now editable
+            )
         }),
         ('Net', {
-            'fields': ('net_payable',)
+            'fields': ('net_payable',)        # ✅ now editable
         }),
         ('Weekly Payments Applied', {
             'fields': ('weekly_payments_applied',),
@@ -751,7 +770,6 @@ class MukkadamJobSettlementAdmin(admin.ModelAdmin):
         }),
         ('Notes & Timestamps', {
             'fields': ('notes', 'calculated_at', 'paid_at', 'created_at', 'updated_at'),
-            'classes': ('collapse',)
         }),
     )
 
@@ -772,7 +790,6 @@ class MukkadamJobSettlementAdmin(admin.ModelAdmin):
             color, obj.get_status_display()
         )
     status_badge.short_description = 'Status'
-
 
 @admin.register(MukkadamActivityRate)
 class MukkadamActivityRateAdmin(admin.ModelAdmin):
@@ -884,17 +901,35 @@ class AllocationAdmin(admin.ModelAdmin):
         )
     status_badge.short_description = 'Status'
 
-
 @admin.register(MukkadamPayment)
 class MukkadamPaymentAdmin(admin.ModelAdmin):
-    list_display = ('payment_id', 'mukkadam', 'mode', 'amount', 'paid_at', 'created_by')
+    list_display = ('payment_id', 'mukkadam', 'settlement', 'mode', 'amount', 'paid_at', 'created_by')
     list_filter = ('mode',)
     search_fields = ('payment_id', 'mukkadam__mukkadam_name')
-    readonly_fields = ('created_at', 'updated_at')
+    
+    # ✅ Only auto-fields readonly
+    readonly_fields = ('payment_id', 'created_at', 'updated_at')
+    
     filter_horizontal = ('allocations',)
     date_hierarchy = 'paid_at'
-    autocomplete_fields = ['mukkadam']
+    autocomplete_fields = ['mukkadam', 'settlement']
 
+    fieldsets = (
+        ('Payment', {
+            'fields': ('payment_id', 'mukkadam', 'settlement', 'mode', 'amount')
+        }),
+        ('Details', {
+            'fields': ('notes', 'paid_at', 'created_by', 'proof_s3_key')
+        }),
+        ('Allocations', {
+            'fields': ('allocations',),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
 
 # ============================================================================
 # LEAVES & EXTRA WORKERS

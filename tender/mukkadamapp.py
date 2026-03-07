@@ -376,12 +376,17 @@ def mukkadam_workbook(request):
         'jobs': jobs_data,
     })
 
+from datetime import date
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework import status
+from django.utils import timezone as tz
 
 @api_view(['GET'])
 def mukkadam_future_work(request):
     """
-    Returns upcoming/future jobs assigned to the mukkadam.
-    Includes allocation-level work status, start/end times, and report info.
+    Returns upcoming and past jobs assigned to the mukkadam.
+    Splits into future_jobs (>= today) and past_jobs (< today).
     """
     mobile = request.query_params.get('mobile', '').strip()
     if not mobile:
@@ -393,112 +398,120 @@ def mukkadam_future_work(request):
 
     today = date.today()
 
+    def fmt_time(dt):
+        if not dt:
+            return None
+        try:
+            local = tz.localtime(dt)
+            return local.strftime('%Y-%m-%d %H:%M')
+        except Exception:
+            return str(dt)
+
+    def build_jobs_map(qs):
+        jobs_map = {}
+
+        allocs = qs.select_related(
+            'job_activity__job__farmer',
+            'job_activity__activity',
+            'job_activity__plot'
+        ).order_by('allocated_date')
+
+        for alloc in allocs:
+            job = alloc.job_activity.job
+            jid = job.job_id
+
+            if jid not in jobs_map:
+                plot = alloc.job_activity.plot or getattr(job, 'plot', None)
+
+                jobs_map[jid] = {
+                    'job_id':         jid,
+                    'farmer_id':      job.farmer.farmer_id,
+                    'farmer_name':    job.farmer.farmer_name,
+                    'farmer_phone':   job.farmer.phone_number,
+                    'scheduled_date': str(job.scheduled_date),
+                    'crop':           f"{job.crop_name} ({job.variety})",
+                    'location': {
+                        'address': job.farmer.location,
+                        'lat': float(plot.latitude)  if plot and plot.latitude  else float(job.latitude)  if job.latitude  else None,
+                        'lng': float(plot.longitude) if plot and plot.longitude else float(job.longitude) if job.longitude else None,
+                    },
+                    'activities':         [],
+                    'projected_earnings': 0.0,
+                    'job_work_status':    None,
+                }
+
+            projected = float(alloc.allocated_area * alloc.mukkadam_rate)
+            jobs_map[jid]['projected_earnings'] += round(projected, 2)
+
+            jobs_map[jid]['activities'].append({
+                'allocation_id':   alloc.id,
+                'name':            alloc.job_activity.activity.name,
+                'date':            str(alloc.allocated_date),
+                'area':            float(alloc.allocated_area),
+                'workers':         alloc.allocated_workers,
+                'rate':            float(alloc.mukkadam_rate),
+                'earning':         round(projected, 2),
+
+                'work_status':     alloc.work_status,
+                'status':          alloc.status,
+
+                'started':         alloc.actual_start_time is not None,
+                'start_time':      fmt_time(alloc.actual_start_time),
+
+                'report_submitted': alloc.report_submitted,
+                'end_time':         fmt_time(alloc.actual_end_time),
+                'submitted_at':     fmt_time(alloc.report_submitted_at),
+
+                'actual_area_done': float(alloc.actual_area_done) if alloc.actual_area_done is not None else None,
+                'actual_crew_size': alloc.actual_crew_size,
+            })
+
+        # derive job-level status & times
+        for job_data in jobs_map.values():
+            acts = job_data['activities']
+            if not acts:
+                job_data['job_work_status'] = 'not_started'
+            elif all(a['report_submitted'] for a in acts):
+                job_data['job_work_status'] = 'completed'
+            elif any(a['started'] or a['work_status'] != 'work_not_started' for a in acts):
+                job_data['job_work_status'] = 'in_progress'
+            else:
+                job_data['job_work_status'] = 'not_started'
+
+            start_times = [a['start_time'] for a in acts if a['start_time']]
+            end_times   = [a['end_time']   for a in acts if a['end_time']]
+            job_data['job_started_at'] = min(start_times) if start_times else None
+            job_data['job_ended_at']   = max(end_times)   if end_times   else None
+
+        return jobs_map
+
+    # future (including today)
     future_allocs = Allocation.objects.filter(
         mukkadam=mukkadam,
-        allocated_date__gte=today
-    ).select_related(
-        'job_activity__job__farmer',
-        'job_activity__activity',
-        'job_activity__plot'
-    ).order_by('allocated_date')
+        allocated_date__gte=today,
+    )
+    future_jobs_map = build_jobs_map(future_allocs)
 
-    jobs_map = {}
-    for alloc in future_allocs:
-        job = alloc.job_activity.job
-        jid = job.job_id
-
-        if jid not in jobs_map:
-            plot = alloc.job_activity.plot or getattr(job, 'plot', None)
-
-            jobs_map[jid] = {
-                'job_id':         jid,
-                'farmer_id':      job.farmer.farmer_id,
-                'farmer_name':    job.farmer.farmer_name,
-                'farmer_phone':   job.farmer.phone_number,
-                'scheduled_date': str(job.scheduled_date),
-                'crop':           f"{job.crop_name} ({job.variety})",
-                'location': {
-                    'address': job.farmer.location,
-                    'lat': float(plot.latitude)  if plot and plot.latitude  else float(job.latitude)  if job.latitude  else None,
-                    'lng': float(plot.longitude) if plot and plot.longitude else float(job.longitude) if job.longitude else None,
-                },
-                'activities':          [],
-                'projected_earnings':  0.0,
-
-                # ── Job-level status summary ──────────────────────────
-                # Derived from the allocations within this job:
-                #   not_started  → all allocations are work_not_started
-                #   in_progress  → at least one started, not all reported
-                #   completed    → all allocations have report_submitted=True
-                'job_work_status':     None,  # filled after all allocs added
-            }
-
-        projected = float(alloc.allocated_area * alloc.mukkadam_rate)
-        jobs_map[jid]['projected_earnings'] += round(projected, 2)
-
-        # ── Format times (IST-friendly string if present) ─────────────
-        def fmt_time(dt):
-            if not dt:
-                return None
-            try:
-                from django.utils import timezone as tz
-                local = tz.localtime(dt)
-                return local.strftime('%Y-%m-%d %H:%M')
-            except Exception:
-                return str(dt)
-
-        jobs_map[jid]['activities'].append({
-            'allocation_id':    alloc.id,
-            'name':             alloc.job_activity.activity.name,
-            'date':             str(alloc.allocated_date),
-            'area':             float(alloc.allocated_area),
-            'workers':          alloc.allocated_workers,
-            'rate':             float(alloc.mukkadam_rate),
-            'earning':          round(projected, 2),
-
-            # ── Work status ───────────────────────────────────────────
-            'work_status':      alloc.work_status,          # work_not_started / in_progress / completed
-            'status':           alloc.status,               # scheduled / in_progress / completed / cancelled
-
-            # ── Start ─────────────────────────────────────────────────
-            'started':          alloc.actual_start_time is not None,
-            'start_time':       fmt_time(alloc.actual_start_time),
-
-            # ── End / report ──────────────────────────────────────────
-            'report_submitted': alloc.report_submitted,
-            'end_time':         fmt_time(alloc.actual_end_time),
-            'submitted_at':     fmt_time(alloc.report_submitted_at),
-
-            # ── Claimed area (from day-end report) ────────────────────
-            'actual_area_done': float(alloc.actual_area_done) if alloc.actual_area_done is not None else None,
-            'actual_crew_size': alloc.actual_crew_size,
-        })
-
-    # ── Derive job-level work status from its allocations ─────────────────
-    for job_data in jobs_map.values():
-        acts = job_data['activities']
-        if not acts:
-            job_data['job_work_status'] = 'not_started'
-        elif all(a['report_submitted'] for a in acts):
-            job_data['job_work_status'] = 'completed'
-        elif any(a['started'] or a['work_status'] != 'work_not_started' for a in acts):
-            job_data['job_work_status'] = 'in_progress'
-        else:
-            job_data['job_work_status'] = 'not_started'
-
-        # ── Earliest start and latest end across all allocations ──────
-        start_times = [a['start_time'] for a in acts if a['start_time']]
-        end_times   = [a['end_time']   for a in acts if a['end_time']]
-        job_data['job_started_at'] = min(start_times) if start_times else None
-        job_data['job_ended_at']   = max(end_times)   if end_times   else None
+    # past (< today)
+    past_allocs = Allocation.objects.filter(
+        mukkadam=mukkadam,
+        allocated_date__lt=today,
+    )
+    past_jobs_map = build_jobs_map(past_allocs)
 
     return Response({
-        'mukkadam_id':             mukkadam.mukkadam_id,
-        'mukkadam_name':           mukkadam.mukkadam_name,
-        'CENTRAL_PHONE' : '+918047361465',
-        'total_future_jobs':       len(jobs_map),
-        'total_projected_earning': round(sum(j['projected_earnings'] for j in jobs_map.values()), 2),
-        'jobs':                    list(jobs_map.values()),
+        'mukkadam_id':   mukkadam.mukkadam_id,
+        'mukkadam_name': mukkadam.mukkadam_name,
+        'CENTRAL_PHONE': '+918047361465',
+
+        'total_future_jobs':   len(future_jobs_map),
+        'total_past_jobs':     len(past_jobs_map),
+
+        'total_future_earning': round(sum(j['projected_earnings'] for j in future_jobs_map.values()), 2),
+        'total_past_earning':   round(sum(j['projected_earnings'] for j in past_jobs_map.values()), 2),
+
+        'future_jobs':   list(future_jobs_map.values()),
+        'past_jobs':     list(past_jobs_map.values()),
     })
 
 from decimal import Decimal
@@ -1012,28 +1025,60 @@ def mukkadam_earnings(request, mukkadam_id):
     })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SETTLEMENT HISTORY  (mirrors cluster_payment_dashboard mukkadam section exactly)
-# ─────────────────────────────────────────────────────────────────────────────
+from decimal import Decimal
+from datetime import date, timedelta
+
+from django.db.models import Q
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+from tender.models import (
+    Mukkadam,
+    ClusterMukkadamAssignment,
+    MukkadamJobSettlement,
+    MukkadamWeeklyPayment,
+    MukkadamPayment,
+    MukkadamMiscCost,
+    Allocation,
+)
+from tender.utils import get_presigned_urls_batch
+
+from decimal import Decimal
+from datetime import date, timedelta
+
+from django.db.models import Q
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+from tender.models import (
+    Mukkadam,
+    ClusterMukkadamAssignment,
+    MukkadamJobSettlement,
+    MukkadamWeeklyPayment,
+    MukkadamPayment,
+    MukkadamMiscCost,
+    Allocation,
+)
+from tender.utils import get_presigned_urls_batch
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def mukkadam_settlement_history(request, mukkadam_id):
     """
     GET /api/mukkadams/<id>/settlement-history/?cluster_id=<optional>
 
-    Added in this version:
-    ─ total_allocated_acres, total_actual_acres, total_effective_acres in every summary
-    ─ payment_breakdown in every summary:
-        advance_paid, weekly_paid, missed_weekly_paid, direct_settlement_paid, total_paid
-    ─ Same breakdown added to: top-level summary, by_cluster, by_farmer, week_ledger
+    Fixes applied:
+    1. select_related('assignment') on weekly_qs so is_missed_recovery() works correctly
+    2. advance_paid in summary sums ALL assignments' advance_amount (not just primary)
+    3. weekly_paid / missed_weekly_paid correctly computed after select_related fix
     """
-    from decimal import Decimal
-    from datetime import date, timedelta
-    from django.db.models import Q
-    from tender.utils import get_presigned_urls_batch
 
     today = date.today()
 
+    # ── Mukkadam ──────────────────────────────────────────────────────
     try:
         mukkadam = Mukkadam.objects.get(pk=mukkadam_id)
     except Mukkadam.DoesNotExist:
@@ -1046,8 +1091,12 @@ def mukkadam_settlement_history(request, mukkadam_id):
             mukkadam=mukkadam, is_active=True,
         ).select_related('cluster').order_by('-joined_at')
     )
+
     if cluster_id_param:
-        assignment = next((a for a in all_assignments if str(a.cluster_id) == str(cluster_id_param)), None)
+        assignment = next(
+            (a for a in all_assignments if str(a.cluster_id) == str(cluster_id_param)),
+            None
+        )
         if not assignment and all_assignments:
             assignment = all_assignments[0]
     else:
@@ -1060,25 +1109,24 @@ def mukkadam_settlement_history(request, mukkadam_id):
         'job', 'job__farmer', 'plot',
     ).order_by('calculated_at')
 
-    # ── Weekly payments across ALL assignments ────────────────────────
+    # ── Weekly payments — FIX #1: select_related('assignment') ───────
     weekly_qs = list(
         MukkadamWeeklyPayment.objects.filter(
             assignment__in=all_assignments
-        ).order_by('payment_date')
+        ).select_related('assignment')          # ← FIXED (was missing)
+        .order_by('payment_date')
     ) if all_assignments else []
 
     weekly_proof_keys = [w.proof_s3_key for w in weekly_qs if getattr(w, 'proof_s3_key', None)]
     weekly_proof_map  = get_presigned_urls_batch(weekly_proof_keys) if weekly_proof_keys else {}
 
-    # Separate: track which weekly payments were for missed dates
-    # A payment is "missed-recovery" if its payment_date differs from the expected
-    # scheduled day for that assignment. We tag them based on _missed_for_assignment.
-    # We'll compute this after assignments are processed.
-
     # ── Settlement payments ───────────────────────────────────────────
     all_payments = list(
         MukkadamPayment.objects.filter(mukkadam=mukkadam)
-        .select_related('settlement', 'settlement__job', 'settlement__job__farmer', 'settlement__plot')
+        .select_related(
+            'settlement', 'settlement__job',
+            'settlement__job__farmer', 'settlement__plot'
+        )
         .order_by('paid_at')
     )
     settle_proof_keys = [p.proof_s3_key for p in all_payments if getattr(p, 'proof_s3_key', None)]
@@ -1128,21 +1176,20 @@ def mukkadam_settlement_history(request, mukkadam_id):
         )
 
     def empty_payment_breakdown():
-        """Standard payment breakdown dict used in every summary."""
         return {
-            'advance_paid':          0.0,   # from ClusterMukkadamAssignment.advance_amount
-            'weekly_paid':           0.0,   # on-time weekly payments
-            'missed_weekly_paid':    0.0,   # recovered late weekly payments
-            'direct_settlement_paid':0.0,   # MukkadamPayment (settlement pay button)
-            'misc_deducted':         0.0,   # MukkadamMiscCost
-            'total_paid':            0.0,   # sum of all above
+            'advance_paid':           0.0,
+            'weekly_paid':            0.0,
+            'missed_weekly_paid':     0.0,
+            'direct_settlement_paid': 0.0,
+            'misc_deducted':          0.0,
+            'total_paid':             0.0,
         }
 
     def empty_acres():
         return {
             'total_allocated_acres': 0.0,
-            'total_actual_acres':    0.0,   # mukkadam claimed / actual_area_done
-            'total_effective_acres': 0.0,   # used for billing (after overrides)
+            'total_actual_acres':    0.0,
+            'total_effective_acres': 0.0,
         }
 
     # ── Missed weekly dates per assignment ────────────────────────────
@@ -1163,17 +1210,13 @@ def mukkadam_settlement_history(request, mukkadam_id):
             cur += timedelta(days=1)
         return missed
 
-    # Pre-compute missed dates per assignment
     missed_by_assignment = {asgn.id: _missed_dates_for(asgn) for asgn in all_assignments}
 
-    # Tag each weekly payment: on_time vs missed_recovery
-    # A weekly payment is "missed_recovery" if payment_date is NOT the expected day
-    # i.e. it was paid late (the date itself differs from the weekday schedule)
-    # We identify this by checking if payment_date was in the missed set BEFORE this payment
-    # Simpler approach: payment is missed_recovery if notes contain "late" or if payment_date
-    # weekday != assignment.weekly_payment_day
+    # ── FIX #2: is_missed_recovery now works because select_related ───
     def is_missed_recovery(w):
-        if w.assignment_id and w.assignment and w.assignment.weekly_payment_day is not None:
+        if (w.assignment_id
+                and w.assignment
+                and w.assignment.weekly_payment_day is not None):
             return w.payment_date.weekday() != w.assignment.weekly_payment_day
         return False
 
@@ -1183,6 +1226,13 @@ def mukkadam_settlement_history(request, mukkadam_id):
     total_weekly_missed_recovery = sum(
         float(w.amount) for w in weekly_qs if is_missed_recovery(w)
     )
+
+    # ── FIX #3: advance_paid = sum of ALL assignments ─────────────────
+    total_advance_amount = sum(
+        float(asgn.advance_amount or 0) for asgn in all_assignments
+    )
+    # Keep primary assignment's advance for per-cluster/farmer proportion base
+    primary_advance = float(assignment.advance_amount or 0) if assignment else 0.0
 
     # ── BUILD SETTLEMENT ROWS ─────────────────────────────────────────
     settlement_rows = []
@@ -1258,9 +1308,9 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'proof_url': misc_proof_map.get(c.proof_s3_key) if getattr(c, 'proof_s3_key', None) else None,
         } for c in job_misc]
 
-        settlement_payments  = payments_by_settlement.get(s.id, [])
-        total_already_paid   = sum(p['amount'] for p in settlement_payments)
-        remaining_payable    = float(s.net_payable) - total_already_paid
+        settlement_payments = payments_by_settlement.get(s.id, [])
+        total_already_paid  = sum(p['amount'] for p in settlement_payments)
+        remaining_payable   = float(s.net_payable) - total_already_paid
 
         settlement_rows.append({
             'job_id':                   str(s.job.job_id),
@@ -1268,13 +1318,11 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'plot_name':                s.plot.name if s.plot else '—',
             'plot_code':                s.plot.plot_code if s.plot else '—',
             'status':                   s.status,
-            # Acres
             'acres': {
                 'total_allocated_acres': float(alloc_acres),
                 'total_actual_acres':    float(actual_acres),
                 'total_effective_acres': float(eff_acres),
             },
-            # Financials
             'gross_amount':             float(s.gross_amount),
             'deposit_percent':          float(deposit_pct),
             'deposit_held':             float(deposit_held),
@@ -1288,20 +1336,19 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'net_payable':              float(s.net_payable),
             'total_already_paid':       total_already_paid,
             'remaining_payable':        remaining_payable,
-            # Payment breakdown for this job
             'payment_breakdown': {
                 'advance_paid':           float(s.advance_deducted),
                 'weekly_paid':            float(s.weekly_payments_deducted),
-                'missed_weekly_paid':     0.0,   # can't split at job level without extra tracking
+                'missed_weekly_paid':     0.0,
                 'direct_settlement_paid': total_already_paid,
                 'misc_deducted':          float(job_misc_total),
                 'total_paid':             float(s.advance_deducted) + float(s.weekly_payments_deducted) + total_already_paid,
             },
-            'calculated_at':  str(s.calculated_at.date()) if s.calculated_at else None,
-            'paid_at':        str(s.paid_at.date()) if s.paid_at else None,
-            'activities':     act_details,
-            'misc_costs':     job_misc_data,
-            'payments_made':  settlement_payments,
+            'calculated_at': str(s.calculated_at.date()) if s.calculated_at else None,
+            'paid_at':       str(s.paid_at.date()) if s.paid_at else None,
+            'activities':    act_details,
+            'misc_costs':    job_misc_data,
+            'payments_made': settlement_payments,
         })
 
     # ── All earned allocations ────────────────────────────────────────
@@ -1327,11 +1374,11 @@ def mukkadam_settlement_history(request, mukkadam_id):
             weekly_by_week[wk_key] = []
         ps_key = getattr(w, 'proof_s3_key', None)
         weekly_by_week[wk_key].append({
-            'payment_date':      str(w.payment_date),
-            'amount':            float(w.amount),
-            'mode':              getattr(w, 'mode', 'CASH'),
-            'notes':             getattr(w, 'notes', ''),
-            'proof_url':         weekly_proof_map.get(ps_key) if ps_key else None,
+            'payment_date':       str(w.payment_date),
+            'amount':             float(w.amount),
+            'mode':               getattr(w, 'mode', 'CASH'),
+            'notes':              getattr(w, 'notes', ''),
+            'proof_url':          weekly_proof_map.get(ps_key) if ps_key else None,
             'is_missed_recovery': is_missed_recovery(w),
         })
 
@@ -1345,16 +1392,15 @@ def mukkadam_settlement_history(request, mukkadam_id):
 
         if wk_key not in week_alloc_map:
             week_alloc_map[wk_key] = {
-                'week_start':       wk_key,
-                'week_end':         str(wk_end),
-                'week_label':       wk_label,
-                'allocations':      [],
-                'total_expected':   Decimal('0'),
-                'total_actual':     Decimal('0'),
-                # Acres accumulators
-                'alloc_acres':      Decimal('0'),
-                'actual_acres':     Decimal('0'),
-                'eff_acres':        Decimal('0'),
+                'week_start':     wk_key,
+                'week_end':       str(wk_end),
+                'week_label':     wk_label,
+                'allocations':    [],
+                'total_expected': Decimal('0'),
+                'total_actual':   Decimal('0'),
+                'alloc_acres':    Decimal('0'),
+                'actual_acres':   Decimal('0'),
+                'eff_acres':      Decimal('0'),
             }
 
         rate     = Decimal(str(a.mukkadam_rate or 0))
@@ -1395,7 +1441,7 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'report_submitted': a.report_submitted,
         })
 
-    # Weeks with only payments
+    # Weeks with only payments (no allocations)
     for wk_key in set(weekly_by_week.keys()) - set(week_alloc_map.keys()):
         wk_start_dt = date.fromisoformat(wk_key)
         wk_end_dt   = wk_start_dt + timedelta(days=6)
@@ -1411,26 +1457,25 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'eff_acres':      Decimal('0'),
         }
 
-    advance_amount  = float(assignment.advance_amount or 0) if assignment else 0.0
-    running_balance = -advance_amount
+    # Running balance starts negative (advance is debt to mukkadam)
+    running_balance = -total_advance_amount   # ← FIXED: use total across all assignments
 
     week_ledger = []
     for wk_key in sorted(week_alloc_map.keys()):
         wk = week_alloc_map[wk_key]
 
-        earned_this_week = float(wk['total_actual'])
-        running_balance += earned_this_week
+        earned_this_week  = float(wk['total_actual'])
+        running_balance  += earned_this_week
 
-        week_payments   = weekly_by_week.get(wk_key, [])
-        week_paid       = sum(p['amount'] for p in week_payments)
+        week_payments     = weekly_by_week.get(wk_key, [])
+        week_paid         = sum(p['amount'] for p in week_payments)
         week_paid_ontime  = sum(p['amount'] for p in week_payments if not p['is_missed_recovery'])
         week_paid_missed  = sum(p['amount'] for p in week_payments if p['is_missed_recovery'])
-        running_balance -= week_paid
+        running_balance  -= week_paid
 
         wk_end_dt = date.fromisoformat(wk['week_end'])
         is_past   = wk_end_dt < today
 
-        # Farmer breakdown within this week
         week_by_farmer = {}
         for alloc in wk['allocations']:
             fname = alloc['farmer_name']
@@ -1452,7 +1497,6 @@ def mukkadam_settlement_history(request, mukkadam_id):
             week_by_farmer[fname]['total_effective_acres'] += alloc['effective_area']
             week_by_farmer[fname]['allocations'].append(alloc)
 
-        # Settlement financials scoped to this week
         week_start_dt = date.fromisoformat(wk['week_start'])
         week_gross = week_net = week_settlement_paid = week_misc = Decimal('0')
         week_deposit = Decimal('0')
@@ -1461,8 +1505,8 @@ def mukkadam_settlement_history(request, mukkadam_id):
             if s['job_id'] in seen_sids:
                 continue
             has_alloc_this_week = any(
-                act.get('allocated_date') and
-                week_start_dt <= date.fromisoformat(act['allocated_date']) <= wk_end_dt
+                act.get('allocated_date')
+                and week_start_dt <= date.fromisoformat(act['allocated_date']) <= wk_end_dt
                 for act in s.get('activities', [])
             )
             if has_alloc_this_week:
@@ -1474,14 +1518,13 @@ def mukkadam_settlement_history(request, mukkadam_id):
                 week_misc            += Decimal(str(s['total_misc']))
 
         week_ledger.append({
-            'week_start':         wk['week_start'],
-            'week_end':           wk['week_end'],
-            'week_label':         wk['week_label'],
-            'is_past':            is_past,
-            'total_expected':     float(wk['total_expected']),
-            'total_actual':       float(wk['total_actual']),
-            'allocation_count':   len(wk['allocations']),
-            # ── Acres ────────────────────────────────────────
+            'week_start':       wk['week_start'],
+            'week_end':         wk['week_end'],
+            'week_label':       wk['week_label'],
+            'is_past':          is_past,
+            'total_expected':   float(wk['total_expected']),
+            'total_actual':     float(wk['total_actual']),
+            'allocation_count': len(wk['allocations']),
             'acres': {
                 'total_allocated_acres': float(wk['alloc_acres']),
                 'total_actual_acres':    float(wk['actual_acres']),
@@ -1492,7 +1535,6 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'weekly_payments':    week_payments,
             'total_weekly_paid':  week_paid,
             'running_balance':    round(running_balance, 2),
-            # ── Summary + payment breakdown ───────────────────
             'summary': {
                 'gross_earned':      float(week_gross),
                 'deposit_held':      float(week_deposit),
@@ -1504,9 +1546,9 @@ def mukkadam_settlement_history(request, mukkadam_id):
                 'running_balance':   round(running_balance, 2),
             },
             'payment_breakdown': {
-                'advance_paid':           0.0,  # advance is one-time, not per-week
-                'weekly_paid':            week_paid_ontime,
-                'missed_weekly_paid':     week_paid_missed,
+                'advance_paid':           0.0,
+                'weekly_paid':            week_paid,             # ALL weekly paid this week
+                'missed_weekly_paid':     week_paid_missed,      # subset of weekly_paid, paid late
                 'direct_settlement_paid': float(week_settlement_paid),
                 'misc_deducted':          float(week_misc),
                 'total_paid':             week_paid + float(week_settlement_paid),
@@ -1519,22 +1561,28 @@ def mukkadam_settlement_history(request, mukkadam_id):
         cid   = a.cluster_id
         cname = a.cluster.name if a.cluster else '—'
         if cid not in cluster_summary_map:
+            # Find the advance for this specific cluster's assignment
+            cluster_advance = next(
+                (float(asgn.advance_amount or 0)
+                 for asgn in all_assignments if asgn.cluster_id == cid),
+                0.0
+            )
             cluster_summary_map[cid] = {
-                'cluster_id':       cid,
-                'cluster_name':     cname,
-                'total_expected':   Decimal('0'),
-                'total_actual':     Decimal('0'),
-                'allocation_count': 0,
-                'alloc_acres':      Decimal('0'),
-                'actual_acres':     Decimal('0'),
-                'eff_acres':        Decimal('0'),
-                'gross_earned':     Decimal('0'),
-                'deposit_held':     Decimal('0'),
-                'advance_given':    Decimal(str(assignment.advance_amount or 0)) if assignment else Decimal('0'),
-                'total_weekly_paid':Decimal('0'),
-                'total_misc':       Decimal('0'),
-                'net_payable_now':  Decimal('0'),
-                'total_paid_out':   Decimal('0'),
+                'cluster_id':        cid,
+                'cluster_name':      cname,
+                'total_expected':    Decimal('0'),
+                'total_actual':      Decimal('0'),
+                'allocation_count':  0,
+                'alloc_acres':       Decimal('0'),
+                'actual_acres':      Decimal('0'),
+                'eff_acres':         Decimal('0'),
+                'gross_earned':      Decimal('0'),
+                'deposit_held':      Decimal('0'),
+                'advance_given':     Decimal(str(cluster_advance)),   # ← per-cluster advance
+                'total_weekly_paid': Decimal('0'),
+                'total_misc':        Decimal('0'),
+                'net_payable_now':   Decimal('0'),
+                'total_paid_out':    Decimal('0'),
             }
         rate     = Decimal(str(a.mukkadam_rate or 0))
         exp_area = Decimal(str(a.allocated_area or 0))
@@ -1564,18 +1612,18 @@ def mukkadam_settlement_history(request, mukkadam_id):
                 cluster_summary_map[cid]['total_misc']      += Decimal(str(s['total_misc']))
                 break
 
-    total_actual_all = sum(v['total_actual'] for v in cluster_summary_map.values()) or Decimal('1')
-    total_weekly_dec = Decimal(str(sum(float(w.amount) for w in weekly_qs)))
-    total_weekly_missed_dec = Decimal(str(total_weekly_missed_recovery))
+    total_actual_all       = sum(v['total_actual'] for v in cluster_summary_map.values()) or Decimal('1')
+    total_weekly_dec       = Decimal(str(sum(float(w.amount) for w in weekly_qs)))
+    total_weekly_missed_dec= Decimal(str(total_weekly_missed_recovery))
 
     by_cluster = []
     for cdata in cluster_summary_map.values():
-        proportion       = cdata['total_actual'] / total_actual_all
-        weekly_prop      = (total_weekly_dec * proportion).quantize(Decimal('0.01'))
-        missed_prop      = (total_weekly_missed_dec * proportion).quantize(Decimal('0.01'))
-        ontime_prop      = weekly_prop - missed_prop
-        remaining        = float(cdata['net_payable_now']) - float(cdata['total_paid_out'])
-        advance_prop     = (Decimal(str(advance_amount)) * proportion).quantize(Decimal('0.01'))
+        proportion   = cdata['total_actual'] / total_actual_all
+        weekly_prop  = (total_weekly_dec * proportion).quantize(Decimal('0.01'))
+        missed_prop  = (total_weekly_missed_dec * proportion).quantize(Decimal('0.01'))
+        ontime_prop  = weekly_prop - missed_prop
+        remaining    = float(cdata['net_payable_now']) - float(cdata['total_paid_out'])
+        advance_prop = cdata['advance_given']   # use actual cluster advance, not proportional
 
         by_cluster.append({
             'cluster_id':       cdata['cluster_id'],
@@ -1601,11 +1649,11 @@ def mukkadam_settlement_history(request, mukkadam_id):
             },
             'payment_breakdown': {
                 'advance_paid':           float(advance_prop),
-                'weekly_paid':            float(ontime_prop),
-                'missed_weekly_paid':     float(missed_prop),
+                'weekly_paid':            float(weekly_prop),   # ALL weekly paid for this cluster
+                'missed_weekly_paid':     float(missed_prop),   # subset of weekly_paid, paid late
                 'direct_settlement_paid': float(cdata['total_paid_out']),
                 'misc_deducted':          float(cdata['total_misc']),
-                'total_paid':             float(advance_prop + weekly_prop + cdata['total_paid_out']),
+                'total_paid':             float(advance_prop) + float(weekly_prop) + float(cdata['total_paid_out']),
             },
         })
 
@@ -1682,13 +1730,13 @@ def mukkadam_settlement_history(request, mukkadam_id):
         for jdata in fdata['jobs'].values():
             jid = jdata['job_id']
             s   = next((sr for sr in settlement_rows if sr['job_id'] == jid), None)
-            job_gross   = Decimal(str(s['gross_amount']))       if s else Decimal('0')
-            job_deposit = Decimal(str(s['deposit_held']))       if (s and not s['deposit_released']) else Decimal('0')
-            job_net     = Decimal(str(s['net_payable']))        if (s and s['status'] == 'calculated') else Decimal('0')
-            job_paid    = Decimal(str(s['total_already_paid'])) if s else Decimal('0')
-            job_misc    = Decimal(str(s['total_misc']))         if s else Decimal('0')
-            job_adv     = Decimal(str(s['advance_deducted']))   if s else Decimal('0')
-            job_wkly    = Decimal(str(s['weekly_payments_deducted'])) if s else Decimal('0')
+            job_gross   = Decimal(str(s['gross_amount']))            if s else Decimal('0')
+            job_deposit = Decimal(str(s['deposit_held']))            if (s and not s['deposit_released']) else Decimal('0')
+            job_net     = Decimal(str(s['net_payable']))             if (s and s['status'] == 'calculated') else Decimal('0')
+            job_paid    = Decimal(str(s['total_already_paid']))      if s else Decimal('0')
+            job_misc    = Decimal(str(s['total_misc']))              if s else Decimal('0')
+            job_adv     = Decimal(str(s['advance_deducted']))        if s else Decimal('0')
+            job_wkly    = Decimal(str(s['weekly_payments_deducted']))if s else Decimal('0')
 
             farmer_gross   += job_gross
             farmer_deposit += job_deposit
@@ -1726,12 +1774,12 @@ def mukkadam_settlement_history(request, mukkadam_id):
                 },
             })
 
-        farmer_proportion   = float(fdata['total_actual']) / total_actual_farmers
-        f_weekly_total      = Decimal(str(round(total_weekly_all * farmer_proportion, 2)))
-        f_weekly_missed     = Decimal(str(round(total_weekly_missed_recovery * farmer_proportion, 2)))
-        f_weekly_ontime     = f_weekly_total - f_weekly_missed
-        f_advance           = Decimal(str(round(advance_amount * farmer_proportion, 2)))
-        farmer_remaining    = float(farmer_net) - float(farmer_paid)
+        farmer_proportion = float(fdata['total_actual']) / total_actual_farmers
+        f_weekly_total    = Decimal(str(round(total_weekly_all * farmer_proportion, 2)))
+        f_weekly_missed   = Decimal(str(round(total_weekly_missed_recovery * farmer_proportion, 2)))
+        f_weekly_ontime   = f_weekly_total - f_weekly_missed
+        f_advance         = Decimal(str(round(total_advance_amount * farmer_proportion, 2)))  # ← FIXED
+        farmer_remaining  = float(farmer_net) - float(farmer_paid)
 
         by_farmer.append({
             'farmer_id':        fdata['farmer_id'],
@@ -1748,7 +1796,7 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'summary': {
                 'gross_earned':      float(farmer_gross),
                 'deposit_held':      float(farmer_deposit),
-                'advance_given':     float(assignment.advance_amount or 0) if assignment else 0,
+                'advance_given':     total_advance_amount,   # ← FIXED: total, not single assignment
                 'total_weekly_paid': float(f_weekly_total),
                 'total_misc':        float(farmer_misc),
                 'net_payable_now':   float(farmer_net),
@@ -1757,8 +1805,8 @@ def mukkadam_settlement_history(request, mukkadam_id):
             },
             'payment_breakdown': {
                 'advance_paid':           float(f_advance),
-                'weekly_paid':            float(f_weekly_ontime),
-                'missed_weekly_paid':     float(f_weekly_missed),
+                'weekly_paid':            float(f_weekly_total),   # ALL weekly paid for this farmer
+                'missed_weekly_paid':     float(f_weekly_missed),  # subset of weekly_paid, paid late
                 'direct_settlement_paid': float(farmer_paid),
                 'misc_deducted':          float(farmer_misc),
                 'total_paid':             float(f_advance + f_weekly_total + farmer_paid),
@@ -1768,13 +1816,22 @@ def mukkadam_settlement_history(request, mukkadam_id):
 
     # ── TRANSACTION HISTORY ───────────────────────────────────────────
     txn_history = []
-    if assignment and assignment.advance_amount and float(assignment.advance_amount) > 0:
-        advance_date = str(assignment.joined_at.date()) if assignment.joined_at else str(today)
-        txn_history.append({
-            'type': 'advance', 'date': advance_date, 'label': 'Advance Given',
-            'amount': -float(assignment.advance_amount), 'mode': 'CASH',
-            'notes': '', 'proof_url': None, 'icon': '💰',
-        })
+
+    # One advance entry per assignment (not just the primary)
+    for asgn in all_assignments:
+        if asgn.advance_amount and float(asgn.advance_amount) > 0:
+            advance_date = str(asgn.joined_at.date()) if asgn.joined_at else str(today)
+            txn_history.append({
+                'type':      'advance',
+                'date':      advance_date,
+                'label':     f"Advance Given — {asgn.cluster.name if asgn.cluster else ''}",
+                'amount':    -float(asgn.advance_amount),
+                'mode':      'CASH',
+                'notes':     '',
+                'proof_url': None,
+                'icon':      '💰',
+            })
+
     for w in weekly_qs:
         ps_key = getattr(w, 'proof_s3_key', None)
         missed = is_missed_recovery(w)
@@ -1789,6 +1846,7 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'icon':               '🔴📅' if missed else '📅',
             'is_missed_recovery': missed,
         })
+
     for p in all_payments:
         ps_key = getattr(p, 'proof_s3_key', None)
         if p.settlement and p.settlement.job:
@@ -1799,19 +1857,27 @@ def mukkadam_settlement_history(request, mukkadam_id):
         else:
             label = 'Settlement Payment'
         txn_history.append({
-            'type': 'settlement_payment', 'date': str(p.paid_at.date()) if p.paid_at else str(today),
-            'label': label, 'amount': float(p.amount),
-            'mode': getattr(p, 'mode', 'CASH'), 'notes': getattr(p, 'notes', ''),
-            'proof_url': settle_proof_map.get(ps_key) if ps_key else None, 'icon': '✅',
+            'type':      'settlement_payment',
+            'date':      str(p.paid_at.date()) if p.paid_at else str(today),
+            'label':     label,
+            'amount':    float(p.amount),
+            'mode':      getattr(p, 'mode', 'CASH'),
+            'notes':     getattr(p, 'notes', ''),
+            'proof_url': settle_proof_map.get(ps_key) if ps_key else None,
+            'icon':      '✅',
         })
+
     for c in all_misc:
         ps_key = getattr(c, 'proof_s3_key', None)
         txn_history.append({
-            'type': 'misc_deduction', 'date': str(c.created_at.date()),
-            'label': f"Misc Deduction — {c.reason or 'No reason'}",
-            'amount': -float(c.amount), 'mode': '—',
-            'notes': c.reason or '',
-            'proof_url': misc_proof_map.get(ps_key) if ps_key else None, 'icon': '⚠️',
+            'type':      'misc_deduction',
+            'date':      str(c.created_at.date()),
+            'label':     f"Misc Deduction — {c.reason or 'No reason'}",
+            'amount':    -float(c.amount),
+            'mode':      '—',
+            'notes':     c.reason or '',
+            'proof_url': misc_proof_map.get(ps_key) if ps_key else None,
+            'icon':      '⚠️',
         })
 
     txn_history.sort(key=lambda x: x['date'])
@@ -1821,20 +1887,20 @@ def mukkadam_settlement_history(request, mukkadam_id):
         txn['running_balance'] = round(running, 2)
 
     # ── SUMMARY GRID ──────────────────────────────────────────────────
-    total_gross    = sum(float(s['gross_amount'])       for s in settlement_rows)
-    total_net      = sum(float(s['net_payable'])        for s in settlement_rows if s['status'] == 'calculated')
-    total_paid_out = sum(float(s['total_already_paid']) for s in settlement_rows)
-    total_misc_all = sum(float(s['total_misc'])         for s in settlement_rows)
-    total_weekly   = sum(float(w.amount)                for w in weekly_qs)
+    total_gross        = sum(float(s['gross_amount'])       for s in settlement_rows)
+    total_net          = sum(float(s['net_payable'])        for s in settlement_rows if s['status'] == 'calculated')
+    total_paid_out     = sum(float(s['total_already_paid']) for s in settlement_rows)
+    total_misc_all     = sum(float(s['total_misc'])         for s in settlement_rows)
+    total_weekly       = sum(float(w.amount)                for w in weekly_qs)
     deposit_held_total = sum(
         float(s['deposit_held']) for s in settlement_rows if not s['deposit_released']
     )
-    # Overall acres
-    all_alloc_acres  = sum(float(a.allocated_area or 0)                                          for a in all_earned_allocs)
-    all_actual_acres = sum(float(a.mukkadam_claimed_area or a.actual_area_done or a.allocated_area) for a in all_earned_allocs)
-    all_eff_acres    = sum(float(effective_area_for(a))                                           for a in all_earned_allocs)
 
-    # Assignments array
+    all_alloc_acres  = sum(float(a.allocated_area or 0)                                               for a in all_earned_allocs)
+    all_actual_acres = sum(float(a.mukkadam_claimed_area or a.actual_area_done or a.allocated_area)   for a in all_earned_allocs)
+    all_eff_acres    = sum(float(effective_area_for(a))                                                for a in all_earned_allocs)
+
+    # Assignments list
     assignments_list = []
     for asgn in all_assignments:
         missed_dates = sorted(str(d) for d in _missed_dates_for(asgn))
@@ -1851,44 +1917,35 @@ def mukkadam_settlement_history(request, mukkadam_id):
             'mukkadam_type':            asgn.mukkadam_type,
         })
 
-    primary_assignment_data = next(
-        (a for a in assignments_list if a['assignment_id'] == (assignment.id if assignment else None)),
-        assignments_list[0] if assignments_list else None
-    )
-
     return Response({
         'mukkadam_id':   mukkadam_id,
         'mukkadam_name': mukkadam.mukkadam_name,
         'mobile':        mukkadam.mobile_numbers,
         'assignments':   assignments_list,
-        # 'assignment':    primary_assignment_data,  # backward compat
 
         'summary': {
             'gross_earned':      total_gross,
             'deposit_held':      round(deposit_held_total, 2),
-            'advance_given':     float(assignment.advance_amount or 0) if assignment else 0,
+            'advance_given':     total_advance_amount,          # ← FIXED: all assignments
             'total_weekly_paid': total_weekly,
             'total_misc':        total_misc_all,
             'net_payable_now':   total_net,
             'total_paid_out':    total_paid_out,
             'remaining':         round(total_net - total_paid_out, 2),
             'closing_balance':   round(running, 2),
-            'allocation_count':  all_earned_allocs.count(), 
-            # Acres
+            'allocation_count':  all_earned_allocs.count(),
             'acres': {
                 'total_allocated_acres': round(all_alloc_acres, 2),
                 'total_actual_acres':    round(all_actual_acres, 2),
                 'total_effective_acres': round(all_eff_acres, 2),
             },
-            # Payment breakdown
             'payment_breakdown': {
-                'advance_paid':           float(assignment.advance_amount or 0) if assignment else 0,
-                'weekly_paid':            total_weekly_on_time,
-                'missed_weekly_paid':     total_weekly_missed_recovery,
+                'advance_paid':           total_advance_amount,
+                'weekly_paid':            total_weekly,               # ALL weekly paid (on-time + late)
+                'missed_weekly_paid':     total_weekly_missed_recovery,  # subset of weekly_paid, paid late
                 'direct_settlement_paid': total_paid_out,
                 'misc_deducted':          total_misc_all,
-                'total_paid':             (float(assignment.advance_amount or 0) if assignment else 0)
-                                          + total_weekly + total_paid_out,
+                'total_paid':             total_advance_amount + total_weekly + total_paid_out,
             },
         },
 

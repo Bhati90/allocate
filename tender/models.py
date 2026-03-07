@@ -721,6 +721,85 @@ def effective_gap_days(cluster, activity):
 # MUKKADAM (TEAM) MODELS
 # ============================================================================
 
+
+# models.py
+
+class MukkadamLedgerEntry(models.Model):
+    """
+    Single flat ledger for all mukkadam payments.
+    One row = one payment event (advance, transport, weekly, job payment).
+    """
+
+    PAYMENT_TYPE_CHOICES = [
+        ('advance', 'Advance'),
+        ('transport', 'Transport'),
+        ('weekly_payment', 'Weekly Payment'),
+        ('per_acre', 'Per Acre (Job)'),
+        ('misc', 'Misc'),
+    ]
+
+    PAYMENT_STATUS_CHOICES = [
+        ('paid', 'Paid'),
+        ('partially_paid', 'Partially Paid'),
+        ('pending', 'Pending'),
+        ('na', 'NA'),
+    ]
+
+    # ── Who ───────────────────────────────────────────────────────────
+    mukkadam        = models.ForeignKey(
+        'Mukkadam', on_delete=models.CASCADE, related_name='ledger_entries'
+    )
+    cluster         = models.ForeignKey(
+        'Cluster', on_delete=models.SET_NULL, null=True, blank=True
+    )
+
+    # ── Farmer & Job (optional — blank for advance/transport/weekly) ──
+    farmer_name     = models.CharField(max_length=255, blank=True)
+    farmer_contact  = models.CharField(max_length=50, blank=True)
+    job             = models.ForeignKey(
+        'Job', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='ledger_entries'
+    )
+    job_activity    = models.ForeignKey(
+        'JobActivity', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='ledger_entries'
+    )
+    activity_name   = models.CharField(max_length=100, blank=True)  # fallback if no FK
+
+    # ── What ──────────────────────────────────────────────────────────
+    payment_type    = models.CharField(max_length=20, choices=PAYMENT_TYPE_CHOICES)
+    acres           = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True,
+        help_text="Only for per_acre type"
+    )
+    amount          = models.DecimalField(max_digits=12, decimal_places=2)
+
+    # ── When ──────────────────────────────────────────────────────────
+    job_date        = models.DateField(null=True, blank=True, help_text="Date work was done")
+    payment_date    = models.DateField(null=True, blank=True, help_text="Date payment was made")
+
+    # ── Status ────────────────────────────────────────────────────────
+    payment_status  = models.CharField(
+        max_length=20, choices=PAYMENT_STATUS_CHOICES, default='paid'
+    )
+    remark          = models.TextField(blank=True)
+
+    # ── Proof ─────────────────────────────────────────────────────────
+    proof_s3_key    = models.CharField(max_length=500, blank=True, null=True)
+
+    # ── Audit ─────────────────────────────────────────────────────────
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+    created_by      = models.ForeignKey(
+        'auth.User', on_delete=models.SET_NULL, null=True, blank=True
+    )
+
+    class Meta:
+        db_table = 'mukkadam_ledger'
+        ordering = ['payment_date', 'created_at']
+
+    def __str__(self):
+        return f"{self.mukkadam.mukkadam_name} | {self.payment_type} | ₹{self.amount} | {self.payment_date}"
 # class Mukkadam(models.Model):
 #     """
 #     Mukkadam/Labor contractor information (synced from API)
@@ -1495,29 +1574,12 @@ class ClusterMukkadamAssignment(models.Model):
 
         super().save(*args, **kwargs)
 
+    def __str__(self):
+        cluster_name = self.cluster.name if self.cluster else '—'
+        mukkadam_name = self.mukkadam.mukkadam_name if self.mukkadam else '—'
+        return f"{mukkadam_name} → {cluster_name}"
 
-    def check_and_deactivate_if_expired(self):
-        """
-        Call this on read. If updown has passed its last date → set is_active=False.
-        No cron needed.
-        """
-        from django.utils import timezone
-        if self.mukkadam_type != 'updown' or not self.is_active:
-            return
-        today = timezone.localdate()
-        expired = False
-        if self.updown_mode == 'range':
-            if self.updown_to_date and today > self.updown_to_date:
-                expired = True
-        elif self.updown_mode == 'specific':
-            if self.updown_specific_dates:
-                from datetime import date
-                last = max(date.fromisoformat(d) for d in self.updown_specific_dates)
-                if today > last:
-                    expired = True
-        if expired:
-            self.is_active = False
-            self.save(update_fields=['is_active'])
+
 
     # ✅ FIXED: remove @property because it needs parameter
     def is_available_on(self, date):

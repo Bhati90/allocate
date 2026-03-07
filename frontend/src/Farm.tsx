@@ -113,6 +113,98 @@ interface InsightsPanelProps {
   startDate: string;
   endDate: string;
 }
+type RangePreset = 'day' | 'week' | 'month' | 'custom';
+
+export function ClusterInsightsContainer({ clusterId }: { clusterId: number }) {
+  const [preset, setPreset] = useState<RangePreset>('week');
+  const [startDate, setStartDate] = useState<string>(() => formatISODate(new Date()));
+  const [endDate, setEndDate] = useState<string>(() => formatISODate(new Date()));
+
+  // whenever preset changes, recompute range
+  useEffect(() => {
+    const today = new Date();
+    if (preset === 'day') {
+      const d = formatISODate(today);
+      setStartDate(d);
+      setEndDate(d);
+    } else if (preset === 'week') {
+      const end = formatISODate(today);
+      const start = formatISODate(addDays(today, -6)); // last 7 days
+      setStartDate(start);
+      setEndDate(end);
+    } else if (preset === 'month') {
+      const year = today.getFullYear();
+      const month = today.getMonth(); // 0‑based
+      const first = new Date(year, month, 1);
+      const last = new Date(year, month + 1, 0);
+      setStartDate(formatISODate(first));
+      setEndDate(formatISODate(last));
+    }
+    // 'custom' keeps whatever user picked
+  }, [preset]);
+
+  return (
+    <div className="space-y-3">
+      {/* Date range controls */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex gap-1 text-xs">
+          {(['day','week','month','custom'] as RangePreset[]).map(p => (
+            <button
+              key={p}
+              onClick={() => setPreset(p)}
+              className={`px-2 py-1 rounded border ${
+                preset === p
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-white text-gray-700 border-gray-300'
+              }`}
+            >
+              {p === 'day' ? 'Day' : p === 'week' ? 'Week' : p === 'month' ? 'Month' : 'Custom'}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2 text-xs">
+          <label className="flex items-center gap-1">
+            <span className="text-gray-600">From</span>
+            <input
+              type="date"
+              className="border rounded px-2 py-1 text-xs"
+              value={startDate}
+              onChange={e => {
+                setPreset('custom');
+                setStartDate(e.target.value);
+              }}
+            />
+          </label>
+          <label className="flex items-center gap-1">
+            <span className="text-gray-600">To</span>
+            <input
+              type="date"
+              className="border rounded px-2 py-1 text-xs"
+              value={endDate}
+              onChange={e => {
+                setPreset('custom');
+                setEndDate(e.target.value);
+              }}
+            />
+          </label>
+        </div>
+      </div>
+
+      <InsightsPanel clusterId={clusterId} startDate={startDate} endDate={endDate} />
+    </div>
+  );
+}
+
+// small helpers
+function formatISODate(d: Date): string {
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+function addDays(d: Date, delta: number): Date {
+  const copy = new Date(d);
+  copy.setDate(copy.getDate() + delta);
+  return copy;
+}
 
 export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelProps) {
   const { data, loading, error } = useClusterInsights(
@@ -372,11 +464,11 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
         <KpiCard label="Area Alloc" value={`${summary.total_area_allocated.toFixed(1)} ac`} />
         <KpiCard label="Area Done" value={`${summary.total_area_completed.toFixed(1)} ac`} />
         <KpiCard label="Crew Util" value={`${summary.crew_utilization_percent.toFixed(1)}%`} color={summary.crew_utilization_percent > 90 ? 'red' : summary.crew_utilization_percent > 75 ? 'yellow' : 'green'} />
-        <KpiCard label="Slot Util" value={`${summary.slot_utilization_percent.toFixed(1)}%`} />
+        {/* <KpiCard label="Slot Util" value={`${summary.slot_utilization_percent.toFixed(1)}%`} /> */}
         <KpiCard label="Profit" value={`₹${(summary.profit / 1000).toFixed(1)}K`} color={summary.profit < 0 ? 'red' : 'green'} />
         <KpiCard label="Profit/ac" value={`₹${summary.profit_per_acre.toFixed(0)}`} />
         <KpiCard label="Disputes" value={`${summary.dispute_count} (${summary.dispute_rate_percent.toFixed(1)}%)`} color={summary.dispute_rate_percent > 5 ? 'red' : 'green'} />
-        <KpiCard label="Efficiency" value={`${summary.avg_efficiency_score.toFixed(1)}%`} />
+        {/* <KpiCard label="Efficiency" value={`${summary.avg_efficiency_score.toFixed(1)}%`} /> */}
       </div>
 
       {/* Tabs */}
@@ -386,7 +478,7 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
           { key: 'mukkadam', label: 'Teams' },
           { key: 'farmer', label: 'Farmers' },
           { key: 'capacity', label: 'Capacity' },
-          { key: 'moves', label: 'Smart Moves' },
+          // { key: 'moves', label: 'Smart Moves' },
         ].map(tab => (
           <button
             key={tab.key}
@@ -408,7 +500,7 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
         {activeTab === 'mukkadam' && <MukkadamTab data={data} />}
         {activeTab === 'farmer' && <FarmerTab data={data} />}
         {activeTab === 'capacity' && <CapacityTab data={data} />}
-        {activeTab === 'moves' && <MovesTab data={data} />}
+        {/* {activeTab === 'moves' && <MovesTab data={data} />} */}
       </div>
     </div>
   );
@@ -733,57 +825,57 @@ function CapacityTab({ data }: { data: ClusterInsightsResponse }) {
   );
 }
 
-function MovesTab({ data }: { data: ClusterInsightsResponse }) {
-  if (data.move_suggestions.length === 0) {
-    return (
-      <div className="text-center py-8 text-gray-500">
-        ✅ No overbooked days or all handled. No move suggestions needed.
-      </div>
-    );
-  }
+// function MovesTab({ data }: { data: ClusterInsightsResponse }) {
+//   if (data.move_suggestions.length === 0) {
+//     return (
+//       <div className="text-center py-8 text-gray-500">
+//         ✅ No overbooked days or all handled. No move suggestions needed.
+//       </div>
+//     );
+//   }
 
-  return (
-    <div className="space-y-4">
-      <h3 className="font-semibold text-gray-700">Smart Move Suggestions</h3>
-      <div className="space-y-3">
-        {data.move_suggestions.map((ms, idx) => (
-          <div key={idx} className="border rounded p-4 bg-yellow-50">
-            <div className="flex justify-between items-start mb-3">
-              <div>
-                <div className="font-medium text-gray-800">
-                  Overbooked: <span className="text-red-600">{ms.overbooked_date}</span>
-                </div>
-                <div className="text-sm text-gray-600">
-                  → Move to: <span className="text-green-600 font-medium">{ms.target_date}</span>
-                  {' '}(has {ms.free_workers_on_target} free workers)
-                </div>
-              </div>
-            </div>
+//   return (
+//     <div className="space-y-4">
+//       <h3 className="font-semibold text-gray-700">Smart Move Suggestions</h3>
+//       <div className="space-y-3">
+//         {data.move_suggestions.map((ms, idx) => (
+//           <div key={idx} className="border rounded p-4 bg-yellow-50">
+//             <div className="flex justify-between items-start mb-3">
+//               <div>
+//                 <div className="font-medium text-gray-800">
+//                   Overbooked: <span className="text-red-600">{ms.overbooked_date}</span>
+//                 </div>
+//                 <div className="text-sm text-gray-600">
+//                   → Move to: <span className="text-green-600 font-medium">{ms.target_date}</span>
+//                   {' '}(has {ms.free_workers_on_target} free workers)
+//                 </div>
+//               </div>
+//             </div>
 
-            <div className="text-xs text-gray-700 mb-2 font-medium">
-              Flexible activities that can be moved:
-            </div>
-            <div className="space-y-2">
-              {ms.flexible_activities.map((act, i) => (
-                <div key={i} className="bg-white border rounded p-2 flex justify-between items-center">
-                  <div>
-                    <div className="font-medium text-gray-800">{act.activity_name}</div>
-                    <div className="text-xs text-gray-500">
-                      {act.farmer_name} • Job: {act.job_id}
-                    </div>
-                  </div>
-                  <div className="text-xs text-gray-600">
-                    Remaining: {act.remaining_area.toFixed(1)} ac
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+//             <div className="text-xs text-gray-700 mb-2 font-medium">
+//               Flexible activities that can be moved:
+//             </div>
+//             <div className="space-y-2">
+//               {ms.flexible_activities.map((act, i) => (
+//                 <div key={i} className="bg-white border rounded p-2 flex justify-between items-center">
+//                   <div>
+//                     <div className="font-medium text-gray-800">{act.activity_name}</div>
+//                     <div className="text-xs text-gray-500">
+//                       {act.farmer_name} • Job: {act.job_id}
+//                     </div>
+//                   </div>
+//                   <div className="text-xs text-gray-600">
+//                     Remaining: {act.remaining_area.toFixed(1)} ac
+//                   </div>
+//                 </div>
+//               ))}
+//             </div>
+//           </div>
+//         ))}
+//       </div>
+//     </div>
+//   );
+// }
 
 
 
@@ -3763,7 +3855,7 @@ const VIEW_OPTIONS: { value: 'jobs' | 'allocations' | 'both' | 'payments' | 'ins
   { value: 'both', label: 'Allocations' },
   { value: 'jobs', label: 'AI' },
   { value: 'payments', label: '💰 Payments' },
-  // { value: 'insights', label: '📊 Insights' },  // ✅ NEW
+  { value: 'insights', label: '📊 Insights' },  // ✅ NEW
 ];
 const [viewModes, setViewModes] = useState<('jobs' | 'allocations' | 'potential' | 'payments' | 'insights')[]>(['jobs', 'allocations']);
 
@@ -4156,11 +4248,9 @@ const varietyOptions = [
   currentMode === 'payments' ? (
     <PaymentDashboard clusterId={clusterId} />
   ) : currentMode === 'insights' ? (
-    <InsightsPanel
-      clusterId={clusterId}
-      startDate={formatDate(startOfMonth)}
-      endDate={formatDate(endOfMonth)}
-    />
+// ✅ use this instead
+<ClusterInsightsContainer clusterId={clusterId} />
+
   ) : (
     <CalendarPanel
       currentMonth={currentMonth}

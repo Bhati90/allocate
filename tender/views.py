@@ -4066,9 +4066,9 @@ def tender_dashboard(request):
         except (ValueError, TypeError):
             pass
 
-        # ── EXPIRY CHECK ─────────────────────────────────────────────
-        for assignment in m.cluster_assignments.filter(is_active=True, mukkadam_type='updown'):
-            assignment.check_and_deactivate_if_expired()
+        # # ── EXPIRY CHECK ─────────────────────────────────────────────
+        # for assignment in m.cluster_assignments.filter(is_active=True, mukkadam_type='updown'):
+        #     assignment.check_and_deactivate_if_expired()
 
         # fetch fresh active assignments after potential deactivation
         active_assignments = m.cluster_assignments.filter(is_active=True).select_related('cluster')
