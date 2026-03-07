@@ -1110,6 +1110,7 @@ function MukkadamSettlementsTab({
 
 // import { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom";
+import { GlobalInsightsPanel } from "./Global";
 
 // ─── Plot Cluster Control ─────────────────────────────────
 function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess }: {
@@ -2729,7 +2730,9 @@ export default function TenderDashboard() {
   const [loading, setLoading] = useState(true);
    const navigate = useNavigate();
   // Change the tab type
-const [tab, setTab] = useState<'mukkadams' | 'farmers' | 'payments'>('mukkadams');
+// change tab type
+const [tab, setTab] = useState<'mukkadams' | 'farmers' | 'payments' | 'global'>('mukkadams');
+
   const [search, setSearch] = useState('');
   const [clusterFilter, setClusterFilter] = useState('');
   const [clusters, setClusters] = useState<ClusterOption[]>([]);
@@ -2906,6 +2909,15 @@ const filteredFarmers = (data?.farmers || []).filter(f => {
     <User size={15} className="inline mr-1" />
     Farmers ({data?.farmers?.length || 0})
   </button>
+
+  <button
+    onClick={() => { setTab('global'); }}
+    className={`px-5 py-2 text-sm font-medium transition ${
+      tab === 'global' ? 'bg-purple-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+    }`}
+  >
+    🌍 Global
+  </button>
   {/* <button
     onClick={() => { setTab('payments'); setNoCluster(false); setClusterFilter(''); }}
     className={`px-5 py-2 text-sm font-medium transition ${tab === 'payments' ? 'bg-orange-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
@@ -3041,6 +3053,8 @@ filteredMukkadams.map(m => (
 ))
       }
     </div>
+  ) : tab === 'global' ? (
+    <GlobalInsightsPanel />
   ) : (
     <PaymentsTab clusters={clusters} />
   )}

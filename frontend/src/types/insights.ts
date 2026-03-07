@@ -154,3 +154,5 @@ export interface ClusterInsightsResponse {
   capacity_demand: CapacityDemand[];
   move_suggestions: MoveSuggestion[];
 }
+
+
