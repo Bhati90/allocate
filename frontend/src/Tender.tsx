@@ -1,5 +1,6 @@
 // App.tsx (TenderFront)
 import React, { useEffect, useState, useRef,useCallback } from 'react';
+import ReactDOM from 'react-dom';
 import FarmScheduler from './Farm';
 import ClusterActivityCalendar from './ClusterCalender';
 import { API_BASE_URL } from './types/config';
@@ -13,7 +14,11 @@ interface Cluster {
     start_date: string | null;
     end_date: string | null;
   };
+  allocation_count :number;
+  activity_count : number;
   id: number;
+  farmer_count: number;
+  mukkadam_count: number;
   name: string;
   district?: string;
   taluka?: string;
@@ -440,9 +445,14 @@ const EditClusterModal: React.FC<EditClusterModalProps> = ({ cluster, onClose, o
         body.villages       = selectedLocations.map(l => l.village.villagenameenglish);
       }
 
-      const res  = await fetch(`${API_BASE_URL}/api/clusters/${cluster.id}/update_locations/`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+      const token = localStorage.getItem('auth_token');
+
+    const res = await fetch(`${API_BASE_URL}/api/clusters/${cluster.id}/update_locations/`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Token ${token}` } : {}),
+      },
         body: JSON.stringify(body),
       });
       const data = await res.json();
@@ -1063,6 +1073,166 @@ const handleSaveSingleEfficiency = async (rateId: number, index: number) => {
   );
 };
 
+
+interface CreateClusterModalProps {
+  states: StateOption[];
+  onClose: () => void;
+  onCreate: (cluster: Cluster) => void;
+}
+
+const CreateClusterModal: React.FC<CreateClusterModalProps> = ({
+  states, onClose, onCreate,
+}) => {
+  const [newName, setNewName]                     = useState('');
+  const [selectedState, setSelectedState]         = useState('MH');
+  const [selectedLocations, setSelectedLocations] = useState<SelectedLocation[]>([]);
+  const [loading, setLoading]                     = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedLocations.length === 0 || !newName.trim()) return;
+    setLoading(true);
+    try {
+      const districtNames = [...new Set(selectedLocations.map(l => l.districtName).filter(Boolean))];
+      const talukaNames   = [...new Set(selectedLocations.map(l => l.talukaName).filter(Boolean))];
+      const villageNames  = selectedLocations.map(l => l.village.villagenameenglish);
+      const districtCodes = [...new Set(selectedLocations.map(l => l.districtCode).filter(Boolean))];
+      const talukaCodes   = [...new Set(selectedLocations.map(l => l.talukaCode).filter(Boolean))];
+      const villageCodes  = selectedLocations.map(l => l.village.villagecode);
+
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`${API_BASE_URL}/api/clusters/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Token ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          name: newName,
+          state_code: selectedState,
+          district_codes: districtCodes,
+          taluka_codes: talukaCodes,
+          village_codes: villageCodes,
+          districts: districtNames,
+          talukas: talukaNames,
+          villages: villageNames,
+        }),
+      });
+      const cluster = await res.json();
+      onCreate(cluster);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBackdrop = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
+  return ReactDOM.createPortal(
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.4)' }}
+      onClick={handleBackdrop}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col"
+        style={{ maxHeight: '90vh' }}           // ✅ cap modal height
+        onClick={e => e.stopPropagation()}
+      >
+        {/* ── Header (fixed) ── */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0">
+          <h2 className="text-base font-bold text-slate-800">Create new cluster</h2>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-400 transition"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* ── Scrollable body ── */}
+        <div className="overflow-y-auto flex-1 px-6 py-5">
+          <form onSubmit={handleSubmit} className="space-y-4">
+
+            {/* Cluster name */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Cluster name
+              </label>
+              <input
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                placeholder="e.g. Satana North"
+                autoFocus
+              />
+            </div>
+
+            {/* State */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                State
+              </label>
+              <select
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                value={selectedState}
+                onChange={e => {
+                  setSelectedState(e.target.value);
+                  setSelectedLocations([]);
+                }}
+              >
+                <option value="">Select state</option>
+                {states.map(s => (
+                  <option key={s.state_code} value={s.state_code}>
+                    {s.state_name_english}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Villages */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Villages
+              </label>
+              {selectedState ? (
+                // ✅ position:relative container so dropdown anchors inside modal scroll area
+                <div className="relative">
+                  <LocationSearch
+                    key={selectedState}
+                    stateCode={selectedState}
+                    onSelectionChange={setSelectedLocations}
+                  />
+                </div>
+              ) : (
+                <p className="text-[13px] text-slate-400 mt-1">Select a state first</p>
+              )}
+            </div>
+
+            {/* Extra bottom padding so dropdown has room to expand downward */}
+            <div style={{ paddingBottom: '220px' }} />
+
+          </form>
+        </div>
+
+        {/* ── Footer with submit (fixed at bottom) ── */}
+        <div className="px-6 py-4 border-t border-slate-100 shrink-0">
+          <button
+            type="button"
+            onClick={handleSubmit as any}
+            disabled={loading || !newName.trim() || selectedLocations.length === 0}
+            className="w-full py-2.5 bg-emerald-600 text-white text-sm font-bold rounded-xl hover:bg-emerald-700 disabled:opacity-40 transition"
+          >
+            {loading ? 'Creating...' : '+ Create & open'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
 const TenderFront: React.FC = () => {
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1073,6 +1243,9 @@ const TenderFront: React.FC = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const [calendarClusterId, setCalendarClusterId] = useState<number | null>(null);
   const [calendarClusterName, setCalendarClusterName] = useState('');
+
+// STEP A: Add modal state (alongside your existing state declarations)
+const [showCreateModal, setShowCreateModal] = useState(false);
 
   const [editModal, setEditModal] = useState<Cluster | null>(null);
 
@@ -1148,9 +1321,14 @@ useEffect(() => {
       const talukaCodes   = [...new Set(selectedLocations.map(l => l.talukaCode).filter(Boolean))];
       const villageCodes  = selectedLocations.map(l => l.village.villagecode);
 
-      const res     = await fetch(`${API_BASE_URL}/api/clusters/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const token = localStorage.getItem('auth_token');
+
+    const res = await fetch(`${API_BASE_URL}/api/clusters/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Token ${token}` } : {}),
+      },
         body: JSON.stringify({
           name: newName,
           state_code: selectedState,
@@ -1173,14 +1351,37 @@ useEffect(() => {
 return (
   <div className="min-h-screen bg-slate-50 px-6 py-5">
     {/* Top bar */}
-    <div className="flex items-center justify-between mb-4">
-      <button
-        onClick={() => navigate('/data')}
-        className="px-4 py-2 bg-blue-500 text-white text-sm font-semibold rounded-lg hover:bg-blue-600 transition"
-      >
-        Go to Data
-      </button>
-    </div>
+
+
+<div className="flex items-center justify-between mb-4">
+  {/* Left: Go to Data */}
+
+
+  {/* Right: three buttons grouped */}
+  <div className="flex items-center gap-2">
+    <button
+      onClick={() => navigate('/global')}   // ← update route as needed
+      className="flex items-center gap-2 px-5 py-2.5 bg-purple-500 text-white text-sm font-bold rounded-xl hover:bg-purple-600 transition shadow-sm whitespace-nowrap"
+    >
+      🌍 Global
+    </button>
+
+    <button
+      onClick={() => navigate('/data')}
+      className="flex items-center gap-2 px-5 py-2.5 bg-sky-500 text-white text-sm font-bold rounded-xl hover:bg-sky-600 transition shadow-sm whitespace-nowrap"
+    >
+      📊 Go to Data
+    </button>
+
+    <button
+      onClick={() => setShowCreateModal(true)}
+      className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white text-sm font-bold rounded-xl hover:bg-emerald-700 transition shadow-sm whitespace-nowrap"
+    >
+      <span className="text-lg leading-none">+</span>
+      New Cluster
+    </button>
+  </div>
+</div>
 
     {/* Title + search */}
     <div className="mb-4">
@@ -1194,34 +1395,44 @@ return (
           onChange={e => setSearchTerm(e.target.value)}
         />
       </div>
+
+      
     </div>
 
     <div className="grid grid-cols-[minmax(0,2.2fr)_minmax(0,1.1fr)] gap-6 items-start">
-      {/* Left: cluster list */}
+      
       <section className="space-y-4">
         {clusters.length === 0 && !loading && (
           <p className="text-sm text-slate-400 italic">No clusters yet.</p>
         )}
+
 {clusters.map(c => (
   <div
     key={c.id}
     className="rounded-2xl bg-white border border-slate-200 px-5 py-4 flex flex-col lg:flex-row items-center justify-between gap-6"
   >
-    {/* Left: Main info section */}
+    {/* ── Left: info ── */}
     <button
       className="flex-1 text-left w-full"
       onClick={() => navigate(`/cluster/${c.id}`)}
     >
       <div className="flex items-center justify-between gap-4">
-        <div>
-          <div className="text-base font-semibold text-slate-900">
-            {c.name}
-          </div>
+        <div className="min-w-0">
+
+          {/* Name */}
+          <div className="text-base font-semibold text-slate-900">{c.name}</div>
+
+          {/* Farmers · Mukkadams */}
           <div className="mt-0.5 text-xs text-slate-500">
-            {[c.district, c.taluka, c.village]
-              .filter(Boolean)
-              .join(' · ')}
+            {c.farmer_count} farmers · {c.mukkadam_count} mukkadams
           </div>
+
+          {/* Location */}
+          <div className="mt-0.5 text-xs text-slate-500">
+            {[c.district, c.taluka, c.village].filter(Boolean).join(' · ')}
+          </div>
+
+          {/* Date range */}
           {c.date_range?.start_date && (
             <div className="mt-1 text-[11px] text-slate-400">
               {c.date_range.start_date} → {c.date_range.end_date || '?'}
@@ -1229,28 +1440,24 @@ return (
           )}
         </div>
 
-        {/* Status Pills */}
-        <div className="flex flex-col items-end gap-1">
-          {c.farmer_due > 0.01 && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-yellow-200 bg-yellow-50 px-2.5 py-1 text-[11px] font-semibold text-yellow-800 whitespace-nowrap">
-              🌾 Collect ₹{c.farmer_due.toLocaleString('en-IN')}
-            </span>
-          )}
-          {c.mukkadam_due > 0.01 && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-[11px] font-semibold text-red-700 whitespace-nowrap">
-              👷 Pay ₹{c.mukkadam_due.toLocaleString('en-IN')}
-            </span>
-          )}
-          {c.farmer_due <= 0.01 && c.mukkadam_due <= 0.01 && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
-              ✓ Clear
-            </span>
-          )}
+        {/* ── Right: stats pills ── */}
+        <div className="flex flex-col items-end gap-1.5 shrink-0">
+
+          {/* Activities pill */}
+          <span className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700 whitespace-nowrap">
+            📋 {c.activity_count ?? 0} activities
+          </span>
+
+          {/* Allocations pill */}
+          <span className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold text-sky-700 whitespace-nowrap">
+            👷 {c.allocation_count ?? 0} allocations
+          </span>
+
         </div>
       </div>
     </button>
 
-    {/* Right: Action Buttons in 3 Columns */}
+    {/* ── Right: action buttons ── */}
     <div className="grid grid-cols-3 gap-2 w-full lg:w-auto">
       <button
         className="flex flex-col items-center justify-center rounded-xl border border-slate-100 bg-slate-50 px-4 py-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors"
@@ -1289,8 +1496,7 @@ return (
   </div>
 ))}
       </section>
-
-      {/* Right: create cluster form */}
+{/* 
       <section className="cluster-form-section bg-white rounded-2xl border border-slate-200 shadow-sm px-4 py-4">
         <h2 className="text-sm font-semibold text-slate-800 mb-3">
           Create new cluster
@@ -1347,7 +1553,7 @@ return (
             {loading ? 'Creating...' : '+ Create & open'}
           </button>
         </form>
-      </section>
+      </section> */}
     </div>
 
     {showCalendar && calendarClusterId && (
@@ -1358,6 +1564,18 @@ return (
           setShowCalendar(false);
           setCalendarClusterId(null);
           setCalendarClusterName('');
+        }}
+      />
+    )}
+
+    {showCreateModal && (
+      <CreateClusterModal
+        states={states}
+        onClose={() => setShowCreateModal(false)}
+        onCreate={cluster => {
+          setClusters(prev => [...prev, cluster]);
+          setShowCreateModal(false);
+          navigate(`/cluster/${cluster.id}`);
         }}
       />
     )}
@@ -1390,3 +1608,4 @@ return (
 
 
 export default TenderFront;
+

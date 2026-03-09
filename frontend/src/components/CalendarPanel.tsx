@@ -561,15 +561,43 @@ const calculateDayCapacity = (date: Date | null) => {
   const usedWorkers = dayAllocations.reduce((sum, a) => sum + a.allocated_workers, 0);
 
   // 8. Final status
-  let status: 'good' | 'warning' | 'caution' | 'error' | 'empty' = 'good';
+// 8. Final status based on available vs required
+let status: 'good' | 'warning' | 'caution' | 'error' | 'empty' = 'good';
+// total demand = sum of needed workers across all mukkadams
+const requiredWorkers = Array.from(neededWorkersByMukkadam.values())
+  .reduce((sum, v) => sum + v, 0);
 
-  if (conflicts.length > 0) {
-    status = 'error';
-  } else if (totalUsedPercentage >= 90) {
+// total available = sum of available workers across all mukkadams
+const availableWorkers = Array.from(availableWorkersByMukkadam.values())
+  .reduce((sum, v) => sum + v, 0);
+
+if (requiredWorkers === 0 && availableWorkers === 0) {
+  status = 'empty';
+} else if (availableWorkers < requiredWorkers) {
+  // not enough workers → red
+  status = 'error';
+} else {
+  const ratio = requiredWorkers > 0 ? availableWorkers / requiredWorkers : Infinity;
+
+  if (ratio >= 1.5) {
+    // >= 150% of demand → green
+    status = 'good';
+  } else if (ratio >= 1.2) {
+    // 120–150% of demand → yellow
     status = 'warning';
-  } else if (totalUsedPercentage >= 70) {
+  } else {
+    // between 100% and 120% → treat as OK-ish (you can choose 'caution' if you like)
     status = 'caution';
   }
+}
+
+  // if (conflicts.length > 0) {
+  //   status = 'error';
+  // } else if (totalUsedPercentage >= 90) {
+  //   status = 'warning';
+  // } else if (totalUsedPercentage >= 70) {
+  //   status = 'caution';
+  // }
 
   if (dayAllocations.length === 0 && totalCapacity === 0 && conflicts.length === 0) {
     status = 'empty';

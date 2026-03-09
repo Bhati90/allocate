@@ -1,5 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from rest_framework.authtoken.views import obtain_auth_token
+
 from .views import (
     ActivityCatalogViewSet,
     ClusterViewSet,
@@ -8,12 +10,12 @@ from .views import (
     LeaveViewSet,ExtraWorkerViewSet,send_start_otp,verify_start_otp,submit_day_end_report,verify_end_otp,resolve_dispute,
     MukkadamViewSet,cluster_payment_dashboard,get_payment_proof_presign,save_payment_proof,
     AllocationViewSet,FarmerViewSet,mukkadam_all_settlements,mukkadam_misc_cost_delete,mukkadam_misc_costs,
-    MukkadamActivityRateViewSet,add_weekly_payment,
+    MukkadamActivityRateViewSet,add_weekly_payment,UserProfileView,UserListAPIView,
     PlanningViewSet,search_farmers_for_cluster,search_mukkadams_for_cluster,add_farmer_plots_to_cluster,add_mukkadam_to_cluster,
     PlotViewSet,tender_dashboard,list_all_settlements,pay_mukkadam_settlement,add_misc_cost,
-    get_cluster_plots,get_districts,get_states,get_talukas,get_villages,
+    get_cluster_plots,get_districts,get_states,get_talukas,get_villages,UserSearchView,
     insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,
-    reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,
+    reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,JobNoteViewSet,
     search_villages,farmer_work_verification_detail,
     suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs
 )
@@ -21,7 +23,7 @@ from .views import (
 from .webhook import booking_webhook,run_mukkadam_sync
 from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history,mukkadam_earnings
 # Create router
-
+from django.views.decorators.csrf import csrf_exempt
 from .insight import ClusterInsightsView,GlobalInsightsView,GlobalDayInsightsView
 router = DefaultRouter()
 
@@ -29,7 +31,8 @@ router = DefaultRouter()
 router.register(r'extra-workers', ExtraWorkerViewSet, basename='extra-worker')
 router.register(r'job-activities', JobActivityViewSet, basename='job-activities')
 router.register(r'plots', PlotViewSet, basename='plot')
-
+router.register(r'job-notes', JobNoteViewSet, basename='job-notes')
+#
 router.register(r'activities', ActivityCatalogViewSet, basename='activity')
 router.register(r'jobs', JobViewSet, basename='job')
 router.register(r'mukkadams', MukkadamViewSet, basename='mukkadam')
@@ -125,7 +128,7 @@ path('api/mukkadam/<int:mukkadam_id>/job/<str:job_id>/misc/',     add_misc_cost)
         name='mukkadam-all-settlements'
     ),
 path('api/activity-calendar/', global_activity_catalog, name='cluster-calendar'),
- 
+     path('ap/login/', csrf_exempt(obtain_auth_token), name='api-token-auth'),
     path('api/clusters/<int:cluster_id>/activity-calendar/<int:activity_id>/reset/', reset_cluster_activity_override, name='reset-override'),
         path('api/clusters/<int:cluster_id>/activity-calendar/<int:activity_id>/reset-rate/', reset_cluster_activity_rate, name='reset-rate'),
     path('api/clusters/<int:cluster_id>/plots/', get_cluster_plots, name='cluster-plots'),
@@ -149,6 +152,14 @@ path('api/clusters/<int:cluster_id>/insights/', ClusterInsightsView.as_view(),
 
 path('api/tender-global-insights/', GlobalInsightsView.as_view(),
          name='global-insights'),
+
+
+    path('auth/me/', UserProfileView.as_view(), name='user-profile'),
+    
+        path('users/all/', UserListAPIView.as_view(), name='user-list-api'),
+
+
+path('api/users/search/', UserSearchView.as_view(), name='user-search'),
 
 
 path('api/tender-global-day-insights/', GlobalDayInsightsView.as_view(),

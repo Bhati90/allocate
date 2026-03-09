@@ -6,6 +6,19 @@ from .models import (
     Allocation, MukkadamPayment,ActivityLogTender, Plot
 )
 
+from rest_framework import serializers
+from django.contrib.auth.models import User
+from .models import UserProfile
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    # We fetch these fields from the related 'profile' model
+    full_name = serializers.CharField(source='profile.full_name')
+    mobile_number = serializers.CharField(source='profile.mobile_number')
+    role = serializers.CharField(source='profile.role')
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'full_name', 'mobile_number', 'role']
 
 # =============================================================================
 # ACTIVITY CATALOG SERIALIZERS
@@ -641,44 +654,106 @@ class JobSerializer(serializers.ModelSerializer):
 from rest_framework import serializers
 from .models import Cluster
 
-class ClusterSerializer(serializers.ModelSerializer):
-    # Add computed fields for backward compatibility
-    district = serializers.SerializerMethodField()
-    taluka = serializers.SerializerMethodField()
-    village = serializers.SerializerMethodField()
-    date_range = serializers.SerializerMethodField()
-    
+# serializers.py — add JobNoteSerializer
+
+from rest_framework import serializers
+from django.contrib.auth.models import User
+from .models import JobNote
+
+
+class NoteAuthorSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
     class Meta:
-        model = Cluster
+        model  = User
+        fields = ['id', 'username', 'full_name']
+
+    def get_full_name(self, obj):
+        return obj.get_full_name() or obj.username
+
+
+# serializers.py — replace JobNoteSerializer with this fixed version
+
+class JobNoteSerializer(serializers.ModelSerializer):
+    author        = NoteAuthorSerializer(read_only=True)
+    resolved_by   = NoteAuthorSerializer(read_only=True)
+    mentions      = NoteAuthorSerializer(many=True, read_only=True)
+    mention_ids   = serializers.ListField(
+        child=serializers.IntegerField(), write_only=True, required=False, default=list
+    )
+    tag_labels    = serializers.SerializerMethodField()
+
+    # ✅ FIX: explicitly declare job_id as a writable field that maps to the job FK
+    job_id = serializers.CharField(write_only=False)  # read + write as string
+
+    class Meta:
+        model  = JobNote
+        fields = [
+            'id', 'job_id', 'author', 'text', 'tags', 'tag_labels',
+            'mentions', 'mention_ids',
+            'is_resolved', 'resolved_by', 'resolved_at', 'resolution_note',
+            'note_date', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'author', 'is_resolved', 'resolved_by',
+                            'resolved_at', 'created_at', 'updated_at']
+
+    TAG_LABEL_MAP = dict(JobNote.TAG_CHOICES)
+
+    def get_tag_labels(self, obj):
+        return [self.TAG_LABEL_MAP.get(t, t) for t in (obj.tags or [])]
+
+    def validate_job_id(self, value):
+        # Confirm the job exists
+        from .models import Job
+        if not Job.objects.filter(job_id=value).exists():
+            raise serializers.ValidationError(f"Job '{value}' does not exist.")
+        return value
+
+    def create(self, validated_data):
+        mention_ids = validated_data.pop('mention_ids', [])
+        job_id      = validated_data.pop('job_id')          # ✅ pop the string id
+
+        from .models import Job
+        job = Job.objects.get(job_id=job_id)                # ✅ look up the Job instance
+
+        note = JobNote.objects.create(job=job, **validated_data)  # ✅ pass FK instance
+
+        if mention_ids:
+            from django.contrib.auth.models import User
+            note.mentions.set(User.objects.filter(id__in=mention_ids))
+
+        return note
+    
+
+class ClusterSerializer(serializers.ModelSerializer):
+    district         = serializers.SerializerMethodField()
+    taluka           = serializers.SerializerMethodField()
+    village          = serializers.SerializerMethodField()
+    date_range       = serializers.SerializerMethodField()
+    farmer_count     = serializers.IntegerField(read_only=True)
+    mukkadam_count   = serializers.IntegerField(read_only=True)
+    activity_count   = serializers.IntegerField(read_only=True)
+    allocation_count = serializers.IntegerField(read_only=True)
+    farmer_due       = serializers.SerializerMethodField()
+    mukkadam_due     = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Cluster
         fields = '__all__'
         read_only_fields = ['id']
 
+    def get_district (self, obj): return ', '.join(obj.districts) if obj.districts else ''
+    def get_taluka   (self, obj): return ', '.join(obj.talukas)   if obj.talukas   else ''
+    def get_village  (self, obj): return ', '.join(obj.villages)  if obj.villages  else ''
+
     def get_date_range(self, obj):
-        from .models import JobActivity
-        from django.db.models import Min, Max
-        
-        result = JobActivity.objects.filter(
-            job__clusters=obj,
-            scheduled_date__isnull=False
-        ).aggregate(
-            start_date=Min('scheduled_date'),
-            end_date=Max('scheduled_date')
-        )
         return {
-            'start_date': result['start_date'],
-            'end_date': result['end_date'],
+            'start_date': getattr(obj, 'activity_start', None),
+            'end_date':   getattr(obj, 'activity_end',   None),
         }
-    
-    def get_district(self, obj):
-        return ', '.join(obj.districts) if obj.districts else ''
-    
-    def get_taluka(self, obj):
-        return ', '.join(obj.talukas) if obj.talukas else ''
-    
-    def get_village(self, obj):
-        return ', '.join(obj.villages) if obj.villages else ''
 
-
+    def get_farmer_due  (self, obj): return 0
+    def get_mukkadam_due(self, obj): return 0
 class PlotSerializer(serializers.ModelSerializer):
     clusters = serializers.PrimaryKeyRelatedField(
         queryset=Cluster.objects.all(), many=True, required=False

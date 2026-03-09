@@ -1,6 +1,7 @@
 // src/context/auth.tsx
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import axios from 'axios';
+import { API_BASE_URL } from '@/types/config';
 
 interface UserData {
   id: number;
@@ -41,7 +42,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     try {
       console.log('🔄 Verifying token with backend...');
-      const response = await axios.get(`${import.meta.env.VITE_API_BASE_URL_ALLOCATION}/ap/auth/me/`, {
+      const response = await axios.get(`${API_BASE_URL}/auth/me/`, {
         headers: { 
           'Authorization': `Token ${token}`,
         }

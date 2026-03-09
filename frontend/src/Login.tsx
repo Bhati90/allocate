@@ -4,6 +4,7 @@ import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from './context/auth';
 import { AlertCircle } from 'lucide-react';
+import { API_BASE_URL } from './types/config';
 
 const API_BASE_URL_A = import.meta.env.VITE_API_BASE_URL_ALLOCATION;
 
@@ -23,7 +24,7 @@ const Login = () => {
     
     try {
       console.log('🔐 Attempting login...');
-      const res = await axios.post(`${API_BASE_URL_A}/ap/login/`, { 
+      const res = await axios.post(`${API_BASE_URL}/ap/login/`, { 
         username, 
         password 
       });

@@ -359,3 +359,26 @@ def validate_availability_capacity(sender, instance, **kwargs):
     if instance.allocated_workers > instance.available_crew_size:
         instance.is_available = False
     # else: leave is_available as-is (don't force True, UI/logic may set holiday)
+
+
+# signals.py
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
+from .models import JobActivity
+from .planing import invalidate_planning_cache
+
+
+def _get_cluster_ids(instance: JobActivity):
+    return list(instance.job.clusters.values_list("id", flat=True))
+
+
+@receiver(post_save, sender=JobActivity)
+def on_job_activity_save(sender, instance, **kwargs):
+    for cid in _get_cluster_ids(instance):
+        invalidate_planning_cache(cid)
+
+
+@receiver(post_delete, sender=JobActivity)
+def on_job_activity_delete(sender, instance, **kwargs):
+    for cid in _get_cluster_ids(instance):
+        invalidate_planning_cache(cid)

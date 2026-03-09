@@ -6,6 +6,9 @@ from django.db.models import Q, Sum, Count
 from django.db import transaction
 from datetime import datetime, timedelta
 from .models import *
+from rest_framework.permissions import IsAuthenticated
+
+
 from .serializers import *
 from .utils import check_can_allocate, get_mukkadam_availability, get_mukkadam_remaining_workers
 # views.py
@@ -44,6 +47,39 @@ def about(request):
 
 
 # views.py - Update cluster_activity_calendar
+
+from rest_framework import generics
+from django.contrib.auth.models import User
+from rest_framework.views import APIView
+class UserListAPIView(generics.ListAPIView):
+    # Use select_related to improve performance (joins the tables in 1 query)
+    queryset = User.objects.select_related('profile').all()
+    serializer_class = UserDetailSerializer
+
+
+class UserProfileView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        user = request.user
+
+        try:
+            # ✅ Get UserProfile to check role
+            profile = user.profile
+
+            return Response({
+                'id': user.id,
+                'username': user.username,
+                'full_name': profile.full_name,
+                'mobile_number': profile.mobile_number,
+                'role': profile.role,
+                'is_admin': profile.role == 'admin',  # ✅ Check role field
+                'is_verified': profile.is_mobile_verified
+            })
+        except UserProfile.DoesNotExist:
+            return Response({
+                'error': 'User profile not found'
+            }, status=status.HTTP_404_NOT_FOUND)
 
 
 
@@ -1321,8 +1357,8 @@ from rest_framework.decorators import api_view
 class JobActivityViewSet(viewsets.ModelViewSet):
     queryset = JobActivity.objects.all().select_related('job', 'activity', 'plot')
     serializer_class = JobActivityCreateUpdateSerializer
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
+    
 
     def get_serializer_class(self):
         if self.action in ['list', 'retrieve']:
@@ -1385,12 +1421,17 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 status=400
             )
 
+        # shrink original
         activity.total_area = activity.total_area - area
-
         activity.move_reason = reason
+        
+        # 👇 track who moved it
+        if request.user and request.user.is_authenticated:
+            activity.last_moved_by = request.user
+            activity.last_moved_at = timezone.now()
         activity.save()
 
-        # create new
+        # create new split activity
         new_activity = JobActivity.objects.create(
             job=activity.job,
             activity=activity.activity,
@@ -1408,10 +1449,14 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             location=activity.location,
             is_manually_moved=True,
             moved_from_activity=activity,
-            source='manual',                       # this move was manual
-        original_source=activity.original_source,
+            source='manual',
+            original_source=activity.original_source,
             move_reason=reason,
             api_activity_id='',
+            # 👇 who created this moved chunk
+            created_by=request.user if request.user.is_authenticated else None,
+            last_moved_by=request.user if request.user.is_authenticated else None,
+            last_moved_at=timezone.now() if request.user.is_authenticated else None,
         )
 
         return Response({
@@ -1422,7 +1467,6 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             'new_activity_id': new_activity.id,
             'new_date': new_date,
             'new_area': float(area),
-            # 'is_manually_moved': True,
         }, status=200)
 
 # views.py - Update MukkadamViewSet
@@ -2346,28 +2390,68 @@ from datetime import date, timedelta, datetime as dt
 
 from django.db.models import Q
 
+from django.db.models import (
+    Count, Min, Max, Q, OuterRef, Subquery, IntegerField
+)
+from django.db.models.functions import Coalesce
+from rest_framework import viewsets, filters
 class ClusterViewSet(viewsets.ModelViewSet):
-    queryset = Cluster.objects.all().order_by('name').prefetch_related(
-        'jobs__activities'
-    )
     serializer_class = ClusterSerializer
-    permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
-        qs = Cluster.objects.all().order_by('name').prefetch_related(
-            'jobs__activities__plot',
-            'jobs__booking',
-        )
 
-        state_code = self.request.query_params.get('state_code')
-        district_code = self.request.query_params.get('district_code')
+        activity_sq = JobActivity.objects.filter(
+            job__clusters__id=OuterRef('pk')
+        ).order_by().values('job__clusters__id').annotate(
+            c=models.Count('id')
+        ).values('c')
+
+        # ── allocation count ──────────────────────────────────────────────────
+        # Allocation has cluster FK directly — use that, much simpler & correct
+        allocation_sq = Allocation.objects.filter(
+            cluster_id=OuterRef('pk')
+        ).order_by().values('cluster_id').annotate(
+            c=models.Count('id')
+        ).values('c')
+
+        # ── farmer count ──────────────────────────────────────────────────────
+        # Farmer.clusters is M2M
+        farmer_sq = Farmer.objects.filter(
+            clusters__id=OuterRef('pk')
+        ).order_by().values('clusters__id').annotate(
+            c=models.Count('farmer_id')
+        ).values('c')
+
+        # ── mukkadam count (active assignments) ──────────────────────────────
+        mukkadam_sq = ClusterMukkadamAssignment.objects.filter(
+            cluster_id=OuterRef('pk'),
+            is_active=True,
+        ).order_by().values('cluster_id').annotate(
+            c=models.Count('id')
+        ).values('c')
+
+        # ── date range ────────────────────────────────────────────────────────
+        date_start_sq = JobActivity.objects.filter(
+            job__clusters__id=OuterRef('pk'),
+            scheduled_date__isnull=False,
+        ).order_by('scheduled_date').values('scheduled_date')[:1]
+
+        date_end_sq = JobActivity.objects.filter(
+            job__clusters__id=OuterRef('pk'),
+            scheduled_date__isnull=False,
+        ).order_by('-scheduled_date').values('scheduled_date')[:1]
+
+        qs = Cluster.objects.annotate(
+            farmer_count     = Coalesce(Subquery(farmer_sq,     output_field=IntegerField()), 0),
+            mukkadam_count   = Coalesce(Subquery(mukkadam_sq,   output_field=IntegerField()), 0),
+            activity_count   = Coalesce(Subquery(activity_sq,   output_field=IntegerField()), 0),
+            allocation_count = Coalesce(Subquery(allocation_sq, output_field=IntegerField()), 0),
+            activity_start   = Subquery(date_start_sq),
+            activity_end     = Subquery(date_end_sq),
+        ).order_by('name')
+
+        # ── optional ?q= filter ───────────────────────────────────────────────
         q = self.request.query_params.get('q', '').strip()
-
-        if state_code:
-            qs = qs.filter(state_code=state_code)
-        if district_code:
-            qs = qs.filter(district_code=district_code)
-
         if q:
             qs = qs.filter(
                 Q(name__icontains=q) |
@@ -2376,6 +2460,21 @@ class ClusterViewSet(viewsets.ModelViewSet):
             ).distinct()
 
         return qs
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve', 'available_activities']:
+            return [AllowAny()]
+        # create / update / custom actions → auth
+        return [IsAuthenticated()]
+    
+    def perform_create(self, serializer):
+        user = self.request.user if self.request.user.is_authenticated else None
+        serializer.save(created_by=user, last_modified_by=user)
+
+    def perform_update(self, serializer):
+        user = self.request.user if self.request.user.is_authenticated else None
+        serializer.save(last_modified_by=user)
+    
 
     def list(self, request, *args, **kwargs):
         from datetime import date
@@ -2465,6 +2564,7 @@ class ClusterViewSet(viewsets.ModelViewSet):
                 cluster=c
             ).select_related('mukkadam')
 
+
             for assignment in assignments:
                 mukkadam = assignment.mukkadam
 
@@ -2484,6 +2584,9 @@ class ClusterViewSet(viewsets.ModelViewSet):
             serialized                 = self.get_serializer(c).data
             serialized['farmer_due']   = '0'
             serialized['mukkadam_due'] = '0'
+
+            serialized['farmer_count'] = c.farmer_count
+            serialized['mukkadam_count'] = c.mukkadam_count
             result.append(serialized)
 
         return Response(result)
@@ -2850,6 +2953,10 @@ class ClusterViewSet(viewsets.ModelViewSet):
 
         assignment.save()
 
+        if request.user and request.user.is_authenticated:
+            assignment.last_modified_by = request.user
+            assignment.save(update_fields=['last_modified_by'])
+
         return Response(
             {
                 'success': True,
@@ -2893,6 +3000,9 @@ class ClusterViewSet(viewsets.ModelViewSet):
         if 'villages' in request.data:
             cluster.villages = request.data['villages']
 
+        if request.user and request.user.is_authenticated:
+            cluster.last_modified_by = request.user
+
         cluster.save()
         return Response(ClusterSerializer(cluster).data)
 
@@ -2900,9 +3010,11 @@ class ClusterViewSet(viewsets.ModelViewSet):
 from decimal import Decimal, ROUND_HALF_UP
 
 from .notification import notify_mukkadam
+from rest_framework.permissions import IsAuthenticated
 
 
 class AllocationViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
     def get_queryset(self):
         qs = Allocation.objects.all().select_related(
             'job_activity__job__farmer',
@@ -3007,7 +3119,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     status='scheduled',
                     cluster=cluster,
                     allows_second_job=allows_second_job,
-                    created_by=request.user if request.user.is_authenticated else None,
+                    created_by=request.user, 
+                    last_modified_by=request.user if request.user.is_authenticated else None,
+        last_modified_at=timezone.now() if request.user.is_authenticated else None,
                 )
 
                 serializer = self.get_serializer(allocation)
@@ -3411,9 +3525,15 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         cluster=allocation.cluster,
                         status='scheduled',
                         created_by=request.user if request.user.is_authenticated else None,
+                        last_modified_by=request.user if request.user.is_authenticated else None,
+        last_modified_at=timezone.now() if request.user.is_authenticated else None,
+
                     )
                     allocation.allocated_area = remaining_area
+                    allocation.last_modified_by = request.user if request.user.is_authenticated else None
+                    allocation.last_modified_at = timezone.now()
                     allocation.save()
+                    
 
                     # restore job_act total
                     job_act.allocated_area += remaining_area + new_area
@@ -3423,6 +3543,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     allocation.allocated_date = new_date
                     allocation.allocated_area = new_area
                     allocation.allocated_workers = workers_needed
+                    allocation.last_modified_by = request.user if request.user.is_authenticated else None
+                    allocation.last_modified_at = timezone.now()
                     allocation.save()
 
                     job_act.allocated_area += new_area
@@ -3824,47 +3946,176 @@ def adjust_job_activities_for_cluster(job: Job, cluster: Cluster):
         ja.scheduled_date = new_date
         ja.save(update_fields=["scheduled_date"])
 
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from django.db import transaction
+from django.utils import timezone
+
+
+
+from rest_framework.decorators import action
+from rest_framework.response   import Response
+from rest_framework            import status, viewsets
+from rest_framework.views      import APIView
+from django.contrib.auth.models import User
+from .models    import JobNote, Job
+from .serializers import JobNoteSerializer, NoteAuthorSerializer
+
+
+class JobNoteViewSet(viewsets.ModelViewSet):
+    """
+    CRUD for notes on a job.
+
+    GET  /api/job-notes/?date=YYYY-MM-DD&cluster_id=X
+         → all notes for jobs scheduled on that date in that cluster
+         → sorted: unresolved first, then resolved; within each group newest first
+
+    POST /api/job-notes/
+         body: { job_id, text, tags, mention_ids, note_date }
+
+    POST /api/job-notes/{id}/resolve/
+         body: { resolution_note }
+    """
+    serializer_class = JobNoteSerializer
+
+    def get_queryset(self):
+        qs = JobNote.objects.select_related('author', 'resolved_by') \
+                            .prefetch_related('mentions')
+
+        date       = self.request.query_params.get('date')
+        cluster_id = self.request.query_params.get('cluster_id')
+        job_id     = self.request.query_params.get('job_id')
+
+        if date:
+            qs = qs.filter(note_date=date)
+        if cluster_id:
+            qs = qs.filter(job__clusters__id=cluster_id)
+        if job_id:
+            qs = qs.filter(job_id=job_id)
+
+        # Unresolved first, then by newest
+        from django.db.models import Case, When, IntegerField
+        qs = qs.annotate(
+            sort_order=Case(
+                When(is_resolved=False, then=0),
+                default=1,
+                output_field=IntegerField(),
+            )
+        ).order_by('sort_order', '-created_at')
+
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(author=self.request.user)
+
+    @action(detail=True, methods=['post'], url_path='resolve')
+    def resolve(self, request, pk=None):
+        note            = self.get_object()
+        resolution_note = request.data.get('resolution_note', '')
+        if not resolution_note.strip():
+            return Response(
+                {'error': 'resolution_note is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        note.resolve(user=request.user, resolution_note=resolution_note)
+        return Response(JobNoteSerializer(note).data)
+
+    @action(detail=True, methods=['post'], url_path='unresolve')
+    def unresolve(self, request, pk=None):
+        note = self.get_object()
+        note.is_resolved     = False
+        note.resolved_by     = None
+        note.resolved_at     = None
+        note.resolution_note = ''
+        note.save(update_fields=['is_resolved', 'resolved_by', 'resolved_at',
+                                 'resolution_note', 'updated_at'])
+        return Response(JobNoteSerializer(note).data)
+
+
+class UserSearchView(APIView):
+    """
+    GET /api/users/search/?q=john
+    → returns app users matching the query (for @mention autocomplete)
+    """
+    def get(self, request):
+        q = request.query_params.get('q', '').strip()
+        if len(q) < 1:
+            return Response([])
+        users = User.objects.filter(
+            models.Q(username__icontains=q) |
+            models.Q(first_name__icontains=q) |
+            models.Q(last_name__icontains=q)
+        ).exclude(id=request.user.id)[:10]
+        return Response(NoteAuthorSerializer(users, many=True).data)
+
+
+
 @api_view(['POST'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def add_farmer_plots_to_cluster(request, cluster_id):
-    cluster = Cluster.objects.get(id=cluster_id)
+    try:
+        cluster = Cluster.objects.get(id=cluster_id)
+    except Cluster.DoesNotExist:
+        return Response({'error': 'Cluster not found'}, status=404)
+
     farmer_id = request.data.get('farmer_id')
     plot_ids = request.data.get('plot_ids', [])
 
-    farmer = Farmer.objects.get(farmer_id=farmer_id)
-    farmer.clusters.add(cluster)
+    if not farmer_id:
+        return Response({'error': 'farmer_id is required'}, status=400)
+    if not isinstance(plot_ids, list) or not plot_ids:
+        return Response({'error': 'plot_ids must be a non-empty list'}, status=400)
 
-    added_plots = []
-    fixed_jobs = 0
+    try:
+        farmer = Farmer.objects.get(farmer_id=farmer_id)
+    except Farmer.DoesNotExist:
+        return Response({'error': 'Farmer not found'}, status=404)
 
-    for plot_id in plot_ids:
-        try:
-            plot = Plot.objects.get(id=plot_id, farmer=farmer)
+    with transaction.atomic():
+        # Link farmer to cluster + audit
+        farmer.clusters.add(cluster)
+        if hasattr(farmer, 'last_cluster_modified_by'):
+            farmer.last_cluster_modified_by = request.user
+            farmer.save(update_fields=['last_cluster_modified_by'])
+
+        added_plots = []
+        jobs_fixed = 0
+
+        # Use a set of job_ids (string PK) to avoid duplicates
+        jobs_to_fix_ids = set()
+
+        for plot_id in plot_ids:
+            try:
+                plot = Plot.objects.get(id=plot_id, farmer=farmer)
+            except Plot.DoesNotExist:
+                continue
+
             plot.clusters.add(cluster)
             added_plots.append(plot.name)
 
-            # ✅ Fix all jobs on this plot
-            jobs_on_plot = Job.objects.filter(plot=plot)
-            for job in jobs_on_plot:
-                job.clusters.add(cluster)
+            if hasattr(plot, 'last_cluster_modified_by'):
+                plot.last_cluster_modified_by = request.user
+                plot.last_cluster_modified_at = timezone.now()
+                plot.save(update_fields=['last_cluster_modified_by', 'last_cluster_modified_at'])
 
-                # 🔹 adjust all its activities for this cluster
-                adjust_job_activities_for_cluster(job, cluster)
+            for job in Job.objects.filter(plot=plot):
+                jobs_to_fix_ids.add(job.job_id)  # 👈 use job.job_id, not job.id
 
-            fixed_jobs += jobs_on_plot.count()
-
-        except Plot.DoesNotExist:
-            pass
+        # Now process each unique job once
+        for job_pk in jobs_to_fix_ids:
+            job = Job.objects.get(pk=job_pk)  # pk == job_id
+            job.clusters.add(cluster)
+            adjust_job_activities_for_cluster(job, cluster)
+            jobs_fixed += 1
 
     return Response({
         'success': True,
         'farmer_name': farmer.farmer_name,
         'cluster_name': cluster.name,
         'plots_added': added_plots,
-        'jobs_fixed': fixed_jobs,
+        'jobs_fixed': jobs_fixed,
     })
-
-
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -3978,6 +4229,10 @@ def add_mukkadam_to_cluster(request, cluster_id):
         updown_from_date=updown_from_date if mukkadam_type == 'updown' and updown_mode == 'range' else None,
         updown_to_date=updown_to_date if mukkadam_type == 'updown' and updown_mode == 'range' else None,
         updown_specific_dates=updown_specific_dates if mukkadam_type == 'updown' and updown_mode == 'specific' else [],
+
+        created_by=request.user if request.user.is_authenticated else None,
+        last_modified_by=request.user if request.user.is_authenticated else None,
+    
     )
 
     if advance_amount is not None:

@@ -10,9 +10,23 @@ import * as XLSX from 'xlsx';
 type GlobalSummary = {
   total_jobs: number;
   total_activities: number;
+  total_area_scheduled: number;
   total_area_allocated: number;
   total_area_completed: number;
   total_allocated_workers: number;
+  total_revenue: number;          // sum of Job.total_activity_amount
+  total_amount_paid: number;      // advance_paid where status=PAID
+  total_outstanding: number;      // revenue - paid
+  collection_rate: number;        // % collected
+
+  // NEW — worker utilization
+  total_capacity_workers: number;
+  total_optimal_workers: number;
+  utilization_rate: number;         // allocated / capacity %
+  optimal_utilization_rate: number; // optimal needed / capacity %
+  staffing_ratio: number | null;    // >1 overstaffed, <1 understaffed
+  optimal_coverage_pct: number;    
+
   farmer_amount: number;
   mukkadam_amount: number;
   profit: number;
@@ -25,7 +39,17 @@ type GlobalSummary = {
 type ClusterSummaryRow = {
   cluster_id: number;
   cluster_name: string;
+  total_revenue: number;
+  total_amount_paid: number;
+  total_outstanding: number;
+  collection_rate: number;
+  total_capacity_workers: number;
+  total_optimal_workers: number;
+  utilization_rate: number;
+  optimal_utilization_rate: number;
+  staffing_ratio: number | null;
   jobs: number;
+  total_area_scheduled: number;
   total_area_allocated: number;
   total_area_completed: number;
   farmer_amount: number;
@@ -96,10 +120,30 @@ type MukkadamSummaryRow = {
   clusters: MukkadamClusterRow[];
 };
 
+
+type FarmerPlotActivity = {
+  activity_name: string;
+  scheduled_date: string | null;
+  total_area: number;
+  allocated_area: number;
+  remaining_area: number;
+  allocation_status: string;
+};
+
+type FarmerPlotRow = {
+  plot_name: string;
+  cluster_name: string;
+  total_area: number;
+  allocated_area: number;
+  remaining_area: number;
+  activities: FarmerPlotActivity[];
+};
+
 type FarmerClusterRow = {
   cluster_id: number;
   cluster_name: string;
   allocations: number;
+  area_scheduled: number;
   area_alloc: number;
   area_done: number;
   farmer_amount: number;
@@ -110,11 +154,13 @@ type FarmerClusterRow = {
 type FarmerSummaryRow = {
   farmer_id: string;
   farmer_name: string;
+  total_area_scheduled: number;
   total_area_allocated: number;
   total_farmer_amount: number;
   total_mukkadam_amount: number;
   profit: number;
   profit_per_acre: number;
+  plots: FarmerPlotRow[];
   clusters: FarmerClusterRow[];
 };
 
@@ -231,7 +277,7 @@ function KpiCard({
   label: string;
   value: string;
   sub?: string;
-  accent?: 'green' | 'red' | 'amber' | 'blue' | 'indigo';
+  accent?: 'green' | 'red' | 'amber' | 'blue' | 'indigo' | 'violet';
 }) {
   const accents: Record<string, string> = {
     green: 'bg-emerald-50 border-emerald-200 text-emerald-700',
@@ -239,6 +285,7 @@ function KpiCard({
     amber: 'bg-amber-50 border-amber-200 text-amber-700',
     blue: 'bg-blue-50 border-blue-200 text-blue-700',
     indigo: 'bg-indigo-50 border-indigo-200 text-indigo-700',
+    violet: 'bg-violet-50 border-violet-200 text-violet-700',
   };
   const cls = accent ? accents[accent] : 'bg-white border-slate-200 text-slate-800';
   return (
@@ -1071,10 +1118,19 @@ function MukkadamsTab({
   const filtered = data.filter(m =>
     !mukkadamFilter || m.mukkadam_name.toLowerCase().includes(mukkadamFilter.toLowerCase()),
   );
+  // MukkadamsTab — after the existing `filtered` array, add:
+const visible = filtered.filter(m => {
+  const clusters = selectedClusterId
+    ? m.clusters.filter(c => c.cluster_id === selectedClusterId)
+    : m.clusters;
+  return clusters.length > 0;  // ✅ hide if no clusters match the filter
+});
+
+
 
   return (
     <div className="space-y-2">
-      {filtered.map(m => {
+      {visible.map(m => {
         const isOpen = expanded.has(m.mukkadam_id);
         const clusters = selectedClusterId
           ? m.clusters.filter(c => c.cluster_id === selectedClusterId)
@@ -1150,6 +1206,10 @@ function MukkadamsTab({
       {filtered.length === 0 && (
         <div className="text-center py-12 text-slate-400 text-sm">No mukkadams found.</div>
       )}
+
+{visible.length === 0 && (
+  <div className="text-center py-12 text-slate-400 text-sm">No mukkadams found.</div>
+)}
     </div>
   );
 }
@@ -1168,26 +1228,36 @@ function FarmersTab({
   selectedClusterId: number | null;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expandedPlots, setExpandedPlots] = useState<Set<string>>(new Set());
+  const [plotView, setPlotView] = useState<Record<string, 'plots' | 'clusters'>>({});
 
   const toggle = (id: string) => {
-    setExpanded(prev => {
-      const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
+    setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
+  const togglePlot = (key: string) => {
+    setExpandedPlots(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   };
 
   const filtered = data.filter(f =>
     !farmerFilter || f.farmer_name.toLowerCase().includes(farmerFilter.toLowerCase()),
   );
 
+  const visible = filtered.filter(f => {
+  const clusters = selectedClusterId
+    ? f.clusters.filter(c => c.cluster_id === selectedClusterId)
+    : f.clusters;
+  return clusters.length > 0;  // ✅ hide if no clusters match
+});
+
   return (
     <div className="space-y-2">
-      {filtered.map(f => {
+      {visible.map(f => {
         const isOpen = expanded.has(f.farmer_id);
+        const view = plotView[f.farmer_id] ?? 'plots';
         const clusters = selectedClusterId
           ? f.clusters.filter(c => c.cluster_id === selectedClusterId)
           : f.clusters;
+        const unallocAcres = (f.total_area_scheduled ?? 0) - f.total_area_allocated;
 
         return (
           <div key={f.farmer_id} className="border border-slate-200 rounded-xl overflow-hidden">
@@ -1201,7 +1271,17 @@ function FarmersTab({
                 </div>
                 <div className="text-left">
                   <div className="text-sm font-bold text-slate-800">{f.farmer_name}</div>
-                  <div className="text-[11px] text-slate-400">{clusters.length} clusters · {fmt(f.total_area_allocated)} ac total</div>
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] mt-0.5">
+                    <span className="text-slate-400">{clusters.length} cluster{clusters.length !== 1 ? 's' : ''}</span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-violet-600 font-bold">{fmt(f.total_area_scheduled ?? 0)} ac total</span>
+                    <span className="text-slate-300">·</span>
+                    <span className="text-blue-600 font-semibold">{fmt(f.total_area_allocated)} ac alloc</span>
+                    {unallocAcres > 0.05 && (
+                      <><span className="text-slate-300">·</span>
+                      <span className="text-amber-600 font-semibold">{fmt(unallocAcres)} ac pending</span></>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-4">
@@ -1215,40 +1295,132 @@ function FarmersTab({
 
             {isOpen && (
               <div className="border-t border-slate-100 p-4 space-y-4 bg-slate-50/50">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  <KpiCard label="Area Alloc" value={`${fmt(f.total_area_allocated)} ac`} accent="green" />
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                  <KpiCard label="Total Acres" value={`${fmt(f.total_area_scheduled ?? 0)} ac`} accent="violet" />
+                  <KpiCard label="Area Alloc" value={`${fmt(f.total_area_allocated)} ac`} accent="blue" />
                   <KpiCard label="Farmer Paid" value={fmtINR(f.total_farmer_amount)} />
                   <KpiCard label="Mukkadam Paid" value={fmtINR(f.total_mukkadam_amount)} accent="amber" />
                   <KpiCard label="Profit" value={fmtINR(f.profit)} accent={f.profit >= 0 ? 'green' : 'red'} sub={`${fmtINR(f.profit_per_acre)}/ac`} />
                 </div>
 
-                <div>
-                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Cluster-wise Breakdown</p>
-                  <div className="overflow-x-auto rounded-lg border border-slate-200">
-                    <table className="min-w-full text-[11px]">
-                      <thead className="bg-slate-800 text-slate-200">
-                        <tr>
-                          {['Cluster', 'Allocations', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit'].map(h => (
-                            <th key={h} className="px-3 py-2 text-left font-medium">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {clusters.map(c => (
-                          <tr key={c.cluster_id} className="hover:bg-slate-50">
-                            <td className="px-3 py-2 font-medium text-slate-700">{c.cluster_name}</td>
-                            <td className="px-3 py-2 text-right">{c.allocations}</td>
-                            <td className="px-3 py-2 text-right text-blue-600">{fmt(c.area_alloc)} ac</td>
-                            <td className="px-3 py-2 text-right text-emerald-600">{fmt(c.area_done)} ac</td>
-                            <td className="px-3 py-2 text-right">{fmtINR(c.farmer_amount)}</td>
-                            <td className="px-3 py-2 text-right">{fmtINR(c.mukkadam_amount)}</td>
-                            <td className={`px-3 py-2 text-right ${profitColor(c.profit)}`}>{fmtINR(c.profit)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
+                  {(['plots', 'clusters'] as const).map(v => (
+                    <button
+                      key={v}
+                      onClick={() => setPlotView(prev => ({ ...prev, [f.farmer_id]: v }))}
+                      className={`px-3 py-1 text-xs font-semibold rounded-md transition-colors ${view === v ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      {v === 'plots' ? '🗺️ Plot-wise' : '🏘️ Cluster-wise'}
+                    </button>
+                  ))}
                 </div>
+
+                {view === 'plots' && (
+                  <div>
+                    <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Plot-wise Breakdown</p>
+                    {(!f.plots || f.plots.length === 0) ? (
+                      <p className="text-xs text-slate-400 py-3 text-center">No plot data — apply backend PATCH 3</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {f.plots.map((plot, pi) => {
+                          const plotKey = `${f.farmer_id}-plot-${pi}`;
+                          const isPlotOpen = expandedPlots.has(plotKey);
+                          const unalloc = plot.total_area - plot.allocated_area;
+                          return (
+                            <div key={pi} className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+                              <button
+                                onClick={() => togglePlot(plotKey)}
+                                className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 transition-colors text-left"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="w-6 h-6 rounded bg-red-50 flex items-center justify-center text-xs">📍</div>
+                                  <div>
+                                    <span className="text-[13px] font-semibold text-slate-700">{plot.plot_name}</span>
+                                    <span className="text-[10px] text-slate-400 ml-2">{plot.cluster_name}</span>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-3 text-[11px]">
+                                  <span className="text-violet-600 font-bold">{fmt(plot.total_area)} ac</span>
+                                  <span className="text-blue-600">{fmt(plot.allocated_area)} alloc</span>
+                                  {unalloc > 0.05 && <span className="text-amber-600">{fmt(unalloc)} pending</span>}
+                                  <span className="text-slate-400">{isPlotOpen ? '▲' : '▼'}</span>
+                                </div>
+                              </button>
+                              {isPlotOpen && plot.activities.length > 0 && (
+                                <div className="border-t border-slate-100">
+                                  <div className="flex items-center gap-4 px-3 py-2 bg-slate-50 border-b border-slate-100 text-[11px] text-slate-500">
+                                    <span><span className="font-bold text-violet-600">{fmt(plot.total_area)} ac</span> total</span>
+                                    <span><span className="font-bold text-blue-600">{fmt(plot.allocated_area)} ac</span> allocated</span>
+                                    <span><span className="font-bold text-amber-600">{fmt(plot.remaining_area)} ac</span> remaining</span>
+                                  </div>
+                                  <table className="min-w-full text-[11px]">
+                                    <thead>
+                                      <tr className="bg-slate-100 text-slate-500">
+                                        <th className="px-3 py-2 text-left font-semibold">Activity</th>
+                                        <th className="px-3 py-2 text-left font-semibold">Date</th>
+                                        <th className="px-3 py-2 text-right font-semibold">Total</th>
+                                        <th className="px-3 py-2 text-right font-semibold">Alloc</th>
+                                        <th className="px-3 py-2 text-right font-semibold">Remaining</th>
+                                        <th className="px-3 py-2 text-left font-semibold">Status</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 bg-white">
+                                      {plot.activities.map((act, ai) => (
+                                        <tr key={ai} className="hover:bg-slate-50">
+                                          <td className="px-3 py-2 font-medium text-slate-700">{act.activity_name}</td>
+                                          <td className="px-3 py-2 text-slate-500">
+                                            {act.scheduled_date ? new Date(act.scheduled_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—'}
+                                          </td>
+                                          <td className="px-3 py-2 text-right font-bold text-violet-600">{fmt(act.total_area)} ac</td>
+                                          <td className="px-3 py-2 text-right text-blue-600">{fmt(act.allocated_area)} ac</td>
+                                          <td className={`px-3 py-2 text-right font-medium ${act.remaining_area > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>{fmt(act.remaining_area)} ac</td>
+                                          <td className="px-3 py-2">
+                                            <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-medium ${statusBadge(act.allocation_status)}`}>{act.allocation_status}</span>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {view === 'clusters' && (
+                  <div>
+                    <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Cluster-wise Breakdown</p>
+                    <div className="overflow-x-auto rounded-lg border border-slate-200">
+                      <table className="min-w-full text-[11px]">
+                        <thead className="bg-slate-800 text-slate-200">
+                          <tr>
+                            {['Cluster', 'Allocations', 'Total Acres', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit'].map(h => (
+                              <th key={h} className="px-3 py-2 text-left font-medium">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {clusters.map(c => (
+                            <tr key={c.cluster_id} className="hover:bg-slate-50">
+                              <td className="px-3 py-2 font-medium text-slate-700">{c.cluster_name}</td>
+                              <td className="px-3 py-2 text-right">{c.allocations}</td>
+                              <td className="px-3 py-2 text-right font-bold text-violet-600">{fmt(c.area_scheduled ?? 0)} ac</td>
+                              <td className="px-3 py-2 text-right text-blue-600">{fmt(c.area_alloc)} ac</td>
+                              <td className="px-3 py-2 text-right text-emerald-600">{fmt(c.area_done)} ac</td>
+                              <td className="px-3 py-2 text-right">{fmtINR(c.farmer_amount)}</td>
+                              <td className="px-3 py-2 text-right">{fmtINR(c.mukkadam_amount)}</td>
+                              <td className={`px-3 py-2 text-right ${profitColor(c.profit)}`}>{fmtINR(c.profit)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1257,6 +1429,10 @@ function FarmersTab({
       {filtered.length === 0 && (
         <div className="text-center py-12 text-slate-400 text-sm">No farmers found.</div>
       )}
+
+      {visible.length === 0 && (
+  <div className="text-center py-12 text-slate-400 text-sm">No farmers found.</div>
+)}
     </div>
   );
 }
@@ -1422,15 +1598,16 @@ function ClustersTab({
           <tr>
             <Th label="Cluster" sortKey="cluster_name" currentSort={sort} onSort={toggle} />
             <Th label="Jobs" sortKey="jobs" right currentSort={sort} onSort={toggle} />
+            <Th label="Total Acres" sortKey="total_area_scheduled" right currentSort={sort} onSort={toggle} />
             <Th label="Area Alloc" sortKey="total_area_allocated" right currentSort={sort} onSort={toggle} />
-            <Th label="Area Done" sortKey="total_area_completed" right currentSort={sort} onSort={toggle} />
+            {/* <Th label="Area Done" sortKey="total_area_completed" right currentSort={sort} onSort={toggle} /> */}
             <Th label="Workers" sortKey="allocated_workers" right currentSort={sort} onSort={toggle} />
             <Th label="Farmer ₹" sortKey="farmer_amount" right currentSort={sort} onSort={toggle} />
             <Th label="Mukkadam ₹" sortKey="mukkadam_amount" right currentSort={sort} onSort={toggle} />
             <Th label="Profit" sortKey="profit" right currentSort={sort} onSort={toggle} />
             <Th label="₹/ac" sortKey="profit_per_acre" right currentSort={sort} onSort={toggle} />
             <Th label="Loss Alloc" sortKey="loss_allocations" right currentSort={sort} onSort={toggle} />
-            <Th label="Disputes" sortKey="dispute_count" right currentSort={sort} onSort={toggle} />
+            {/* <Th label="Disputes" sortKey="dispute_count" right currentSort={sort} onSort={toggle} /> */}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -1442,6 +1619,7 @@ function ClustersTab({
             >
               <td className="px-3 py-2.5 font-semibold text-slate-700">{c.cluster_name}</td>
               <td className="px-3 py-2.5 text-right">{c.jobs}</td>
+              <td className="px-3 py-2.5 text-right font-bold text-violet-600">{fmt(c.total_area_scheduled ?? 0)} ac</td>
               <td className="px-3 py-2.5 text-right text-blue-600 font-medium">{fmt(c.total_area_allocated)} ac</td>
               <td className="px-3 py-2.5 text-right text-emerald-600 font-medium">{fmt(c.total_area_completed)} ac</td>
               <td className="px-3 py-2.5 text-right">{c.allocated_workers}</td>
@@ -1472,7 +1650,8 @@ export function GlobalInsightsPanel() {
 
   const today = new Date();
   const defaultEnd = today.toISOString().slice(0, 10);
-  const defaultStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
+//   const defaultStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
+const defaultStart = '2026-01-01';
 
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
@@ -1510,6 +1689,7 @@ export function GlobalInsightsPanel() {
       ['Metric', 'Value'],
       ['Total Jobs', s.total_jobs],
       ['Total Activities', s.total_activities],
+      ['Total Area Scheduled (ac)', (s.total_area_scheduled ?? 0).toFixed(2)],
       ['Total Area Allocated (ac)', s.total_area_allocated.toFixed(2)],
       ['Total Area Completed (ac)', s.total_area_completed.toFixed(2)],
       ['Total Workers Allocated', s.total_allocated_workers],
@@ -1523,8 +1703,8 @@ export function GlobalInsightsPanel() {
     ]), 'Global Summary');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Cluster', 'Jobs', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit', 'Profit/ac', 'Workers', 'Loss', 'Disputes'],
-      ...data.cluster_summary.map(c => [c.cluster_name, c.jobs, c.total_area_allocated.toFixed(2), c.total_area_completed.toFixed(2), c.farmer_amount.toFixed(2), c.mukkadam_amount.toFixed(2), c.profit.toFixed(2), c.profit_per_acre.toFixed(2), c.allocated_workers, c.loss_allocations, c.dispute_count]),
+      ['Cluster', 'Jobs', 'Total Acres', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit', 'Profit/ac', 'Workers', 'Loss', 'Disputes'],
+      ...data.cluster_summary.map(c => [c.cluster_name, c.jobs, (c.total_area_scheduled ?? 0).toFixed(2), c.total_area_allocated.toFixed(2), c.total_area_completed.toFixed(2), c.farmer_amount.toFixed(2), c.mukkadam_amount.toFixed(2), c.profit.toFixed(2), c.profit_per_acre.toFixed(2), c.allocated_workers, c.loss_allocations, c.dispute_count]),
     ]), 'Cluster Summary');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
@@ -1540,8 +1720,18 @@ export function GlobalInsightsPanel() {
     data.mukkadam_summary.forEach(m => m.clusters.forEach(c => mukRows.push([m.mukkadam_name, c.cluster_name, c.allocations, c.area_alloc.toFixed(2), c.area_done.toFixed(2), c.farmer_amount.toFixed(2), c.mukkadam_amount.toFixed(2), c.profit.toFixed(2)])));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(mukRows), 'Mukkadam Summary');
 
-    const farmerRows: any[][] = [['Farmer', 'Cluster', 'Allocations', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit']];
-    data.farmer_summary.forEach(f => f.clusters.forEach(c => farmerRows.push([f.farmer_name, c.cluster_name, c.allocations, c.area_alloc.toFixed(2), c.area_done.toFixed(2), c.farmer_amount.toFixed(2), c.mukkadam_amount.toFixed(2), c.profit.toFixed(2)])));
+    const farmerRows: any[][] = [['Farmer', 'Total Acres', 'Alloc Acres', 'Plot', 'Cluster', 'Activity', 'Sched Date', 'Total Area', 'Alloc Area', 'Remaining', 'Status']];
+    data.farmer_summary.forEach(f => {
+      (f.plots || []).forEach(plot => {
+        plot.activities.forEach(act => {
+          farmerRows.push([f.farmer_name, (f.total_area_scheduled ?? 0).toFixed(2), f.total_area_allocated.toFixed(2), plot.plot_name, plot.cluster_name, act.activity_name, act.scheduled_date || '', act.total_area.toFixed(2), act.allocated_area.toFixed(2), act.remaining_area.toFixed(2), act.allocation_status]);
+        });
+      });
+      // fallback: if no plots, add cluster rows
+      if (!f.plots || f.plots.length === 0) {
+        f.clusters.forEach(c => farmerRows.push([f.farmer_name, (f.total_area_scheduled ?? 0).toFixed(2), f.total_area_allocated.toFixed(2), '—', c.cluster_name, '—', '—', '—', c.area_alloc.toFixed(2), '—', '—']));
+      }
+    });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(farmerRows), 'Farmer Summary');
 
     XLSX.writeFile(wb, `Global_Insights_${data.date_range.start}_to_${data.date_range.end}.xlsx`);
@@ -1652,15 +1842,16 @@ export function GlobalInsightsPanel() {
 
       <div className="px-6 py-4 space-y-4">
         {/* KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+        <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-2">
           <KpiCard label="Total Jobs" value={String(s.total_jobs)} />
           <KpiCard label="Activities" value={String(s.total_activities)} />
+          <KpiCard label="Total Acres" value={`${fmt(s.total_area_scheduled ?? 0)} ac`} accent="violet" />
           <KpiCard label="Area Alloc" value={`${fmt(s.total_area_allocated)} ac`} accent="blue" />
-          <KpiCard label="Area Done" value={`${fmt(s.total_area_completed)} ac`} accent="green" />
+          {/* <KpiCard label="Area Done" value={`${fmt(s.total_area_completed)} ac`} accent="green" /> */}
           <KpiCard label="Workers" value={String(s.total_allocated_workers)} />
           <KpiCard label="Profit" value={fmtINR(s.profit)} accent={s.profit >= 0 ? 'green' : 'red'} sub={`${fmtINR(s.profit_per_acre)}/ac`} />
           <KpiCard label="Loss Allocs" value={String(s.loss_allocations)} accent={s.loss_allocations > 0 ? 'red' : undefined} />
-          <KpiCard label="Disputes" value={String(s.dispute_count)} accent={s.dispute_count > 0 ? 'amber' : undefined} />
+          {/* <KpiCard label="Disputes" value={String(s.dispute_count)} accent={s.dispute_count > 0 ? 'amber' : undefined} /> */}
         </div>
 
         {/* Tabs */}
@@ -1706,7 +1897,9 @@ export function GlobalInsightsPanel() {
 
           {tab === 'mukkadams' && (
             <>
-              <SectionHeader title="Mukkadam Summary" count={data.mukkadam_summary.length} />
+              <SectionHeader title="Mukkadam Summary" count={data.mukkadam_summary.filter(m =>
+  !selectedClusterId || m.clusters.some(c => c.cluster_id === selectedClusterId)
+).length} />
               <MukkadamsTab
                 data={data.mukkadam_summary}
                 mukkadamFilter={mukkadamFilter}
@@ -1717,7 +1910,9 @@ export function GlobalInsightsPanel() {
 
           {tab === 'farmers' && (
             <>
-              <SectionHeader title="Farmer Summary" count={data.farmer_summary.length} />
+              <SectionHeader title="Farmer Summary" count={data.farmer_summary.filter(f =>
+  !selectedClusterId || f.clusters.some(c => c.cluster_id === selectedClusterId)
+).length} />
               <FarmersTab
                 data={data.farmer_summary}
                 farmerFilter={farmerFilter}

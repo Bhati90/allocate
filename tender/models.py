@@ -9,6 +9,52 @@ from django.core.exceptions import ValidationError
 # ============================================================================
 # MASTER DATA MODELS
 # ============================================================================
+import requests
+from django.db import models
+from django.contrib.auth.models import User
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+import logging
+
+logger = logging.getLogger(__name__)
+
+class UserProfile(models.Model):
+    """
+    Company team member profile
+    Links mobile number to Django User for mobile app login
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    mobile_number = models.CharField(
+        max_length=15, 
+        unique=True, 
+        db_index=True,
+        null=True,  # ✅ Allow NULL
+        blank=True  # ✅ Allow empty in forms
+    )
+    full_name = models.CharField(max_length=255, blank=True, null=True)
+    role = models.CharField(
+        max_length=50,
+        choices=[
+            ('admin', 'Admin'),
+            ('manager', 'Manager'),
+            ('supervisor', 'Field Supervisor'),
+            ('staff', 'Staff')
+        ],
+        default='staff'
+    )
+    
+    is_mobile_verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['mobile_number']),
+        ]
+    
+    def __str__(self):
+        return f"{self.full_name or self.user.username} - {self.mobile_number or 'No mobile'}"
+
 
 class ActivityCatalog(models.Model):
     """
@@ -76,7 +122,21 @@ class Cluster(models.Model):
     villages = models.JSONField(default=list, blank=True)   # List of village names
 
     note = models.TextField(blank=True, null=True)
-
+    # 👇 NEW
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='clusters_created',
+    )
+    last_modified_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='clusters_modified',
+    )
     def __str__(self):
         return self.name
     
@@ -131,6 +191,14 @@ class Farmer(models.Model):
         related_name='farmers'
     )
 
+    last_cluster_modified_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='farmers_cluster_modified',
+    )
+
     location = models.CharField(max_length=255, blank=True)
     latitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
@@ -175,6 +243,14 @@ class Plot(models.Model):
     longitude = models.DecimalField(max_digits=10, decimal_places=6, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
+    last_cluster_modified_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='plots_cluster_modified',
+    )
+    last_cluster_modified_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'plots'
@@ -485,6 +561,25 @@ class JobActivity(models.Model):
         default=0,
         validators=[MinValueValidator(0)]
     )
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='job_activities_created',
+    )
+    last_moved_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='job_activities_moved',
+    )
+    last_moved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
     remaining_area = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -594,6 +689,73 @@ class JobActivity(models.Model):
      
         super().save(*args, **kwargs)
 
+
+# models.py — add this model
+
+from django.db import models
+from django.contrib.auth.models import User
+from django.utils import timezone
+
+
+class JobNote(models.Model):
+
+    TAG_CHOICES = [
+        ('urgent',          '🔴 Urgent'),
+        ('important',       '⚠️ Important'),
+        ('mukkadam_issue',  '👷 Mukkadam Issue'),
+        ('farmer_issue',    '🌾 Farmer Issue'),
+        ('sales',           '💼 Sales'),
+        ('operations',      '⚙️ Operations'),
+        ('data_wrong',      '📊 Data Wrong'),
+        ('price_mismatch',  '💰 Price Mismatch'),
+        ('team_charging',   '⚡ Team Charging'),
+    ]
+
+    job         = models.ForeignKey(
+        'Job', on_delete=models.CASCADE, related_name='notes'
+    )
+    author      = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, related_name='job_notes_authored'
+    )
+    text        = models.TextField()                          # raw text with @username inline
+    tags        = models.JSONField(default=list, blank=True)  # list of tag keys e.g. ["urgent","sales"]
+    mentions    = models.ManyToManyField(
+        User, blank=True, related_name='job_notes_mentioned'
+    )
+
+    # Resolution
+    is_resolved     = models.BooleanField(default=False)
+    resolved_by     = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='job_notes_resolved'
+    )
+    resolved_at     = models.DateTimeField(null=True, blank=True)
+    resolution_note = models.TextField(blank=True)
+
+    # Index by date so DayDetailModal can query notes for a specific day
+    note_date   = models.DateField(db_index=True)             # set to job activity scheduled_date on create
+
+    created_at  = models.DateTimeField(auto_now_add=True)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'job_notes'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['note_date']),
+            models.Index(fields=['is_resolved']),
+            models.Index(fields=['job', 'note_date']),
+        ]
+
+    def __str__(self):
+        return f"Note on {self.job_id} by {self.author} [{', '.join(self.tags)}]"
+
+    def resolve(self, user, resolution_note=''):
+        self.is_resolved     = True
+        self.resolved_by     = user
+        self.resolved_at     = timezone.now()
+        self.resolution_note = resolution_note
+        self.save(update_fields=['is_resolved', 'resolved_by', 'resolved_at', 'resolution_note', 'updated_at'])
 
 class JobBooking(models.Model):
     """
@@ -1124,6 +1286,19 @@ class Allocation(models.Model):
         default=False,
         help_text="If True, settlement uses actual_area_done over allocated_area"
     )
+
+    # 👇 NEW: who last moved / changed this allocation (date/area)
+    last_modified_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='allocations_modified'
+    )
+    last_modified_at = models.DateTimeField(
+        null=True,
+        blank=True
+    )
     
     # Calculated amounts
     farmer_amount = models.DecimalField(
@@ -1514,6 +1689,21 @@ class ClusterMukkadamAssignment(models.Model):
         decimal_places=2,
         default=0,
         help_text="Weekly payment amount agreed for this mukkadam in this cluster"
+    )
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cluster_mukkadam_assignments_created',
+    )
+    last_modified_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cluster_mukkadam_assignments_modified',
     )
 
     transport_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)

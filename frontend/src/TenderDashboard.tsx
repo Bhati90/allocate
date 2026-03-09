@@ -1166,12 +1166,14 @@ function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess
     .map(g => ({ id: g.cluster_id!, name: g.cluster_name }));
 
   const handleAddPlot = async (cluster: ClusterOption) => {
+
+    const token = localStorage.getItem('auth_token')
     if (saving) return;
     setSaving(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/cluster/${cluster.id}/add_farmer/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json','Authorization':`Token ${token}` },
         body: JSON.stringify({ farmer_id: farmerId, plot_ids: [plot.plot_id] }),
       });
       if (res.ok) {
@@ -1365,13 +1367,14 @@ function AddToClusterTrigger({ farmer, clusters, onSuccess }: {
   );
 
   const handleAddToCluster = async (cluster: ClusterOption) => {
+    const token = localStorage.getItem('auth_token')
     if (saving) return;
     setSaving(true);
     try {
       const allPlotIds = farmer.plots_by_cluster.flatMap(g => g.plots.map(p => p.plot_id));
       const res = await fetch(`${API_BASE_URL}/api/cluster/${cluster.id}/add_farmer/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' ,'Authorization':`Token ${token}`},
         body: JSON.stringify({ farmer_id: farmer.farmer_id, plot_ids: allPlotIds }),
       });
       if (res.ok) {
@@ -2910,14 +2913,14 @@ const filteredFarmers = (data?.farmers || []).filter(f => {
     Farmers ({data?.farmers?.length || 0})
   </button>
 
-  <button
+  {/* <button
     onClick={() => { setTab('global'); }}
     className={`px-5 py-2 text-sm font-medium transition ${
       tab === 'global' ? 'bg-purple-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
     }`}
   >
     🌍 Global
-  </button>
+  </button> */}
   {/* <button
     onClick={() => { setTab('payments'); setNoCluster(false); setClusterFilter(''); }}
     className={`px-5 py-2 text-sm font-medium transition ${tab === 'payments' ? 'bg-orange-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
@@ -3607,76 +3610,82 @@ function MukkadamAddToCluster({
     setSelectedCluster(cluster);
   };
 
-  const handleConfirm = async (
-    transportPrice: number,
-    weeklyPaymentDay: number,
-    advanceAmount: number,
-    weeklyAmount: number,
-    updownConfig: {
-      mukkadam_type: MukkadamType;
-      updown_mode?: UpdownMode;
-      updown_from_date?: string;
-      updown_to_date?: string;
-      updown_specific_dates?: string[];
-    }
-  ) => {
-    if (!selectedCluster) return;
-    setSaving(true);
-    try {
-      const isEdit = mode === 'edit';
-      const url = isEdit
-        ? `${API_BASE_URL}/api/clusters/${selectedCluster.id}/update_mukkadam/`
-        : `${API_BASE_URL}/api/cluster/${selectedCluster.id}/add_mukkadam/`;
-      const method = isEdit ? 'PATCH' : 'POST';
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mukkadam_id: mukkadam.id,
-          transport_price: transportPrice,
-          weekly_payment_day: weeklyPaymentDay,
-          advance_amount: advanceAmount,
-          weekly_amount: weeklyAmount,
-          mukkadam_type: updownConfig.mukkadam_type,
-          updown_mode: updownConfig.updown_mode,
-          updown_from_date: updownConfig.updown_from_date,
-          updown_to_date: updownConfig.updown_to_date,
-          updown_specific_dates: updownConfig.updown_specific_dates,
-        }),
-      });
- let data: any = null;
+const handleConfirm = async (
+  transportPrice: number,
+  weeklyPaymentDay: number,
+  advanceAmount: number,
+  weeklyAmount: number,
+  updownConfig: {
+    mukkadam_type: MukkadamType;
+    updown_mode?: UpdownMode;
+    updown_from_date?: string;
+    updown_to_date?: string;
+    updown_specific_dates?: string[];
+  }
+) => {
+  if (!selectedCluster) return;
+  setSaving(true);
   try {
-    data = await res.json();
-  } catch (e) {
-    // non‑JSON error response
-    console.error('Failed to parse JSON', e);
-  }
+    const isEdit = mode === 'edit';
+    const url = isEdit
+      ? `${API_BASE_URL}/api/clusters/${selectedCluster.id}/update_mukkadam/`
+      : `${API_BASE_URL}/api/cluster/${selectedCluster.id}/add_mukkadam/`;
+    const method = isEdit ? 'PATCH' : 'POST';
 
-  if (res.ok) {
-    toast.success(
-      data?.message ||
-        (isEdit
-          ? `Updated ${mukkadam.name} in ${selectedCluster.name}`
-          : `${mukkadam.name} → ${selectedCluster.name}`),
-    );
-    setSelectedCluster(null);
-    onSuccess();
-  } else {
-    console.error('Update error', res.status, data);
-    const msg =
-      data?.detail ||
-      data?.error ||
-      `Failed to save mukkadam assignment (HTTP ${res.status})`;
-    toast.error(msg);
+    const token = localStorage.getItem('auth_token');
+
+    const res = await fetch(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Token ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        mukkadam_id: mukkadam.id,
+        transport_price: transportPrice,
+        weekly_payment_day: weeklyPaymentDay,
+        advance_amount: advanceAmount,
+        weekly_amount: weeklyAmount,
+        mukkadam_type: updownConfig.mukkadam_type,
+        updown_mode: updownConfig.updown_mode,
+        updown_from_date: updownConfig.updown_from_date,
+        updown_to_date: updownConfig.updown_to_date,
+        updown_specific_dates: updownConfig.updown_specific_dates,
+      }),
+    });
+
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch (e) {
+      console.error('Failed to parse JSON', e);
+    }
+
+    if (res.ok) {
+      toast.success(
+        data?.message ||
+          (isEdit
+            ? `Updated ${mukkadam.name} in ${selectedCluster.name}`
+            : `${mukkadam.name} → ${selectedCluster.name}`),
+      );
+      setSelectedCluster(null);
+      onSuccess();
+    } else {
+      console.error('Update error', res.status, data);
+      const msg =
+        data?.detail ||
+        data?.error ||
+        `Failed to save mukkadam assignment (HTTP ${res.status})`;
+      toast.error(msg);
+    }
+  } catch (e) {
+    console.error('Network error', e);
+    toast.error('Network error');
+  } finally {
+    setSaving(false);
   }
-} catch (e) {
-  console.error('Network error', e);
-  toast.error('Network error');
-} finally {
-  setSaving(false);
-}
-  };
+};
+
 
   useEffect(() => {
     if (openDropdown) {

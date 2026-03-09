@@ -49,8 +49,6 @@ interface FarmSchedulerProps {clusterId: number;onBackToClusters: () => void;
   onOpenDialpadWithNumber: (phone: string) => void;}
 
 
-
-
 // ─────────────────────────────────────────────
 // Types (matching backend exactly)
 // ─────────────────────────────────────────────
@@ -61,6 +59,7 @@ type ClusterInsightsResponse = {
   summary: {
     total_jobs: number;
     total_activities: number;
+    total_area_scheduled: number;          // ✅ NEW
     total_area_allocated: number;
     total_area_completed: number;
     total_allocated_workers: number;
@@ -87,6 +86,7 @@ type ClusterInsightsResponse = {
 
 type ByDayRow = {
   date: string;
+  total_area_scheduled: number;            // ✅ NEW
   total_area_allocated: number;
   total_area_completed: number;
   allocated_workers: number;
@@ -108,6 +108,7 @@ type ByMukkadamRow = {
   allocated_workers_total: number;
   effective_capacity_workers: number;
   crew_utilization_percent: number;
+  total_area_scheduled: number;            // ✅ NEW
   total_area_allocated: number;
   total_area_completed: number;
   avg_efficiency_score: number;
@@ -140,16 +141,16 @@ type AllocationDetail = {
   allocated_area: number;
   actual_area_completed: number;
   allocated_workers: number;
-  farmer_amount: number;       // ✅ now exposed per allocation
-  mukkadam_amount: number;     // ✅ now exposed per allocation
+  farmer_amount: number;
+  mukkadam_amount: number;
   work_status: string;
   payment_status: string;
   profit: number;
   allows_second_job: boolean;
   is_carry_forward: boolean;
   is_auto_allocated: boolean;
-  is_manually_moved: boolean;       // ✅ from JobActivity.is_manually_moved
-  allocation_source: 'AI' | 'H';    // ✅ pre-computed: H if moved, AI if not
+  is_manually_moved: boolean;
+  allocation_source: 'AI' | 'H';
 };
 
 type MukkadamWorkEntry = {
@@ -180,6 +181,8 @@ type FarmerActivityEntry = {
   allocated_area: number;
   remaining_area: number;
   allocation_status: string;
+  is_manually_moved: boolean;              // ✅ NEW
+  allocation_source: 'AI' | 'H';          // ✅ NEW
   allocations: FarmerAllocDetail[];
 };
 
@@ -206,7 +209,9 @@ type FlexActivity = {
   scheduled_date: string | null;
   remaining_area: number;
   is_manually_moved: boolean;
+  suggested_target_date?: string | null;  // 👈 NEW (planning hint)
 };
+
 
 type MoveSuggestion = {
   overbooked_date: string;
@@ -221,7 +226,7 @@ type MoveSuggestion = {
 // Helpers
 // ─────────────────────────────────────────────
 
-const fmt = (n: number, d = 2) => n.toFixed(d);
+const fmt = (n: number, d = 2) => (n ?? 0).toFixed(d);
 const fmtINR = (n: number) =>
   (n < 0 ? '-₹' : '₹') + Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
@@ -239,6 +244,12 @@ function statusBadge(s: string) {
   return 'bg-slate-100 text-slate-600';
 }
 
+function allocSourceBadge(source: 'AI' | 'H') {
+  return source === 'H'
+    ? 'bg-sky-100 text-sky-700 border-sky-200'
+    : 'bg-purple-100 text-purple-700 border-purple-200';
+}
+
 // ─────────────────────────────────────────────
 // Hook
 // ─────────────────────────────────────────────
@@ -249,6 +260,7 @@ function useClusterInsights(
   endDate: string,
   enabled: boolean,
   refreshKey?: number,
+  mode: 'actual' | 'planning' = 'actual',   // 👈 NEW
 ) {
   const [data, setData] = useState<ClusterInsightsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -259,8 +271,14 @@ function useClusterInsights(
     const ctrl = new AbortController();
     setLoading(true);
     setError(null);
-    const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
-    fetch(`${API_BASE_URL}/api/clusters/${clusterId}/insights/?${params}`, {
+
+    const params = new URLSearchParams({
+      start_date: startDate,
+      end_date: endDate,
+      mode,                               // 👈 NEW
+    });
+
+    fetch(`${API_BASE_URL}/api/clusters/${clusterId}/insights/?${params.toString()}`, {
       credentials: 'include',
       signal: ctrl.signal,
     })
@@ -268,11 +286,13 @@ function useClusterInsights(
       .then(setData)
       .catch(e => { if (e.name !== 'AbortError') setError(e.message || 'Failed'); })
       .finally(() => setLoading(false));
+
     return () => ctrl.abort();
-  }, [clusterId, startDate, endDate, enabled, refreshKey]);
+  }, [clusterId, startDate, endDate, enabled, refreshKey, mode]);  // 👈 include mode
 
   return { data, loading, error };
 }
+
 
 // ─────────────────────────────────────────────
 // Date utils
@@ -284,21 +304,28 @@ function addDays(d: Date, delta: number) {
 }
 
 // ─────────────────────────────────────────────
-// KPI Card
+// KPI Card  ✅ added 'violet' + 'sub' prop
 // ─────────────────────────────────────────────
 
-function KpiCard({ label, value, accent }: { label: string; value: string; accent?: 'green' | 'red' | 'amber' | 'blue' }) {
+function KpiCard({ label, value, sub, accent }: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: 'green' | 'red' | 'amber' | 'blue' | 'violet';
+}) {
   const cls: Record<string, string> = {
-    green: 'bg-emerald-50 border-emerald-200 text-emerald-700',
-    red: 'bg-red-50 border-red-200 text-red-600',
-    amber: 'bg-amber-50 border-amber-200 text-amber-700',
-    blue: 'bg-blue-50 border-blue-200 text-blue-700',
+    green:  'bg-emerald-50 border-emerald-200 text-emerald-700',
+    red:    'bg-red-50 border-red-200 text-red-600',
+    amber:  'bg-amber-50 border-amber-200 text-amber-700',
+    blue:   'bg-blue-50 border-blue-200 text-blue-700',
+    violet: 'bg-violet-50 border-violet-200 text-violet-700',
   };
   const base = accent ? cls[accent] : 'bg-white border-slate-200 text-slate-800';
   return (
     <div className={`${base} border rounded-xl p-3 flex flex-col gap-1`}>
       <span className="text-[10px] uppercase tracking-widest font-medium opacity-60">{label}</span>
       <span className="text-lg font-bold leading-none">{value}</span>
+      {sub && <span className="text-[11px] opacity-50">{sub}</span>}
     </div>
   );
 }
@@ -382,9 +409,27 @@ interface InsightsPanelProps { clusterId: number; startDate: string; endDate: st
 
 export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelProps) {
   const [refreshKey, setRefreshKey] = useState(0);
-  const { data, loading, error } = useClusterInsights(clusterId, startDate, endDate, true, refreshKey);
-  const [activeTab, setActiveTab] = useState<'overview' | 'mukkadam' | 'farmer' | 'capacity'>('overview');
+  const [activeTab, setActiveTab] =
+    useState<'overview' | 'mukkadam' | 'farmer' | 'capacity'>('overview');
 
+  // ❶ Actual insights (allocations) for overview/mukkadam/farmer
+  const {
+    data: actualData,
+    loading,
+    error,
+  } = useClusterInsights(clusterId, startDate, endDate, true, refreshKey, 'actual');
+
+  // ❷ Planning insights for capacity tab
+const {
+  data: planningData,
+} = useClusterInsights(
+  clusterId,
+  startDate,
+  endDate,
+  activeTab === 'capacity',   // 👈 only fetch when tab is active
+  refreshKey,
+  'planning'
+);
   if (loading) return (
     <div className="flex items-center justify-center h-40 gap-3 text-slate-400">
       <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
@@ -392,19 +437,21 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
     </div>
   );
   if (error) return <div className="text-red-500 text-sm p-6">Error: {error}</div>;
-  if (!data) return null;
+  if (!actualData) return null;
 
+  const data = actualData;
   const { summary } = data;
 
   // ── Excel Export ──────────────────────────────────────────────────────────
   const handleExport = () => {
     const wb = XLSX.utils.book_new();
 
-    // 1. Summary
+    // 1. Summary  ✅ added total_area_scheduled row
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
       ['Metric', 'Value'],
       ['Total Jobs', summary.total_jobs],
       ['Total Activities', summary.total_activities],
+      ['Total Area Scheduled (ac)', fmt(summary.total_area_scheduled)],   // ✅ NEW
       ['Total Area Allocated (ac)', fmt(summary.total_area_allocated)],
       ['Total Area Completed (ac)', fmt(summary.total_area_completed)],
       ['Total Workers Allocated', summary.total_allocated_workers],
@@ -421,26 +468,23 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
       ['Avg Efficiency Score', fmt(summary.avg_efficiency_score, 1)],
     ]), 'Summary');
 
-    // 2. By Day — ONE ROW PER ALLOCATION (matching screenshot exactly)
-    // Build flat rows from mukkadam_work grouped by date
+    // 2. By Day — ONE ROW PER ALLOCATION  ✅ added Total Sched column
     const byDayRows: any[][] = [[
       'Date', 'Cluster', 'Village', 'Farmer', 'Activity Name',
-      'Area Alloc(Acre)', 'Area Done(Acre)', 'Mukkadam/Team',
-      'Workers', 'Capacity', 'Crew Util %', 'Slot Util %',
+      'Total Sched (ac)',                                                   // ✅ NEW
+      'Area Alloc (ac)', 'Area Done (ac)',
+      'Mukkadam/Team', 'Workers', 'Capacity',
+      'Crew Util %', 'Slot Util %',
       'Farmer Amount', 'Mukkadam Amount', 'Profit',
       'Jobs Sched', 'Jobs Done', 'Disputes', 'Allocation as per',
     ]];
 
-    // Build a date→day_summary map for capacity/util/jobs per day
     const dayMap: Record<string, ByDayRow> = {};
     data.by_day.forEach(d => { dayMap[d.date] = d; });
 
-    // Flatten all allocations from mukkadam_work, sort by date
     const allAllocs: (AllocationDetail & { mukkadam_name: string })[] = [];
     data.mukkadam_work.forEach(mw => {
-      mw.allocations.forEach(a => {
-        allAllocs.push({ ...a, mukkadam_name: mw.name });
-      });
+      mw.allocations.forEach(a => allAllocs.push({ ...a, mukkadam_name: mw.name }));
     });
     allAllocs.sort((a, b) => a.date.localeCompare(b.date));
 
@@ -449,9 +493,10 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
       byDayRows.push([
         a.date,
         data.cluster.name,
-        '', // Village — not in API, keep blank
+        '',
         a.farmer_name,
         a.activity_name,
+        day ? fmt(day.total_area_scheduled) : '',                           // ✅ NEW
         fmt(a.allocated_area),
         fmt(a.actual_area_completed),
         a.mukkadam_name,
@@ -459,21 +504,21 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
         day?.effective_capacity_workers ?? '',
         day ? fmt(day.crew_utilization_percent, 1) : '',
         day ? fmt(day.slot_utilization_percent, 1) : '',
-        fmt(a.farmer_amount),    // ✅ real per-allocation farmer amount
-        fmt(a.mukkadam_amount),  // ✅ real per-allocation mukkadam amount
+        fmt(a.farmer_amount),
+        fmt(a.mukkadam_amount),
         fmt(a.profit),
         day?.jobs_scheduled ?? '',
         day?.jobs_completed ?? '',
         day?.disputes ?? '',
-        a.allocation_source,   // ✅ "H" if is_manually_moved, "AI" if not
+        a.allocation_source,
       ]);
     });
 
-    // If no allocations, fall back to day-summary rows
     if (allAllocs.length === 0) {
       data.by_day.forEach(d => {
         byDayRows.push([
           d.date, data.cluster.name, '', '', '',
+          fmt(d.total_area_scheduled),                                       // ✅ NEW
           fmt(d.total_area_allocated), fmt(d.total_area_completed), '',
           d.allocated_workers, d.effective_capacity_workers,
           fmt(d.crew_utilization_percent, 1), fmt(d.slot_utilization_percent, 1),
@@ -483,17 +528,18 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
       });
     }
 
-    const wsByDay = XLSX.utils.aoa_to_sheet(byDayRows);
-    // Color header
-    XLSX.utils.book_append_sheet(wb, wsByDay, 'By Day');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(byDayRows), 'By Day');
 
-    // 3. By Mukkadam
+    // 3. By Mukkadam  ✅ added Total Sched column
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Mukkadam ID', 'Name', 'Crew Size', 'Allocations', 'Workers Total', 'Capacity', 'Util %', 'Area Alloc', 'Area Done', 'Eff Score', 'Profit', 'Disputes'],
+      ['Mukkadam ID', 'Name', 'Crew Size', 'Allocations', 'Workers Total',
+       'Capacity', 'Util %', 'Total Sched', 'Area Alloc', 'Area Done',     // ✅ NEW col
+       'Eff Score', 'Profit', 'Disputes'],
       ...data.by_mukkadam.map(m => [
         m.mukkadam_id, m.name, m.crew_size, m.allocations,
         m.allocated_workers_total, m.effective_capacity_workers,
         fmt(m.crew_utilization_percent, 1),
+        fmt(m.total_area_scheduled),                                         // ✅ NEW
         fmt(m.total_area_allocated), fmt(m.total_area_completed),
         fmt(m.avg_efficiency_score, 1), fmt(m.profit), m.disputes,
       ]),
@@ -524,15 +570,15 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
         fmt(a.profit), a.work_status, a.payment_status,
         a.allows_second_job ? 'Yes' : 'No',
         a.is_carry_forward ? 'Yes' : 'No',
-        a.allocation_source,   // ✅ "H" if is_manually_moved, "AI" if not
+        a.allocation_source,
       ])),
     );
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(mukRows), 'Mukkadam Work');
 
-    // 6. Farmer Work Detail
+    // 6. Farmer Work Detail  ✅ added Alloc As column
     const farmerRows: any[][] = [[
       'Farmer ID', 'Farmer Name', 'Job ID', 'Plot', 'Activity', 'Sched Date',
-      'Total Area', 'Alloc Area', 'Remain Area', 'Status',
+      'Total Area', 'Alloc Area', 'Remain Area', 'Status', 'Alloc As',     // ✅ NEW col
       'Mukkadam', 'Alloc Date', 'Alloc Area', 'Workers',
     ]];
     data.farmer_work.forEach(fw =>
@@ -542,15 +588,16 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
             fw.farmer_id, fw.farmer_name, act.job_id, act.plot_name || '',
             act.activity_name, act.scheduled_date || '',
             fmt(act.total_area), fmt(act.allocated_area), fmt(act.remaining_area),
-            act.allocation_status, 'NOT ALLOCATED', '', '', '',
+            act.allocation_status, act.allocation_source,                    // ✅ NEW
+            'NOT ALLOCATED', '', '', '',
           ]);
         } else {
           act.allocations.forEach(al => farmerRows.push([
             fw.farmer_id, fw.farmer_name, act.job_id, act.plot_name || '',
             act.activity_name, act.scheduled_date || '',
             fmt(act.total_area), fmt(act.allocated_area), fmt(act.remaining_area),
-            act.allocation_status, al.mukkadam_name, al.date,
-            fmt(al.allocated_area), al.allocated_workers,
+            act.allocation_status, act.allocation_source,                    // ✅ NEW
+            al.mukkadam_name, al.date, fmt(al.allocated_area), al.allocated_workers,
           ]));
         }
       }),
@@ -570,9 +617,9 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
   };
 
   const tabs = [
-    { key: 'overview', label: '📊 Overview' },
+    { key: 'overview',  label: '📊 Overview' },
     { key: 'mukkadam', label: '👷 Teams' },
-    { key: 'farmer', label: '🧑‍🌾 Farmers' },
+    { key: 'farmer',   label: '🧑‍🌾 Farmers' },
     { key: 'capacity', label: '⚡ Capacity & Smart Moves' },
   ];
 
@@ -595,17 +642,19 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
       </div>
 
       <div className="px-5 py-4 space-y-4">
-        {/* KPI Strip */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-          <KpiCard label="Area Alloc" value={`${fmt(summary.total_area_allocated, 1)} ac`} accent="blue" />
-          <KpiCard label="Area Done" value={`${fmt(summary.total_area_completed, 1)} ac`} accent="green" />
+        {/* ── KPI Strip  ✅ 7 cards, Total Acres first in violet ── */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          <KpiCard label="Total Acres"  value={`${fmt(summary.total_area_scheduled, 1)} ac`} accent="violet" />
+          <KpiCard label="Area Alloc"   value={`${fmt(summary.total_area_allocated, 1)} ac`} accent="blue" />
+          <KpiCard label="Area Done"    value={`${fmt(summary.total_area_completed, 1)} ac`} accent="green" />
           <KpiCard
             label="Crew Util"
             value={`${fmt(summary.crew_utilization_percent, 1)}%`}
             accent={summary.crew_utilization_percent > 100 ? 'red' : summary.crew_utilization_percent > 75 ? 'amber' : 'green'}
           />
-          <KpiCard label="Profit" value={fmtINR(summary.profit)} accent={summary.profit < 0 ? 'red' : 'green'} />
-          <KpiCard label="Profit/ac" value={fmtINR(summary.profit_per_acre)} />
+          <KpiCard label="Profit"     value={fmtINR(summary.profit)} accent={summary.profit < 0 ? 'red' : 'green'}
+                   sub={`${fmtINR(summary.profit_per_acre)}/ac`} />
+          <KpiCard label="Farmer ₹"  value={fmtINR(summary.farmer_amount)} />
           <KpiCard
             label="Disputes"
             value={`${summary.dispute_count} (${fmt(summary.dispute_rate_percent, 1)}%)`}
@@ -614,12 +663,12 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 border-b border-slate-200 bg-white rounded-t-xl px-2 pt-2">
+        <div className="flex gap-1 border-b border-slate-200 bg-white rounded-t-xl px-2 pt-2 overflow-x-auto">
           {tabs.map(t => (
             <button
               key={t.key}
               onClick={() => setActiveTab(t.key as any)}
-              className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors ${activeTab === t.key ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+              className={`px-3 py-2 text-xs font-semibold rounded-t-lg whitespace-nowrap transition-colors ${activeTab === t.key ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
             >
               {t.label}
             </button>
@@ -628,10 +677,17 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
 
         {/* Tab Body */}
         <div className="bg-white rounded-b-xl rounded-tr-xl border border-slate-200 p-4">
-          {activeTab === 'overview' && <OverviewTab data={data} />}
+          {activeTab === 'overview'  && <OverviewTab data={data} />}
           {activeTab === 'mukkadam' && <MukkadamTab data={data} />}
-          {activeTab === 'farmer' && <FarmerTab data={data} />}
-          {activeTab === 'capacity' && <CapacityTab data={data} clusterId={clusterId} onMoved={() => setRefreshKey(k => k + 1)} />}
+          {activeTab === 'farmer'   && <FarmerTab data={data} />}
+          
+{activeTab === 'capacity' && (
+  <CapacityTab
+    data={planningData || actualData}   // 👈 use planningData, fallback to actual
+    clusterId={clusterId}
+    onMoved={() => setRefreshKey(k => k + 1)}
+  />
+)}
         </div>
       </div>
     </div>
@@ -639,13 +695,12 @@ export function InsightsPanel({ clusterId, startDate, endDate }: InsightsPanelPr
 }
 
 // ─────────────────────────────────────────────
-// Overview Tab — By Day per-allocation view
+// Overview Tab
 // ─────────────────────────────────────────────
 
 function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
 
-  // Build a map: date → allocations[]
   const allocByDate: Record<string, (AllocationDetail & { mukkadam_name: string })[]> = {};
   data.mukkadam_work.forEach(mw => {
     mw.allocations.forEach(a => {
@@ -654,13 +709,12 @@ function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
     });
   });
 
-  // Build a map: date → day summary
-  const dayMap: Record<string, typeof data.by_day[0]> = {};
+  const dayMap: Record<string, ByDayRow> = {};
   data.by_day.forEach(d => { dayMap[d.date] = d; });
 
   return (
     <div className="space-y-6">
-      {/* ── By Day — per allocation table ─────────────────────── */}
+      {/* ── By Day ── */}
       <div>
         <div className="flex items-center gap-2 mb-3">
           <h3 className="text-sm font-bold text-slate-700">Daily Breakdown</h3>
@@ -676,12 +730,10 @@ function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
 
             return (
               <div key={d.date} className="border border-slate-200 rounded-xl overflow-hidden">
-                {/* Summary row — clickable */}
                 <button
                   className="w-full flex items-center gap-0 hover:bg-slate-50 transition-colors text-left"
                   onClick={() => setExpandedDate(prev => prev === d.date ? null : d.date)}
                 >
-                  {/* Date */}
                   <div className="w-28 shrink-0 px-3 py-3 border-r border-slate-100">
                     <div className="text-xs font-bold text-slate-700">{d.date}</div>
                     <div className="text-[10px] text-slate-400">
@@ -689,18 +741,19 @@ function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
                     </div>
                   </div>
 
-                  {/* Stats strip */}
                   <div className="flex flex-wrap flex-1 divide-x divide-slate-100">
+                    {/* ✅ Total Acres column added first in violet */}
                     {[
-                      { label: 'Area Alloc', value: `${d.total_area_allocated.toFixed(1)} ac`, cls: 'text-blue-600' },
-                      { label: 'Area Done', value: `${d.total_area_completed.toFixed(1)} ac`, cls: 'text-emerald-600' },
-                      { label: 'Workers', value: `${d.allocated_workers}/${d.effective_capacity_workers}`, cls: 'text-slate-700' },
-                      { label: 'Crew Util', value: `${d.crew_utilization_percent.toFixed(1)}%`, cls: d.crew_utilization_percent > 100 ? 'text-red-600 font-bold' : 'text-slate-700' },
-                      { label: 'Slot Util', value: `${d.slot_utilization_percent.toFixed(1)}%`, cls: 'text-slate-700' },
-                      { label: 'Profit', value: fmtINR(d.profit), cls: d.profit < 0 ? 'text-red-600 font-bold' : 'text-emerald-600 font-bold' },
-                      { label: 'Jobs S/D', value: `${d.jobs_scheduled}/${d.jobs_completed}`, cls: 'text-slate-600' },
-                      { label: 'Disputes', value: String(d.disputes), cls: d.disputes > 0 ? 'text-red-500 font-bold' : 'text-slate-400' },
-                      { label: 'Allocs', value: String(allocs.length), cls: 'text-indigo-600' },
+                      { label: 'Total Acres', value: `${d.total_area_scheduled.toFixed(1)} ac`, cls: 'text-violet-600 font-bold' },
+                      { label: 'Area Alloc',  value: `${d.total_area_allocated.toFixed(1)} ac`,  cls: 'text-blue-600' },
+                      { label: 'Area Done',   value: `${d.total_area_completed.toFixed(1)} ac`,  cls: 'text-emerald-600' },
+                      { label: 'Workers',     value: `${d.allocated_workers}/${d.effective_capacity_workers}`, cls: 'text-slate-700' },
+                      { label: 'Crew Util',   value: `${d.crew_utilization_percent.toFixed(1)}%`, cls: d.crew_utilization_percent > 100 ? 'text-red-600 font-bold' : 'text-slate-700' },
+                      { label: 'Slot Util',   value: `${d.slot_utilization_percent.toFixed(1)}%`, cls: 'text-slate-700' },
+                      { label: 'Profit',      value: fmtINR(d.profit), cls: d.profit < 0 ? 'text-red-600 font-bold' : 'text-emerald-600 font-bold' },
+                      { label: 'Jobs S/D',    value: `${d.jobs_scheduled}/${d.jobs_completed}`, cls: 'text-slate-600' },
+                      { label: 'Disputes',    value: String(d.disputes), cls: d.disputes > 0 ? 'text-red-500 font-bold' : 'text-slate-400' },
+                      { label: 'Allocs',      value: String(allocs.length), cls: 'text-indigo-600' },
                     ].map(({ label, value, cls }) => (
                       <div key={label} className="px-3 py-2 min-w-[80px]">
                         <div className="text-[9px] text-slate-400 uppercase tracking-wide">{label}</div>
@@ -712,7 +765,6 @@ function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
                   <div className="px-3 text-slate-400 text-xs">{isOpen ? '▲' : '▼'}</div>
                 </button>
 
-                {/* Expanded: per-allocation detail table */}
                 {isOpen && (
                   <div className="border-t border-slate-100 overflow-x-auto">
                     {allocs.length === 0 ? (
@@ -720,20 +772,14 @@ function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
                     ) : (
                       <table className="min-w-full text-[11px]">
                         <Thead cols={[
-                          { label: 'Farmer' },
-                          { label: 'Activity' },
-                          { label: 'Plot' },
+                          { label: 'Farmer' }, { label: 'Activity' }, { label: 'Plot' },
                           { label: 'Mukkadam / Team' },
-                          { label: 'Area Alloc', right: true },
-                          { label: 'Area Done', right: true },
+                          { label: 'Area Alloc', right: true }, { label: 'Area Done', right: true },
                           { label: 'Workers', right: true },
-                          { label: 'Farmer ₹', right: true },
-                          { label: 'Mukkadam ₹', right: true },
+                          { label: 'Farmer ₹', right: true }, { label: 'Mukkadam ₹', right: true },
                           { label: 'Profit', right: true },
-                          { label: 'Work Status' },
-                          { label: 'Payment' },
-                          { label: 'Alloc As' },
-                          { label: 'Tags' },
+                          { label: 'Work Status' }, { label: 'Payment' },
+                          { label: 'Alloc As' }, { label: 'Tags' },
                         ]} />
                         <tbody className="divide-y divide-slate-100 bg-white">
                           {allocs.map((a, i) => (
@@ -749,30 +795,25 @@ function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
                               <td className="px-2.5 py-2 text-right text-slate-600">{fmtINR(a.mukkadam_amount)}</td>
                               <td className={`px-2.5 py-2 text-right ${profitCls(a.profit)}`}>{fmtINR(a.profit)}</td>
                               <td className="px-2.5 py-2">
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadge(a.work_status)}`}>
-                                  {a.work_status}
-                                </span>
+                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadge(a.work_status)}`}>{a.work_status}</span>
                               </td>
                               <td className="px-2.5 py-2">
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadge(a.payment_status)}`}>
-                                  {a.payment_status}
-                                </span>
+                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadge(a.payment_status)}`}>{a.payment_status}</span>
                               </td>
                               <td className="px-2.5 py-2">
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${a.allocation_source === 'H' ? 'bg-sky-100 text-sky-700 border-sky-200' : 'bg-purple-100 text-purple-700 border-purple-200'}`}>
+                                <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-bold ${allocSourceBadge(a.allocation_source)}`}>
                                   {a.allocation_source}
                                 </span>
                               </td>
                               <td className="px-2.5 py-2">
                                 <div className="flex gap-1 flex-wrap">
                                   {a.allows_second_job && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[9px] rounded font-medium">2nd</span>}
-                                  {a.is_carry_forward && <span className="px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[9px] rounded font-medium">CF</span>}
+                                  {a.is_carry_forward   && <span className="px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[9px] rounded font-medium">CF</span>}
                                 </div>
                               </td>
                             </tr>
                           ))}
                         </tbody>
-                        {/* Totals row */}
                         <tfoot className="bg-slate-50 border-t-2 border-slate-300">
                           <tr>
                             <td className="px-2.5 py-2 font-bold text-slate-700" colSpan={4}>Day Total</td>
@@ -802,20 +843,16 @@ function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
         </div>
       </div>
 
-      {/* ── By Activity ───────────────────────────────────────── */}
+      {/* ── By Activity ── */}
       <div>
         <h3 className="text-sm font-bold text-slate-700 mb-3">By Activity</h3>
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full text-[11px]">
             <Thead cols={[
-              { label: 'Activity' },
-              { label: 'Allocations', right: true },
-              { label: 'Area Alloc', right: true },
-              { label: 'Area Done', right: true },
-              { label: 'Farmer Rate/ac', right: true },
-              { label: 'Mukkadam Rate/ac', right: true },
-              { label: 'Profit/ac', right: true },
-              { label: 'Profit', right: true },
+              { label: 'Activity' }, { label: 'Allocations', right: true },
+              { label: 'Area Alloc', right: true }, { label: 'Area Done', right: true },
+              { label: 'Farmer Rate/ac', right: true }, { label: 'Mukkadam Rate/ac', right: true },
+              { label: 'Profit/ac', right: true }, { label: 'Profit', right: true },
               { label: 'Loss Allocs', right: true },
             ]} />
             <tbody className="divide-y divide-slate-100 bg-white">
@@ -843,7 +880,7 @@ function OverviewTab({ data }: { data: ClusterInsightsResponse }) {
 }
 
 // ─────────────────────────────────────────────
-// Mukkadam Tab
+// Mukkadam Tab  ✅ added Total Acres column
 // ─────────────────────────────────────────────
 
 function MukkadamTab({ data }: { data: ClusterInsightsResponse }) {
@@ -853,21 +890,16 @@ function MukkadamTab({ data }: { data: ClusterInsightsResponse }) {
     <div className="space-y-3">
       <h3 className="text-sm font-bold text-slate-700">Team Workload & Performance</h3>
 
-      {/* Summary table */}
       <div className="overflow-x-auto rounded-xl border border-slate-200 mb-4">
         <table className="min-w-full text-[11px]">
           <Thead cols={[
-            { label: 'Mukkadam' },
-            { label: 'Crew Size', right: true },
+            { label: 'Mukkadam' }, { label: 'Crew Size', right: true },
             { label: 'Allocations', right: true },
-            { label: 'Area Alloc', right: true },
-            { label: 'Area Done', right: true },
-            { label: 'Workers', right: true },
-            { label: 'Capacity', right: true },
-            { label: 'Crew Util %', right: true },
-            { label: 'Eff Score', right: true },
-            { label: 'Profit', right: true },
-            { label: 'Disputes', right: true },
+            { label: 'Total Acres', right: true },          // ✅ NEW
+            { label: 'Area Alloc', right: true }, { label: 'Area Done', right: true },
+            { label: 'Workers', right: true }, { label: 'Capacity', right: true },
+            { label: 'Crew Util %', right: true }, { label: 'Eff Score', right: true },
+            { label: 'Profit', right: true }, { label: 'Disputes', right: true },
           ]} />
           <tbody className="divide-y divide-slate-100 bg-white">
             {data.by_mukkadam.map(m => (
@@ -875,6 +907,7 @@ function MukkadamTab({ data }: { data: ClusterInsightsResponse }) {
                 <td className="px-3 py-2 font-semibold text-slate-700">{m.name}</td>
                 <td className="px-3 py-2 text-right">{m.crew_size}</td>
                 <td className="px-3 py-2 text-right">{m.allocations}</td>
+                <td className="px-3 py-2 text-right font-bold text-violet-600">{m.total_area_scheduled.toFixed(1)} ac</td>  {/* ✅ NEW */}
                 <td className="px-3 py-2 text-right text-blue-600 font-medium">{m.total_area_allocated.toFixed(1)} ac</td>
                 <td className="px-3 py-2 text-right text-emerald-600">{m.total_area_completed.toFixed(1)} ac</td>
                 <td className="px-3 py-2 text-right">{m.allocated_workers_total}</td>
@@ -891,7 +924,6 @@ function MukkadamTab({ data }: { data: ClusterInsightsResponse }) {
         </table>
       </div>
 
-      {/* Detail accordion */}
       <h3 className="text-sm font-bold text-slate-700">Allocation Detail per Mukkadam</h3>
       <div className="space-y-2">
         {data.mukkadam_work.map(mw => (
@@ -914,11 +946,12 @@ function MukkadamTab({ data }: { data: ClusterInsightsResponse }) {
               <div className="border-t border-slate-100 overflow-x-auto">
                 <table className="min-w-full text-[11px]">
                   <Thead cols={[
-                    { label: 'Date' }, { label: 'Farmer' }, { label: 'Plot' },
-                    { label: 'Activity' }, { label: 'Area Alloc', right: true },
-                    { label: 'Area Done', right: true }, { label: 'Workers', right: true },
-                    { label: 'Profit', right: true }, { label: 'Work Status' },
-                    { label: 'Payment' }, { label: 'Alloc As' }, { label: 'Tags' },
+                    { label: 'Date' }, { label: 'Farmer' }, { label: 'Plot' }, { label: 'Activity' },
+                    { label: 'Area Alloc', right: true }, { label: 'Area Done', right: true },
+                    { label: 'Workers', right: true },
+                    { label: 'Farmer ₹', right: true }, { label: 'Mukkadam ₹', right: true },
+                    { label: 'Profit', right: true },
+                    { label: 'Work Status' }, { label: 'Payment' }, { label: 'Alloc As' }, { label: 'Tags' },
                   ]} />
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {mw.allocations.map(a => (
@@ -930,6 +963,8 @@ function MukkadamTab({ data }: { data: ClusterInsightsResponse }) {
                         <td className="px-2.5 py-2 text-right text-blue-600 font-medium">{a.allocated_area.toFixed(2)} ac</td>
                         <td className="px-2.5 py-2 text-right text-emerald-600">{a.actual_area_completed.toFixed(2)} ac</td>
                         <td className="px-2.5 py-2 text-right">{a.allocated_workers}</td>
+                        <td className="px-2.5 py-2 text-right text-slate-600">{fmtINR(a.farmer_amount)}</td>
+                        <td className="px-2.5 py-2 text-right text-slate-600">{fmtINR(a.mukkadam_amount)}</td>
                         <td className={`px-2.5 py-2 text-right ${profitCls(a.profit)}`}>{fmtINR(a.profit)}</td>
                         <td className="px-2.5 py-2">
                           <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadge(a.work_status)}`}>{a.work_status}</span>
@@ -938,14 +973,14 @@ function MukkadamTab({ data }: { data: ClusterInsightsResponse }) {
                           <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadge(a.payment_status)}`}>{a.payment_status}</span>
                         </td>
                         <td className="px-2.5 py-2">
-                                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${a.allocation_source === 'H' ? 'bg-sky-100 text-sky-700 border-sky-200' : 'bg-purple-100 text-purple-700 border-purple-200'}`}>
-                                            {a.allocation_source}
+                          <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-bold ${allocSourceBadge(a.allocation_source)}`}>
+                            {a.allocation_source}
                           </span>
                         </td>
                         <td className="px-2.5 py-2">
                           <div className="flex gap-1">
                             {a.allows_second_job && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[9px] rounded font-medium">2nd</span>}
-                            {a.is_carry_forward && <span className="px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[9px] rounded font-medium">CF</span>}
+                            {a.is_carry_forward   && <span className="px-1.5 py-0.5 bg-orange-100 text-orange-700 text-[9px] rounded font-medium">CF</span>}
                           </div>
                         </td>
                       </tr>
@@ -962,7 +997,7 @@ function MukkadamTab({ data }: { data: ClusterInsightsResponse }) {
 }
 
 // ─────────────────────────────────────────────
-// Farmer Tab
+// Farmer Tab  ✅ added AI/H badge + area stats in header
 // ─────────────────────────────────────────────
 
 function FarmerTab({ data }: { data: ClusterInsightsResponse }) {
@@ -975,25 +1010,50 @@ function FarmerTab({ data }: { data: ClusterInsightsResponse }) {
         {data.farmer_work.map(fw => {
           const unalloc = fw.activities.filter(a => a.remaining_area > 0).length;
           const isOpen = expandedId === fw.farmer_id;
+
+          const totalArea  = fw.activities.reduce((s, a) => s + a.total_area, 0);
+          const totalAlloc = fw.activities.reduce((s, a) => s + a.allocated_area, 0);
+          const totalRem   = fw.activities.reduce((s, a) => s + a.remaining_area, 0);
+          const totalProfit = fw.activities.reduce((s, a) =>
+            s + a.allocations.reduce((ss, al) => ss + al.profit, 0), 0);
+
           return (
             <div key={fw.farmer_id} className="border border-slate-200 rounded-xl overflow-hidden">
               <button
                 onClick={() => setExpandedId(isOpen ? null : fw.farmer_id)}
                 className="w-full px-4 py-3 flex justify-between items-center hover:bg-slate-50 transition-colors"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <div className="w-8 h-8 rounded-full bg-green-100 text-green-700 flex items-center justify-center text-xs font-bold">
                     {fw.farmer_name.charAt(0).toUpperCase()}
                   </div>
-                  <span className="font-semibold text-slate-800 text-sm">{fw.farmer_name}</span>
-                  <span className="text-xs text-slate-400">{fw.activities.length} activities</span>
+                  <div className="text-left">
+                    <div className="font-semibold text-slate-800 text-sm">{fw.farmer_name}</div>
+                    {/* ✅ area summary in subtitle */}
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] mt-0.5">
+                      <span className="text-slate-400">{fw.activities.length} activities</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="text-slate-600">{totalArea.toFixed(1)} ac total</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="text-blue-600 font-semibold">{totalAlloc.toFixed(1)} ac alloc</span>
+                      {totalRem > 0 && (
+                        <>
+                          <span className="text-slate-300">·</span>
+                          <span className="text-amber-600 font-semibold">{totalRem.toFixed(1)} ac pending</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
                   {unalloc > 0 && (
                     <span className="px-2 py-0.5 bg-red-100 text-red-700 text-[10px] rounded-full font-medium">
                       {unalloc} unallocated
                     </span>
                   )}
                 </div>
-                <span className="text-slate-400 text-xs">{isOpen ? '▲' : '▼'}</span>
+                <div className="flex items-center gap-3">
+                  <div className={`text-sm font-bold ${profitCls(totalProfit)}`}>{fmtINR(totalProfit)}</div>
+                  <span className="text-slate-400 text-xs">{isOpen ? '▲' : '▼'}</span>
+                </div>
               </button>
 
               {isOpen && (
@@ -1002,14 +1062,18 @@ function FarmerTab({ data }: { data: ClusterInsightsResponse }) {
                     <div key={`${act.job_id}-${act.activity_id}`} className="border border-slate-200 rounded-lg bg-white overflow-hidden">
                       {/* Activity header */}
                       <div className="px-3 py-2.5 bg-slate-50 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100">
-                        <div>
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-bold text-slate-800">{act.activity_name}</span>
-                          <span className="text-[11px] text-slate-400 ml-2">{act.plot_name || 'No plot'} · {act.scheduled_date || 'Not scheduled'}</span>
+                          <span className="text-[11px] text-slate-400">{act.plot_name || 'No plot'} · {act.scheduled_date || 'Not scheduled'}</span>
+                          {/* ✅ AI/H badge per activity */}
+                          <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-bold ${allocSourceBadge(act.allocation_source)}`}>
+                            {act.allocation_source}
+                          </span>
                         </div>
                         <div className="flex items-center gap-2 text-[11px]">
                           <span className="text-slate-500">Total: <strong className="text-slate-700">{act.total_area.toFixed(1)} ac</strong></span>
                           <span className="text-blue-600">Alloc: <strong>{act.allocated_area.toFixed(1)} ac</strong></span>
-                          <span className={act.remaining_area > 0 ? 'text-red-500 font-bold' : 'text-emerald-600'}>
+                          <span className={act.remaining_area > 0 ? 'text-amber-600 font-bold' : 'text-emerald-600'}>
                             Rem: {act.remaining_area.toFixed(1)} ac
                           </span>
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadge(act.allocation_status)}`}>
@@ -1060,9 +1124,12 @@ function FarmerTab({ data }: { data: ClusterInsightsResponse }) {
   );
 }
 
+// ─────────────────────────────────────────────
+// Capacity Tab  ✅ fixed handleMove (credentials), full smart moves UI
+// ─────────────────────────────────────────────
 
 function CapacityTab({ data, clusterId, onMoved }: {
-  data: any; // Replace 'any' with ClusterInsightsResponse
+  data: ClusterInsightsResponse;
   clusterId: number;
   onMoved?: () => void;
 }) {
@@ -1078,18 +1145,18 @@ function CapacityTab({ data, clusterId, onMoved }: {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const overbooked = data.capacity_demand.filter((d: any) => d.is_overbooked);
-  const totalShortage = overbooked.reduce((s: number, d: any) => s + d.shortage_workers, 0);
+  const overbooked = data.capacity_demand.filter(d => d.is_overbooked);
+  const totalShortage = overbooked.reduce((s, d) => s + d.shortage_workers, 0);
 
   const freeByDate: Record<string, number> = {};
-  data.capacity_demand.forEach((d: any) => {
+  data.capacity_demand.forEach(d => {
     const free = d.capacity_workers - d.demand_workers;
     if (free > 0) freeByDate[d.date] = free;
   });
   const freeDates = Object.keys(freeByDate).sort();
 
   const maxWorkers = Math.max(
-    ...data.capacity_demand.map((d: any) => Math.max(d.capacity_workers, d.demand_workers)), 1
+    ...data.capacity_demand.map(d => Math.max(d.capacity_workers, d.demand_workers)), 1,
   );
 
   const bar = (val: number, max: number, color: string) => (
@@ -1099,7 +1166,7 @@ function CapacityTab({ data, clusterId, onMoved }: {
     </div>
   );
 
-  const handleMove = async (act: any, fromDate: string, toDate: string) => {
+  const handleMove = async (act: FlexActivity, fromDate: string, toDate: string) => {
     const key = `${act.job_id}-${act.activity_id}`;
     if (!toDate) { showToast('Please select a target date first.', false); return; }
     setMovingKey(key);
@@ -1107,6 +1174,7 @@ function CapacityTab({ data, clusterId, onMoved }: {
       const res = await fetch(`${API_BASE_URL}/api/job-activities/${act.activity_id}/move/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',                              // ✅ FIXED: was missing
         body: JSON.stringify({
           scheduled_date: toDate,
           is_manually_moved: true,
@@ -1130,45 +1198,40 @@ function CapacityTab({ data, clusterId, onMoved }: {
     <div className="space-y-4 relative">
       {/* Toast */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-semibold transition-all
-          ${toast.ok ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-semibold transition-all ${toast.ok ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
           {toast.msg}
         </div>
       )}
 
       {/* KPI strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <KpiCard label="Total Days" value={String(data.capacity_demand.length)} />
-        <KpiCard label="Overbooked Days" value={String(overbooked.length)}
-                  accent={overbooked.length > 0 ? 'red' : 'green'} />
-        <KpiCard label="Worker Shortage" value={`${totalShortage}`}
-                  accent={totalShortage > 0 ? 'red' : 'green'} />
+        <KpiCard label="Total Days"           value={String(data.capacity_demand.length)} />
+        <KpiCard label="Overbooked Days"      value={String(overbooked.length)} accent={overbooked.length > 0 ? 'red' : 'green'} />
+        <KpiCard label="Worker Shortage"      value={String(totalShortage)} accent={totalShortage > 0 ? 'red' : 'green'} />
         <KpiCard label="Days with Free Slots" value={String(freeDates.length)} accent="blue" />
       </div>
 
-      {/* Sub-tab toggle */}
+      {/* Sub-tab */}
       <div className="flex gap-1 border-b border-slate-200">
         {(['overview', 'moves'] as const).map(key => (
           <button key={key} onClick={() => setView(key)}
-            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors
-              ${view === key ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
-            {key === 'overview' ? '📊 All Days' : `🔀 Smart Moves${overbooked.length > 0 ? ` (${overbooked.length} overbooked)` : ''}`}
+            className={`px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors ${view === key ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
+            {key === 'overview' ? '📊 All Days' : `🔀 Smart Moves${overbooked.length > 0 ? ` (${overbooked.length})` : ''}`}
           </button>
         ))}
       </div>
 
-      {/* OVERVIEW VIEW */}
+      {/* ── OVERVIEW ── */}
       {view === 'overview' && (
         <div className="space-y-1.5">
-          {data.capacity_demand.map((cd: any) => {
+          {data.capacity_demand.map(cd => {
             const utilPct = cd.capacity_workers > 0 ? (cd.demand_workers / cd.capacity_workers) * 100 : 0;
-            const isOver = cd.is_overbooked;
-            const free = cd.capacity_workers - cd.demand_workers;
-            const dow = new Date(cd.date).toLocaleDateString('en-IN', { weekday: 'short' });
+            const isOver  = cd.is_overbooked;
+            const free    = cd.capacity_workers - cd.demand_workers;
+            const dow     = new Date(cd.date).toLocaleDateString('en-IN', { weekday: 'short' });
             return (
               <div key={cd.date}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border text-[11px]
-                  ${isOver ? 'bg-red-50 border-red-200' : free > 0 ? 'bg-white border-slate-100 hover:bg-emerald-50/40' : 'bg-slate-50 border-slate-100'}`}>
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border text-[11px] ${isOver ? 'bg-red-50 border-red-200' : free > 0 ? 'bg-white border-slate-100 hover:bg-emerald-50/40' : 'bg-slate-50 border-slate-100'}`}>
                 <div className="w-24 shrink-0">
                   <div className="font-bold text-slate-700">{cd.date}</div>
                   <div className="text-[10px] text-slate-400">{dow}</div>
@@ -1205,7 +1268,7 @@ function CapacityTab({ data, clusterId, onMoved }: {
         </div>
       )}
 
-      {/* SMART MOVES VIEW */}
+      {/* ── SMART MOVES ── */}
       {view === 'moves' && (
         <div className="space-y-3">
           {overbooked.length === 0 ? (
@@ -1239,19 +1302,18 @@ function CapacityTab({ data, clusterId, onMoved }: {
                 </div>
               )}
 
-              {data.move_suggestions.map((ms: any) => {
-                const isExpanded = expandedDate === ms.overbooked_date;
-                const dowOver = new Date(ms.overbooked_date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
-                const dowTarget = ms.target_date ? new Date(ms.target_date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' }) : null;
-                const cdOver = data.capacity_demand.find((d: any) => d.date === ms.overbooked_date);
-                const cdTarget = data.capacity_demand.find((d: any) => d.date === ms.target_date);
-                const movedCount = ms.flexible_activities.filter((a: any) => movedKeys.has(`${a.job_id}-${a.activity_id}`)).length;
+              {data.move_suggestions.map(ms => {
+                const isExpanded  = expandedDate === ms.overbooked_date;
+                const dowOver     = new Date(ms.overbooked_date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
+                const dowTarget   = ms.target_date ? new Date(ms.target_date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' }) : null;
+                const movedCount  = ms.flexible_activities.filter(a => movedKeys.has(`${a.job_id}-${a.activity_id}`)).length;
 
                 return (
                   <div key={ms.overbooked_date} className="border border-red-200 rounded-xl overflow-hidden shadow-sm">
                     <button
                       onClick={() => setExpandedDate(isExpanded ? null : ms.overbooked_date)}
-                      className="w-full px-4 py-3 bg-red-50 hover:bg-red-100 transition-colors flex items-start justify-between text-left gap-3">
+                      className="w-full px-4 py-3 bg-red-50 hover:bg-red-100 transition-colors flex items-start justify-between text-left gap-3"
+                    >
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="flex items-center gap-1.5">
                           <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" />
@@ -1263,6 +1325,12 @@ function CapacityTab({ data, clusterId, onMoved }: {
                         <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[10px] font-bold border border-red-200">
                           -{ms.shortage_workers} workers short
                         </span>
+                        {ms.can_fully_move && (
+                          <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-[10px] font-semibold">Can fully resolve</span>
+                        )}
+                        {movedCount > 0 && (
+                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-[10px] font-semibold">{movedCount} moved</span>
+                        )}
                         {ms.target_date && (
                           <>
                             <span className="text-slate-400">→</span>
@@ -1270,7 +1338,7 @@ function CapacityTab({ data, clusterId, onMoved }: {
                               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0" />
                               <div>
                                 <div className="text-xs font-extrabold text-emerald-700">{ms.target_date}</div>
-                                <div className="text-[10px] text-emerald-400">{dowTarget}</div>
+                                <div className="text-[10px] text-emerald-400">{dowTarget} · {ms.free_workers_on_target} free</div>
                               </div>
                             </div>
                           </>
@@ -1278,41 +1346,71 @@ function CapacityTab({ data, clusterId, onMoved }: {
                       </div>
                       <span className="text-slate-400 text-xs">{isExpanded ? '▲' : '▼'}</span>
                     </button>
+
                     {isExpanded && (
-                      <div className="p-4 bg-white border-t border-red-100 space-y-4">
-                        {/* Render table and activities here similar to your logic */}
-                        <div className="overflow-x-auto rounded-lg border border-slate-200">
+                      <div className="p-4 bg-white border-t border-red-100 space-y-3">
+                        {ms.flexible_activities.length === 0 ? (
+                          <p className="text-sm text-slate-400 text-center py-4">No flexible activities to move on this day.</p>
+                        ) : (
+                          <div className="overflow-x-auto rounded-lg border border-slate-200">
                             <table className="min-w-full text-[11px]">
-                                <Thead cols={[{label: 'Farmer'}, {label: 'Activity'}, {label: 'Job ID'}, {label: 'Rem. Area', right: true}, {label: 'Move To'}, {label: 'Action'}]} />
-                                <tbody className="divide-y divide-slate-100 bg-white">
-                                    {ms.flexible_activities.map((act: any) => {
-                                        const key = `${act.job_id}-${act.activity_id}`;
-                                        const target = customTarget[key] ?? ms.target_date ?? '';
-                                        return (
-                                            <tr key={key}>
-                                                <td className="px-2.5 py-2.5">{act.farmer_name}</td>
-                                                <td className="px-2.5 py-2.5">{act.activity_name}</td>
-                                                <td className="px-2.5 py-2.5">{act.job_id}</td>
-                                                <td className="px-2.5 py-2.5 text-right">{act.remaining_area.toFixed(2)} ac</td>
-                                                <td className="px-2.5 py-2.5">
-                                                    <select 
-                                                        value={target} 
-                                                        onChange={e => setCustomTarget(prev => ({ ...prev, [key]: e.target.value }))}
-                                                        className="border rounded p-1"
-                                                    >
-                                                        <option value="">— pick date —</option>
-                                                        {freeDates.map(d => <option key={d} value={d}>{d}</option>)}
-                                                    </select>
-                                                </td>
-                                                <td className="px-2.5 py-2.5">
-                                                    <button onClick={() => handleMove(act, ms.overbooked_date, target)} className="bg-blue-600 text-white px-2 py-1 rounded">Move</button>
-                                                </td>
-                                            </tr>
-                                        )
-                                    })}
-                                </tbody>
+                              <Thead cols={[
+                                { label: 'Farmer' }, { label: 'Activity' }, { label: 'Job ID' },
+                                { label: 'Rem. Area', right: true }, { label: 'Move To' }, { label: 'Action' },
+                              ]} />
+                              <tbody className="divide-y divide-slate-100 bg-white">
+                                {ms.flexible_activities.map(act => {
+                                  const key      = `${act.job_id}-${act.activity_id}`;
+                                  const isMoved  = movedKeys.has(key);
+                                  const isMoving = movingKey === key;
+                                  const target =
+  customTarget[key] ??
+  act.suggested_target_date ??   // 👈 use planning suggestion first
+  ms.target_date ??              // (actual-mode fallback)
+  '';
+
+                                  return (
+                                    <tr key={key} className={isMoved ? 'bg-emerald-50 opacity-70' : 'hover:bg-slate-50'}>
+                                      <td className="px-2.5 py-2.5 font-medium text-slate-700">{act.farmer_name}</td>
+                                      <td className="px-2.5 py-2.5 text-slate-700">{act.activity_name}</td>
+                                      <td className="px-2.5 py-2.5 font-mono text-blue-600">{act.job_id}</td>
+                                      <td className="px-2.5 py-2.5 text-right text-amber-600 font-medium">{act.remaining_area.toFixed(2)} ac</td>
+                                      <td className="px-2.5 py-2.5">
+                                        {isMoved ? (
+                                          <span className="text-emerald-600 font-semibold text-[11px]">✅ Moved → {target}</span>
+                                        ) : (
+                                          <select
+                                            value={target}
+                                            onChange={e => setCustomTarget(prev => ({ ...prev, [key]: e.target.value }))}
+                                            className="border border-slate-200 rounded-lg px-2 py-1 text-[11px] text-slate-700 bg-white focus:ring-1 focus:ring-blue-400 outline-none"
+                                          >
+                                            <option value="">— pick date —</option>
+                                            {freeDates.map(d => (
+                                              <option key={d} value={d}>{d} (+{freeByDate[d]} free)</option>
+                                            ))}
+                                          </select>
+                                        )}
+                                      </td>
+                                      <td className="px-2.5 py-2.5">
+                                        {isMoved ? (
+                                          <span className="text-emerald-600 text-[11px] font-semibold">Done</span>
+                                        ) : (
+                                          <button
+                                            disabled={isMoving || !target}
+                                            onClick={() => handleMove(act, ms.overbooked_date, target)}
+                                            className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors ${isMoving ? 'bg-slate-200 text-slate-400 cursor-wait' : !target ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                                          >
+                                            {isMoving ? 'Moving…' : 'Move'}
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
                             </table>
-                        </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1325,7 +1423,6 @@ function CapacityTab({ data, clusterId, onMoved }: {
     </div>
   );
 }
-
 function PaymentDashboard({ clusterId }: { clusterId: number }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -3713,7 +3810,7 @@ useEffect(() => {
     }
   };
 
-  fetchDayCapacities();
+  // fetchDayCapacities();
 }, [selectedDate]);
 
 // load all mukkadams
@@ -3889,9 +3986,17 @@ const loadAllocations = async (forMonth?: Date) => {
   try {
     const startDate = new Date(month.getFullYear(), month.getMonth(), 1);
     const endDate = new Date(month.getFullYear(), month.getMonth() + 1, 0);
-    
+    const token = localStorage.getItem('auth_token');
     const response = await fetch(
       `${API_BASE_URL}/api/allocations/calendar_view/?start_date=${formatDate(startDate)}&end_date=${formatDate(endDate)}&cluster_id=${clusterId}`
+      ,
+  {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Token ${token}` } : {}),
+    },
+    credentials: 'include',
+  },
     );
     const data = await response.json();
     const allocationsList: Allocation[] = [];
@@ -4048,12 +4153,13 @@ const validateAllocation = async (allocationData: any, isMultiTeam: boolean = fa
     setLoading(false);
   }
 };
+const token = localStorage.getItem('auth_token');
 const createAllocation = async (allocationData: any, force: boolean = false, skipStrictCheck: boolean = false) => {  // 👈 Add parameter
   try {
     setLoading(true);
     const response = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${token}`,},
       body: JSON.stringify({ 
         ...allocationData, 
         force,
@@ -4298,7 +4404,7 @@ useEffect(() => {
   return () => window.removeEventListener('farm-scheduler-refresh', handler);
 }, [currentMonth, filters.plotId]); // deps so handleRefreshAll uses fresh values
 
-const VIEW_OPTIONS: { value: 'jobs' | 'allocations' | 'both' | 'payments' | 'insights'; label: string }[] = [
+const VIEW_OPTIONS: { value: 'jobs' | 'allocations' | 'both' | 'payments' | 'insights' ; label: string }[] = [
   { value: 'both', label: 'Allocations' },
   { value: 'jobs', label: 'AI' },
   { value: 'payments', label: '💰 Payments' },

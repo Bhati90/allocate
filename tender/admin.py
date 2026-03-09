@@ -6,7 +6,7 @@ from django.utils.safestring import mark_safe
 from django import forms
 from decimal import Decimal
 
-from .models import (
+from .models import (UserProfile,
     ActivityCatalog, Cluster, Farmer, Plot, ClusterActivityRate,MukkadamLedgerEntry,
     ClusterMukkadamAssignment, Job, JobActivity, JobBooking, FarmerPayment,
     ActivityScheduleRule, ClusterActivityScheduleRule,
@@ -17,6 +17,24 @@ from .models import (
     WebhookLog, SystemConfiguration, APISync,
     MukkadamWeeklyPayment, MukkadamMiscCost, MukkadamJobSettlement,
 )
+
+# -----------------------------
+# User Profile Admin
+# -----------------------------
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'user',
+        'full_name',
+        'mobile_number',
+        'role',
+        'is_mobile_verified',
+        'created_at'
+    )
+    list_filter = ('role', 'is_mobile_verified', 'created_at')
+    search_fields = ('mobile_number', 'full_name', 'user__username')
+    readonly_fields = ('created_at', 'updated_at')
 
 
 # ============================================================================
