@@ -543,13 +543,383 @@ from rest_framework.permissions import AllowAny
 
 from .models import Allocation, Job, JobActivity, Cluster, Mukkadam, Farmer
 
+# tender/insight.py
+
+from collections import defaultdict
+from datetime import date, datetime
+
+from django.db.models import Sum, Count, Avg, Q
+from django.db.models.functions import TruncWeek
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
+
+from .models import (
+    Cluster, Allocation, Job, JobActivity, JobBooking,
+    MukkadamActivityRate,
+)
+
+
+# ── Productivity lookup ───────────────────────────────────────────────────────
+_productivity_cache: dict = {}
+
+
+def _get_productivity(mukkadam_id, activity_id) -> float | None:
+    """
+    Returns productivity_per_worker (ac/worker/day) for this mukkadam × activity.
+    Returns None if no rate exists — that allocation is excluded from optimal calc.
+    """
+    key = (mukkadam_id, activity_id)
+    if key in _productivity_cache:
+        return _productivity_cache[key]
+
+    val = (
+        MukkadamActivityRate.objects
+        .filter(mukkadam_id=mukkadam_id, activity_id=activity_id, is_active=True)
+        .values_list('productivity_per_worker', flat=True)
+        .first()
+    )
+    result = float(val) if val else None
+    _productivity_cache[key] = result
+    return result
+
+
+# tender/insight.py
+
+from collections import defaultdict
+from datetime import date, datetime
+
+from django.db.models import Sum, Count, Avg, Q, Max
+from django.db.models.functions import TruncWeek
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
+
+from .models import (
+    Cluster, Allocation, Job, JobActivity, JobBooking,
+    MukkadamActivityRate, ClusterMukkadamAssignment, Leave,
+)
+
+
+# ── Productivity lookup ───────────────────────────────────────────────────────
+_productivity_cache: dict = {}
+
+
+def _get_productivity(mukkadam_id, activity_id) -> float | None:
+    """
+    Returns productivity_per_worker (ac/worker/day) for this mukkadam × activity.
+    Returns None if no rate exists — that allocation is excluded from optimal calc.
+    """
+    key = (mukkadam_id, activity_id)
+    if key in _productivity_cache:
+        return _productivity_cache[key]
+
+    val = (
+        MukkadamActivityRate.objects
+        .filter(mukkadam_id=mukkadam_id, activity_id=activity_id, is_active=True)
+        .values_list('productivity_per_worker', flat=True)
+        .first()
+    )
+    result = float(val) if val else None
+    _productivity_cache[key] = result
+    return result
+
+
+def _available_crew_for_cluster_date(cluster_id, date) -> list[dict]:
+    """
+    Replicates daily_capacity_all logic inline (no HTTP call).
+    Returns list of {mukkadam_id, available_crew_size} for a cluster+date.
+    """
+    date_str = date.isoformat()
+
+    # General holiday → zero capacity
+    if Leave.objects.filter(date=date, is_active=True, leave_type='general', cluster_id=cluster_id).exists():
+        return []
+
+    assignments = (
+        ClusterMukkadamAssignment.objects
+        .filter(cluster_id=cluster_id, is_active=True)
+        .select_related('mukkadam')
+    )
+
+    result = []
+    for assignment in assignments:
+        # updown availability check
+        if assignment.mukkadam_type == 'updown':
+            available = False
+            if assignment.updown_mode == 'range':
+                if assignment.updown_from_date and assignment.updown_to_date:
+                    available = assignment.updown_from_date <= date <= assignment.updown_to_date
+            elif assignment.updown_mode == 'specific':
+                available = date_str in (assignment.updown_specific_dates or [])
+            if not available:
+                continue
+
+        mukkadam = assignment.mukkadam
+        crew = mukkadam.crew_size or 0
+
+        used = (
+            Allocation.objects
+            .filter(
+                mukkadam=mukkadam,
+                allocated_date=date,
+                allows_second_job=False,
+                status__in=['scheduled', 'in_progress'],
+            )
+            .aggregate(total=Sum('allocated_workers'))['total'] or 0
+        )
+
+        on_leave = (
+            Leave.objects
+            .filter(leave_type='mukkadam', mukkadam=mukkadam, date=date, is_active=True)
+            .aggregate(total=Sum('crew_on_leave'))['total'] or 0
+        )
+
+        remaining = max(crew - used - on_leave, 0)
+        result.append({'mukkadam_id': mukkadam.mukkadam_id, 'available_crew_size': remaining})
+
+    return result
+
+
+# Cache for best productivity per (mukkadam_id, frozenset of activity_ids)
+_best_productivity_cache: dict = {}
+
+
+def _best_productivity_for_mukkadam_activities(mukkadam_id, activity_ids: list) -> float:
+    """
+    Returns the best (max) productivity_per_worker for this mukkadam
+    across the specific activities scheduled that day.
+    Returns 0.0 if no rate found.
+    """
+    if not activity_ids:
+        return 0.0
+    key = (mukkadam_id, frozenset(activity_ids))
+    if key in _best_productivity_cache:
+        return _best_productivity_cache[key]
+
+    val = (
+        MukkadamActivityRate.objects
+        .filter(mukkadam_id=mukkadam_id, activity_id__in=activity_ids, is_active=True)
+        .aggregate(best=Max('productivity_per_worker'))['best']
+    )
+    result = float(val) if val else 0.0
+    _best_productivity_cache[key] = result
+    return result
+
+
+# tender/insight.py
+
+from collections import defaultdict
+from datetime import date, datetime
+
+from django.db.models import Sum, Count, Avg, Q, Max
+from django.db.models.functions import TruncWeek
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
+
+from .models import (
+    Cluster, Allocation, Job, JobActivity, JobBooking,
+    MukkadamActivityRate, ClusterMukkadamAssignment, Leave,
+)
+
+
+# ── Productivity lookup ───────────────────────────────────────────────────────
+_productivity_cache: dict = {}
+
+
+def _get_productivity(mukkadam_id, activity_id) -> float | None:
+    """
+    Returns productivity_per_worker (ac/worker/day) for this mukkadam × activity.
+    Returns None if no rate exists — that allocation is excluded from optimal calc.
+    """
+    key = (mukkadam_id, activity_id)
+    if key in _productivity_cache:
+        return _productivity_cache[key]
+
+    val = (
+        MukkadamActivityRate.objects
+        .filter(mukkadam_id=mukkadam_id, activity_id=activity_id, is_active=True)
+        .values_list('productivity_per_worker', flat=True)
+        .first()
+    )
+    result = float(val) if val else None
+    _productivity_cache[key] = result
+    return result
+
+
+def _available_crew_for_cluster_date(cluster_id, date) -> list[dict]:
+    """
+    Replicates daily_capacity_all logic inline (no HTTP call).
+    Returns list of {mukkadam_id, available_crew_size} for a cluster+date.
+    """
+    date_str = date.isoformat()
+
+    # General holiday → zero capacity
+    if Leave.objects.filter(date=date, is_active=True, leave_type='general', cluster_id=cluster_id).exists():
+        return []
+
+    assignments = (
+        ClusterMukkadamAssignment.objects
+        .filter(cluster_id=cluster_id, is_active=True)
+        .select_related('mukkadam')
+    )
+
+    result = []
+    for assignment in assignments:
+        # updown availability check
+        if assignment.mukkadam_type == 'updown':
+            available = False
+            if assignment.updown_mode == 'range':
+                if assignment.updown_from_date and assignment.updown_to_date:
+                    available = assignment.updown_from_date <= date <= assignment.updown_to_date
+            elif assignment.updown_mode == 'specific':
+                available = date_str in (assignment.updown_specific_dates or [])
+            if not available:
+                continue
+
+        mukkadam = assignment.mukkadam
+        crew = mukkadam.crew_size or 0
+
+        used = (
+            Allocation.objects
+            .filter(
+                mukkadam=mukkadam,
+                allocated_date=date,
+                allows_second_job=False,
+                status__in=['scheduled', 'in_progress'],
+            )
+            .aggregate(total=Sum('allocated_workers'))['total'] or 0
+        )
+
+        on_leave = (
+            Leave.objects
+            .filter(leave_type='mukkadam', mukkadam=mukkadam, date=date, is_active=True)
+            .aggregate(total=Sum('crew_on_leave'))['total'] or 0
+        )
+
+        remaining = max(crew - used - on_leave, 0)
+        result.append({'mukkadam_id': mukkadam.mukkadam_id, 'available_crew_size': remaining})
+
+    return result
+
+
+# Cache for best productivity per (mukkadam_id, frozenset of activity_ids)
+_best_productivity_cache: dict = {}
+
+
+def _best_productivity_for_mukkadam_activities(mukkadam_id, activity_ids: list) -> float:
+    """
+    Returns the best (max) productivity_per_worker for this mukkadam
+    across the specific activities scheduled that day.
+    Returns 0.0 if no rate found.
+    """
+    if not activity_ids:
+        return 0.0
+    key = (mukkadam_id, frozenset(activity_ids))
+    if key in _best_productivity_cache:
+        return _best_productivity_cache[key]
+
+    val = (
+        MukkadamActivityRate.objects
+        .filter(mukkadam_id=mukkadam_id, activity_id__in=activity_ids, is_active=True)
+        .aggregate(best=Max('productivity_per_worker'))['best']
+    )
+    result = float(val) if val else 0.0
+    _best_productivity_cache[key] = result
+    return result
+
+
+def _get_booking_capacity(cluster_id, start_date, end_date) -> dict:
+    """
+    Calculates booking-based capacity for a cluster over a date range.
+    """
+    # Step 1: Get job IDs for this cluster via a clean subquery (avoids M2M join duplicating JobActivity rows)
+    cluster_job_ids = list(
+        Job.objects
+        .filter(clusters__id=cluster_id)
+        .values_list('job_id', flat=True)
+    )
+
+    if not cluster_job_ids:
+        return {
+            'total_acres_needed': 0.0,
+            'total_crew_available': 0,
+            'total_acres_coverable': 0.0,
+            'coverage_rate': 0.0,
+            'by_date': [],
+        }
+
+    # Step 2: Filter JobActivity by job_id — no M2M join, no duplicates
+    date_activity_qs = (
+        JobActivity.objects
+        .filter(
+            job_id__in=cluster_job_ids,
+            scheduled_date__range=[start_date, end_date],
+            scheduled_date__isnull=False,
+        )
+        .values('scheduled_date', 'activity_id')
+        .annotate(area=Sum('total_area'))
+        .order_by('scheduled_date')
+    )
+
+    # Group by date: {date: {activity_id: area}}
+    date_map: dict = defaultdict(lambda: {'activities': {}, 'total_area': 0.0})
+    for row in date_activity_qs:
+        d = row['scheduled_date']
+        date_map[d]['activities'][row['activity_id']] = float(row['area'] or 0)
+        date_map[d]['total_area'] += float(row['area'] or 0)
+
+    total_acres_needed    = 0.0
+    total_crew_available  = 0
+    total_acres_coverable = 0.0
+    by_date = []
+
+    for d, info in sorted(date_map.items()):
+        activity_ids  = list(info['activities'].keys())
+        acres_needed  = info['total_area']
+        crew_list     = _available_crew_for_cluster_date(cluster_id, d)
+
+        day_crew      = 0
+        day_coverable = 0.0
+
+        for entry in crew_list:
+            m_id = entry['mukkadam_id']
+            crew = entry['available_crew_size']
+            day_crew += crew
+            best_rate = _best_productivity_for_mukkadam_activities(m_id, activity_ids)
+            day_coverable += crew * best_rate
+
+        total_acres_needed    += acres_needed
+        total_crew_available  += day_crew
+        total_acres_coverable += day_coverable
+
+        by_date.append({
+            'date':            d.isoformat(),
+            'acres_needed':    round(acres_needed, 2),
+            'crew_available':  day_crew,
+            'acres_coverable': round(day_coverable, 2),
+            'activity_count':  len(activity_ids),
+        })
+
+    coverage_rate = round(total_acres_coverable / total_acres_needed * 100, 1) if total_acres_needed else 0.0
+
+    return {
+        'total_acres_needed':    round(total_acres_needed, 2),
+        'total_crew_available':  total_crew_available,
+        'total_acres_coverable': round(total_acres_coverable, 2),
+        'coverage_rate':         coverage_rate,
+        'by_date':               by_date,
+    }
+
+
 class GlobalInsightsView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        # ---- 1. Date range ----
+        # ── 1. Date range ─────────────────────────────────────────────────────
         start_date_str = request.query_params.get('start_date')
-        end_date_str = request.query_params.get('end_date')
+        end_date_str   = request.query_params.get('end_date')
 
         today = date.today()
         if start_date_str:
@@ -564,7 +934,7 @@ class GlobalInsightsView(APIView):
 
         clusters = list(Cluster.objects.all())
 
-        # ---- 2. Base querysets ----
+        # ── 2. Base querysets ─────────────────────────────────────────────────
         alloc_qs = (
             Allocation.objects.filter(
                 allocated_date__range=[start_date, end_date]
@@ -586,13 +956,116 @@ class GlobalInsightsView(APIView):
             .distinct()
         )
 
-        # ---- 3. Overall summary ----
+        # ── 3. Revenue: Job.total_activity_amount ─────────────────────────────
+        total_revenue = float(
+            jobs_qs.aggregate(s=Sum('total_activities_amount'))['s'] or 0
+        )
+
+        # ── 4. Amount paid: JobBooking.advance_paid where status='PAID' ───────
+        total_amount_paid = float(
+            JobBooking.objects
+            .filter(job__in=jobs_qs, status='PAID')
+            .aggregate(s=Sum('advance_paid'))['s'] or 0
+        )
+
+        total_outstanding = max(0.0, total_revenue - total_amount_paid)
+        collection_rate   = round(total_amount_paid / total_revenue * 100, 1) if total_revenue else 0.0
+
+        # ── 5. Worker utilization metrics ─────────────────────────────────────
+        seen_mukkadam_date      = set()
+        total_capacity_workers  = 0
+        total_allocated_workers = 0
+        total_optimal_workers   = 0.0
+        optimal_coverage_count  = 0
+        total_alloc_count       = 0
+
+        for a in alloc_qs:
+            m = a.mukkadam
+            if not m:
+                continue
+
+            total_alloc_count += 1
+
+            md_key = (m.mukkadam_id, a.allocated_date)
+            if md_key not in seen_mukkadam_date:
+                seen_mukkadam_date.add(md_key)
+                total_capacity_workers += int(m.crew_size or 0)
+
+            alloc_w = int(a.allocated_workers or 0)
+            total_allocated_workers += alloc_w
+
+            if a.allocated_area and a.job_activity_id:
+                prod = _get_productivity(
+                    m.mukkadam_id,
+                    a.job_activity.activity_id,
+                )
+                if prod and prod > 0:
+                    total_optimal_workers += float(a.allocated_area) / prod
+                    optimal_coverage_count += 1
+
+        utilization_rate         = round(total_allocated_workers / total_capacity_workers * 100, 1) if total_capacity_workers else 0.0
+        optimal_utilization_rate = round(total_optimal_workers   / total_capacity_workers * 100, 1) if total_capacity_workers else 0.0
+        staffing_ratio           = round(total_allocated_workers / total_optimal_workers, 2)        if total_optimal_workers  else None
+
+        # ── 5b. Booking capacity (global — calculated once, not summed per cluster to avoid double-counting) ──
+        # Jobs can belong to multiple clusters, so summing _get_booking_capacity() per cluster
+        # would double-count. Instead calculate globally across all job IDs in jobs_qs.
+        global_job_ids = list(jobs_qs.values_list('job_id', flat=True))
+        global_date_activity_qs = (
+            JobActivity.objects
+            .filter(
+                job_id__in=global_job_ids,
+                scheduled_date__range=[start_date, end_date],
+                scheduled_date__isnull=False,
+            )
+            .values('scheduled_date', 'activity_id')
+            .annotate(area=Sum('total_area'))
+            .order_by('scheduled_date')
+        )
+
+        # Build date→activity map globally
+        global_date_map: dict = defaultdict(lambda: {'activity_ids': set(), 'total_area': 0.0})
+        for row in global_date_activity_qs:
+            d = row['scheduled_date']
+            global_date_map[d]['activity_ids'].add(row['activity_id'])
+            global_date_map[d]['total_area'] += float(row['area'] or 0)
+
+        all_bc_needed    = 0.0
+        all_bc_crew      = 0
+        all_bc_coverable = 0.0
+
+        for d, info in global_date_map.items():
+            activity_ids = list(info['activity_ids'])
+            all_bc_needed += info['total_area']
+
+            # Deduplicate mukkadams across clusters for this date
+            seen_mukkadam_on_date: set = set()
+            for c in clusters:
+                crew_list = _available_crew_for_cluster_date(c.id, d)
+                for entry in crew_list:
+                    m_id = entry['mukkadam_id']
+                    if m_id in seen_mukkadam_on_date:
+                        continue                          # already counted this mukkadam today
+                    seen_mukkadam_on_date.add(m_id)
+                    crew = entry['available_crew_size']
+                    all_bc_crew += crew
+                    best_rate = _best_productivity_for_mukkadam_activities(m_id, activity_ids)
+                    all_bc_coverable += crew * best_rate
+
+        overall_booking_capacity = {
+            'total_acres_needed':    round(all_bc_needed, 2),
+            'total_crew_available':  all_bc_crew,
+            'total_acres_coverable': round(all_bc_coverable, 2),
+            'coverage_rate':         round(all_bc_coverable / all_bc_needed * 100, 1) if all_bc_needed else 0.0,
+        }
+
+        # ── 6. Overall summary ────────────────────────────────────────────────
         summary_agg = alloc_qs.aggregate(
             total_farmer_amount=Sum('farmer_amount'),
             total_mukkadam_amount=Sum('mukkadam_amount'),
             total_area_allocated=Sum('allocated_area'),
             total_area_completed=Sum('actual_area_completed'),
-            total_allocated_workers=Sum('allocated_workers'),
+            total_allocated_workers_agg=Sum('allocated_workers'),
             loss_allocations=Count('id', filter=Q(profit__lt=0)),
             dispute_count=Count('id', filter=Q(payment_status='dispute')),
             avg_efficiency_score=Avg('efficiency_score'),
@@ -611,30 +1084,47 @@ class GlobalInsightsView(APIView):
             ).aggregate(s=Sum('total_area'))['s'] or 0
         )
 
-        farmer_amount = float(summary_agg['total_farmer_amount'] or 0)
-        mukkadam_amount = float(summary_agg['total_mukkadam_amount'] or 0)
-        total_area_allocated = float(summary_agg['total_area_allocated'] or 0)
-        profit = farmer_amount - mukkadam_amount
-        profit_per_acre = profit / total_area_allocated if total_area_allocated else 0
+        farmer_amount        = float(summary_agg['total_farmer_amount']   or 0)
+        mukkadam_amount      = float(summary_agg['total_mukkadam_amount'] or 0)
+        total_area_allocated = float(summary_agg['total_area_allocated']  or 0)
+        profit               = farmer_amount - mukkadam_amount
+        profit_per_acre      = profit / total_area_allocated if total_area_allocated else 0
 
         overall_summary = {
-            "total_jobs": total_jobs,
-            "total_activities": total_activities,
-            "total_area_scheduled": total_area_scheduled,
-            "total_area_allocated": total_area_allocated,
-            "total_area_completed": float(summary_agg['total_area_completed'] or 0),
-            "total_allocated_workers": summary_agg['total_allocated_workers'] or 0,
-            "farmer_amount": farmer_amount,
-            "mukkadam_amount": mukkadam_amount,
-            "profit": profit,
-            "profit_per_acre": profit_per_acre,
-            "loss_allocations": summary_agg['loss_allocations'] or 0,
-            "dispute_count": summary_agg['dispute_count'] or 0,
-            "avg_efficiency_score": float(summary_agg['avg_efficiency_score'] or 0),
+            # existing
+            "total_jobs":              total_jobs,
+            "total_activities":        total_activities,
+            "total_area_scheduled":    total_area_scheduled,
+            "total_area_allocated":    total_area_allocated,
+            "total_area_completed":    float(summary_agg['total_area_completed'] or 0),
+            "total_allocated_workers": total_allocated_workers,
+            "farmer_amount":           farmer_amount,
+            "mukkadam_amount":         mukkadam_amount,
+            "profit":                  profit,
+            "profit_per_acre":         profit_per_acre,
+            "loss_allocations":        summary_agg['loss_allocations']  or 0,
+            "dispute_count":           summary_agg['dispute_count']     or 0,
+            "avg_efficiency_score":    float(summary_agg['avg_efficiency_score'] or 0),
+            # NEW — revenue & payment
+            "total_revenue":           round(total_revenue, 2),
+            "total_amount_paid":       round(total_amount_paid, 2),
+            "total_outstanding":       round(total_outstanding, 2),
+            "collection_rate":         collection_rate,
+            # NEW — worker utilization
+            "total_capacity_workers":    total_capacity_workers,
+            "total_optimal_workers":     round(total_optimal_workers, 1),
+            "utilization_rate":          utilization_rate,
+            "optimal_utilization_rate":  optimal_utilization_rate,
+            "staffing_ratio":            staffing_ratio,
+            "optimal_coverage_pct":      round(
+                optimal_coverage_count / total_alloc_count * 100, 1
+            ) if total_alloc_count else 0,
+            # NEW — booking capacity
+            "booking_capacity": overall_booking_capacity,
         }
 
-        # ---- 4. Cluster summary (KPI per cluster) ----
-        cluster_rows = []
+        # ── 7. Cluster summary (KPI per cluster) ──────────────────────────────
+        cluster_rows       = []
         cluster_name_cache = {c.id: c.name for c in clusters}
 
         for c in clusters:
@@ -642,12 +1132,25 @@ class GlobalInsightsView(APIView):
             if not c_allocs.exists():
                 continue
 
+            c_jobs_qs = jobs_qs.filter(clusters=c).distinct()
+
             c_area_scheduled = float(
                 JobActivity.objects.filter(
                     job__clusters=c,
                     scheduled_date__range=[start_date, end_date],
                 ).aggregate(s=Sum('total_area'))['s'] or 0
             )
+
+            # Revenue & payment per cluster
+            c_revenue = float(
+                c_jobs_qs.aggregate(s=Sum('total_activities_amount'))['s'] or 0
+            )
+            c_paid = float(
+                JobBooking.objects
+                .filter(job__in=c_jobs_qs, status='PAID')
+                .aggregate(s=Sum('advance_paid'))['s'] or 0
+            )
+            c_outstanding = max(0.0, c_revenue - c_paid)
 
             c_agg = c_allocs.aggregate(
                 total_farmer_amount=Sum('farmer_amount'),
@@ -659,30 +1162,60 @@ class GlobalInsightsView(APIView):
                 dispute_count=Count('id', filter=Q(payment_status='dispute')),
             )
 
-            fa = float(c_agg['total_farmer_amount'] or 0)
+            fa = float(c_agg['total_farmer_amount']  or 0)
             ma = float(c_agg['total_mukkadam_amount'] or 0)
-            ta = float(c_agg['total_area_allocated'] or 0)
+            ta = float(c_agg['total_area_allocated']  or 0)
             pr = fa - ma
 
-            jobs_in_cluster = jobs_qs.filter(clusters=c).distinct().count()
+            # Utilization per cluster
+            c_seen    = set()
+            c_cap     = 0
+            c_alloc_w = 0
+            c_opt_w   = 0.0
+            for a in c_allocs.select_related('mukkadam', 'job_activity__activity'):
+                m = a.mukkadam
+                if not m:
+                    continue
+                md = (m.mukkadam_id, a.allocated_date)
+                if md not in c_seen:
+                    c_seen.add(md)
+                    c_cap += int(m.crew_size or 0)
+                c_alloc_w += int(a.allocated_workers or 0)
+                if a.allocated_area and a.job_activity_id:
+                    prod = _get_productivity(m.mukkadam_id, a.job_activity.activity_id)
+                    if prod and prod > 0:
+                        c_opt_w += float(a.allocated_area) / prod
 
             cluster_rows.append({
-                "cluster_id": c.id,
-                "cluster_name": c.name,
-                "jobs": jobs_in_cluster,
+                # existing
+                "cluster_id":           c.id,
+                "cluster_name":         c.name,
+                "jobs":                 c_jobs_qs.count(),
                 "total_area_scheduled": c_area_scheduled,
                 "total_area_allocated": ta,
                 "total_area_completed": float(c_agg['total_area_completed'] or 0),
-                "farmer_amount": fa,
-                "mukkadam_amount": ma,
-                "profit": pr,
-                "profit_per_acre": pr / ta if ta else 0,
-                "allocated_workers": c_agg['total_allocated_workers'] or 0,
-                "loss_allocations": c_agg['loss_allocations'] or 0,
-                "dispute_count": c_agg['dispute_count'] or 0,
+                "farmer_amount":        fa,
+                "mukkadam_amount":      ma,
+                "profit":               pr,
+                "profit_per_acre":      pr / ta if ta else 0,
+                "allocated_workers":    c_agg['total_allocated_workers'] or 0,
+                "loss_allocations":     c_agg['loss_allocations'] or 0,
+                "dispute_count":        c_agg['dispute_count']    or 0,
+                # NEW
+                "total_revenue":             round(c_revenue, 2),
+                "total_amount_paid":         round(c_paid, 2),
+                "total_outstanding":         round(c_outstanding, 2),
+                "collection_rate":           round(c_paid / c_revenue * 100, 1) if c_revenue else 0.0,
+                "total_capacity_workers":    c_cap,
+                "total_optimal_workers":     round(c_opt_w, 1),
+                "utilization_rate":          round(c_alloc_w / c_cap * 100, 1) if c_cap else 0.0,
+                "optimal_utilization_rate":  round(c_opt_w  / c_cap * 100, 1) if c_cap else 0.0,
+                "staffing_ratio":            round(c_alloc_w / c_opt_w, 2)     if c_opt_w else None,
+                # NEW — booking capacity per cluster (includes by_date breakdown)
+                "booking_capacity": _get_booking_capacity(c.id, start_date, end_date),
             })
 
-        # ---- 5. Cluster jobs + allocation status detail ----
+        # ── 8. Cluster jobs + allocation status detail ────────────────────────
         cluster_jobs = defaultdict(list)
 
         job_acts = (
@@ -692,28 +1225,28 @@ class GlobalInsightsView(APIView):
         )
 
         for ja in job_acts:
-            job = ja.job
+            job    = ja.job
             farmer = job.farmer
-            plot = ja.plot
-            alloc_list = list(ja.allocations.all())
-            alloc_count = len(alloc_list)
-            alloc_area_sum = sum(float(a.allocated_area or 0) for a in alloc_list)
+            plot   = ja.plot
+            alloc_list       = list(ja.allocations.all())
+            alloc_count      = len(alloc_list)
+            alloc_area_sum   = sum(float(a.allocated_area or 0) for a in alloc_list)
             alloc_workers_sum = sum(a.allocated_workers or 0 for a in alloc_list)
 
             for c in job.clusters.all():
                 cluster_jobs[c.id].append({
-                    "job_id": job.job_id,
-                    "cluster_id": c.id,
-                    "cluster_name": c.name,
-                    "farmer_id": farmer.farmer_id,
-                    "farmer_name": farmer.farmer_name,
-                    "plot_name": plot.name if plot else None,
-                    "activity_id": ja.activity.id,
-                    "activity_name": ja.activity.name,
-                    "scheduled_date": ja.scheduled_date.isoformat() if ja.scheduled_date else None,
-                    "total_area": float(ja.total_area),
-                    "allocated_area": float(ja.allocated_area),
-                    "remaining_area": float(ja.remaining_area),
+                    "job_id":           job.job_id,
+                    "cluster_id":       c.id,
+                    "cluster_name":     c.name,
+                    "farmer_id":        farmer.farmer_id,
+                    "farmer_name":      farmer.farmer_name,
+                    "plot_name":        plot.name if plot else None,
+                    "activity_id":      ja.activity.id,
+                    "activity_name":    ja.activity.name,
+                    "scheduled_date":   ja.scheduled_date.isoformat() if ja.scheduled_date else None,
+                    "total_area":       float(ja.total_area),
+                    "allocated_area":   float(ja.allocated_area),
+                    "remaining_area":   float(ja.remaining_area),
                     "estimated_workers": ja.estimated_workers or 0,
                     "allocation_status": ja.allocation_status,
                     "allocations_count": alloc_count,
@@ -726,18 +1259,18 @@ class GlobalInsightsView(APIView):
             if c.id not in cluster_jobs:
                 continue
             cluster_job_list.append({
-                "cluster_id": c.id,
+                "cluster_id":   c.id,
                 "cluster_name": c.name,
-                "jobs": cluster_jobs[c.id],
+                "jobs":         cluster_jobs[c.id],
             })
 
-        # ---- 6. Mukkadam summary (global + per cluster) ----
+        # ── 9. Mukkadam summary (global + per cluster) ────────────────────────
         mukkadam_cluster_map = defaultdict(
             lambda: defaultdict(lambda: {
-                "allocations": 0,
-                "area_alloc": 0.0,
-                "area_done": 0.0,
-                "farmer_amount": 0.0,
+                "allocations":    0,
+                "area_alloc":     0.0,
+                "area_done":      0.0,
+                "farmer_amount":  0.0,
                 "mukkadam_amount": 0.0,
             })
         )
@@ -747,79 +1280,78 @@ class GlobalInsightsView(APIView):
             c = a.cluster
             if not m or not c:
                 continue
-            key = (m.mukkadam_id, m.mukkadam_name)
+            key    = (m.mukkadam_id, m.mukkadam_name)
             bucket = mukkadam_cluster_map[key][c.id]
-            bucket["allocations"] += 1
-            bucket["area_alloc"] += float(a.allocated_area or 0)
-            bucket["area_done"] += float(a.actual_area_completed or 0)
-            bucket["farmer_amount"] += float(a.farmer_amount or 0)
+            bucket["allocations"]     += 1
+            bucket["area_alloc"]      += float(a.allocated_area or 0)
+            bucket["area_done"]       += float(a.actual_area_completed or 0)
+            bucket["farmer_amount"]   += float(a.farmer_amount or 0)
             bucket["mukkadam_amount"] += float(a.mukkadam_amount or 0)
 
         mukkadam_summary = []
 
         for (m_id, m_name), clusters_map in mukkadam_cluster_map.items():
-            total_area_alloc = sum(v["area_alloc"] for v in clusters_map.values())
-            total_farmer_amount = sum(v["farmer_amount"] for v in clusters_map.values())
+            total_area_alloc      = sum(v["area_alloc"]      for v in clusters_map.values())
+            total_farmer_amount   = sum(v["farmer_amount"]   for v in clusters_map.values())
             total_mukkadam_amount = sum(v["mukkadam_amount"] for v in clusters_map.values())
-            pr = total_farmer_amount - total_mukkadam_amount
-            profit_per_acre_m = pr / total_area_alloc if total_area_alloc else 0
+            pr                    = total_farmer_amount - total_mukkadam_amount
+            profit_per_acre_m     = pr / total_area_alloc if total_area_alloc else 0
 
             mukkadam_summary.append({
-                "mukkadam_id": m_id,
-                "mukkadam_name": m_name,
-                "total_area_allocated": total_area_alloc,
-                "total_farmer_amount": total_farmer_amount,
-                "total_mukkadam_amount": total_mukkadam_amount,
-                "profit": pr,
-                "profit_per_acre": profit_per_acre_m,
+                "mukkadam_id":            m_id,
+                "mukkadam_name":          m_name,
+                "total_area_allocated":   total_area_alloc,
+                "total_farmer_amount":    total_farmer_amount,
+                "total_mukkadam_amount":  total_mukkadam_amount,
+                "profit":                 pr,
+                "profit_per_acre":        profit_per_acre_m,
                 "clusters": [
                     {
-                        "cluster_id": cid,
-                        "cluster_name": cluster_name_cache.get(cid, ""),
-                        "allocations": v["allocations"],
-                        "area_alloc": v["area_alloc"],
-                        "area_done": v["area_done"],
-                        "farmer_amount": v["farmer_amount"],
+                        "cluster_id":     cid,
+                        "cluster_name":   cluster_name_cache.get(cid, ""),
+                        "allocations":    v["allocations"],
+                        "area_alloc":     v["area_alloc"],
+                        "area_done":      v["area_done"],
+                        "farmer_amount":  v["farmer_amount"],
                         "mukkadam_amount": v["mukkadam_amount"],
-                        "profit": v["farmer_amount"] - v["mukkadam_amount"],
+                        "profit":         v["farmer_amount"] - v["mukkadam_amount"],
                     }
                     for cid, v in clusters_map.items()
                 ],
             })
 
-        # ---- 7. Farmer summary (global + per cluster + per plot) ----
+        # ── 10. Farmer summary (global + per cluster + per plot) ──────────────
         farmer_cluster_map = defaultdict(
             lambda: defaultdict(lambda: {
-                "allocations": 0,
+                "allocations":    0,
                 "area_scheduled": 0.0,
-                "area_alloc": 0.0,
-                "area_done": 0.0,
-                "farmer_amount": 0.0,
+                "area_alloc":     0.0,
+                "area_done":      0.0,
+                "farmer_amount":  0.0,
                 "mukkadam_amount": 0.0,
             })
         )
 
-        # Plot-level breakdown per farmer: {farmer_key: {plot_id: {...}}}
         farmer_plot_map = defaultdict(lambda: defaultdict(lambda: {
-            "plot_name": "—",
-            "cluster_name": "",
-            "activity_keys_seen": set(),   # deduplicate ja rows
-            "activities": [],
+            "plot_name":            "—",
+            "cluster_name":         "",
+            "activity_keys_seen":   set(),
+            "activities":           [],
         }))
 
-        # Step A — build cluster buckets from allocations (amounts, area_alloc, area_done)
+        # Step A — cluster buckets from allocations
         for a in alloc_qs:
-            f = a.job_activity.job.farmer
-            c = a.cluster
-            key = (f.farmer_id, f.farmer_name)
+            f      = a.job_activity.job.farmer
+            c      = a.cluster
+            key    = (f.farmer_id, f.farmer_name)
             bucket = farmer_cluster_map[key][c.id]
-            bucket["allocations"] += 1
-            bucket["area_alloc"] += float(a.allocated_area or 0)
-            bucket["area_done"] += float(a.actual_area_completed or 0)
-            bucket["farmer_amount"] += float(a.farmer_amount or 0)
+            bucket["allocations"]     += 1
+            bucket["area_alloc"]      += float(a.allocated_area or 0)
+            bucket["area_done"]       += float(a.actual_area_completed or 0)
+            bucket["farmer_amount"]   += float(a.farmer_amount or 0)
             bucket["mukkadam_amount"] += float(a.mukkadam_amount or 0)
 
-        # Step B — build area_scheduled + plot breakdown from JobActivity
+        # Step B — area_scheduled + plot breakdown from JobActivity
         ja_for_farmers = (
             JobActivity.objects.filter(
                 job__in=jobs_qs,
@@ -830,30 +1362,27 @@ class GlobalInsightsView(APIView):
         )
 
         for ja in ja_for_farmers:
-            f = ja.job.farmer
-            plot = ja.plot
-            key = (f.farmer_id, f.farmer_name)
+            f        = ja.job.farmer
+            plot     = ja.plot
+            key      = (f.farmer_id, f.farmer_name)
             plot_key = plot.id if plot else 0
 
             for c in ja.job.clusters.all():
-                # Add scheduled area to the cluster bucket
                 farmer_cluster_map[key][c.id]["area_scheduled"] += float(ja.total_area or 0)
 
-                # Build plot entry (use first cluster we see for display)
                 plot_bucket = farmer_plot_map[key][plot_key]
                 plot_bucket["plot_name"] = plot.name if plot else "—"
                 if not plot_bucket["cluster_name"]:
                     plot_bucket["cluster_name"] = c.name
 
-                # Deduplicate by ja.id so we don't double-count for multi-cluster jobs
                 if ja.id not in plot_bucket["activity_keys_seen"]:
                     plot_bucket["activity_keys_seen"].add(ja.id)
                     plot_bucket["activities"].append({
-                        "activity_name": ja.activity.name,
-                        "scheduled_date": ja.scheduled_date.isoformat() if ja.scheduled_date else None,
-                        "total_area": float(ja.total_area or 0),
-                        "allocated_area": float(ja.allocated_area or 0),
-                        "remaining_area": float(ja.remaining_area or 0),
+                        "activity_name":     ja.activity.name,
+                        "scheduled_date":    ja.scheduled_date.isoformat() if ja.scheduled_date else None,
+                        "total_area":        float(ja.total_area or 0),
+                        "allocated_area":    float(ja.allocated_area or 0),
+                        "remaining_area":    float(ja.remaining_area or 0),
                         "allocation_status": ja.allocation_status,
                     })
 
@@ -861,8 +1390,6 @@ class GlobalInsightsView(APIView):
         farmer_summary = []
         for (f_id, f_name), clusters_map in farmer_cluster_map.items():
             total_area_alloc = sum(v["area_alloc"] for v in clusters_map.values())
-            # Sum area_scheduled once per cluster (already added per-cluster above)
-            # But since one ja can belong to multiple clusters, we compute it cleanly:
             total_area_scheduled_f = float(
                 JobActivity.objects.filter(
                     job__farmer__farmer_id=f_id,
@@ -870,58 +1397,54 @@ class GlobalInsightsView(APIView):
                     scheduled_date__range=[start_date, end_date],
                 ).aggregate(s=Sum('total_area'))['s'] or 0
             )
-            total_farmer_amount = sum(v["farmer_amount"] for v in clusters_map.values())
+            total_farmer_amount   = sum(v["farmer_amount"]   for v in clusters_map.values())
             total_mukkadam_amount = sum(v["mukkadam_amount"] for v in clusters_map.values())
-            pr = total_farmer_amount - total_mukkadam_amount
-            profit_per_acre_f = pr / total_area_alloc if total_area_alloc else 0
+            pr                    = total_farmer_amount - total_mukkadam_amount
+            profit_per_acre_f     = pr / total_area_alloc if total_area_alloc else 0
 
-            # Build plots list (strip internal dedupe set before serializing)
             plots_list = []
             for plot_id, pb in farmer_plot_map[(f_id, f_name)].items():
-                activities_sorted = sorted(
-                    pb["activities"],
-                    key=lambda x: x["scheduled_date"] or ""
-                )
-                plot_total = sum(a["total_area"] for a in activities_sorted)
-                plot_alloc = sum(a["allocated_area"] for a in activities_sorted)
+                activities_sorted = sorted(pb["activities"], key=lambda x: x["scheduled_date"] or "")
+                plot_total     = sum(a["total_area"]     for a in activities_sorted)
+                plot_alloc     = sum(a["allocated_area"] for a in activities_sorted)
                 plot_remaining = sum(a["remaining_area"] for a in activities_sorted)
                 plots_list.append({
-                    "plot_name": pb["plot_name"],
-                    "cluster_name": pb["cluster_name"],
-                    "total_area": plot_total,
+                    "plot_name":      pb["plot_name"],
+                    "cluster_name":   pb["cluster_name"],
+                    "total_area":     plot_total,
                     "allocated_area": plot_alloc,
                     "remaining_area": plot_remaining,
-                    "activities": activities_sorted,
+                    "activities":     activities_sorted,
                 })
 
             farmer_summary.append({
-                "farmer_id": f_id,
-                "farmer_name": f_name,
-                "total_area_scheduled": total_area_scheduled_f,
-                "total_area_allocated": total_area_alloc,
-                "total_farmer_amount": total_farmer_amount,
+                "farmer_id":             f_id,
+                "farmer_name":           f_name,
+                "total_area_scheduled":  total_area_scheduled_f,
+                "total_area_allocated":  total_area_alloc,
+                "total_farmer_amount":   total_farmer_amount,
                 "total_mukkadam_amount": total_mukkadam_amount,
-                "profit": pr,
-                "profit_per_acre": profit_per_acre_f,
-                "plots": plots_list,
+                "profit":                pr,
+                "profit_per_acre":       profit_per_acre_f,
+                "plots":                 plots_list,
                 "clusters": [
                     {
-                        "cluster_id": cid,
-                        "cluster_name": cluster_name_cache.get(cid, ""),
-                        "allocations": v["allocations"],
+                        "cluster_id":     cid,
+                        "cluster_name":   cluster_name_cache.get(cid, ""),
+                        "allocations":    v["allocations"],
                         "area_scheduled": v["area_scheduled"],
-                        "area_alloc": v["area_alloc"],
-                        "area_done": v["area_done"],
-                        "farmer_amount": v["farmer_amount"],
+                        "area_alloc":     v["area_alloc"],
+                        "area_done":      v["area_done"],
+                        "farmer_amount":  v["farmer_amount"],
                         "mukkadam_amount": v["mukkadam_amount"],
-                        "profit": v["farmer_amount"] - v["mukkadam_amount"],
+                        "profit":         v["farmer_amount"] - v["mukkadam_amount"],
                     }
                     for cid, v in clusters_map.items()
                 ],
             })
 
-        # ---- 8. Week summary ----
-        week_rows = []
+        # ── 11. Week summary ──────────────────────────────────────────────────
+        week_rows    = []
         alloc_by_week = (
             alloc_qs
             .annotate(week=TruncWeek('allocated_date'))
@@ -937,36 +1460,35 @@ class GlobalInsightsView(APIView):
         )
 
         for w in alloc_by_week:
-            fa = float(w['total_farmer_amount'] or 0)
+            fa = float(w['total_farmer_amount']   or 0)
             ma = float(w['total_mukkadam_amount'] or 0)
-            ta = float(w['total_area_allocated'] or 0)
+            ta = float(w['total_area_allocated']  or 0)
             pr = fa - ma
             week_rows.append({
-                "week_start": w['week'].isoformat(),
-                "allocations": w['alloc_count'] or 0,
+                "week_start":           w['week'].isoformat(),
+                "allocations":          w['alloc_count'] or 0,
                 "total_area_allocated": ta,
                 "total_area_completed": float(w['total_area_completed'] or 0),
-                "farmer_amount": fa,
-                "mukkadam_amount": ma,
-                "profit": pr,
-                "profit_per_acre": pr / ta if ta else 0,
+                "farmer_amount":        fa,
+                "mukkadam_amount":      ma,
+                "profit":               pr,
+                "profit_per_acre":      pr / ta if ta else 0,
             })
 
-        # ---- 9. Response ----
+        # ── 12. Response ──────────────────────────────────────────────────────
         data = {
             "date_range": {
                 "start": start_date.isoformat(),
-                "end": end_date.isoformat(),
+                "end":   end_date.isoformat(),
             },
-            "overall_summary": overall_summary,
-            "cluster_summary": cluster_rows,
-            "cluster_jobs": cluster_job_list,
+            "overall_summary":  overall_summary,
+            "cluster_summary":  cluster_rows,
+            "cluster_jobs":     cluster_job_list,
             "mukkadam_summary": mukkadam_summary,
-            "farmer_summary": farmer_summary,
-            "week_summary": week_rows,
+            "farmer_summary":   farmer_summary,
+            "week_summary":     week_rows,
         }
         return Response(data)
-# tender/insight.py
 
 from collections import defaultdict
 from datetime import datetime, date

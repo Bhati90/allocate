@@ -3006,7 +3006,6 @@ class ClusterViewSet(viewsets.ModelViewSet):
         cluster.save()
         return Response(ClusterSerializer(cluster).data)
 
-
 from decimal import Decimal, ROUND_HALF_UP
 
 from .notification import notify_mukkadam

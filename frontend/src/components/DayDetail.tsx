@@ -113,6 +113,10 @@ interface DayDetailModalProps {
    potentialJobs?: PotentialJob[];
   overloads: any[];    
   jobs: Job[];
+  onLeavesUpdated?: () => void;
+
+
+
   leaves: any[];
   filters?: CalendarFilters;  // ✅ ADD THIS
   allJobs?: Job[]; 
@@ -663,6 +667,7 @@ const DayDetailModal: React.FC<DayDetailModalProps> = ({
   allocations,
   mukkadams,
   overloads,
+  onLeavesUpdated,
   filters,
   allJobs,
   viewMode,
@@ -724,7 +729,7 @@ const handleMoveSubmit = async () => {
     }
     toast.success('Allocation moved successfully');
     setMoveModal(null);
-          window.location.reload();
+          onLeavesUpdated();
     setMoveForm({ date: '', area: '' });
     // onLeavesUpdated(); // refresh
   } catch {
@@ -780,7 +785,7 @@ const handleFarmerVerify = async (
         ? '✅ Verified! Allocation adjusted automatically.'
         : '⚠️ Dispute recorded.'
       );
-            window.location.reload();
+            onLeavesUpdated()
       // trigger parent refresh
       // if (onAllocationDelete) onAllocationDelete({ id: -1 } as any);
     } else {
@@ -893,7 +898,8 @@ const token = localStorage.getItem('auth_token');
       );
       setHalfDayDialog(null);
       setAllowsSecondJob(false);
-      window.location.reload();
+      onLeavesUpdated();
+      
     } else {
       toast.error(data.error || 'Allocation failed');
     }
@@ -1034,8 +1040,8 @@ const handleEditAllocation = async () => {
     toast.success('Allocation updated successfully!');
     setShowEditAllocationModal(false);
     setEditingAllocation(null);
-          window.location.reload();
-    // onLeavesUpdated(); // Refresh allocations
+         
+    onLeavesUpdated(); // Refresh allocations
   } catch (error) {
     toast.error('Failed to update allocation');
     console.error(error);

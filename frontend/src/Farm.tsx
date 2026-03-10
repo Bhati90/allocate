@@ -4909,4 +4909,3 @@ const varietyOptions = [
 };
 
 export default FarmScheduler;
-

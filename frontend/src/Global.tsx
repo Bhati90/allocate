@@ -7,6 +7,20 @@ import * as XLSX from 'xlsx';
 // Types
 // ─────────────────────────────────────────────
 
+type BookingCapacity = {
+  total_acres_needed: number;
+  total_crew_available: number;
+  total_acres_coverable: number;
+  coverage_rate: number;
+  by_date?: {
+    date: string;
+    acres_needed: number;
+    crew_available: number;
+    acres_coverable: number;
+    activity_count: number;
+  }[];
+};
+
 type GlobalSummary = {
   total_jobs: number;
   total_activities: number;
@@ -14,19 +28,6 @@ type GlobalSummary = {
   total_area_allocated: number;
   total_area_completed: number;
   total_allocated_workers: number;
-  total_revenue: number;          // sum of Job.total_activity_amount
-  total_amount_paid: number;      // advance_paid where status=PAID
-  total_outstanding: number;      // revenue - paid
-  collection_rate: number;        // % collected
-
-  // NEW — worker utilization
-  total_capacity_workers: number;
-  total_optimal_workers: number;
-  utilization_rate: number;         // allocated / capacity %
-  optimal_utilization_rate: number; // optimal needed / capacity %
-  staffing_ratio: number | null;    // >1 overstaffed, <1 understaffed
-  optimal_coverage_pct: number;    
-
   farmer_amount: number;
   mukkadam_amount: number;
   profit: number;
@@ -34,20 +35,25 @@ type GlobalSummary = {
   loss_allocations: number;
   dispute_count: number;
   avg_efficiency_score: number;
-};
-
-type ClusterSummaryRow = {
-  cluster_id: number;
-  cluster_name: string;
+  // revenue & payment
   total_revenue: number;
   total_amount_paid: number;
   total_outstanding: number;
   collection_rate: number;
+  // worker utilization
   total_capacity_workers: number;
   total_optimal_workers: number;
   utilization_rate: number;
   optimal_utilization_rate: number;
   staffing_ratio: number | null;
+  optimal_coverage_pct: number;
+  // booking capacity
+  booking_capacity: BookingCapacity;
+};
+
+type ClusterSummaryRow = {
+  cluster_id: number;
+  cluster_name: string;
   jobs: number;
   total_area_scheduled: number;
   total_area_allocated: number;
@@ -59,6 +65,18 @@ type ClusterSummaryRow = {
   allocated_workers: number;
   loss_allocations: number;
   dispute_count: number;
+  // new
+  total_revenue: number;
+  total_amount_paid: number;
+  total_outstanding: number;
+  collection_rate: number;
+  total_capacity_workers: number;
+  total_optimal_workers: number;
+  utilization_rate: number;
+  optimal_utilization_rate: number;
+  staffing_ratio: number | null;
+  // booking capacity
+  booking_capacity: BookingCapacity;
 };
 
 type WeekSummaryRow = {
@@ -119,7 +137,6 @@ type MukkadamSummaryRow = {
   profit_per_acre: number;
   clusters: MukkadamClusterRow[];
 };
-
 
 type FarmerPlotActivity = {
   activity_name: string;
@@ -280,10 +297,10 @@ function KpiCard({
   accent?: 'green' | 'red' | 'amber' | 'blue' | 'indigo' | 'violet';
 }) {
   const accents: Record<string, string> = {
-    green: 'bg-emerald-50 border-emerald-200 text-emerald-700',
-    red: 'bg-red-50 border-red-200 text-red-600',
-    amber: 'bg-amber-50 border-amber-200 text-amber-700',
-    blue: 'bg-blue-50 border-blue-200 text-blue-700',
+    green:  'bg-emerald-50 border-emerald-200 text-emerald-700',
+    red:    'bg-red-50 border-red-200 text-red-600',
+    amber:  'bg-amber-50 border-amber-200 text-amber-700',
+    blue:   'bg-blue-50 border-blue-200 text-blue-700',
     indigo: 'bg-indigo-50 border-indigo-200 text-indigo-700',
     violet: 'bg-violet-50 border-violet-200 text-violet-700',
   };
@@ -369,7 +386,7 @@ function useSort<T>(data: T[], defaultKey: string) {
 }
 
 // ─────────────────────────────────────────────
-// Calendar Day Tab — range-wide calendar with per-date stats + drill-in
+// Calendar Day Tab
 // ─────────────────────────────────────────────
 
 type DaySummaryCache = Record<string, DayApiResponse | null | 'loading' | 'empty'>;
@@ -393,7 +410,6 @@ function CalendarDayTab({
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [loadingDates, setLoadingDates] = useState<Set<string>>(new Set());
 
-  // Generate all dates in range
   const allDates: string[] = [];
   if (startDate && endDate) {
     const s = new Date(startDate);
@@ -403,25 +419,14 @@ function CalendarDayTab({
     }
   }
 
-  // Fetch all dates in range on mount / when range changes
   useEffect(() => {
     if (!allDates.length) return;
     const toFetch = allDates.filter(d => !(d in cache));
     if (!toFetch.length) return;
 
-    // Mark as loading
-    setLoadingDates(prev => {
-      const n = new Set(prev);
-      toFetch.forEach(d => n.add(d));
-      return n;
-    });
-    setCache(prev => {
-      const n = { ...prev };
-      toFetch.forEach(d => { n[d] = 'loading'; });
-      return n;
-    });
+    setLoadingDates(prev => { const n = new Set(prev); toFetch.forEach(d => n.add(d)); return n; });
+    setCache(prev => { const n = { ...prev }; toFetch.forEach(d => { n[d] = 'loading'; }); return n; });
 
-    // Fetch in batches of 5 to avoid hammering the API
     const batches: string[][] = [];
     for (let i = 0; i < toFetch.length; i += 5) batches.push(toFetch.slice(i, i + 5));
 
@@ -442,16 +447,13 @@ function CalendarDayTab({
       }));
     };
 
-    (async () => {
-      for (const batch of batches) await fetchBatch(batch);
-    })();
+    (async () => { for (const batch of batches) await fetchBatch(batch); })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startDate, endDate, clusterId]);
 
-  // Group dates by month → week rows
   const months: Record<string, string[]> = {};
   allDates.forEach(d => {
-    const key = d.slice(0, 7); // YYYY-MM
+    const key = d.slice(0, 7);
     if (!months[key]) months[key] = [];
     months[key].push(d);
   });
@@ -461,13 +463,8 @@ function CalendarDayTab({
     return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
   };
 
-  const dayLabel = (d: string) => {
-    const dt = new Date(d);
-    return { num: dt.getDate(), dow: dt.toLocaleDateString('en-IN', { weekday: 'short' }) };
-  };
-
   const totalLoading = loadingDates.size;
-  const totalDates = allDates.length;
+  const totalDates   = allDates.length;
 
   if (selectedDate) {
     const cached = cache[selectedDate];
@@ -506,7 +503,6 @@ function CalendarDayTab({
 
   return (
     <div>
-      {/* Loading progress bar */}
       {totalLoading > 0 && (
         <div className="mb-3">
           <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
@@ -522,7 +518,6 @@ function CalendarDayTab({
         </div>
       )}
 
-      {/* Legend + stat key */}
       <div className="flex flex-wrap gap-x-4 gap-y-1.5 mb-4 text-[11px] text-slate-500 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3">
         <span className="font-semibold text-slate-600 w-full">Each tile shows:</span>
         <span><span className="font-bold text-violet-600">Jobs ac</span> — total area of all scheduled jobs</span>
@@ -531,8 +526,8 @@ function CalendarDayTab({
         <span><span className="font-bold text-slate-600">Workers</span> — used / capacity</span>
         <span><span className="font-bold text-emerald-600">₹</span> — profit (k = thousands, L = lakhs)</span>
         <div className="w-full border-t border-slate-200 my-0.5" />
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-white border border-emerald-300 inline-block" /> Profitable day — click for detail</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-50 border border-amber-300 inline-block" /> Loss day — click for detail</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-white border border-emerald-300 inline-block" /> Profitable day</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-50 border border-amber-300 inline-block" /> Loss day</span>
         <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-50 border border-slate-200 inline-block opacity-40" /> No data</span>
       </div>
 
@@ -544,21 +539,12 @@ function CalendarDayTab({
               {fmtMonth(ym)}
               <span className="w-full h-px bg-slate-100 inline-block" />
             </div>
-
-            {/* Day-of-week header */}
             <div className="grid grid-cols-7 gap-1.5 mb-1">
               {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
                 <div key={d} className="text-[10px] text-center text-slate-400 font-semibold py-1">{d}</div>
               ))}
             </div>
-
-            {/* Calendar grid — pad start */}
-            <CalendarMonthGrid
-              dates={dates}
-              cache={cache}
-              loadingDates={loadingDates}
-              onSelect={setSelectedDate}
-            />
+            <CalendarMonthGrid dates={dates} cache={cache} loadingDates={loadingDates} onSelect={setSelectedDate} />
           </div>
         ))}
       </div>
@@ -574,21 +560,16 @@ function CalendarDayTab({
 }
 
 function CalendarMonthGrid({
-  dates,
-  cache,
-  loadingDates,
-  onSelect,
+  dates, cache, loadingDates, onSelect,
 }: {
   dates: string[];
   cache: DaySummaryCache;
   loadingDates: Set<string>;
   onSelect: (d: string) => void;
 }) {
-  // figure out padding: day of week of first date
-  const firstDow = new Date(dates[0]).getDay(); // 0=Sun
-  const padCells = Array(firstDow).fill(null);
-  const allCells = [...padCells, ...dates];
-  // fill to complete last row
+  const firstDow  = new Date(dates[0]).getDay();
+  const padCells  = Array(firstDow).fill(null);
+  const allCells  = [...padCells, ...dates];
   while (allCells.length % 7 !== 0) allCells.push(null);
 
   const rows: (string | null)[][] = [];
@@ -614,10 +595,7 @@ function CalendarMonthGrid({
 }
 
 function CalendarDayTile({
-  date,
-  cached,
-  isLoading,
-  onSelect,
+  date, cached, isLoading, onSelect,
 }: {
   date: string | null;
   cached: DayApiResponse | null | 'loading' | 'empty' | undefined;
@@ -626,15 +604,13 @@ function CalendarDayTile({
 }) {
   if (!date) return <div className="rounded-xl min-h-[7.5rem]" />;
 
-  const dayNum = new Date(date).getDate();
+  const dayNum  = new Date(date).getDate();
   const dowShort = new Date(date).toLocaleDateString('en-IN', { weekday: 'short' });
   const isToday = date === new Date().toISOString().slice(0, 10);
   const hasData = cached && cached !== 'loading' && cached !== 'empty';
-  const data = hasData ? (cached as DayApiResponse) : null;
-  const profit = data?.overall.profit ?? 0;
-  const isLoss = hasData && profit < 0;
-
-  // total job acres = total_area_scheduled (all jobs scheduled this day)
+  const data    = hasData ? (cached as DayApiResponse) : null;
+  const profit  = data?.overall.profit ?? 0;
+  const isLoss  = hasData && profit < 0;
   const totalJobAcres = data?.overall.total_area_scheduled ?? 0;
 
   let tileCls = 'border rounded-xl p-2 flex flex-col gap-0.5 transition-all min-h-[7.5rem] ';
@@ -647,7 +623,6 @@ function CalendarDayTile({
   } else {
     tileCls += 'bg-white border-emerald-200 hover:bg-emerald-50 hover:border-emerald-400 cursor-pointer hover:shadow-lg active:scale-95';
   }
-
   if (isToday) tileCls += ' ring-2 ring-blue-400 ring-offset-1';
 
   const shortNum = (n: number) =>
@@ -659,7 +634,6 @@ function CalendarDayTile({
 
   return (
     <div className={tileCls} onClick={() => hasData && onSelect(date)}>
-      {/* Date header */}
       <div className="flex items-center justify-between mb-0.5">
         <div className="flex items-center gap-1">
           <span className={`text-xs font-extrabold leading-none ${isToday ? 'text-blue-600' : 'text-slate-700'}`}>{dayNum}</span>
@@ -667,34 +641,27 @@ function CalendarDayTile({
         </div>
         <span className="text-[9px] text-slate-400 font-medium">{dowShort}</span>
       </div>
-
-      {/* Thin divider */}
       {hasData && <div className="h-px bg-slate-100 mb-0.5" />}
-
       {isLoading || cached === 'loading' ? (
         <div className="space-y-1.5 mt-1 flex-1">
-          <div className="h-2 bg-slate-200 rounded w-4/5" />
-          <div className="h-2 bg-slate-200 rounded w-3/5" />
-          <div className="h-2 bg-slate-200 rounded w-4/5" />
-          <div className="h-2 bg-slate-200 rounded w-2/5" />
-          <div className="h-2 bg-slate-200 rounded w-3/5" />
+          {[4, 3, 4, 2, 3].map((w, i) => (
+            <div key={i} className={`h-2 bg-slate-200 rounded w-${w}/5`} />
+          ))}
         </div>
       ) : hasData && data ? (
         <div className="flex-1 flex flex-col justify-between space-y-0.5">
-          {/* Row: label | value */}
           {[
-            { label: 'Jobs ac', value: `${totalJobAcres.toFixed(1)}`, color: 'text-violet-600', labelColor: 'text-violet-400' },
-            { label: 'Act', value: String(data.overall.total_activities), color: 'text-indigo-600', labelColor: 'text-indigo-400' },
-            { label: 'Alloc', value: `${data.overall.total_area_allocated.toFixed(1)}ac`, color: 'text-blue-600', labelColor: 'text-blue-400' },
+            { label: 'Jobs ac', value: `${totalJobAcres.toFixed(1)}`,                                              color: 'text-violet-600',  labelColor: 'text-violet-400' },
+            { label: 'Act',     value: String(data.overall.total_activities),                                       color: 'text-indigo-600',  labelColor: 'text-indigo-400' },
+            { label: 'Alloc',   value: `${data.overall.total_area_allocated.toFixed(1)}ac`,                        color: 'text-blue-600',    labelColor: 'text-blue-400' },
             { label: 'Workers', value: `${data.overall.total_allocated_workers}/${data.overall.total_available_capacity_workers}`, color: 'text-slate-600', labelColor: 'text-slate-400' },
-            { label: '₹', value: shortNum(profit), color: profit >= 0 ? 'text-emerald-600' : 'text-red-500', labelColor: profit >= 0 ? 'text-emerald-400' : 'text-red-300' },
+            { label: '₹',       value: shortNum(profit), color: profit >= 0 ? 'text-emerald-600' : 'text-red-500', labelColor: profit >= 0 ? 'text-emerald-400' : 'text-red-300' },
           ].map(({ label, value, color, labelColor }) => (
             <div key={label} className="flex items-center justify-between">
               <span className={`text-[9px] font-semibold ${labelColor}`}>{label}</span>
               <span className={`text-[10px] font-bold ${color} tabular-nums`}>{value}</span>
             </div>
           ))}
-          {/* Click hint */}
           <div className="text-[8px] text-slate-300 text-center mt-0.5">tap for detail</div>
         </div>
       ) : (
@@ -706,13 +673,8 @@ function CalendarDayTile({
   );
 }
 
-// Full day detail view (used when clicking a calendar tile)
 function DayDetailView({
-  data,
-  farmerFilter,
-  mukkadamFilter,
-  activityFilter,
-  clusterId,
+  data, farmerFilter, mukkadamFilter, activityFilter, clusterId,
 }: {
   data: DayApiResponse;
   farmerFilter: string;
@@ -737,17 +699,15 @@ function DayDetailView({
 
   return (
     <div className="space-y-3">
-      {/* Overall KPI strip */}
       <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
         <KpiCard label="Activities" value={String(o.total_activities)} accent="indigo" />
         <KpiCard label="Area Sched" value={`${fmt(o.total_area_scheduled)} ac`} />
         <KpiCard label="Area Alloc" value={`${fmt(o.total_area_allocated)} ac`} accent="blue" />
-        <KpiCard label="Remaining" value={`${fmt(o.total_area_remaining)} ac`} accent="amber" />
-        <KpiCard label="Workers" value={`${o.total_allocated_workers}/${o.total_available_capacity_workers}`} />
-        <KpiCard label="Profit" value={fmtINR(o.profit)} accent={o.profit >= 0 ? 'green' : 'red'} />
+        <KpiCard label="Remaining"  value={`${fmt(o.total_area_remaining)} ac`} accent="amber" />
+        <KpiCard label="Workers"    value={`${o.total_allocated_workers}/${o.total_available_capacity_workers}`} />
+        <KpiCard label="Profit"     value={fmtINR(o.profit)} accent={o.profit >= 0 ? 'green' : 'red'} />
       </div>
 
-      {/* Per-cluster accordions */}
       {Object.values(byCluster).map(({ cluster: c, jobs }) => (
         <div key={c.cluster_id} className="border border-slate-200 rounded-xl overflow-hidden">
           <button
@@ -756,39 +716,33 @@ function DayDetailView({
           >
             <div className="flex items-center gap-3">
               <span className="text-sm font-bold text-slate-700">{c.cluster_name}</span>
-              <span className="text-[11px] text-slate-500">
-                {c.activities} activities · {fmt(c.area_allocated)} ac alloc · {c.allocated_workers} workers
-              </span>
+              <span className="text-[11px] text-slate-500">{c.activities} activities · {fmt(c.area_allocated)} ac alloc · {c.allocated_workers} workers</span>
             </div>
             <div className="flex items-center gap-3">
               <span className={`text-sm font-bold ${profitColor(c.profit)}`}>{fmtINR(c.profit)}</span>
               <span className="text-slate-400 text-xs">{expandedCluster === c.cluster_id ? '▲' : '▼'}</span>
             </div>
           </button>
-
           {expandedCluster === c.cluster_id && (
             <div className="p-3 border-t border-slate-100">
               <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">
                 <KpiCard label="Sched Area" value={`${fmt(c.area_scheduled)} ac`} />
                 <KpiCard label="Alloc Area" value={`${fmt(c.area_allocated)} ac`} accent="blue" />
-                <KpiCard label="Remaining" value={`${fmt(c.area_remaining)} ac`} accent="amber" />
-                <KpiCard label="Workers" value={`${c.allocated_workers}/${c.available_capacity_workers}`} />
-                <KpiCard label="Profit" value={fmtINR(c.profit)} accent={c.profit >= 0 ? 'green' : 'red'} />
+                <KpiCard label="Remaining"  value={`${fmt(c.area_remaining)} ac`} accent="amber" />
+                <KpiCard label="Workers"    value={`${c.allocated_workers}/${c.available_capacity_workers}`} />
+                <KpiCard label="Profit"     value={fmtINR(c.profit)} accent={c.profit >= 0 ? 'green' : 'red'} />
               </div>
-
               <div className="overflow-x-auto rounded-lg border border-slate-200">
                 <table className="min-w-full text-[11px]">
                   <thead className="bg-slate-800 text-slate-200">
                     <tr>
-                      {['Booking', 'Farmer', 'Plot', 'Activity', 'Mukkadam', 'Total Area', 'Alloc Area', 'Remaining', 'Workers', 'Farmer ₹', 'Mukkadam ₹', 'Profit', 'Status'].map(h => (
+                      {['Booking','Farmer','Plot','Activity','Mukkadam','Total Area','Alloc Area','Remaining','Workers','Farmer ₹','Mukkadam ₹','Profit','Status'].map(h => (
                         <th key={h} className="px-2.5 py-2 text-left font-medium whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
-                    {jobs.length === 0 && (
-                      <tr><td colSpan={13} className="px-3 py-5 text-center text-slate-400">No jobs for this cluster.</td></tr>
-                    )}
+                    {jobs.length === 0 && <tr><td colSpan={13} className="px-3 py-5 text-center text-slate-400">No jobs for this cluster.</td></tr>}
                     {jobs.map((j, i) => (
                       <tr key={i} className="hover:bg-slate-50 transition-colors">
                         <td className="px-2.5 py-2 font-mono text-blue-600">{j.booking_id}</td>
@@ -804,9 +758,7 @@ function DayDetailView({
                         <td className="px-2.5 py-2 text-right text-slate-600">{fmtINR(j.mukkadam_price)}</td>
                         <td className={`px-2.5 py-2 text-right ${profitColor(j.profit)}`}>{fmtINR(j.profit)}</td>
                         <td className="px-2.5 py-2">
-                          <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-medium ${statusBadge(j.allocation_status)}`}>
-                            {j.allocation_status}
-                          </span>
+                          <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-medium ${statusBadge(j.allocation_status)}`}>{j.allocation_status}</span>
                         </td>
                       </tr>
                     ))}
@@ -826,11 +778,7 @@ function DayDetailView({
 // ─────────────────────────────────────────────
 
 function DayPanel({
-  date,
-  clusterId,
-  farmerFilter,
-  mukkadamFilter,
-  activityFilter,
+  date, clusterId, farmerFilter, mukkadamFilter, activityFilter,
 }: {
   date: string;
   clusterId: number | null;
@@ -838,124 +786,81 @@ function DayPanel({
   mukkadamFilter: string;
   activityFilter: string;
 }) {
-  const [data, setData] = useState<DayApiResponse | null>(null);
+  const [data, setData]       = useState<DayApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]     = useState<string | null>(null);
   const [expandedCluster, setExpandedCluster] = useState<number | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     const params: Record<string, string> = { date };
     if (clusterId) params.cluster_id = String(clusterId);
-    axios
-      .get(`${API_BASE_URL}/api/tender-global-day-insights/`, { params })
+    axios.get(`${API_BASE_URL}/api/tender-global-day-insights/`, { params })
       .then(r => setData(r.data))
       .catch(e => setError(e.message || 'Failed'))
       .finally(() => setLoading(false));
   }, [date, clusterId]);
 
-  if (loading)
-    return (
-      <div className="flex items-center justify-center h-32 text-slate-400 text-sm">
-        <span className="animate-pulse">Loading day data…</span>
-      </div>
-    );
-  if (error || !data)
-    return <div className="text-red-500 text-sm p-4">{error || 'Error'}</div>;
+  if (loading) return <div className="flex items-center justify-center h-32 text-slate-400 text-sm"><span className="animate-pulse">Loading day data…</span></div>;
+  if (error || !data) return <div className="text-red-500 text-sm p-4">{error || 'Error'}</div>;
 
   const o = data.overall;
-
   const filteredJobs = data.jobs.filter(j => {
     if (clusterId && j.cluster_id !== clusterId) return false;
-    if (farmerFilter && !j.farmer_name.toLowerCase().includes(farmerFilter.toLowerCase()))
-      return false;
-    if (mukkadamFilter && !(j.mukkadam_name || '').toLowerCase().includes(mukkadamFilter.toLowerCase()))
-      return false;
-    if (activityFilter && !j.activity_name.toLowerCase().includes(activityFilter.toLowerCase()))
-      return false;
+    if (farmerFilter && !j.farmer_name.toLowerCase().includes(farmerFilter.toLowerCase())) return false;
+    if (mukkadamFilter && !(j.mukkadam_name || '').toLowerCase().includes(mukkadamFilter.toLowerCase())) return false;
+    if (activityFilter && !j.activity_name.toLowerCase().includes(activityFilter.toLowerCase())) return false;
     return true;
   });
 
-  // group by cluster
   const byCluster: Record<number, { cluster: DayClusterRow; jobs: DayJobRow[] }> = {};
-  data.clusters.forEach(c => {
-    byCluster[c.cluster_id] = { cluster: c, jobs: [] };
-  });
-  filteredJobs.forEach(j => {
-    if (!byCluster[j.cluster_id]) return;
-    byCluster[j.cluster_id].jobs.push(j);
-  });
+  data.clusters.forEach(c => { byCluster[c.cluster_id] = { cluster: c, jobs: [] }; });
+  filteredJobs.forEach(j => { if (!byCluster[j.cluster_id]) return; byCluster[j.cluster_id].jobs.push(j); });
 
   return (
     <div className="space-y-3">
-      {/* Overall pills */}
       <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
         <KpiCard label="Activities" value={String(o.total_activities)} accent="indigo" />
         <KpiCard label="Area Sched" value={`${fmt(o.total_area_scheduled)} ac`} />
         <KpiCard label="Area Alloc" value={`${fmt(o.total_area_allocated)} ac`} accent="blue" />
-        <KpiCard label="Remaining" value={`${fmt(o.total_area_remaining)} ac`} accent="amber" />
-        <KpiCard
-          label="Workers"
-          value={`${o.total_allocated_workers}/${o.total_available_capacity_workers}`}
-        />
-        <KpiCard
-          label="Profit"
-          value={fmtINR(o.profit)}
-          accent={o.profit >= 0 ? 'green' : 'red'}
-        />
+        <KpiCard label="Remaining"  value={`${fmt(o.total_area_remaining)} ac`} accent="amber" />
+        <KpiCard label="Workers"    value={`${o.total_allocated_workers}/${o.total_available_capacity_workers}`} />
+        <KpiCard label="Profit"     value={fmtINR(o.profit)} accent={o.profit >= 0 ? 'green' : 'red'} />
       </div>
-
-      {/* Per-cluster accordion */}
       {Object.values(byCluster).map(({ cluster: c, jobs }) => (
         <div key={c.cluster_id} className="border border-slate-200 rounded-xl overflow-hidden">
           <button
             className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
-            onClick={() =>
-              setExpandedCluster(prev => (prev === c.cluster_id ? null : c.cluster_id))
-            }
+            onClick={() => setExpandedCluster(prev => prev === c.cluster_id ? null : c.cluster_id)}
           >
             <div className="flex items-center gap-3">
               <span className="text-sm font-bold text-slate-700">{c.cluster_name}</span>
-              <span className="text-[11px] text-slate-500">
-                {c.activities} activities · {fmt(c.area_allocated)} ac alloc · {c.allocated_workers} workers
-              </span>
+              <span className="text-[11px] text-slate-500">{c.activities} activities · {fmt(c.area_allocated)} ac alloc · {c.allocated_workers} workers</span>
             </div>
             <div className="flex items-center gap-3">
               <span className={`text-sm ${profitColor(c.profit)}`}>{fmtINR(c.profit)}</span>
               <span className="text-slate-400 text-xs">{expandedCluster === c.cluster_id ? '▲' : '▼'}</span>
             </div>
           </button>
-
           {expandedCluster === c.cluster_id && (
             <div className="p-3 overflow-x-auto">
-              {/* Cluster day stats */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">
                 <KpiCard label="Sched Area" value={`${fmt(c.area_scheduled)} ac`} />
                 <KpiCard label="Alloc Area" value={`${fmt(c.area_allocated)} ac`} accent="blue" />
-                <KpiCard label="Remaining" value={`${fmt(c.area_remaining)} ac`} accent="amber" />
-                <KpiCard label="Workers" value={`${c.allocated_workers}/${c.available_capacity_workers}`} />
-                <KpiCard
-                  label="Profit"
-                  value={fmtINR(c.profit)}
-                  accent={c.profit >= 0 ? 'green' : 'red'}
-                />
+                <KpiCard label="Remaining"  value={`${fmt(c.area_remaining)} ac`} accent="amber" />
+                <KpiCard label="Workers"    value={`${c.allocated_workers}/${c.available_capacity_workers}`} />
+                <KpiCard label="Profit"     value={fmtINR(c.profit)} accent={c.profit >= 0 ? 'green' : 'red'} />
               </div>
-
               <table className="min-w-full text-[11px] rounded-lg overflow-hidden">
                 <thead className="bg-slate-800 text-slate-200">
                   <tr>
-                    {['Booking', 'Farmer', 'Plot', 'Activity', 'Mukkadam', 'Total Area', 'Alloc Area', 'Remaining', 'Workers', 'Farmer ₹', 'Mukkadam ₹', 'Profit', 'Status'].map(h => (
+                    {['Booking','Farmer','Plot','Activity','Mukkadam','Total Area','Alloc Area','Remaining','Workers','Farmer ₹','Mukkadam ₹','Profit','Status'].map(h => (
                       <th key={h} className="px-2.5 py-2 text-left font-medium whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {jobs.length === 0 && (
-                    <tr>
-                      <td colSpan={13} className="px-3 py-5 text-center text-slate-400">No jobs for this cluster on this day.</td>
-                    </tr>
-                  )}
+                  {jobs.length === 0 && <tr><td colSpan={13} className="px-3 py-5 text-center text-slate-400">No jobs for this cluster on this day.</td></tr>}
                   {jobs.map((j, i) => (
                     <tr key={i} className="hover:bg-slate-50 transition-colors">
                       <td className="px-2.5 py-2 font-mono text-blue-600">{j.booking_id}</td>
@@ -971,9 +876,7 @@ function DayPanel({
                       <td className="px-2.5 py-2 text-right text-slate-600">{fmtINR(j.mukkadam_price)}</td>
                       <td className={`px-2.5 py-2 text-right ${profitColor(j.profit)}`}>{fmtINR(j.profit)}</td>
                       <td className="px-2.5 py-2">
-                        <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-medium ${statusBadge(j.allocation_status)}`}>
-                          {j.allocation_status}
-                        </span>
+                        <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-medium ${statusBadge(j.allocation_status)}`}>{j.allocation_status}</span>
                       </td>
                     </tr>
                   ))}
@@ -992,10 +895,7 @@ function DayPanel({
 // ─────────────────────────────────────────────
 
 function ClusterJobsTab({
-  clusterJobs,
-  selectedClusterId,
-  farmerFilter,
-  activityFilter,
+  clusterJobs, selectedClusterId, farmerFilter, activityFilter,
 }: {
   clusterJobs: ClusterJobsBlock[];
   selectedClusterId: number | null;
@@ -1005,11 +905,7 @@ function ClusterJobsTab({
   const [expandedClusters, setExpandedClusters] = useState<Set<number>>(new Set());
 
   const toggle = (id: number) => {
-    setExpandedClusters(prev => {
-      const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
+    setExpandedClusters(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   };
 
   const blocks = clusterJobs.filter(b => !selectedClusterId || b.cluster_id === selectedClusterId);
@@ -1022,10 +918,10 @@ function ClusterJobsTab({
           if (activityFilter && !j.activity_name.toLowerCase().includes(activityFilter.toLowerCase())) return false;
           return true;
         });
-        const isOpen = expandedClusters.has(block.cluster_id);
+        const isOpen    = expandedClusters.has(block.cluster_id);
         const totalArea = filtered.reduce((s, j) => s + j.total_area, 0);
         const allocArea = filtered.reduce((s, j) => s + j.allocated_area, 0);
-        const workers = filtered.reduce((s, j) => s + j.allocated_workers, 0);
+        const workers   = filtered.reduce((s, j) => s + j.allocated_workers, 0);
 
         return (
           <div key={block.cluster_id} className="border border-slate-200 rounded-xl overflow-hidden">
@@ -1043,13 +939,12 @@ function ClusterJobsTab({
                 <span>{isOpen ? '▲' : '▼'}</span>
               </div>
             </button>
-
             {isOpen && (
               <div className="overflow-x-auto border-t border-slate-100">
                 <table className="min-w-full text-[11px]">
                   <thead className="bg-slate-800 text-slate-200">
                     <tr>
-                      {['Job ID', 'Farmer', 'Plot', 'Activity', 'Sched Date', 'Total Area', 'Alloc Area', 'Remaining', 'Est Workers', 'Alloc Workers', 'Alloc Count', 'Status'].map(h => (
+                      {['Job ID','Farmer','Plot','Activity','Sched Date','Total Area','Alloc Area','Remaining','Est Workers','Alloc Workers','Alloc Count','Status'].map(h => (
                         <th key={h} className="px-2.5 py-2 text-left font-medium whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -1069,17 +964,11 @@ function ClusterJobsTab({
                         <td className="px-2.5 py-2 text-right">{j.allocated_workers}</td>
                         <td className="px-2.5 py-2 text-right">{j.allocations_count}</td>
                         <td className="px-2.5 py-2">
-                          <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-medium ${statusBadge(j.allocation_status)}`}>
-                            {j.allocation_status}
-                          </span>
+                          <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-medium ${statusBadge(j.allocation_status)}`}>{j.allocation_status}</span>
                         </td>
                       </tr>
                     ))}
-                    {filtered.length === 0 && (
-                      <tr>
-                        <td colSpan={12} className="py-5 text-center text-slate-400">No jobs match filters.</td>
-                      </tr>
-                    )}
+                    {filtered.length === 0 && <tr><td colSpan={12} className="py-5 text-center text-slate-400">No jobs match filters.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -1096,42 +985,33 @@ function ClusterJobsTab({
 // ─────────────────────────────────────────────
 
 function MukkadamsTab({
-  data,
-  mukkadamFilter,
-  selectedClusterId,
+  data, mukkadamFilter, selectedClusterId,
 }: {
   data: MukkadamSummaryRow[];
   mukkadamFilter: string;
   selectedClusterId: number | null;
 }) {
   const [expanded, setExpanded] = useState<Set<string | number>>(new Set());
-  const [selectedWeekDay, setSelectedWeekDay] = useState<Record<string | number, string>>({});
 
   const toggle = (id: string | number) => {
-    setExpanded(prev => {
-      const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
-      return n;
-    });
+    setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   };
 
   const filtered = data.filter(m =>
     !mukkadamFilter || m.mukkadam_name.toLowerCase().includes(mukkadamFilter.toLowerCase()),
   );
-  // MukkadamsTab — after the existing `filtered` array, add:
-const visible = filtered.filter(m => {
-  const clusters = selectedClusterId
-    ? m.clusters.filter(c => c.cluster_id === selectedClusterId)
-    : m.clusters;
-  return clusters.length > 0;  // ✅ hide if no clusters match the filter
-});
 
-
+  const visible = filtered.filter(m => {
+    const clusters = selectedClusterId
+      ? m.clusters.filter(c => c.cluster_id === selectedClusterId)
+      : m.clusters;
+    return clusters.length > 0;
+  });
 
   return (
     <div className="space-y-2">
       {visible.map(m => {
-        const isOpen = expanded.has(m.mukkadam_id);
+        const isOpen   = expanded.has(m.mukkadam_id);
         const clusters = selectedClusterId
           ? m.clusters.filter(c => c.cluster_id === selectedClusterId)
           : m.clusters;
@@ -1159,25 +1039,21 @@ const visible = filtered.filter(m => {
                 <span className="text-slate-400 text-xs">{isOpen ? '▲' : '▼'}</span>
               </div>
             </button>
-
             {isOpen && (
               <div className="border-t border-slate-100 p-4 space-y-4 bg-slate-50/50">
-                {/* Summary KPIs */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                  <KpiCard label="Area Alloc" value={`${fmt(m.total_area_allocated)} ac`} accent="indigo" />
-                  <KpiCard label="Farmer Paid" value={fmtINR(m.total_farmer_amount)} />
+                  <KpiCard label="Area Alloc"    value={`${fmt(m.total_area_allocated)} ac`} accent="indigo" />
+                  <KpiCard label="Farmer Paid"   value={fmtINR(m.total_farmer_amount)} />
                   <KpiCard label="Mukkadam Paid" value={fmtINR(m.total_mukkadam_amount)} accent="amber" />
-                  <KpiCard label="Profit" value={fmtINR(m.profit)} accent={m.profit >= 0 ? 'green' : 'red'} sub={`${fmtINR(m.profit_per_acre)}/ac`} />
+                  <KpiCard label="Profit"        value={fmtINR(m.profit)} accent={m.profit >= 0 ? 'green' : 'red'} sub={`${fmtINR(m.profit_per_acre)}/ac`} />
                 </div>
-
-                {/* Cluster breakdown table */}
                 <div>
                   <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Cluster-wise Breakdown</p>
                   <div className="overflow-x-auto rounded-lg border border-slate-200">
                     <table className="min-w-full text-[11px]">
                       <thead className="bg-slate-800 text-slate-200">
                         <tr>
-                          {['Cluster', 'Allocations', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit'].map(h => (
+                          {['Cluster','Allocations','Area Alloc','Area Done','Farmer ₹','Mukkadam ₹','Profit'].map(h => (
                             <th key={h} className="px-3 py-2 text-left font-medium">{h}</th>
                           ))}
                         </tr>
@@ -1203,13 +1079,9 @@ const visible = filtered.filter(m => {
           </div>
         );
       })}
-      {filtered.length === 0 && (
+      {visible.length === 0 && (
         <div className="text-center py-12 text-slate-400 text-sm">No mukkadams found.</div>
       )}
-
-{visible.length === 0 && (
-  <div className="text-center py-12 text-slate-400 text-sm">No mukkadams found.</div>
-)}
     </div>
   );
 }
@@ -1219,44 +1091,36 @@ const visible = filtered.filter(m => {
 // ─────────────────────────────────────────────
 
 function FarmersTab({
-  data,
-  farmerFilter,
-  selectedClusterId,
+  data, farmerFilter, selectedClusterId,
 }: {
   data: FarmerSummaryRow[];
   farmerFilter: string;
   selectedClusterId: number | null;
 }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded]           = useState<Set<string>>(new Set());
   const [expandedPlots, setExpandedPlots] = useState<Set<string>>(new Set());
-  const [plotView, setPlotView] = useState<Record<string, 'plots' | 'clusters'>>({});
+  const [plotView, setPlotView]           = useState<Record<string, 'plots' | 'clusters'>>({});
 
-  const toggle = (id: string) => {
-    setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  };
-  const togglePlot = (key: string) => {
-    setExpandedPlots(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
-  };
+  const toggle     = (id: string)  => { setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
+  const togglePlot = (key: string) => { setExpandedPlots(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; }); };
 
   const filtered = data.filter(f =>
     !farmerFilter || f.farmer_name.toLowerCase().includes(farmerFilter.toLowerCase()),
   );
 
   const visible = filtered.filter(f => {
-  const clusters = selectedClusterId
-    ? f.clusters.filter(c => c.cluster_id === selectedClusterId)
-    : f.clusters;
-  return clusters.length > 0;  // ✅ hide if no clusters match
-});
+    const clusters = selectedClusterId
+      ? f.clusters.filter(c => c.cluster_id === selectedClusterId)
+      : f.clusters;
+    return clusters.length > 0;
+  });
 
   return (
     <div className="space-y-2">
       {visible.map(f => {
-        const isOpen = expanded.has(f.farmer_id);
-        const view = plotView[f.farmer_id] ?? 'plots';
-        const clusters = selectedClusterId
-          ? f.clusters.filter(c => c.cluster_id === selectedClusterId)
-          : f.clusters;
+        const isOpen      = expanded.has(f.farmer_id);
+        const view        = plotView[f.farmer_id] ?? 'plots';
+        const clusters    = selectedClusterId ? f.clusters.filter(c => c.cluster_id === selectedClusterId) : f.clusters;
         const unallocAcres = (f.total_area_scheduled ?? 0) - f.total_area_allocated;
 
         return (
@@ -1277,10 +1141,7 @@ function FarmersTab({
                     <span className="text-violet-600 font-bold">{fmt(f.total_area_scheduled ?? 0)} ac total</span>
                     <span className="text-slate-300">·</span>
                     <span className="text-blue-600 font-semibold">{fmt(f.total_area_allocated)} ac alloc</span>
-                    {unallocAcres > 0.05 && (
-                      <><span className="text-slate-300">·</span>
-                      <span className="text-amber-600 font-semibold">{fmt(unallocAcres)} ac pending</span></>
-                    )}
+                    {unallocAcres > 0.05 && (<><span className="text-slate-300">·</span><span className="text-amber-600 font-semibold">{fmt(unallocAcres)} ac pending</span></>)}
                   </div>
                 </div>
               </div>
@@ -1296,11 +1157,11 @@ function FarmersTab({
             {isOpen && (
               <div className="border-t border-slate-100 p-4 space-y-4 bg-slate-50/50">
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                  <KpiCard label="Total Acres" value={`${fmt(f.total_area_scheduled ?? 0)} ac`} accent="violet" />
-                  <KpiCard label="Area Alloc" value={`${fmt(f.total_area_allocated)} ac`} accent="blue" />
-                  <KpiCard label="Farmer Paid" value={fmtINR(f.total_farmer_amount)} />
+                  <KpiCard label="Total Acres"   value={`${fmt(f.total_area_scheduled ?? 0)} ac`} accent="violet" />
+                  <KpiCard label="Area Alloc"    value={`${fmt(f.total_area_allocated)} ac`} accent="blue" />
+                  <KpiCard label="Farmer Paid"   value={fmtINR(f.total_farmer_amount)} />
                   <KpiCard label="Mukkadam Paid" value={fmtINR(f.total_mukkadam_amount)} accent="amber" />
-                  <KpiCard label="Profit" value={fmtINR(f.profit)} accent={f.profit >= 0 ? 'green' : 'red'} sub={`${fmtINR(f.profit_per_acre)}/ac`} />
+                  <KpiCard label="Profit"        value={fmtINR(f.profit)} accent={f.profit >= 0 ? 'green' : 'red'} sub={`${fmtINR(f.profit_per_acre)}/ac`} />
                 </div>
 
                 <div className="flex gap-1 bg-slate-100 rounded-lg p-1 w-fit">
@@ -1319,13 +1180,13 @@ function FarmersTab({
                   <div>
                     <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Plot-wise Breakdown</p>
                     {(!f.plots || f.plots.length === 0) ? (
-                      <p className="text-xs text-slate-400 py-3 text-center">No plot data — apply backend PATCH 3</p>
+                      <p className="text-xs text-slate-400 py-3 text-center">No plot data available.</p>
                     ) : (
                       <div className="space-y-2">
                         {f.plots.map((plot, pi) => {
-                          const plotKey = `${f.farmer_id}-plot-${pi}`;
+                          const plotKey    = `${f.farmer_id}-plot-${pi}`;
                           const isPlotOpen = expandedPlots.has(plotKey);
-                          const unalloc = plot.total_area - plot.allocated_area;
+                          const unalloc    = plot.total_area - plot.allocated_area;
                           return (
                             <div key={pi} className="border border-slate-200 rounded-lg overflow-hidden bg-white">
                               <button
@@ -1398,7 +1259,7 @@ function FarmersTab({
                       <table className="min-w-full text-[11px]">
                         <thead className="bg-slate-800 text-slate-200">
                           <tr>
-                            {['Cluster', 'Allocations', 'Total Acres', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit'].map(h => (
+                            {['Cluster','Allocations','Total Acres','Area Alloc','Area Done','Farmer ₹','Mukkadam ₹','Profit'].map(h => (
                               <th key={h} className="px-3 py-2 text-left font-medium">{h}</th>
                             ))}
                           </tr>
@@ -1426,27 +1287,19 @@ function FarmersTab({
           </div>
         );
       })}
-      {filtered.length === 0 && (
+      {visible.length === 0 && (
         <div className="text-center py-12 text-slate-400 text-sm">No farmers found.</div>
       )}
-
-      {visible.length === 0 && (
-  <div className="text-center py-12 text-slate-400 text-sm">No farmers found.</div>
-)}
     </div>
   );
 }
 
 // ─────────────────────────────────────────────
-// Weeks Tab with click-to-day-drill-down
+// Weeks Tab
 // ─────────────────────────────────────────────
 
 function WeeksTab({
-  weeks,
-  selectedClusterId,
-  farmerFilter,
-  mukkadamFilter,
-  activityFilter,
+  weeks, selectedClusterId, farmerFilter, mukkadamFilter, activityFilter,
 }: {
   weeks: WeekSummaryRow[];
   selectedClusterId: number | null;
@@ -1456,13 +1309,11 @@ function WeeksTab({
 }) {
   const [expandedWeek, setExpandedWeek] = useState<string | null>(null);
 
-  // Generate 7 days for a given week_start
   const weekDays = (weekStart: string) => {
     const days = [];
     const d = new Date(weekStart);
     for (let i = 0; i < 7; i++) {
-      const n = new Date(d);
-      n.setDate(d.getDate() + i);
+      const n = new Date(d); n.setDate(d.getDate() + i);
       days.push(n.toISOString().slice(0, 10));
     }
     return days;
@@ -1472,23 +1323,18 @@ function WeeksTab({
     <div className="space-y-2">
       {weeks.map(w => {
         const isOpen = expandedWeek === w.week_start;
-        const days = weekDays(w.week_start);
-
+        const days   = weekDays(w.week_start);
         return (
           <div key={w.week_start} className="border border-slate-200 rounded-xl overflow-hidden">
             <button
               className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-slate-50 transition-colors"
-              onClick={() => setExpandedWeek(prev => (prev === w.week_start ? null : w.week_start))}
+              onClick={() => setExpandedWeek(prev => prev === w.week_start ? null : w.week_start)}
             >
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
-                  W
-                </div>
+                <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs font-bold">W</div>
                 <div className="text-left">
                   <div className="text-sm font-bold text-slate-800">Week of {w.week_start}</div>
-                  <div className="text-[11px] text-slate-400">
-                    {w.allocations} allocations · {fmt(w.total_area_allocated)} ac alloc · {fmt(w.total_area_completed)} ac done
-                  </div>
+                  <div className="text-[11px] text-slate-400">{w.allocations} allocations · {fmt(w.total_area_allocated)} ac alloc · {fmt(w.total_area_completed)} ac done</div>
                 </div>
               </div>
               <div className="flex items-center gap-4">
@@ -1499,30 +1345,19 @@ function WeeksTab({
                 <span className="text-slate-400 text-xs">{isOpen ? '▲' : '▼'}</span>
               </div>
             </button>
-
             {isOpen && (
               <div className="border-t border-slate-100 p-4 bg-slate-50/50 space-y-4">
-                {/* Week KPIs */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   <KpiCard label="Allocations" value={String(w.allocations)} accent="indigo" />
-                  <KpiCard label="Area Alloc" value={`${fmt(w.total_area_allocated)} ac`} accent="blue" />
-                  <KpiCard label="Area Done" value={`${fmt(w.total_area_completed)} ac`} accent="green" />
-                  <KpiCard label="Profit" value={fmtINR(w.profit)} accent={w.profit >= 0 ? 'green' : 'red'} sub={`${fmtINR(w.profit_per_acre)}/ac`} />
+                  <KpiCard label="Area Alloc"  value={`${fmt(w.total_area_allocated)} ac`} accent="blue" />
+                  <KpiCard label="Area Done"   value={`${fmt(w.total_area_completed)} ac`} accent="green" />
+                  <KpiCard label="Profit"      value={fmtINR(w.profit)} accent={w.profit >= 0 ? 'green' : 'red'} sub={`${fmtINR(w.profit_per_acre)}/ac`} />
                 </div>
-
-                {/* Day-by-day */}
                 <div>
                   <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-2">Day-by-Day Detail</p>
                   <div className="space-y-2">
                     {days.map(day => (
-                      <DayAccordionRow
-                        key={day}
-                        date={day}
-                        clusterId={selectedClusterId}
-                        farmerFilter={farmerFilter}
-                        mukkadamFilter={mukkadamFilter}
-                        activityFilter={activityFilter}
-                      />
+                      <DayAccordionRow key={day} date={day} clusterId={selectedClusterId} farmerFilter={farmerFilter} mukkadamFilter={mukkadamFilter} activityFilter={activityFilter} />
                     ))}
                   </div>
                 </div>
@@ -1535,13 +1370,8 @@ function WeeksTab({
   );
 }
 
-// Lazy-loaded day row within weeks
 function DayAccordionRow({
-  date,
-  clusterId,
-  farmerFilter,
-  mukkadamFilter,
-  activityFilter,
+  date, clusterId, farmerFilter, mukkadamFilter, activityFilter,
 }: {
   date: string;
   clusterId: number | null;
@@ -1563,13 +1393,7 @@ function DayAccordionRow({
       </button>
       {open && (
         <div className="border-t border-slate-100 p-3">
-          <DayPanel
-            date={date}
-            clusterId={clusterId}
-            farmerFilter={farmerFilter}
-            mukkadamFilter={mukkadamFilter}
-            activityFilter={activityFilter}
-          />
+          <DayPanel date={date} clusterId={clusterId} farmerFilter={farmerFilter} mukkadamFilter={mukkadamFilter} activityFilter={activityFilter} />
         </div>
       )}
     </div>
@@ -1581,9 +1405,7 @@ function DayAccordionRow({
 // ─────────────────────────────────────────────
 
 function ClustersTab({
-  clusters,
-  selectedClusterId,
-  onSelectCluster,
+  clusters, selectedClusterId, onSelectCluster,
 }: {
   clusters: ClusterSummaryRow[];
   selectedClusterId: number | null;
@@ -1596,18 +1418,24 @@ function ClustersTab({
       <table className="min-w-full text-xs">
         <thead className="bg-slate-800 text-slate-200">
           <tr>
-            <Th label="Cluster" sortKey="cluster_name" currentSort={sort} onSort={toggle} />
-            <Th label="Jobs" sortKey="jobs" right currentSort={sort} onSort={toggle} />
-            <Th label="Total Acres" sortKey="total_area_scheduled" right currentSort={sort} onSort={toggle} />
-            <Th label="Area Alloc" sortKey="total_area_allocated" right currentSort={sort} onSort={toggle} />
-            {/* <Th label="Area Done" sortKey="total_area_completed" right currentSort={sort} onSort={toggle} /> */}
-            <Th label="Workers" sortKey="allocated_workers" right currentSort={sort} onSort={toggle} />
-            <Th label="Farmer ₹" sortKey="farmer_amount" right currentSort={sort} onSort={toggle} />
-            <Th label="Mukkadam ₹" sortKey="mukkadam_amount" right currentSort={sort} onSort={toggle} />
-            <Th label="Profit" sortKey="profit" right currentSort={sort} onSort={toggle} />
-            <Th label="₹/ac" sortKey="profit_per_acre" right currentSort={sort} onSort={toggle} />
-            <Th label="Loss Alloc" sortKey="loss_allocations" right currentSort={sort} onSort={toggle} />
-            {/* <Th label="Disputes" sortKey="dispute_count" right currentSort={sort} onSort={toggle} /> */}
+            <Th label="Cluster"      sortKey="cluster_name"          currentSort={sort} onSort={toggle} />
+            <Th label="Jobs"         sortKey="jobs"                  right currentSort={sort} onSort={toggle} />
+            <Th label="Total Acres"  sortKey="total_area_scheduled"  right currentSort={sort} onSort={toggle} />
+            <Th label="Area Alloc"   sortKey="total_area_allocated"  right currentSort={sort} onSort={toggle} />
+            <Th label="Workers"      sortKey="allocated_workers"     right currentSort={sort} onSort={toggle} />
+            <Th label="Farmer ₹"    sortKey="farmer_amount"         right currentSort={sort} onSort={toggle} />
+            <Th label="Mukkadam ₹"  sortKey="mukkadam_amount"       right currentSort={sort} onSort={toggle} />
+            <Th label="Profit"       sortKey="profit"                right currentSort={sort} onSort={toggle} />
+            <Th label="₹/ac"         sortKey="profit_per_acre"       right currentSort={sort} onSort={toggle} />
+            <Th label="Loss Alloc"   sortKey="loss_allocations"      right currentSort={sort} onSort={toggle} />
+            <Th label="Revenue"      sortKey="total_revenue"         right currentSort={sort} onSort={toggle} />
+            <Th label="Collected"    sortKey="total_amount_paid"     right currentSort={sort} onSort={toggle} />
+            <Th label="Outstanding"  sortKey="total_outstanding"     right currentSort={sort} onSort={toggle} />
+            <Th label="Util %"       sortKey="utilization_rate"      right currentSort={sort} onSort={toggle} />
+            <Th label="Optimal %"    sortKey="optimal_utilization_rate" right currentSort={sort} onSort={toggle} />
+            <Th label="Acres Needed" sortKey="booking_capacity.total_acres_needed" right currentSort={sort} onSort={toggle} />
+            <Th label="Coverable"    sortKey="booking_capacity.total_acres_coverable" right currentSort={sort} onSort={toggle} />
+            <Th label="Bk Cover%"   sortKey="booking_capacity.coverage_rate" right currentSort={sort} onSort={toggle} />
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -1621,14 +1449,44 @@ function ClustersTab({
               <td className="px-3 py-2.5 text-right">{c.jobs}</td>
               <td className="px-3 py-2.5 text-right font-bold text-violet-600">{fmt(c.total_area_scheduled ?? 0)} ac</td>
               <td className="px-3 py-2.5 text-right text-blue-600 font-medium">{fmt(c.total_area_allocated)} ac</td>
-              <td className="px-3 py-2.5 text-right text-emerald-600 font-medium">{fmt(c.total_area_completed)} ac</td>
               <td className="px-3 py-2.5 text-right">{c.allocated_workers}</td>
               <td className="px-3 py-2.5 text-right">{fmtINR(c.farmer_amount)}</td>
               <td className="px-3 py-2.5 text-right">{fmtINR(c.mukkadam_amount)}</td>
               <td className={`px-3 py-2.5 text-right ${profitColor(c.profit)}`}>{fmtINR(c.profit)}</td>
               <td className={`px-3 py-2.5 text-right ${profitColor(c.profit_per_acre)}`}>{fmtINR(c.profit_per_acre)}</td>
               <td className="px-3 py-2.5 text-right">{c.loss_allocations > 0 ? <span className="text-red-500 font-semibold">{c.loss_allocations}</span> : 0}</td>
-              <td className="px-3 py-2.5 text-right">{c.dispute_count > 0 ? <span className="text-amber-500 font-semibold">{c.dispute_count}</span> : 0}</td>
+              <td className="px-3 py-2.5 text-right font-semibold text-indigo-600">{fmtINR(c.total_revenue)}</td>
+              <td className="px-3 py-2.5 text-right">
+                <span className="text-emerald-600">{fmtINR(c.total_amount_paid)}</span>
+                <span className="block text-[9px] text-slate-400">{c.collection_rate}%</span>
+              </td>
+              <td className={`px-3 py-2.5 text-right ${c.total_outstanding > 0 ? 'text-amber-600 font-semibold' : 'text-slate-400'}`}>
+                {c.total_outstanding > 0 ? fmtINR(c.total_outstanding) : '—'}
+              </td>
+              <td className="px-3 py-2.5 text-right">
+                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                  c.utilization_rate > 90 ? 'bg-red-100 text-red-600'
+                  : c.utilization_rate > 70 ? 'bg-amber-100 text-amber-700'
+                  : 'bg-emerald-100 text-emerald-700'
+                }`}>{c.utilization_rate}%</span>
+              </td>
+              <td className="px-3 py-2.5 text-right">
+                <span className="text-violet-600 font-semibold">{c.optimal_utilization_rate}%</span>
+                {c.staffing_ratio !== null && (
+                  <span className={`block text-[9px] ${c.staffing_ratio > 1.2 ? 'text-amber-500' : c.staffing_ratio < 0.8 ? 'text-red-500' : 'text-emerald-500'}`}>
+                    {c.staffing_ratio > 1.2 ? '⚠️ over' : c.staffing_ratio < 0.8 ? '⚡ under' : '✅ ok'}
+                  </span>
+                )}
+              </td>
+              <td className="px-3 py-2.5 text-right text-slate-600">{(c.booking_capacity?.total_acres_needed ?? 0).toFixed(1)} ac</td>
+              <td className="px-3 py-2.5 text-right text-violet-600 font-medium">{(c.booking_capacity?.total_acres_coverable ?? 0).toFixed(1)} ac</td>
+              <td className="px-3 py-2.5 text-right">
+                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                  (c.booking_capacity?.coverage_rate ?? 0) >= 80 ? 'bg-emerald-100 text-emerald-700'
+                  : (c.booking_capacity?.coverage_rate ?? 0) >= 50 ? 'bg-amber-100 text-amber-700'
+                  : 'bg-red-100 text-red-600'
+                }`}>{c.booking_capacity?.coverage_rate ?? 0}%</span>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -1644,31 +1502,28 @@ function ClustersTab({
 type TabKey = 'clusters' | 'jobs' | 'mukkadams' | 'farmers' | 'weeks' | 'day';
 
 export function GlobalInsightsPanel() {
-  const [data, setData] = useState<GlobalInsightsResponse | null>(null);
+  const [data, setData]       = useState<GlobalInsightsResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]     = useState<string | null>(null);
 
-  const today = new Date();
-  const defaultEnd = today.toISOString().slice(0, 10);
-//   const defaultStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
-const defaultStart = '2026-01-01';
+  const today        = new Date();
+  const defaultEnd   = today.toISOString().slice(0, 10);
+  const defaultStart = '2026-01-01';
 
-  const [startDate, setStartDate] = useState(defaultStart);
-  const [endDate, setEndDate] = useState(defaultEnd);
-  const [tab, setTab] = useState<TabKey>('clusters');
+  const [startDate, setStartDate]           = useState(defaultStart);
+  const [endDate, setEndDate]               = useState(defaultEnd);
+  const [tab, setTab]                       = useState<TabKey>('clusters');
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
-  const [farmerFilter, setFarmerFilter] = useState('');
+  const [farmerFilter, setFarmerFilter]     = useState('');
   const [mukkadamFilter, setMukkadamFilter] = useState('');
   const [activityFilter, setActivityFilter] = useState('');
 
-
   const fetchGlobal = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const params: Record<string, string> = {};
       if (startDate) params.start_date = startDate;
-      if (endDate) params.end_date = endDate;
+      if (endDate)   params.end_date   = endDate;
       const res = await axios.get(`${API_BASE_URL}/api/tender-global-insights/`, { params });
       setData(res.data);
     } catch (e: any) {
@@ -1683,7 +1538,7 @@ const defaultStart = '2026-01-01';
   const handleExport = () => {
     if (!data) return;
     const wb = XLSX.utils.book_new();
-    const s = data.overall_summary;
+    const s  = data.overall_summary;
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
       ['Metric', 'Value'],
@@ -1700,34 +1555,67 @@ const defaultStart = '2026-01-01';
       ['Loss Allocations', s.loss_allocations],
       ['Dispute Count', s.dispute_count],
       ['Avg Efficiency Score', s.avg_efficiency_score.toFixed(1)],
+      ['Total Revenue (₹)', s.total_revenue.toFixed(2)],
+      ['Amount Paid (₹)', s.total_amount_paid.toFixed(2)],
+      ['Outstanding (₹)', s.total_outstanding.toFixed(2)],
+      ['Collection Rate (%)', s.collection_rate],
+      ['Total Capacity Workers', s.total_capacity_workers],
+      ['Total Optimal Workers', s.total_optimal_workers],
+      ['Utilization Rate (%)', s.utilization_rate],
+      ['Optimal Utilization Rate (%)', s.optimal_utilization_rate],
+      ['Staffing Ratio', s.staffing_ratio ?? 'N/A'],
+      ['', ''],
+      ['--- Booking Capacity ---', ''],
+      ['Acres Needed (Bookings)', s.booking_capacity?.total_acres_needed?.toFixed(2) ?? 0],
+      ['Crew Available (worker-days)', s.booking_capacity?.total_crew_available ?? 0],
+      ['Acres Coverable', s.booking_capacity?.total_acres_coverable?.toFixed(2) ?? 0],
+      ['Booking Coverage Rate (%)', s.booking_capacity?.coverage_rate ?? 0],
     ]), 'Global Summary');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Cluster', 'Jobs', 'Total Acres', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit', 'Profit/ac', 'Workers', 'Loss', 'Disputes'],
-      ...data.cluster_summary.map(c => [c.cluster_name, c.jobs, (c.total_area_scheduled ?? 0).toFixed(2), c.total_area_allocated.toFixed(2), c.total_area_completed.toFixed(2), c.farmer_amount.toFixed(2), c.mukkadam_amount.toFixed(2), c.profit.toFixed(2), c.profit_per_acre.toFixed(2), c.allocated_workers, c.loss_allocations, c.dispute_count]),
+      ['Cluster','Jobs','Total Acres','Area Alloc','Area Done','Farmer ₹','Mukkadam ₹','Profit','Profit/ac','Workers','Loss','Revenue','Paid','Outstanding','Util%','Optimal%','Acres Needed','Acres Coverable','Bk Coverage%'],
+      ...data.cluster_summary.map(c => [
+        c.cluster_name, c.jobs,
+        (c.total_area_scheduled ?? 0).toFixed(2), c.total_area_allocated.toFixed(2), c.total_area_completed.toFixed(2),
+        c.farmer_amount.toFixed(2), c.mukkadam_amount.toFixed(2), c.profit.toFixed(2), c.profit_per_acre.toFixed(2),
+        c.allocated_workers, c.loss_allocations,
+        c.total_revenue.toFixed(2), c.total_amount_paid.toFixed(2), c.total_outstanding.toFixed(2),
+        c.utilization_rate, c.optimal_utilization_rate,
+        (c.booking_capacity?.total_acres_needed ?? 0).toFixed(2),
+        (c.booking_capacity?.total_acres_coverable ?? 0).toFixed(2),
+        c.booking_capacity?.coverage_rate ?? 0,
+      ]),
     ]), 'Cluster Summary');
 
+    // New sheet: booking capacity by date per cluster
+    const bkRows: any[][] = [['Cluster','Date','Acres Needed','Crew Available','Acres Coverable','Activity Count']];
+    data.cluster_summary.forEach(c => {
+      (c.booking_capacity?.by_date ?? []).forEach(d => {
+        bkRows.push([c.cluster_name, d.date, d.acres_needed.toFixed(2), d.crew_available, d.acres_coverable.toFixed(2), d.activity_count]);
+      });
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(bkRows), 'Booking Capacity');
+
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Week Start', 'Allocations', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit', 'Profit/ac'],
+      ['Week Start','Allocations','Area Alloc','Area Done','Farmer ₹','Mukkadam ₹','Profit','Profit/ac'],
       ...data.week_summary.map(w => [w.week_start, w.allocations, w.total_area_allocated.toFixed(2), w.total_area_completed.toFixed(2), w.farmer_amount.toFixed(2), w.mukkadam_amount.toFixed(2), w.profit.toFixed(2), w.profit_per_acre.toFixed(2)]),
     ]), 'Week Summary');
 
-    const cjRows: any[][] = [['Cluster', 'Job ID', 'Farmer', 'Plot', 'Activity', 'Sched Date', 'Total Area', 'Alloc Area', 'Remaining', 'Est Workers', 'Alloc Workers', 'Alloc Count', 'Status']];
+    const cjRows: any[][] = [['Cluster','Job ID','Farmer','Plot','Activity','Sched Date','Total Area','Alloc Area','Remaining','Est Workers','Alloc Workers','Alloc Count','Status']];
     data.cluster_jobs.forEach(b => b.jobs.forEach(j => cjRows.push([b.cluster_name, j.job_id, j.farmer_name, j.plot_name || '', j.activity_name, j.scheduled_date || '', j.total_area.toFixed(2), j.allocated_area.toFixed(2), j.remaining_area.toFixed(2), j.estimated_workers, j.allocated_workers, j.allocations_count, j.allocation_status])));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cjRows), 'Cluster Jobs');
 
-    const mukRows: any[][] = [['Mukkadam', 'Cluster', 'Allocations', 'Area Alloc', 'Area Done', 'Farmer ₹', 'Mukkadam ₹', 'Profit']];
+    const mukRows: any[][] = [['Mukkadam','Cluster','Allocations','Area Alloc','Area Done','Farmer ₹','Mukkadam ₹','Profit']];
     data.mukkadam_summary.forEach(m => m.clusters.forEach(c => mukRows.push([m.mukkadam_name, c.cluster_name, c.allocations, c.area_alloc.toFixed(2), c.area_done.toFixed(2), c.farmer_amount.toFixed(2), c.mukkadam_amount.toFixed(2), c.profit.toFixed(2)])));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(mukRows), 'Mukkadam Summary');
 
-    const farmerRows: any[][] = [['Farmer', 'Total Acres', 'Alloc Acres', 'Plot', 'Cluster', 'Activity', 'Sched Date', 'Total Area', 'Alloc Area', 'Remaining', 'Status']];
+    const farmerRows: any[][] = [['Farmer','Total Acres','Alloc Acres','Plot','Cluster','Activity','Sched Date','Total Area','Alloc Area','Remaining','Status']];
     data.farmer_summary.forEach(f => {
       (f.plots || []).forEach(plot => {
         plot.activities.forEach(act => {
           farmerRows.push([f.farmer_name, (f.total_area_scheduled ?? 0).toFixed(2), f.total_area_allocated.toFixed(2), plot.plot_name, plot.cluster_name, act.activity_name, act.scheduled_date || '', act.total_area.toFixed(2), act.allocated_area.toFixed(2), act.remaining_area.toFixed(2), act.allocation_status]);
         });
       });
-      // fallback: if no plots, add cluster rows
       if (!f.plots || f.plots.length === 0) {
         f.clusters.forEach(c => farmerRows.push([f.farmer_name, (f.total_area_scheduled ?? 0).toFixed(2), f.total_area_allocated.toFixed(2), '—', c.cluster_name, '—', '—', '—', c.area_alloc.toFixed(2), '—', '—']));
       }
@@ -1750,21 +1638,18 @@ const defaultStart = '2026-01-01';
       <div className="flex flex-col items-center justify-center h-64 text-red-500 gap-2">
         <span className="text-2xl">⚠️</span>
         <span className="text-sm">{error || 'Failed to load global insights'}</span>
-        <button onClick={fetchGlobal} className="text-xs bg-red-50 border border-red-200 text-red-600 px-3 py-1 rounded-lg hover:bg-red-100">
-          Retry
-        </button>
+        <button onClick={fetchGlobal} className="text-xs bg-red-50 border border-red-200 text-red-600 px-3 py-1 rounded-lg hover:bg-red-100">Retry</button>
       </div>
     );
 
-  const s = data.overall_summary;
-
+  const s    = data.overall_summary;
   const tabs: { key: TabKey; label: string; icon: string }[] = [
-    { key: 'clusters', label: 'Clusters', icon: '🏘️' },
-    { key: 'jobs', label: 'Cluster Jobs', icon: '🌾' },
-    { key: 'mukkadams', label: 'Mukkadams', icon: '👷' },
-    { key: 'farmers', label: 'Farmers', icon: '🧑‍🌾' },
-    { key: 'weeks', label: 'Weeks', icon: '📅' },
-    { key: 'day', label: 'Day View', icon: '📆' },
+    { key: 'clusters',  label: 'Clusters',     icon: '🏘️' },
+    { key: 'jobs',      label: 'Cluster Jobs',  icon: '🌾' },
+    { key: 'mukkadams', label: 'Mukkadams',     icon: '👷' },
+    { key: 'farmers',   label: 'Farmers',       icon: '🧑‍🌾' },
+    { key: 'weeks',     label: 'Weeks',         icon: '📅' },
+    { key: 'day',       label: 'Day View',      icon: '📆' },
   ];
 
   return (
@@ -1776,82 +1661,122 @@ const defaultStart = '2026-01-01';
             <h1 className="text-lg font-extrabold text-slate-900 tracking-tight">🌍 Global Cluster Insights</h1>
             <p className="text-xs text-slate-400 mt-0.5">{data.date_range.start} → {data.date_range.end}</p>
           </div>
-
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1.5 bg-slate-100 rounded-lg px-3 py-1.5">
-              <input
-                type="date"
-                value={startDate}
-                onChange={e => setStartDate(e.target.value)}
-                className="bg-transparent text-xs text-slate-700 outline-none"
-              />
+              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-transparent text-xs text-slate-700 outline-none" />
               <span className="text-slate-400 text-xs">→</span>
-              <input
-                type="date"
-                value={endDate}
-                onChange={e => setEndDate(e.target.value)}
-                className="bg-transparent text-xs text-slate-700 outline-none"
-              />
+              <input type="date" value={endDate}   onChange={e => setEndDate(e.target.value)}   className="bg-transparent text-xs text-slate-700 outline-none" />
             </div>
-            <button
-              onClick={fetchGlobal}
-              className="px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Apply
-            </button>
-            <button
-              onClick={handleExport}
-              className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 transition-colors"
-            >
-              ↓ Export
-            </button>
+            <button onClick={fetchGlobal}   className="px-3 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 transition-colors">Apply</button>
+            <button onClick={handleExport}  className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 transition-colors">↓ Export</button>
           </div>
         </div>
 
         {/* Filters */}
         <div className="flex flex-wrap gap-2 mt-3">
-          <input
-            className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white placeholder-slate-400 focus:ring-1 focus:ring-blue-400 outline-none"
-            placeholder="🔍 Filter farmer…"
-            value={farmerFilter}
-            onChange={e => setFarmerFilter(e.target.value)}
-          />
-          <input
-            className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white placeholder-slate-400 focus:ring-1 focus:ring-blue-400 outline-none"
-            placeholder="🔍 Filter mukkadam…"
-            value={mukkadamFilter}
-            onChange={e => setMukkadamFilter(e.target.value)}
-          />
-          <input
-            className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white placeholder-slate-400 focus:ring-1 focus:ring-blue-400 outline-none"
-            placeholder="🔍 Filter activity…"
-            value={activityFilter}
-            onChange={e => setActivityFilter(e.target.value)}
-          />
+          <input className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white placeholder-slate-400 focus:ring-1 focus:ring-blue-400 outline-none" placeholder="🔍 Filter farmer…"   value={farmerFilter}   onChange={e => setFarmerFilter(e.target.value)} />
+          <input className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white placeholder-slate-400 focus:ring-1 focus:ring-blue-400 outline-none" placeholder="🔍 Filter mukkadam…" value={mukkadamFilter} onChange={e => setMukkadamFilter(e.target.value)} />
+          <input className="border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-white placeholder-slate-400 focus:ring-1 focus:ring-blue-400 outline-none" placeholder="🔍 Filter activity…" value={activityFilter} onChange={e => setActivityFilter(e.target.value)} />
           {selectedClusterId && (
-            <button
-              onClick={() => setSelectedClusterId(null)}
-              className="px-3 py-1.5 bg-blue-100 text-blue-700 border border-blue-200 text-xs font-medium rounded-lg hover:bg-blue-200 transition-colors flex items-center gap-1"
-            >
-              <span>Cluster filter active</span>
-              <span>✕</span>
+            <button onClick={() => setSelectedClusterId(null)} className="px-3 py-1.5 bg-blue-100 text-blue-700 border border-blue-200 text-xs font-medium rounded-lg hover:bg-blue-200 transition-colors flex items-center gap-1">
+              <span>Cluster filter active</span><span>✕</span>
             </button>
           )}
         </div>
       </div>
 
       <div className="px-6 py-4 space-y-4">
-        {/* KPIs */}
-        <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-2">
-          <KpiCard label="Total Jobs" value={String(s.total_jobs)} />
-          <KpiCard label="Activities" value={String(s.total_activities)} />
-          <KpiCard label="Total Acres" value={`${fmt(s.total_area_scheduled ?? 0)} ac`} accent="violet" />
-          <KpiCard label="Area Alloc" value={`${fmt(s.total_area_allocated)} ac`} accent="blue" />
-          {/* <KpiCard label="Area Done" value={`${fmt(s.total_area_completed)} ac`} accent="green" /> */}
-          <KpiCard label="Workers" value={String(s.total_allocated_workers)} />
-          <KpiCard label="Profit" value={fmtINR(s.profit)} accent={s.profit >= 0 ? 'green' : 'red'} sub={`${fmtINR(s.profit_per_acre)}/ac`} />
-          <KpiCard label="Loss Allocs" value={String(s.loss_allocations)} accent={s.loss_allocations > 0 ? 'red' : undefined} />
-          {/* <KpiCard label="Disputes" value={String(s.dispute_count)} accent={s.dispute_count > 0 ? 'amber' : undefined} /> */}
+
+        {/* ── KPI Sections ── */}
+        <div className="space-y-3">
+
+          {/* Operations */}
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 px-0.5">📋 Operations</p>
+            <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-6 gap-2">
+              <KpiCard label="Total Jobs"  value={String(s.total_jobs)} />
+              <KpiCard label="Activities"  value={String(s.total_activities)} />
+              <KpiCard label="Total Acres" value={`${fmt(s.total_area_scheduled ?? 0)} ac`} accent="violet" />
+              <KpiCard label="Area Alloc"  value={`${fmt(s.total_area_allocated)} ac`} accent="blue" />
+              <KpiCard label="Loss Allocs" value={String(s.loss_allocations)} accent={s.loss_allocations > 0 ? 'red' : undefined} />
+              {/* <KpiCard label="Disputes"    value={String(s.dispute_count)}    accent={s.dispute_count > 0 ? 'amber' : undefined} /> */}
+            </div>
+          </div>
+
+          {/* Revenue & Payments */}
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 px-0.5">💰 Revenue & Payments</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+              <KpiCard label="Total Revenue"  value={fmtINR(s.total_revenue)}      sub="sum of all job amounts"   accent="indigo" />
+              <KpiCard label="Collected"      value={fmtINR(s.total_amount_paid)}  sub={`${s.collection_rate}% collection rate`} accent="green" />
+              <KpiCard label="Outstanding"    value={fmtINR(s.total_outstanding)}  sub="yet to collect"           accent={s.total_outstanding > 0 ? 'amber' : undefined} />
+              <KpiCard label="Farmer Billed"  value={fmtINR(s.farmer_amount)}      sub="from allocations" />
+              <KpiCard label="Net Profit"     value={fmtINR(s.profit)}             sub={`${fmtINR(s.profit_per_acre)}/ac`} accent={s.profit >= 0 ? 'green' : 'red'} />
+            </div>
+          </div>
+
+          {/* Worker Utilization */}
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 px-0.5">👷 Worker Utilization</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+              <KpiCard label="Total Capacity" value={`${s.total_capacity_workers}`}    sub="crew × active days" />
+              <KpiCard label="Allocated"      value={`${s.total_allocated_workers}`}   sub={`${s.utilization_rate}% of capacity`}        accent="blue" />
+              <KpiCard label="Optimal Need"   value={`${s.total_optimal_workers}`}     sub={`${s.optimal_utilization_rate}% of capacity`} accent="violet" />
+              <KpiCard label="Utilization"    value={`${s.utilization_rate}%`}         sub="allocated ÷ capacity"
+                accent={s.utilization_rate > 90 ? 'red' : s.utilization_rate > 70 ? 'amber' : 'green'}
+              />
+              {/* <KpiCard
+                label="Staffing Ratio"
+                value={s.staffing_ratio !== null ? `${s.staffing_ratio}×` : '—'}
+                sub={
+                  s.staffing_ratio === null   ? `${s.optimal_coverage_pct}% allocs rated`
+                  : s.staffing_ratio > 1.2    ? '⚠️ Overstaffed'
+                  : s.staffing_ratio < 0.8    ? '⚡ Understaffed'
+                  : '✅ Optimal'
+                }
+                accent={
+                  s.staffing_ratio === null   ? undefined
+                  : s.staffing_ratio > 1.2    ? 'amber'
+                  : s.staffing_ratio < 0.8    ? 'red'
+                  : 'green'
+                }
+              /> */}
+            </div>
+          </div>
+
+          {/* Booking Capacity */}
+          <div>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 px-0.5">📅 Booking Capacity</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <KpiCard
+                label="Acres Needed"
+                value={`${(s.booking_capacity?.total_acres_needed ?? 0).toFixed(1)} ac`}
+                sub="from scheduled bookings"
+              />
+              <KpiCard
+                label="Crew Available"
+                value={`${s.booking_capacity?.total_crew_available ?? 0}`}
+                sub="worker-days across dates"
+                accent="blue"
+              />
+              <KpiCard
+                label="Acres Coverable"
+                value={`${(s.booking_capacity?.total_acres_coverable ?? 0).toFixed(1)} ac`}
+                sub="crew × best productivity"
+                accent="violet"
+              />
+              <KpiCard
+                label="Coverage"
+                value={`${s.booking_capacity?.coverage_rate ?? 0}%`}
+                sub="coverable ÷ needed"
+                accent={
+                  (s.booking_capacity?.coverage_rate ?? 0) >= 80 ? 'green'
+                  : (s.booking_capacity?.coverage_rate ?? 0) >= 50 ? 'amber'
+                  : 'red'
+                }
+              />
+            </div>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -1862,8 +1787,7 @@ const defaultStart = '2026-01-01';
               onClick={() => setTab(t.key)}
               className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold whitespace-nowrap transition-colors rounded-t-lg ${tab === t.key ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'}`}
             >
-              <span>{t.icon}</span>
-              {t.label}
+              <span>{t.icon}</span>{t.label}
             </button>
           ))}
         </div>
@@ -1874,81 +1798,42 @@ const defaultStart = '2026-01-01';
             <>
               <SectionHeader title="Cluster Summary" count={data.cluster_summary.length} />
               <p className="text-[11px] text-slate-400 mb-3">Click a row to filter all tabs by that cluster.</p>
-              <ClustersTab
-                clusters={data.cluster_summary}
-                selectedClusterId={selectedClusterId}
-                onSelectCluster={setSelectedClusterId}
-              />
+              <ClustersTab clusters={data.cluster_summary} selectedClusterId={selectedClusterId} onSelectCluster={setSelectedClusterId} />
             </>
           )}
-
           {tab === 'jobs' && (
             <>
               <SectionHeader title="Cluster Jobs & Allocation Status" />
               <p className="text-[11px] text-slate-400 mb-3">Each cluster is expandable. Shows job-level: plot, activity, area, allocation detail.</p>
-              <ClusterJobsTab
-                clusterJobs={data.cluster_jobs}
-                selectedClusterId={selectedClusterId}
-                farmerFilter={farmerFilter}
-                activityFilter={activityFilter}
-              />
+              <ClusterJobsTab clusterJobs={data.cluster_jobs} selectedClusterId={selectedClusterId} farmerFilter={farmerFilter} activityFilter={activityFilter} />
             </>
           )}
-
           {tab === 'mukkadams' && (
             <>
-              <SectionHeader title="Mukkadam Summary" count={data.mukkadam_summary.filter(m =>
-  !selectedClusterId || m.clusters.some(c => c.cluster_id === selectedClusterId)
-).length} />
-              <MukkadamsTab
-                data={data.mukkadam_summary}
-                mukkadamFilter={mukkadamFilter}
-                selectedClusterId={selectedClusterId}
-              />
+              <SectionHeader title="Mukkadam Summary" count={data.mukkadam_summary.filter(m => !selectedClusterId || m.clusters.some(c => c.cluster_id === selectedClusterId)).length} />
+              <MukkadamsTab data={data.mukkadam_summary} mukkadamFilter={mukkadamFilter} selectedClusterId={selectedClusterId} />
             </>
           )}
-
           {tab === 'farmers' && (
             <>
-              <SectionHeader title="Farmer Summary" count={data.farmer_summary.filter(f =>
-  !selectedClusterId || f.clusters.some(c => c.cluster_id === selectedClusterId)
-).length} />
-              <FarmersTab
-                data={data.farmer_summary}
-                farmerFilter={farmerFilter}
-                selectedClusterId={selectedClusterId}
-              />
+              <SectionHeader title="Farmer Summary" count={data.farmer_summary.filter(f => !selectedClusterId || f.clusters.some(c => c.cluster_id === selectedClusterId)).length} />
+              <FarmersTab data={data.farmer_summary} farmerFilter={farmerFilter} selectedClusterId={selectedClusterId} />
             </>
           )}
-
           {tab === 'weeks' && (
             <>
               <SectionHeader title="Week Summary" count={data.week_summary.length} />
-              <p className="text-[11px] text-slate-400 mb-3">Click a week to expand day-by-day detail. Click each day to see cluster and job breakdown.</p>
-              <WeeksTab
-                weeks={data.week_summary}
-                selectedClusterId={selectedClusterId}
-                farmerFilter={farmerFilter}
-                mukkadamFilter={mukkadamFilter}
-                activityFilter={activityFilter}
-              />
+              <p className="text-[11px] text-slate-400 mb-3">Click a week to expand day-by-day detail.</p>
+              <WeeksTab weeks={data.week_summary} selectedClusterId={selectedClusterId} farmerFilter={farmerFilter} mukkadamFilter={mukkadamFilter} activityFilter={activityFilter} />
             </>
           )}
-
           {tab === 'day' && (
             <>
               <SectionHeader title="Day View" />
               <p className="text-[11px] text-slate-400 mb-4">
-                Showing all dates from <strong>{startDate}</strong> to <strong>{endDate}</strong>. Each tile shows activities, area allocated, workers and profit. Click any tile with data to see full detail.
+                Showing all dates from <strong>{startDate}</strong> to <strong>{endDate}</strong>. Click any tile with data to see full detail.
               </p>
-              <CalendarDayTab
-                startDate={startDate}
-                endDate={endDate}
-                clusterId={selectedClusterId}
-                farmerFilter={farmerFilter}
-                mukkadamFilter={mukkadamFilter}
-                activityFilter={activityFilter}
-              />
+              <CalendarDayTab startDate={startDate} endDate={endDate} clusterId={selectedClusterId} farmerFilter={farmerFilter} mukkadamFilter={mukkadamFilter} activityFilter={activityFilter} />
             </>
           )}
         </div>
