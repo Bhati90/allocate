@@ -813,3 +813,357 @@ def fetch_plot_crop_details(farmer_id: str, plot_code: str):
     except Exception as e:
         logger.error(f"Failed to fetch plot details: {e}")
         return '', ''
+
+
+
+
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+import requests
+import logging
+
+from .models import FarmerBillWebhookLog
+
+logger = logging.getLogger(__name__)
+
+# ── Paste your webhook URL here ──────────────────────────────
+FARMER_BILL_WEBHOOK_URL = 'https://webhook.site/d9bd49ac-44a0-4287-b57a-47e9318b804b'
+from rest_framework.authentication import BasicAuthentication
+from rest_framework.permissions import AllowAny
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def send_farmer_bill_to_webhook(request):
+    try:
+        data = request.data
+
+        # ── Validate ─────────────────────────────────────────
+        required = ['farmer', 'job', 'mukkadam', 'work_done', 'bill_summary']
+        missing = [f for f in required if f not in data]
+        if missing:
+            return Response(
+                {'error': f'Missing fields: {", ".join(missing)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        farmer   = data.get('farmer', {})
+        job      = data.get('job', {})
+        mukkadam = data.get('mukkadam', {})
+        payments = data.get('payment_history', [])
+        bill     = data.get('bill_summary', {})
+        work_done = data.get('work_done', [])
+
+        # ── Fetch user info from auth token ──────────────────
+        sent_by_name  = None
+        sent_by_email = None
+        sent_by_id    = None
+        auth_header = request.headers.get('Authorization', '')
+        auth_token  = auth_header.replace('Token ', '').replace('Bearer ', '').strip() or request.data.get('auth_token')
+
+        if auth_token:
+            try:
+                user_response = requests.get(
+                    'https://tender.bharatintelligence.ai/tender/auth/me/',
+                    headers={
+                        'Authorization': f'Token {auth_token}',
+                        'Content-Type': 'application/json',
+                    },
+                    timeout=5,
+                )
+                if user_response.status_code == 200:
+                    user_data     = user_response.json()
+                    sent_by_name  = user_data.get('name')  or user_data.get('full_name') or user_data.get('username')
+                    sent_by_email = user_data.get('email')
+                    sent_by_id    = str(user_data.get('id') or user_data.get('user_id') or '')
+            except Exception as e:
+                logger.warning(f"Could not fetch user info: {e}")
+
+        # ── Build webhook payload ─────────────────────────────
+        payload = {
+            'event':     'farmer_bill_collect_initiated',
+            'timestamp': data.get('timestamp'),
+            'sent_by': {
+                'name':  sent_by_name,
+                'email': sent_by_email,
+                'id':    sent_by_id,
+            },
+            'farmer': {
+                'id':    farmer.get('id'),
+                'name':  farmer.get('name'),
+                'phone': farmer.get('phone'),
+            },
+            'job': {
+                'id':   job.get('id'),
+                'crop': job.get('crop'),
+                'plot': job.get('plot'),
+            },
+            'mukkadam': {
+                'name':   mukkadam.get('name'),
+                'mobile': mukkadam.get('mobile'),
+            },
+            'work_done': [
+                {
+                    'activity':      w.get('activity'),
+                    'date':          w.get('date'),
+                    'acres_done':    w.get('acres_done'),
+                    'rate_per_acre': w.get('rate_per_acre'),
+                    'amount':        w.get('amount'),
+                }
+                for w in work_done
+            ],
+            'payment_history': [
+                {
+                    'date':   p.get('date'),
+                    'amount': p.get('amount'),
+                    'mode':   p.get('mode'),
+                    'notes':  p.get('notes', ''),
+                }
+                for p in payments
+            ],
+            'bill_summary': {
+                'total_billed':       bill.get('total_billed'),
+                'total_already_paid': bill.get('total_already_paid'),
+                'balance_due_now':    bill.get('balance_due_now'),
+                'why_this_bill':      bill.get('why_this_bill'),
+            },
+        }
+
+        # ── Fire to webhook ───────────────────────────────────
+        webhook_status   = None
+        webhook_response = None
+        try:
+            wh_res           = requests.post(
+                FARMER_BILL_WEBHOOK_URL,
+                json=payload,
+                timeout=10,
+                headers={'Content-Type': 'application/json'},
+            )
+            webhook_status   = wh_res.status_code
+            webhook_response = wh_res.text
+        except Exception as e:
+            webhook_response = str(e)
+
+        # ── Save to DB ────────────────────────────────────────
+        FarmerBillWebhookLog.objects.create(
+            auth_token       = auth_token,
+            sent_by_name     = sent_by_name,
+            sent_by_email    = sent_by_email,
+            sent_by_id       = sent_by_id,
+            farmer_id        = farmer.get('id'),
+            farmer_name      = farmer.get('name'),
+            farmer_phone     = farmer.get('phone'),
+            job_id           = job.get('id'),
+            crop_name        = job.get('crop'),
+            plot_name        = job.get('plot'),
+            mukkadam_name    = mukkadam.get('name'),
+            mukkadam_mobile  = mukkadam.get('mobile'),
+            total_billed     = bill.get('total_billed'),
+            total_paid       = bill.get('total_already_paid'),
+            balance_due      = bill.get('balance_due_now'),
+            full_payload     = payload,
+            webhook_status   = webhook_status,
+            webhook_response = webhook_response,
+        )
+
+        return Response({
+            'success':        True,
+            'webhook_status': webhook_status,
+            'message':        'Bill details sent and saved successfully',
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+
+
+# ── Paste your confirmation webhook URL here ─────────────────
+FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = 'YOUR_CONFIRMATION_WEBHOOK_URL_HERE'
+from .models import FarmerPaymentWebhookLog
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def farmer_payment_webhook(request):
+    """
+    Receives payment from farmer's payment link and records it.
+
+    Expected payload:
+    {
+        "booking_id": "434",
+        "amount": 2000,
+        "mode": "UPI",                        ← optional, default UPI
+        "transaction_id": "TXN123456",        ← optional
+        "notes": "Paid via link",             ← optional
+        "paid_at": "2026-03-10T14:00:00Z",   ← optional, default now
+        "confirmation_webhook_url": "https://your-crm.com/webhook/"  ← optional override
+    }
+    """
+    from datetime import datetime
+    import uuid
+
+    raw_payload = request.data
+    log = None
+
+    try:
+        booking_id     = str(raw_payload.get('booking_id', '')).strip()
+        amount         = raw_payload.get('amount')
+        mode           = raw_payload.get('mode', 'UPI').upper()
+        transaction_id = raw_payload.get('transaction_id') or str(uuid.uuid4())[:8]
+        notes          = raw_payload.get('notes', 'Paid via farmer payment link')
+        paid_at_raw    = raw_payload.get('paid_at')
+        confirmation_url = raw_payload.get('confirmation_webhook_url') or FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL
+
+        # ── Validate ─────────────────────────────────────────
+        if not booking_id:
+            return Response({'error': 'booking_id is required'}, status=400)
+        if not amount:
+            return Response({'error': 'amount is required'}, status=400)
+
+        try:
+            amount = Decimal(str(amount))
+        except Exception:
+            return Response({'error': 'Invalid amount'}, status=400)
+
+        # ── Parse paid_at ─────────────────────────────────────
+        if paid_at_raw:
+            try:
+                from django.utils.dateparse import parse_datetime
+                paid_at = parse_datetime(paid_at_raw)
+            except Exception:
+                paid_at = datetime.now()
+        else:
+            paid_at = datetime.now()
+
+        # ── Create initial log ────────────────────────────────
+        log = FarmerPaymentWebhookLog.objects.create(
+            booking_ref = booking_id,
+            amount         = amount,
+            mode           = mode,
+            transaction_id = transaction_id,
+            notes          = notes,
+            paid_at        = paid_at,
+            raw_payload    = raw_payload,
+            status         = 'received',
+            confirmation_webhook_url = confirmation_url,
+        )
+
+        # ── Find booking ──────────────────────────────────────
+        try:
+            booking = JobBooking.objects.get(booking_id=booking_id)
+        except JobBooking.DoesNotExist:
+            log.status = 'failed'
+            log.error  = f'Booking #{booking_id} not found'
+            log.save()
+            return Response({'error': f'Booking #{booking_id} not found'}, status=404)
+
+        log.booking = booking
+        log.save()
+
+        # ── Duplicate check ───────────────────────────────────
+        already_exists = FarmerPayment.objects.filter(
+            booking=booking,
+            amount=amount,
+            paid_at__date=paid_at.date() if paid_at else datetime.now().date(),
+        ).exists()
+
+        if already_exists:
+            log.status = 'duplicate'
+            log.save()
+            return Response({
+                'success': False,
+                'message': 'Duplicate payment — already recorded for this booking/amount/date',
+            }, status=200)
+
+        # ── Generate payment_id ───────────────────────────────
+        last_payment = FarmerPayment.objects.order_by('-payment_id').first()
+        new_payment_id = (last_payment.payment_id + 1) if last_payment else 100001
+
+        # ── Create FarmerPayment ──────────────────────────────
+        farmer_payment = FarmerPayment.objects.create(
+            booking    = booking,
+            payment_id = new_payment_id,
+            mode       = mode if mode in ['CASH','UPI','ZOHO_PAYMENT','BANK_TRANSFER','CHEQUE','OTHER'] else 'UPI',
+            amount     = amount,
+            notes      = f"{notes} | txn: {transaction_id}",
+            paid_at    = paid_at or datetime.now(),
+            paid_status = True,
+        )
+
+        # ── Update JobBooking status ──────────────────────────
+        all_payments = FarmerPayment.objects.filter(booking=booking, paid_status=True)
+        total_paid   = sum(p.amount for p in all_payments)
+
+        if total_paid >= booking.total_amount:
+            booking.status  = 'PAID'
+        elif total_paid > 0:
+            booking.status  = 'PARTIALLY_PAID'
+
+        booking.balance = max(Decimal('0'), booking.total_amount - total_paid)
+        booking.save()
+
+        # ── Update log ────────────────────────────────────────
+        log.payment_created = True
+        log.farmer_payment  = farmer_payment
+        log.status          = 'processed'
+        log.save()
+
+        # ── Send confirmation webhook ─────────────────────────
+        confirmation_payload = {
+            'event':       'farmer_payment_received',
+            'timestamp':   datetime.now().isoformat(),
+            'booking_id':  booking_id,
+            'job_id':      booking.job.job_id,
+            'farmer_name': booking.job.farmer.farmer_name if booking.job.farmer else '—',
+            'farmer_phone': getattr(booking.job.farmer, 'phone_number', '') or getattr(booking.job.farmer, 'mobile_number', ''),
+            'payment': {
+                'payment_id':    new_payment_id,
+                'amount':        float(amount),
+                'mode':          mode,
+                'transaction_id': transaction_id,
+                'paid_at':       str(paid_at),
+            },
+            'booking_summary': {
+                'total_amount': float(booking.total_amount),
+                'total_paid':   float(total_paid),
+                'balance':      float(booking.balance),
+                'status':       booking.status,
+            },
+        }
+
+        try:
+            conf_res = requests.post(
+                confirmation_url,
+                json=confirmation_payload,
+                timeout=10,
+                headers={'Content-Type': 'application/json'},
+            )
+            log.confirmation_sent   = True
+            log.confirmation_status = conf_res.status_code
+            log.save()
+        except Exception as e:
+            logger.warning(f"Confirmation webhook failed: {e}")
+            log.confirmation_sent = False
+            log.save()
+
+        logger.info(f"Payment webhook processed — Booking #{booking_id} ₹{amount}")
+
+        return Response({
+            'success':    True,
+            'message':    f'Payment of ₹{amount} recorded for booking #{booking_id}',
+            'payment_id': new_payment_id,
+            'booking_status': booking.status,
+            'balance_remaining': float(booking.balance),
+        }, status=200)
+
+    except Exception as e:
+        logger.error(f"farmer_payment_webhook error: {e}")
+        if log:
+            log.status = 'failed'
+            log.error  = str(e)
+            log.save()
+        return Response({'error': str(e)}, status=500)

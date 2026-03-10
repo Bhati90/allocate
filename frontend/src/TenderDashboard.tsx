@@ -3603,6 +3603,10 @@ function MukkadamAddToCluster({
   const alreadyInCluster = (clusterId: number) =>
     mukkadam.clusters.some((c) => c.id === clusterId);
 
+
+  const alreadyInClusterPermanently = (clusterId: number) =>
+  mukkadam.clusters.some((c) => c.id === clusterId && c.mukkadam_type === 'permanent');
+
   const handleClusterSelect = (cluster: ClusterOption) => {
     if (saving) return;
     setOpenDropdown(false);
@@ -3671,13 +3675,15 @@ const handleConfirm = async (
       setSelectedCluster(null);
       onSuccess();
     } else {
-      console.error('Update error', res.status, data);
-      const msg =
-        data?.detail ||
-        data?.error ||
-        `Failed to save mukkadam assignment (HTTP ${res.status})`;
-      toast.error(msg);
-    }
+  console.error('Update error', res.status, data);
+  const msg =
+    data?.detail ||
+    data?.error ||
+    data?.message ||           // ← add this
+    JSON.stringify(data) ||    // ← add this as last fallback
+    `Failed to save mukkadam assignment (HTTP ${res.status})`;
+  toast.error(msg);
+}
   } catch (e) {
     console.error('Network error', e);
     toast.error('Network error');
@@ -3784,7 +3790,7 @@ const handleConfirm = async (
                     <ClusterItem
                       key={c.id}
                       name={c.name}
-                      alreadyIn={alreadyInCluster(c.id)}
+                      alreadyIn={alreadyInClusterPermanently(c.id)}
                       saving={saving}
                       onClick={() => handleClusterSelect(c)}
                     />

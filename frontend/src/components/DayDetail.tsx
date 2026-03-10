@@ -15,6 +15,7 @@ import LeaveModal from './leave'; // Import your leave modal component
 import ReactDOM from 'react-dom';
 import { JobNoteModal } from './JobNoteModel';
 import { useCurrentUser } from '../hooks/currentUser';
+import { notifyWhatsAppGroup } from '@/utils/whatsapp';
 
 // TagChip component
 const TagChip: React.FC<{ tagKey: string; small?: boolean }> = ({ tagKey, small }) => {
@@ -356,6 +357,17 @@ const getJobLabel = (jobId: string): string =>
                         Open & resolve →
                       </button>
                     </p>
+
+                    <span>·</span>
+<button
+  onClick={() => {
+    notifyWhatsAppGroup(n, jobLabel, n.author?.full_name);
+    toast.success('Message copied! Just paste & send in the group 📲');
+  }}
+  className="text-green-600 hover:underline font-medium flex items-center gap-1"
+>
+  📲 WhatsApp Group
+</button>
                   </div>
                 </div>
               );
@@ -598,7 +610,7 @@ const TeamDropdown: React.FC<{
                 r.availableWorkers > 0;
 
               const handleTeamClick = () => {
-                if (!canDo) return;
+                // if (!canDo) return;
                 const mukkadam = mukkadams.find(
                   mk => mk.mukkadam_id === r.mukkadamId
                 );
@@ -631,7 +643,7 @@ const TeamDropdown: React.FC<{
                   key={i}
                   type="button"
                   onClick={handleTeamClick}
-                  disabled={!canDo}
+                  // disabled={!canDo}
                   className={`w-full flex items-center justify-between px-2 py-1 rounded text-xs text-left ${
                     canDo
                       ? 'hover:bg-teal-50 text-teal-800'
@@ -2419,7 +2431,7 @@ const mukkadamHasHalfDay =
 
                               const handleTeamClick =
                                 () => {
-                                  if (!fits) return;
+                                  // if (!fits) return;
                                   const mukkadam =
                                     mukkadams.find(
                                       (mk) =>
@@ -2469,12 +2481,12 @@ const mukkadamHasHalfDay =
                                   key={i}
                                   type="button"
                                   onClick={handleTeamClick}
-                                  disabled={!fits}
+                                  // disabled={!fits}
                                   className={[
                                     'flex items-center gap-2 px-2 py-1 rounded-full text-xs border',
                                     fits
                                       ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                                      : 'border-stone-200 bg-stone-50 text-stone-400 cursor-not-allowed',
+                                      : 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100',
                                   ].join(' ')}
                                 >
                                   <span className="font-medium">

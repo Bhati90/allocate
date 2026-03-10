@@ -832,6 +832,46 @@ class FarmerPayment(models.Model):
     def __str__(self):
         return f"₹{self.amount} - {self.mode} - {self.paid_at.date()}"
 
+
+class FarmerPaymentWebhookLog(models.Model):
+    """Logs incoming payment webhooks from farmer payment links"""
+    
+    booking         = models.ForeignKey(JobBooking, on_delete=models.SET_NULL, null=True, blank=True, related_name='webhook_logs')
+    booking_ref         = models.CharField(max_length=100)  # ← renamed
+    
+    # Payment details received
+    amount          = models.DecimalField(max_digits=12, decimal_places=2)
+    mode            = models.CharField(max_length=50, default='UPI')
+    transaction_id  = models.CharField(max_length=255, blank=True, null=True)
+    notes           = models.TextField(blank=True, null=True)
+    paid_at         = models.DateTimeField(blank=True, null=True)
+    
+    # What we did
+    payment_created = models.BooleanField(default=False)  # did we create FarmerPayment
+    farmer_payment  = models.ForeignKey('FarmerPayment', on_delete=models.SET_NULL, null=True, blank=True)
+    
+    # Raw payload
+    raw_payload     = models.JSONField()
+    
+    # Confirmation webhook we sent back
+    confirmation_sent         = models.BooleanField(default=False)
+    confirmation_webhook_url  = models.CharField(max_length=500, blank=True, null=True)
+    confirmation_status       = models.IntegerField(blank=True, null=True)
+    
+    status   = models.CharField(max_length=50, default='received')  # received / processed / failed / duplicate
+    error    = models.TextField(blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name        = 'Farmer Payment Webhook Log'
+        verbose_name_plural = 'Farmer Payment Webhook Logs'
+
+    def __str__(self):
+        return f"Booking #{self.booking_id} | ₹{self.amount} | {self.status} | {self.created_at.date()}"
+    
+
 class ActivityScheduleRule(models.Model):
     """
     Global default schedule rules per activity.
@@ -1110,6 +1150,52 @@ class ClusterMukkadamActivityRate(models.Model):
     def __str__(self):
         return f"{self.cluster.name} - {self.activity.name}: ₹{self.rate_per_acre}/ac (Mukkadam Default)"
 
+
+from django.db import models
+
+class FarmerBillWebhookLog(models.Model):
+    # ── Who sent it ──────────────────────────────────────────
+    auth_token        = models.TextField(blank=True, null=True)
+    sent_by_name      = models.CharField(max_length=255, blank=True, null=True)
+    sent_by_email     = models.CharField(max_length=255, blank=True, null=True)
+    sent_by_id        = models.CharField(max_length=100, blank=True, null=True)
+
+    # ── Farmer ───────────────────────────────────────────────
+    farmer_id         = models.CharField(max_length=100, blank=True, null=True)
+    farmer_name       = models.CharField(max_length=255, blank=True, null=True)
+    farmer_phone      = models.CharField(max_length=50,  blank=True, null=True)
+
+    # ── Job ──────────────────────────────────────────────────
+    job_id            = models.CharField(max_length=100, blank=True, null=True)
+    crop_name         = models.CharField(max_length=255, blank=True, null=True)
+    plot_name         = models.CharField(max_length=255, blank=True, null=True)
+
+    # ── Mukkadam ─────────────────────────────────────────────
+    mukkadam_name     = models.CharField(max_length=255, blank=True, null=True)
+    mukkadam_mobile   = models.CharField(max_length=50,  blank=True, null=True)
+
+    # ── Bill ─────────────────────────────────────────────────
+    total_billed      = models.DecimalField(max_digits=12, decimal_places=2, null=True)
+    total_paid        = models.DecimalField(max_digits=12, decimal_places=2, null=True)
+    balance_due       = models.DecimalField(max_digits=12, decimal_places=2, null=True)
+
+    # ── Full payload + response ───────────────────────────────
+    full_payload      = models.JSONField()
+    webhook_status    = models.IntegerField(blank=True, null=True)
+    webhook_response  = models.TextField(blank=True, null=True)
+
+    # ── Timestamp ────────────────────────────────────────────
+    created_at        = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name     = 'Farmer Bill Webhook Log'
+        verbose_name_plural = 'Farmer Bill Webhook Logs'
+
+    def __str__(self):
+        return f"{self.farmer_name} | Job #{self.job_id} | ₹{self.balance_due} | {self.created_at.date()}"
+    
+    
 class MukkadamActivityRate(models.Model):
     """
     Mukkadam-specific rate for activities
@@ -1754,9 +1840,7 @@ class ClusterMukkadamAssignment(models.Model):
 
     class Meta:
         db_table = 'cluster_mukkadam_assignments'
-        unique_together = ['mukkadam', 'cluster']
-
-
+        
     def save(self, *args, **kwargs):
 
         if not self.joined_date and self.joined_at:
@@ -1846,6 +1930,14 @@ class MukkadamJobSettlement(models.Model):
     )
     cluster = models.ForeignKey(
         Cluster, on_delete=models.SET_NULL, null=True, blank=True
+    )
+
+    # Transport cost (updown team only — permanent team always 0)
+    transport_deducted = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0'),
+        help_text="Transport cost added to updown team bill. 0 for permanent team."
     )
 
     # In MukkadamJobSettlement model

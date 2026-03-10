@@ -402,3 +402,35 @@
 .day-cell.carry-forward-day .day-number {
   color: #7c3aed;
 }
+
+
+/* ─── Day cell status colours ────────────────────────────────────────────────
+   Add/replace these rules in your calender.css
+   The warning (amber) was too close to the default white — now it's a clear
+   saturated yellow-amber with a strong left border so it's unmistakable.
+─────────────────────────────────────────────────────────────────────────── */
+
+
+
+/* AMBER/YELLOW — 60–80% load */
+.day-cell.warning {
+  background-color: #fefce8;       /* bright yellow tint — was too pale before */
+  border-left: 3px solid #ca8a04;  /* yellow-600, strong amber */
+}
+
+/* RED — over 80% load or 0 capacity with jobs */
+.day-cell.error {
+  background-color: #fff1f2;       /* light red tint */
+  border-left: 3px solid #dc2626;  /* red-600 */
+}
+
+/* HOLIDAY */
+.day-cell.holiday {
+  background-color: #f1f5f9;
+  border-left: 3px solid #94a3b8;  /* slate */
+}
+
+/* Selected state — keep border colour, just darken bg */
+/* .day-cell.good.selected   { background-color: #dcfce7; } */
+/* .day-cell.warning.selected { background-color: #fef9c3; } */
+/* .day-cell.error.selected  { background-color: #ffe4e6; } */

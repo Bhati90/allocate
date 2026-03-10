@@ -18,6 +18,10 @@ from .models import (UserProfile,
     MukkadamWeeklyPayment, MukkadamMiscCost, MukkadamJobSettlement,
 )
 
+
+from django.contrib import admin
+from .models import FarmerBillWebhookLog
+
 # -----------------------------
 # User Profile Admin
 # -----------------------------
@@ -636,6 +640,9 @@ from .models import ClusterMukkadamAssignment
 
 from django.contrib import admin
 
+
+
+
 @admin.register(ClusterMukkadamAssignment)
 class ClusterMukkadamAssignmentAdmin(admin.ModelAdmin):
     search_fields = ('mukkadam__mukkadam_name', 'cluster__name')  # ← required for autocomplete_fields
@@ -1102,4 +1109,88 @@ class APISyncAdmin(admin.ModelAdmin):
         return False
 
     def has_change_permission(self, request, obj=None):
+        return False
+    
+
+
+from django.contrib import admin
+from .models import FarmerBillWebhookLog
+
+@admin.register(FarmerBillWebhookLog)
+class FarmerBillWebhookLogAdmin(admin.ModelAdmin):
+    list_display = [
+        'created_at',
+        'farmer_name',
+        'farmer_phone',
+        'job_id',
+        'crop_name',
+        'plot_name',
+        'mukkadam_name',
+        'mukkadam_mobile',
+        'total_billed',
+        'total_paid',
+        'balance_due',
+        'sent_by_name',
+        'sent_by_email',
+        'webhook_status',
+    ]
+    list_filter  = [
+        'webhook_status',
+        'created_at',
+    ]
+    search_fields = [
+        'farmer_name',
+        'farmer_id',
+        'farmer_phone',
+        'job_id',
+        'crop_name',
+        'mukkadam_name',
+        'sent_by_name',
+        'sent_by_email',
+    ]
+    readonly_fields = [
+        'auth_token',
+        'sent_by_name',
+        'sent_by_email',
+        'sent_by_id',
+        'farmer_id',
+        'farmer_name',
+        'farmer_phone',
+        'job_id',
+        'crop_name',
+        'plot_name',
+        'mukkadam_name',
+        'mukkadam_mobile',
+        'total_billed',
+        'total_paid',
+        'balance_due',
+        'full_payload',
+        'webhook_status',
+        'webhook_response',
+        'created_at',
+    ]
+    ordering = ['-created_at']
+
+    # Disable add/delete — this is a log, should only be viewed
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+    
+
+
+from .models import FarmerPaymentWebhookLog
+
+@admin.register(FarmerPaymentWebhookLog)
+class FarmerPaymentWebhookLogAdmin(admin.ModelAdmin):
+    list_display    = ['created_at', 'booking_id', 'amount', 'mode', 'transaction_id', 'payment_created', 'confirmation_sent', 'confirmation_status', 'status']
+    list_filter     = ['status', 'payment_created', 'confirmation_sent', 'created_at']
+    search_fields   = ['booking_id', 'transaction_id', 'notes']
+    readonly_fields = ['booking', 'booking_id', 'amount', 'mode', 'transaction_id', 'notes', 'paid_at', 'payment_created', 'farmer_payment', 'raw_payload', 'confirmation_sent', 'confirmation_webhook_url', 'confirmation_status', 'status', 'error', 'created_at']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False

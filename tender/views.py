@@ -4209,11 +4209,35 @@ def add_mukkadam_to_cluster(request, cluster_id):
     except Mukkadam.DoesNotExist:
         return Response({'error': 'Mukkadam not found'}, status=404)
 
-    if ClusterMukkadamAssignment.objects.filter(
-        mukkadam=mukkadam, cluster=cluster, is_active=True
-    ).exists():
-        return Response({'error': 'Mukkadam is already assigned to this cluster'}, status=400)
+    # Permanent mukkadams can only be in a cluster once
+    if mukkadam_type == 'permanent':
+        if ClusterMukkadamAssignment.objects.filter(
+            mukkadam=mukkadam, cluster=cluster, is_active=True, mukkadam_type='permanent'
+        ).exists():
+            return Response({'error': 'Mukkadam is already permanently assigned to this cluster'}, status=400)
 
+    # Updown mukkadams — check date overlap to prevent duplicate periods
+    if mukkadam_type == 'updown':
+        existing = ClusterMukkadamAssignment.objects.filter(
+            mukkadam=mukkadam, cluster=cluster, is_active=True, mukkadam_type='updown'
+        )
+        if updown_mode == 'range' and updown_from_date and updown_to_date:
+            # Check if any existing updown assignment overlaps with new dates
+            for ex in existing:
+                if ex.updown_mode == 'range' and ex.updown_from_date and ex.updown_to_date:
+                    # Overlap check
+                    if not (updown_to_date < str(ex.updown_from_date) or updown_from_date > str(ex.updown_to_date)):
+                        return Response({
+                            'error': f'Overlapping updown period already exists ({ex.updown_from_date} → {ex.updown_to_date})'
+                        }, status=400)
+        if updown_mode == 'specific' and updown_specific_dates:
+            for ex in existing:
+                if ex.updown_mode == 'specific':
+                    overlap = set(updown_specific_dates) & set(ex.updown_specific_dates or [])
+                    if overlap:
+                        return Response({
+                            'error': f'Overlapping dates already exist: {", ".join(sorted(overlap))}'
+                        }, status=400)
     if weekly_payment_day is not None and weekly_payment_day not in range(7):
         return Response({'error': 'weekly_payment_day must be 0–6'}, status=400)
 
@@ -5037,6 +5061,19 @@ def cluster_payment_dashboard(request, cluster_id):
                 })
 
             # ── Farmer Payments ──────────────────────────────────────────
+
+            # ── Mukkadam info for this job ────────────────────────────────
+            job_mukkadam_name   = '—'
+            job_mukkadam_mobile = '—'
+            try:
+                first_alloc = Allocation.objects.filter(
+                    job_activity__job=job
+                ).select_related('mukkadam').first()
+                if first_alloc and first_alloc.mukkadam:
+                    job_mukkadam_name   = first_alloc.mukkadam.mukkadam_name or '—'
+                    job_mukkadam_mobile = first_alloc.mukkadam.mobile_numbers or '—'
+            except Exception:
+                pass
             advance_paid    = Decimal(str(booking.advance_paid)) if booking else Decimal('0')
             additional_paid = Decimal('0')
             payment_history = []
@@ -5082,11 +5119,19 @@ def cluster_payment_dashboard(request, cluster_id):
                 'crop_name':            job.crop_name,
                 'variety':              getattr(job, 'variety', ''),
                 'plot_name':            activities[0].plot.name if activities and activities[0].plot else '—',
+                'plot_name':            activities[0].plot.name if activities and activities[0].plot else '—',
+                'mukkadam_name':        job_mukkadam_name,
+                'mukkadam_mobile':      job_mukkadam_mobile,
                 'job_status':           job.status,
                 'first_activity_date':  str(first_date) if first_date else None,
                 'last_activity_date':   str(last_date) if last_date else None,
                 'booking_id':           booking.booking_id if booking else None,
                 'total_job_amount':     float(booking_total),
+
+                'bill_sent':            FarmerBillWebhookLog.objects.filter(   # ← ADD THIS
+                        farmer_id=str(farmer.farmer_id),
+                        job_id=str(job.job_id),
+                    ).exists(),
                 'activities':           activity_rows,
                 'summary': {
                     'total_billable_so_far': float(total_billable),
@@ -5129,7 +5174,7 @@ def cluster_payment_dashboard(request, cluster_id):
         mukkadam = assignment.mukkadam
 
         settlements = MukkadamJobSettlement.objects.filter(
-            mukkadam=mukkadam, cluster_id=cluster_id,
+            mukkadam=mukkadam,
         ).select_related('job', 'job__farmer').order_by('-calculated_at')
 
         weekly_qs = MukkadamWeeklyPayment.objects.filter(
@@ -5274,6 +5319,8 @@ def cluster_payment_dashboard(request, cluster_id):
                 'advance_deducted':         float(s.advance_deducted),
                 'weekly_payments_deducted': float(s.weekly_payments_deducted),
                 'misc_costs':               misc_costs_data,
+                'mukkadam_type':      assignment.mukkadam_type,
+'transport_deducted': float(s.transport_deducted) if hasattr(s, 'transport_deducted') else 0.0,
                 'total_misc':               float(total_misc),
                 'transport_deducted':       float(s.transport_deducted) if hasattr(s, 'transport_deducted') else 0.0,
                 'net_payable':              float(s.net_payable),
@@ -5425,6 +5472,85 @@ def cluster_payment_dashboard(request, cluster_id):
 
         from datetime import timedelta
 
+        updown_allocations = []
+        if assignment.mukkadam_type == 'updown':
+
+            all_updown_allocs = Allocation.objects.filter(
+                mukkadam=mukkadam,
+            ).select_related(
+                'job_activity__activity',
+                'job_activity__plot',
+                'job_activity__job',
+                'job_activity__job__farmer',
+                'cluster',
+            ).order_by('allocated_date')
+
+            # Pre-fetch all assignments for this mukkadam (for transport resolution)
+            all_mukkadam_assignments = list(
+                ClusterMukkadamAssignment.objects.filter(
+                    mukkadam=mukkadam,
+                    mukkadam_type='updown',
+                ).order_by('joined_at')
+            )
+
+            # Pre-fetch existing settlements for this mukkadam
+            # so we can attach bill data to completed allocations
+            settled_map = {}
+            for sr in settlement_rows:
+                settled_map[str(sr['job_id'])] = sr
+
+            for a in all_updown_allocs:
+                ja     = a.job_activity
+                job    = ja.job
+                plot   = ja.plot
+                farmer = job.farmer if job else None
+
+                area = Decimal(str(a.actual_area_done or a.allocated_area or 0))
+                rate = Decimal(str(a.mukkadam_rate or 0))
+                gross_est = (area * rate).quantize(Decimal('0.01'))
+
+                # Resolve transport for this allocation's date
+                transport_est = Decimal('0')
+                if a.allocated_date:
+                    for asgn in all_mukkadam_assignments:
+                        if asgn.joined_at and asgn.joined_at.date() <= a.allocated_date:
+                            transport_est = Decimal(str(asgn.transport_price or 0))
+
+                net_est = gross_est + transport_est
+
+                # If completed, pull actual bill from settlement
+                is_completed = a.work_status == 'completed'
+                job_id_str   = str(job.job_id) if job else None
+                sr = settled_map.get(job_id_str)
+
+                updown_allocations.append({
+                    'allocation_id':      a.id,
+                    'allocated_date':     str(a.allocated_date) if a.allocated_date else None,
+                    'job_id':             job_id_str,
+                    'farmer_name':        farmer.farmer_name if farmer else '—',
+                    'farmer_id':          str(farmer.farmer_id) if farmer else None,
+                    'activity_name':      ja.activity.name if ja.activity else '—',
+                    'plot_code':          plot.plot_code if plot else '—',
+                    'plot_name':          plot.name if plot else '—',
+                    'allocated_area':     float(a.allocated_area or 0),
+                    'actual_area_done':   float(a.actual_area_done) if a.actual_area_done is not None else None,
+                    'mukkadam_rate':      float(rate),
+                    'work_status':        a.work_status or 'work_not_started',
+                    'report_submitted':   a.report_submitted,
+                    'allocated_workers':  a.allocated_workers or 0,
+                    'actual_crew_size':   a.actual_crew_size,
+                    'cluster_id':         a.cluster_id,
+                    'cluster_name':       a.cluster.name if a.cluster else '—',
+                    'gross_estimate':     float(gross_est),
+                    'transport_estimate': float(transport_est),
+                    'net_estimate':       float(net_est),
+                    'is_completed':       is_completed,
+                    'settlement_status':  sr['status'] if sr else None,
+                    'actual_gross':       sr['gross_amount'] if sr else None,
+                    'actual_transport':   sr['transport_deducted'] if sr else None,
+                    'actual_net':         sr['net_payable'] if sr else None,
+                    'settlement_id':      None,
+                })
         missed_weekly = []
         if assignment.weekly_payment_day is not None and assignment.joined_at:
             start = assignment.joined_at.date()
@@ -5457,6 +5583,8 @@ def cluster_payment_dashboard(request, cluster_id):
             ).exists(),
             'assignment_id':            assignment.id,
             'settlements':              settlement_rows,
+            'updown_allocations': updown_allocations,  
+            'mukkadam_type': assignment.mukkadam_type,  # 'updown' or 'permanent'
             'unsettled_jobs':           unsettled_jobs,
             'week_ledger':              week_ledger,
             'transaction_history':       txn_history,
@@ -5523,106 +5651,6 @@ def add_weekly_payment(request):
         'payment_date':   str(weekly_payment.payment_date),
         'amount':         float(weekly_payment.amount),
     })
-
-
-# Example usage in views
-def example_allocation_flow(request):
-    """
-    Example: Complete allocation flow with productivity validation
-    
-    This shows how frontend would interact with the API
-    """
-    
-    # Step 1: Frontend gets allocation form data
-    data = {
-        'job_activity_id': 123,
-        'mukkadam_id': 278,
-        'allocated_date': '2026-02-15',
-        'allocated_area': 2.0,
-        'allocated_workers': 10,
-        'farmer_rate': 1000,
-        'mukkadam_rate': 800
-    }
-    
-    # Step 2: Frontend calls validate_allocation endpoint
-    # POST /api/allocations/validate_allocation/
-    response = {
-        'can_allocate': False,
-        'error': 'Productivity constraint violated',
-        'warnings': {
-            'productivity_warning': {
-                'severity': 'error',
-                'message': 'Team cannot complete 2.0 acres in 1 day!',
-                'details': {
-                    'workers': 10,
-                    'productivity_per_worker': '0.15 acres/worker/day',
-                    'max_capacity': '1.5 acres/day',
-                    'requested': '2.0 acres',
-                    'deficit': '0.5 acres short'
-                },
-                'suggestions': [
-                    {
-                        'option': 'reduce_area',
-                        'description': 'Allocate only 1.50 acres (what team can complete)',
-                        'allocation': {
-                            'area': 1.5,
-                            'workers': 10,
-                            'will_complete': True
-                        }
-                    },
-                    {
-                        'option': 'add_workers',
-                        'description': 'Increase workers from 10 to 14 workers',
-                        'allocation': {
-                            'area': 2.0,
-                            'workers': 14,
-                            'will_complete': True,
-                            'note': 'Need 4 more workers'
-                        }
-                    },
-                    {
-                        'option': 'update_productivity',
-                        'description': 'Update productivity from 0.15 to 0.200 acres/worker/day',
-                        'allocation': {
-                            'area': 2.0,
-                            'workers': 10,
-                            'new_productivity': 0.2,
-                            'will_complete': True
-                        }
-                    },
-                    {
-                        'option': 'split_days',
-                        'description': 'Split: 1.50 acres today + 0.50 acres tomorrow',
-                        'allocations': [
-                            {'date': '2026-02-15', 'area': 1.5, 'workers': 10},
-                            {'date': 'next_day', 'area': 0.5, 'workers': 10}
-                        ]
-                    }
-                ]
-            }
-        }
-    }
-    
-    # Step 3: Frontend shows modal with options
-    # User chooses one of:
-    
-    # OPTION A: Reduce area to 1.5 acres
-    data_updated = {**data, 'allocated_area': 1.5}
-    # POST /api/allocations/create_allocation/ with updated data
-    
-    # OPTION B: Update productivity
-    # POST /api/mukkadam-rates/update_rate_and_productivity/
-    # Then POST /api/allocations/create_allocation/ with original data
-    
-    # OPTION C: Force allocation (override warning)
-    data_force = {**data, 'force': True}
-    # POST /api/allocations/create_allocation/ with force=true
-    
-    # OPTION D: Split into 2 allocations
-    # POST /api/allocations/create_allocation/ (Day 1: 1.5 acres)
-    # POST /api/allocations/create_allocation/ (Day 2: 0.5 acres)
-    
-    return response
 
 
 import uuid

@@ -1,4 +1,4 @@
-import { Toaster } from "@/components/ui/toaster";
+// import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -6,7 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-
 import Dashboard from "./Dashboard";
 
 import Login from "./Login";
-
+import { Toaster } from 'react-hot-toast';
 import AllocationView from './AllocationView';
 import AllocationDashboard from "./AllocationDashboard";
 
@@ -39,6 +39,10 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter basename="/">
+      <Toaster 
+  position="top-center"
+  containerStyle={{ zIndex: 99999 }}  // ← higher than modal's 9999
+/>
         <Routes>
           {/* <Route path="/loginf" element={<Login />} />
           

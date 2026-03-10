@@ -20,13 +20,15 @@ from .views import (
     suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs
 )
 
-from .webhook import booking_webhook,run_mukkadam_sync
+from .webhook import booking_webhook,run_mukkadam_sync,send_farmer_bill_to_webhook,farmer_payment_webhook
 from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history,mukkadam_earnings
 # Create router
 from django.views.decorators.csrf import csrf_exempt
 from .insight import ClusterInsightsView,GlobalInsightsView,GlobalDayInsightsView
 router = DefaultRouter()
 
+
+from .updown import updown_allocation_list,updown_complete_allocation
 # Register ViewSets
 router.register(r'extra-workers', ExtraWorkerViewSet, basename='extra-worker')
 router.register(r'job-activities', JobActivityViewSet, basename='job-activities')
@@ -66,6 +68,17 @@ path('api/settlements/', list_all_settlements, name='list-settlements'),
         mukkadam_settlement_detail,
         name='mukkadam-settlement-detail'
     ),
+
+
+   
+path('api/mukkadam/<int:mukkadam_id>/updown-allocations/',
+       updown_allocation_list, name='updown-allocation-list'),
+  path('api/mukkadam/<int:mukkadam_id>/updown-allocations/<int:allocation_id>/complete/',
+       updown_complete_allocation, name='updown-complete-allocation'),
+path('api/farmer-payment/webhook/', farmer_payment_webhook),
+
+
+
 path('api/attendance/send-start-otp/',       send_start_otp,       name='send-start-otp'),
     path('api/attendance/verify-start-otp/',     verify_start_otp,     name='verify-start-otp'),
     path('api/attendance/submit-day-end-report/', submit_day_end_report, name='submit-day-end-report'),
@@ -108,6 +121,8 @@ path('api/farmer/work-reports/', farmer_work_verification_detail, name='farmer_w
 
 path('api/cluster/<int:cluster_id>/payment-dashboard/', cluster_payment_dashboard),
 
+
+path('api/farmer-bill/send-webhook/', send_farmer_bill_to_webhook),
 
 
     path('api/mukkadam/<int:mukkadam_id>/settlement/<str:job_id>/pay/',
