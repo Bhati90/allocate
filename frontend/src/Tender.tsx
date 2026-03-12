@@ -1285,6 +1285,11 @@ const [showCreateModal, setShowCreateModal] = useState(false);
 
   const [editModal, setEditModal] = useState<Cluster | null>(null);
 
+  const [isAdmin, setIsAdmin] = useState(false);
+
+
+const [manageModal, setManageModal] = useState<{ id: number; name: string } | null>(null);
+
 
   const [searchTerm, setSearchTerm] = useState('');
 const [searchLoading, setSearchLoading] = useState(false);

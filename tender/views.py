@@ -2544,7 +2544,144 @@ class ClusterViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         user = self.request.user if self.request.user.is_authenticated else None
         serializer.save(last_modified_by=user)
+
+    @action(detail=True, methods=['post'], url_path='remove_farmer')
+    def remove_farmer(self, request, pk=None):
+        """
+        POST /api/clusters/{id}/remove_farmer/
+        Body: { "farmer_id": "F001" }
+        Admin only. Removes farmer + their plots + their jobs from this cluster.
+        """
+        if not request.user.is_authenticated:
+            return Response({'error': 'Authentication required'}, status=401)
+
+        try:
+            if request.user.profile.role != 'admin':
+                return Response({'error': 'Admin access required'}, status=403)
+        except UserProfile.DoesNotExist:
+            return Response({'error': 'Admin access required'}, status=403)
+
+        cluster = self.get_object()
+        farmer_id = request.data.get('farmer_id')
+        if not farmer_id:
+            return Response({'error': 'farmer_id required'}, status=400)
+
+        try:
+            farmer = Farmer.objects.get(farmer_id=farmer_id)
+        except Farmer.DoesNotExist:
+            return Response({'error': 'Farmer not found'}, status=404)
+
+        now = timezone.now()
+
+        # 1. Remove farmer from cluster + record who did it
+        cluster.farmers.remove(farmer)
+        Farmer.objects.filter(farmer_id=farmer_id).update(
+            last_cluster_modified_by=request.user,
+        )
+
+        # 2. Remove farmer's plots from this cluster + record who did it
+        farmer_plots = Plot.objects.filter(farmer=farmer, clusters=cluster)
+        plots_count = farmer_plots.count()
+        for plot in farmer_plots:
+            plot.clusters.remove(cluster)
+        Plot.objects.filter(farmer=farmer).update(
+            last_cluster_modified_by=request.user,
+            last_cluster_modified_at=now,
+        )
+
+        # 3. Remove farmer's jobs from this cluster + record who did it
+        farmer_jobs = Job.objects.filter(farmer=farmer, clusters=cluster)
+        jobs_count = farmer_jobs.count()
+        for job in farmer_jobs:
+            job.clusters.remove(cluster)
+
+        # 4. Log the action
+        logger.info(
+            f"[CLUSTER REMOVE] user='{request.user.username}' (id={request.user.id}) "
+            f"removed farmer='{farmer.farmer_name}' ({farmer_id}) "
+            f"from cluster='{cluster.name}' (id={cluster.id}) "
+            f"| plots_removed={plots_count} jobs_removed={jobs_count} "
+            f"| at={now.isoformat()}"
+        )
+
+        return Response({
+            'success': True,
+            'message': f'{farmer.farmer_name} removed from {cluster.name}',
+            'removed_by': request.user.username,
+            'removed_at': now.isoformat(),
+            'plots_removed': plots_count,
+            'jobs_removed': jobs_count,
+        })
     
+    
+    @action(detail=True, methods=['post'], url_path='remove_mukkadam')
+    def remove_mukkadam(self, request, pk=None):
+        if not request.user.is_authenticated:
+            return Response({'error': 'Authentication required'}, status=401)
+
+        try:
+            if request.user.profile.role != 'admin':
+                return Response({'error': 'Admin access required'}, status=403)
+        except UserProfile.DoesNotExist:
+            return Response({'error': 'Admin access required'}, status=403)
+
+        cluster = self.get_object()
+        mukkadam_id = request.data.get('mukkadam_id')
+        if not mukkadam_id:
+            return Response({'error': 'mukkadam_id required'}, status=400)
+
+        now = timezone.now()
+
+        updated = ClusterMukkadamAssignment.objects.filter(
+            cluster=cluster,
+            mukkadam__mukkadam_id=mukkadam_id,
+            is_active=True,
+        ).update(
+            is_active=False,
+            last_modified_by=request.user,  # ← keep this
+            # last_modified_at=now,         # ← remove this, updated_at auto_now handles it
+        )
+
+        if not updated:
+            return Response({'error': 'Active assignment not found'}, status=404)
+
+        # Log the action
+        logger.info(
+            f"[CLUSTER REMOVE] user='{request.user.username}' (id={request.user.id}) "
+            f"removed mukkadam='{mukkadam_id}' "
+            f"from cluster='{cluster.name}' (id={cluster.id}) "
+            f"| at={now.isoformat()}"
+        )
+
+        return Response({
+            'success': True,
+            'message': f'Mukkadam removed from {cluster.name}',
+            'removed_by': request.user.username,
+            'removed_at': now.isoformat(),
+        })
+    @action(detail=True, methods=['get'], url_path='members')
+    def members(self, request, pk=None):
+        """
+        GET /api/clusters/{id}/members/
+        Returns farmers + mukkadams in this cluster.
+        """
+        cluster = self.get_object()
+
+        farmers = cluster.farmers.values('farmer_id', 'farmer_name', 'phone_number', 'location')
+        
+        mukkadams = ClusterMukkadamAssignment.objects.filter(
+            cluster=cluster, is_active=True
+        ).select_related('mukkadam').values(
+            mukkadam_id=models.F('mukkadam__mukkadam_id'),
+            mukkadam_name=models.F('mukkadam__mukkadam_name'),
+            mukkadam_type=models.F('mukkadam_type'),
+        )
+
+        return Response({
+            'farmers': list(farmers),
+            'mukkadams': list(mukkadams),
+        })
+        
 
     # def list(self, request, *args, **kwargs):
     #     from datetime import date
@@ -3458,6 +3595,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
             mukkadams = Mukkadam.objects.all()
         
         report = []
+
+
         
         for mukkadam in mukkadams:
             rates = mukkadam.activity_rates.filter(is_active=True)
@@ -5248,26 +5387,49 @@ def cluster_payment_dashboard(request, cluster_id):
     # ─────────────────────────────────────────────────────────────
     # MUKKADAMS
     # ─────────────────────────────────────────────────────────────
-    assignments = ClusterMukkadamAssignment.objects.filter(
-        cluster_id=cluster_id, is_active=True,
-    ).select_related('mukkadam')
-
     mukkadam_data = []
-    for assignment in assignments:
-        mukkadam = assignment.mukkadam
+
+    seen_mukkadams = set()
+    all_assignments = ClusterMukkadamAssignment.objects.filter(
+        cluster_id=cluster_id, is_active=True,
+    ).select_related('mukkadam').order_by('joined_at')
+
+    for _assignment in all_assignments:
+        mukkadam = _assignment.mukkadam
+        if mukkadam.mukkadam_id in seen_mukkadams:
+            continue
+        seen_mukkadams.add(mukkadam.mukkadam_id)
+
+        # Use the LATEST assignment for display info (type, transport, weekly etc.)
+        assignment = ClusterMukkadamAssignment.objects.filter(
+            mukkadam=mukkadam,
+            cluster_id=cluster_id,
+            is_active=True,
+        ).order_by('-joined_at').first()
+
+        # Check if mukkadam has ANY updown history (even if now permanent)
+        has_updown_history = ClusterMukkadamAssignment.objects.filter(
+            mukkadam=mukkadam,
+            cluster_id=cluster_id,
+            is_active=True,
+            mukkadam_type='updown',
+        ).exists()
 
         settlements = MukkadamJobSettlement.objects.filter(
             mukkadam=mukkadam,
         ).select_related('job', 'job__farmer').order_by('-calculated_at')
 
+        # Weekly payments across ALL assignments for this mukkadam in this cluster
         weekly_qs = MukkadamWeeklyPayment.objects.filter(
-                assignment=assignment
-            ).order_by('payment_date')
-        
-         # ── Define weekly_proof_map HERE (before settlements loop) ──
+            assignment__mukkadam=mukkadam,
+            assignment__cluster_id=cluster_id,
+        ).order_by('payment_date')
+
+        # ── Define weekly_proof_map HERE (before settlements loop) ──
         weekly_proof_keys = [w.proof_s3_key for w in weekly_qs if getattr(w, 'proof_s3_key', None)]
         weekly_proof_map  = get_presigned_urls_batch(weekly_proof_keys) if weekly_proof_keys else {}
         # ───────
+
         settlement_rows = []
         for s in settlements:
             allocations = Allocation.objects.filter(
@@ -5346,12 +5508,13 @@ def cluster_payment_dashboard(request, cluster_id):
                 })
 
             # ── Weekly payments with proof ───────────────────────────────
-            # Use assignment-level weekly payments (not settlement FK)
-            weekly_qs = MukkadamWeeklyPayment.objects.filter(
-                assignment=assignment
+            # Across ALL assignments for this mukkadam in this cluster
+            weekly_payments_qs = MukkadamWeeklyPayment.objects.filter(
+                assignment__mukkadam=mukkadam,
+                assignment__cluster_id=cluster_id,
             ).order_by('payment_date')
             weekly_payments_data = []
-            for w in weekly_qs:
+            for w in weekly_payments_qs:
                 ps_key = getattr(w, 'proof_s3_key', None)
                 weekly_payments_data.append({
                     'payment_date':      str(w.payment_date),
@@ -5388,6 +5551,10 @@ def cluster_payment_dashboard(request, cluster_id):
             if settlement_payments_data:
                 settlement_proof_url = settlement_payments_data[-1]['proof_url']
 
+            # Use settlement's own mukkadam_type for historical accuracy
+            # (updown settlements stay updown even if mukkadam is now permanent)
+            settlement_mukkadam_type = s.mukkadam_type if hasattr(s, 'mukkadam_type') else assignment.mukkadam_type
+
             settlement_rows.append({
                 'job_id':                   s.job.job_id,
                 'job_title':                f"{s.job.crop_name} — {s.job.farmer.farmer_name}",
@@ -5402,10 +5569,9 @@ def cluster_payment_dashboard(request, cluster_id):
                 'advance_deducted':         float(s.advance_deducted),
                 'weekly_payments_deducted': float(s.weekly_payments_deducted),
                 'misc_costs':               misc_costs_data,
-                'mukkadam_type':      assignment.mukkadam_type,
-'transport_deducted': float(s.transport_deducted) if hasattr(s, 'transport_deducted') else 0.0,
-                'total_misc':               float(total_misc),
+                'mukkadam_type':            settlement_mukkadam_type,
                 'transport_deducted':       float(s.transport_deducted) if hasattr(s, 'transport_deducted') else 0.0,
+                'total_misc':               float(total_misc),
                 'net_payable':              float(s.net_payable),
                 'calculated_at':            str(s.calculated_at.date()) if s.calculated_at else None,
                 'paid_at':                  str(s.paid_at.date()) if s.paid_at else None,
@@ -5415,16 +5581,17 @@ def cluster_payment_dashboard(request, cluster_id):
                 'show_raise_payment':       s.status == 'calculated' and s.net_payable > 0,
                 'activities':               act_details,
                 'weekly_payments':          weekly_payments_data,
-                # keep old key for any other consumers
                 'weekly_breakdown': [{
                     'payment_date': w['payment_date'],
                     'amount':       w['amount'],
                     'crew_size':    w['crew_size_on_date'],
                 } for w in weekly_payments_data],
             })
-        
+
+        # ── Total weekly paid across ALL assignments ──────────────────
         total_weekly_paid = MukkadamWeeklyPayment.objects.filter(
-            assignment=assignment
+            assignment__mukkadam=mukkadam,
+            assignment__cluster_id=cluster_id,
         ).aggregate(total=models.Sum('amount'))['total'] or 0
 
         total_net      = sum(Decimal(str(s['net_payable'])) for s in settlement_rows if s['status'] == 'calculated')
@@ -5455,17 +5622,14 @@ def cluster_payment_dashboard(request, cluster_id):
             pending_work  = ledger_data['pending_work']
             ledger_summary = ledger_data['summary']
         except Exception as e:
-            # Fallback: empty ledger if builder fails
             week_ledger    = []
             pending_work   = []
             ledger_summary = {}
 
         # ── Build unified transaction history timeline ───────────────────
-        # Every money event: advance, weekly, settlement payments, misc costs
-        # Sorted by date ascending
         txn_history = []
 
-        # 1. Advance
+        # 1. Advance — from latest assignment
         if assignment.advance_amount and float(assignment.advance_amount) > 0:
             advance_date = str(assignment.joined_at.date()) if assignment.joined_at else str(today)
             txn_history.append({
@@ -5481,13 +5645,13 @@ def cluster_payment_dashboard(request, cluster_id):
                 'icon':      '💰',
             })
 
-        # 2. Weekly payments
+        # 2. Weekly payments — across ALL assignments
         for w in weekly_qs:
             ps_key = getattr(w, 'proof_s3_key', None)
             txn_history.append({
                 'type':      'weekly',
                 'date':      str(w.payment_date),
-                'label':     f'Weekly Payment',
+                'label':     'Weekly Payment',
                 'amount':    -float(w.amount),
                 'mode':      getattr(w, 'mode', 'CASH'),
                 'notes':     getattr(w, 'notes', ''),
@@ -5497,7 +5661,7 @@ def cluster_payment_dashboard(request, cluster_id):
                 'icon':      '📅',
             })
 
-        # 3. Settlement payments (paid jobs)
+        # 3. Settlement payments
         all_mukkadam_payments = MukkadamPayment.objects.filter(
             mukkadam=mukkadam,
         ).select_related('settlement__job').order_by('paid_at')
@@ -5505,8 +5669,8 @@ def cluster_payment_dashboard(request, cluster_id):
         settle_proof_map  = get_presigned_urls_batch(settle_proof_keys) if settle_proof_keys else {}
 
         for p in all_mukkadam_payments:
-            ps_key     = getattr(p, 'proof_s3_key', None)
-            job_id     = p.settlement.job.job_id if p.settlement and p.settlement.job else None
+            ps_key      = getattr(p, 'proof_s3_key', None)
+            job_id      = p.settlement.job.job_id if p.settlement and p.settlement.job else None
             farmer_name = p.settlement.job.farmer.farmer_name if p.settlement and p.settlement.job and p.settlement.job.farmer else ''
             txn_history.append({
                 'type':      'settlement_payment',
@@ -5521,7 +5685,7 @@ def cluster_payment_dashboard(request, cluster_id):
                 'icon':      '✅',
             })
 
-        # 4. Misc deductions (all jobs)
+        # 4. Misc deductions
         all_misc = MukkadamMiscCost.objects.filter(
             mukkadam=mukkadam,
         ).select_related('job').order_by('created_at')
@@ -5529,8 +5693,8 @@ def cluster_payment_dashboard(request, cluster_id):
         all_misc_proof_map  = get_presigned_urls_batch(all_misc_proof_keys) if all_misc_proof_keys else {}
 
         for c in all_misc:
-            ps_key  = getattr(c, 'proof_s3_key', None)
-            job_id  = c.job.job_id if c.job else None
+            ps_key = getattr(c, 'proof_s3_key', None)
+            job_id = c.job.job_id if c.job else None
             txn_history.append({
                 'type':      'misc_deduction',
                 'date':      str(c.created_at.date()),
@@ -5544,10 +5708,7 @@ def cluster_payment_dashboard(request, cluster_id):
                 'icon':      '⚠️',
             })
 
-        # Sort all events by date
         txn_history.sort(key=lambda x: x['date'])
-
-        # Running balance
         running = 0.0
         for txn in txn_history:
             running += txn['amount']
@@ -5555,9 +5716,9 @@ def cluster_payment_dashboard(request, cluster_id):
 
         from datetime import timedelta
 
+        # ── Updown allocations — show if ANY updown history exists ────
         updown_allocations = []
-        if assignment.mukkadam_type == 'updown':
-
+        if has_updown_history:
             all_updown_allocs = Allocation.objects.filter(
                 mukkadam=mukkadam,
             ).select_related(
@@ -5568,7 +5729,7 @@ def cluster_payment_dashboard(request, cluster_id):
                 'cluster',
             ).order_by('allocated_date')
 
-            # Pre-fetch all assignments for this mukkadam (for transport resolution)
+            # All updown assignments for transport resolution
             all_mukkadam_assignments = list(
                 ClusterMukkadamAssignment.objects.filter(
                     mukkadam=mukkadam,
@@ -5576,8 +5737,6 @@ def cluster_payment_dashboard(request, cluster_id):
                 ).order_by('joined_at')
             )
 
-            # Pre-fetch existing settlements for this mukkadam
-            # so we can attach bill data to completed allocations
             settled_map = {}
             for sr in settlement_rows:
                 settled_map[str(sr['job_id'])] = sr
@@ -5588,23 +5747,20 @@ def cluster_payment_dashboard(request, cluster_id):
                 plot   = ja.plot
                 farmer = job.farmer if job else None
 
-                area = Decimal(str(a.actual_area_done or a.allocated_area or 0))
-                rate = Decimal(str(a.mukkadam_rate or 0))
+                area      = Decimal(str(a.actual_area_done or a.allocated_area or 0))
+                rate      = Decimal(str(a.mukkadam_rate or 0))
                 gross_est = (area * rate).quantize(Decimal('0.01'))
 
-                # Resolve transport for this allocation's date
                 transport_est = Decimal('0')
                 if a.allocated_date:
                     for asgn in all_mukkadam_assignments:
                         if asgn.joined_at and asgn.joined_at.date() <= a.allocated_date:
                             transport_est = Decimal(str(asgn.transport_price or 0))
 
-                net_est = gross_est + transport_est
-
-                # If completed, pull actual bill from settlement
+                net_est      = gross_est + transport_est
                 is_completed = a.work_status == 'completed'
                 job_id_str   = str(job.job_id) if job else None
-                sr = settled_map.get(job_id_str)
+                sr           = settled_map.get(job_id_str)
 
                 updown_allocations.append({
                     'allocation_id':      a.id,
@@ -5634,16 +5790,19 @@ def cluster_payment_dashboard(request, cluster_id):
                     'actual_net':         sr['net_payable'] if sr else None,
                     'settlement_id':      None,
                 })
+
+        # ── Missed weekly payments — from latest assignment only ──────
         missed_weekly = []
         if assignment.weekly_payment_day is not None and assignment.joined_at:
-            start = assignment.joined_at.date()
+            start   = assignment.joined_at.date()
             current = start
             paid_dates = set(
-                MukkadamWeeklyPayment.objects.filter(assignment=assignment)
-                .values_list('payment_date', flat=True)
+                MukkadamWeeklyPayment.objects.filter(
+                    assignment__mukkadam=mukkadam,
+                    assignment__cluster_id=cluster_id,
+                ).values_list('payment_date', flat=True)
             )
             while current <= today:
-                # weekly_payment_day: 0=Mon...6=Sun
                 if current.weekday() == assignment.weekly_payment_day and current < today:
                     if current not in paid_dates:
                         missed_weekly.append(str(current))
@@ -5660,17 +5819,20 @@ def cluster_payment_dashboard(request, cluster_id):
             'weekly_payment_amount':    float(assignment.weekly_amount),
             'weekly_payment_day_value': assignment.weekly_payment_day,
             'weekly_payment_day_label': assignment.get_weekly_payment_day_display() if assignment.weekly_payment_day is not None else None,
-            'missed_weekly_dates': missed_weekly,
-            'already_paid_today': MukkadamWeeklyPayment.objects.filter(
-                assignment=assignment, payment_date=today,
+            'missed_weekly_dates':      missed_weekly,
+            'already_paid_today':       MukkadamWeeklyPayment.objects.filter(
+                assignment__mukkadam=mukkadam,
+                assignment__cluster_id=cluster_id,
+                payment_date=today,
             ).exists(),
             'assignment_id':            assignment.id,
             'settlements':              settlement_rows,
-            'updown_allocations': updown_allocations,  
-            'mukkadam_type': assignment.mukkadam_type,  # 'updown' or 'permanent'
+            'updown_allocations':       updown_allocations,
+            'mukkadam_type':            assignment.mukkadam_type,  # current type
+            'has_updown_history':       has_updown_history,
             'unsettled_jobs':           unsettled_jobs,
             'week_ledger':              week_ledger,
-            'transaction_history':       txn_history,
+            'transaction_history':      txn_history,
             'pending_work':             pending_work,
             'ledger_summary':           ledger_summary,
             'summary': {
@@ -5692,7 +5854,6 @@ def cluster_payment_dashboard(request, cluster_id):
         'farmers':            farmer_data,
         'mukkadams':          mukkadam_data,
     })
-
 
 @api_view(['POST'])
 @permission_classes([AllowAny])

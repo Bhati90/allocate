@@ -427,11 +427,12 @@ function ActivityRowWithEfficiency({ activity, mukkadamEfficiency }: {
   );
 }
 // ─── Mukkadam Card ───────────────────────────────────────
-function MukkadamCard({ m, clusters, onSuccess ,onCallClick}: {
+function MukkadamCard({ m, clusters, onSuccess ,onCallClick,isAdmin = false}: {
   m: Mukkadam;
   clusters: ClusterOption[];
   onSuccess: () => void;
   onCallClick: (number: string) => void;
+  isAdmin?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -486,6 +487,7 @@ function MukkadamCard({ m, clusters, onSuccess ,onCallClick}: {
                 </span>
               ) : (
                 m.clusters.map((c: ClusterOption) => (
+                  
                   <span
                     key={c.id}
                     style={{
@@ -522,7 +524,40 @@ function MukkadamCard({ m, clusters, onSuccess ,onCallClick}: {
                       mode="edit"
                       clusterToEdit={c}
                     />
+
+                    {isAdmin && (
+  <button
+    onClick={async (e) => {
+      const token = localStorage.getItem('auth_token')
+      e.stopPropagation();
+      if (!confirm(`Remove ${m.name} from "${c.name}"?`)) return;
+      await fetch(`${API_BASE_URL}/api/clusters/${c.id}/remove_mukkadam/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json','Authorization': `Token ${token}`, },
+        
+        body: JSON.stringify({ mukkadam_id: m.id }),
+      });
+      onSuccess();
+    }}
+    title="Remove from cluster"
+    style={{
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      padding: '0 2px',
+      lineHeight: 1,
+      color: '#ef4444',
+      opacity: 0.7,
+      fontSize: '0.75rem',
+    }}
+    onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+    onMouseLeave={e => (e.currentTarget.style.opacity = '0.7')}
+  >
+    ✕
+  </button>
+)}
                   </span>
+                  
                 ))
               )}
 
@@ -1506,6 +1541,7 @@ function AddToClusterTrigger({ farmer, clusters, onSuccess }: {
 interface FarmerCardProps {
   farmer: Farmer;
   clusters: ClusterOption[];
+  isAdmin?: boolean;
   onSuccess: () => void;
 }
 // Remove the entire formatPruningBadge function and replace with:
@@ -1518,11 +1554,13 @@ function formatPruningDate(date: Date | null): React.ReactNode {
     </span>
   );
 }
-function FarmerCard({ farmer, clusters, onSuccess }: FarmerCardProps) {
+function FarmerCard({ farmer, clusters, onSuccess,isAdmin = false }: FarmerCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [expandedPlot, setExpandedPlot] = useState<number | null>(null);
   const [expandedJob, setExpandedJob] = useState<string | null>(null);
 const [farmerTab, setFarmerTab] = useState<'details' | 'billing'>('details');
+
+
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
@@ -1580,15 +1618,36 @@ const [farmerTab, setFarmerTab] = useState<'details' | 'billing'>('details');
               <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">
                 {farmer.total_jobs} Jobs
               </span>
-              {farmer.clusters.length === 0 ? (
-                <span className="px-2 py-0.5 bg-red-50 text-red-600 rounded text-xs">No Cluster</span>
-              ) : farmer.clusters.map(c => (
-                <span key={c.id} className="px-2 py-0.5 bg-teal-50 text-teal-700 rounded text-xs">
-                  {c.name}
-                </span>
+{farmer.clusters.length === 0 ? (
+  <span className="px-2 py-0.5 bg-red-50 text-red-600 rounded text-xs">No Cluster</span>
+) : farmer.clusters.map(c => (
+  <span key={c.id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-teal-50 text-teal-700 rounded text-xs">
+    {c.name}
 
-                
-              ))}
+    {isAdmin && (
+      <button
+        onClick={async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Remove ${farmer.farmer_name} from "${c.name}"?`)) return;
+          const token = localStorage.getItem('auth_token');
+          await fetch(`${API_BASE_URL}/api/clusters/${c.id}/remove_farmer/`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Token ${token}`,
+            },
+            body: JSON.stringify({ farmer_id: farmer.farmer_id }),
+          });
+          onSuccess();
+        }}
+        title="Remove from cluster"
+        className="ml-0.5 text-red-400 hover:text-red-600 leading-none"
+      >
+        ✕
+      </button>
+    )}
+  </span>
+))}
 
 {/* ← ADD THIS */}
 {(() => {
@@ -2732,6 +2791,22 @@ export default function TenderDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
    const navigate = useNavigate();
+
+   const [isAdmin, setIsAdmin] = useState(false);
+
+useEffect(() => {
+  const token = localStorage.getItem('auth_token'); // ← use whatever key you store it under
+
+  fetch(`${API_BASE_URL}/auth/me/`, {
+    headers: {
+      'Authorization': `Token ${token}`,   // or `Bearer ${token}` if using JWT
+      'Content-Type': 'application/json',
+    },
+  })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d?.is_admin) setIsAdmin(true); })
+    .catch(() => {});
+}, []);
   // Change the tab type
 // change tab type
 const [tab, setTab] = useState<'mukkadams' | 'farmers' | 'payments' | 'global'>('mukkadams');
@@ -3027,6 +3102,7 @@ filteredMukkadams.map(m => (
   key={m.id}
   m={m}
   clusters={clusters}
+  isAdmin={isAdmin}
   onSuccess={fetchDataSilent}
   onCallClick={(num: string) => {
     setDialpadNumber(num || '');
@@ -3052,7 +3128,7 @@ filteredMukkadams.map(m => (
       {filteredFarmers.length === 0
         ? <div className="text-center py-16 text-gray-400">No farmers found</div>
         : filteredFarmers.map(f => (
-  <FarmerCard key={f.farmer_id} farmer={f} clusters={clusters} onSuccess={fetchDataSilent} />
+  <FarmerCard key={f.farmer_id} farmer={f} clusters={clusters} isAdmin={isAdmin} onSuccess={fetchDataSilent} />
 ))
       }
     </div>

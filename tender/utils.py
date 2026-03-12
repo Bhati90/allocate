@@ -205,26 +205,36 @@ def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers,
 
     # ── UPDOWN CHECK ──────────────────────────────────────────────────────────
     check_date_str = str(date)
+    # ── UPDOWN CHECK ──────────────────────────────────────────────────────────
     if cluster_id:
-        assignment = ClusterMukkadamAssignment.objects.filter(
+        assignments = ClusterMukkadamAssignment.objects.filter(
             mukkadam=mukkadam,
             cluster_id=cluster_id,
             is_active=True,
-        ).first()
-        if assignment and assignment.mukkadam_type == 'updown':
+        )
+        
+        # If ANY assignment covers this date, they're available
+        updown_assignments = [a for a in assignments if a.mukkadam_type == 'updown']
+        
+        if updown_assignments:
             available = False
-            if assignment.updown_mode == 'range':
-                if assignment.updown_from_date and assignment.updown_to_date:
-                    available = assignment.updown_from_date <= date <= assignment.updown_to_date
-            elif assignment.updown_mode == 'specific':
-                available = check_date_str in (assignment.updown_specific_dates or [])
+            for assignment in updown_assignments:
+                if assignment.updown_mode == 'range':
+                    if assignment.updown_from_date and assignment.updown_to_date:
+                        if assignment.updown_from_date <= date <= assignment.updown_to_date:
+                            available = True
+                            break
+                elif assignment.updown_mode == 'specific':
+                    if check_date_str in (assignment.updown_specific_dates or []):
+                        available = True
+                        break
+            
             if not available:
                 return (
                     False,
                     f"{mukkadam.mukkadam_name} is not available on {check_date_str} in this cluster",
                     {},
                 )
-
     # ── REMAINING AREA CHECK ──────────────────────────────────────────────────
     if not skip_strict_check and area > job_activity.remaining_area:
         return False, f"Area exceeds remaining: {job_activity.remaining_area} acres still not allocated", {}

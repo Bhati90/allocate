@@ -2730,443 +2730,750 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
   </div>
 )}
 
-        {tab === 'mukkadams' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {data.mukkadams.filter((m: any) => {
-                const allAllocs = (m.settlements || []).flatMap((s: any) => s.activities || []);
-                if (allAllocs.length === 0) return true;
-                return allAllocs.some((a: any) => a.work_status !== 'work_not_started');
-              }).length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '48px', color: '#9ca3af', fontSize: '0.82rem' }}>
-                No active mukkadams (all work not started yet)
-              </div>
-            ) :  data.mukkadams.map((m: any) => {
-              if (m.already_paid_today === false && m.weekly_payment_day_value !== null && m.weekly_payment_day_value !== undefined) {
-                const todayJs = new Date().getDay();
-                const todayPy = todayJs === 0 ? 6 : todayJs - 1;
-                if (m.weekly_payment_day_value === todayPy) return true;
-              }
-              if (m.advance_amount > 0) return true;
-              if (m.settlements && m.settlements.length > 0) return true;
-              const allAllocs = (m.settlements || []).flatMap((s: any) => s.activities || []);
-              if (allAllocs.length === 0) return false;
-              return allAllocs.some((a: any) => a.work_status !== 'work_not_started');
-            }).map((m: any) => {
-              const expandKey = `mukkadam-${m.mukkadam_id}`;
-              const isOpen = expandedKey === expandKey;
+{tab === 'mukkadams' && (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+    {data.mukkadams.map((m: any) => {
+      // ── SAFE DEFAULTS ─────────────────────────────────────────
+      const settlements    = Array.isArray(m.settlements)         ? m.settlements         : [];
+      const missedWeekly   = Array.isArray(m.missed_weekly_dates) ? m.missed_weekly_dates : [];
 
-              // ── UPDOWN DETECTION ─────────────────────────────────────────
-              const isUpdown = m.mukkadam_type === 'updown';
+      const expandKey = `mukkadam-${m.mukkadam_id}`;
+      const isOpen    = expandedKey === expandKey;
 
-              const weeklyPaymentDayValue = m.weekly_payment_day_value ?? m.assignment?.weekly_payment_day_value;
-              const weeklyPaymentAmount   = m.weekly_payment_amount   ?? m.assignment?.weekly_payment_amount;
-              const weeklyPaymentDayLabel = m.weekly_payment_day_label ?? m.assignment?.weekly_payment_day_label;
-              const alreadyPaidToday      = m.already_paid_today      ?? m.assignment?.already_paid_today;
-              const assignmentId          = m.assignment_id            ?? m.assignment?.assignment_id;
-              const totalWeeklyPaid       = m.total_weekly_paid        ?? 0;
-              const advancePaid           = m.advance_amount           ?? 0;
+      // ── UPDOWN DETECTION ─────────────────────────────────────────
+      const isUpdown = m.mukkadam_type === 'updown';
 
-              const todayJs = new Date().getDay();
-              const todayPy = todayJs === 0 ? 6 : todayJs - 1;
-              const weeklyDueToday = !isUpdown && weeklyPaymentDayValue === todayPy && !alreadyPaidToday;
+      const weeklyPaymentDayValue = m.weekly_payment_day_value ?? m.assignment?.weekly_payment_day_value;
+      const weeklyPaymentAmount   = m.weekly_payment_amount    ?? m.assignment?.weekly_payment_amount;
+      const weeklyPaymentDayLabel = m.weekly_payment_day_label ?? m.assignment?.weekly_payment_day_label;
+      const alreadyPaidToday      = m.already_paid_today       ?? m.assignment?.already_paid_today;
+      const assignmentId          = m.assignment_id            ?? m.assignment?.assignment_id;
+      const totalWeeklyPaid       = m.total_weekly_paid        ?? 0;
+      const advancePaid           = m.advance_amount           ?? 0;
 
-              // ── GROSS & TRANSPORT ────────────────────────────────────────
-              const totalGross = Array.isArray(m.settlements)
-  ? m.settlements.reduce(
-      (acc: number, st: any) => acc + Number(st.gross_amount),
-      0
-    )
-  : 0;
-         const totalTransport =
-  m.settlements?.reduce(
-    (acc: number, st: any) => acc + Number(st.transport_deducted || 0),
-    0
-  ) ?? 0;
+      const todayJs = new Date().getDay();
+      const todayPy = todayJs === 0 ? 6 : todayJs - 1;
+      const weeklyDueToday = !isUpdown && weeklyPaymentDayValue === todayPy && !alreadyPaidToday;
 
-              // ── DEPOSIT (permanent only) ─────────────────────────────────
-              const isJobFullyDone = (st: any) => {
-                const acts = st.activities || [];
-                return acts.length > 0 && acts.every((a: any) => a.work_status === 'completed');
-              };
-              const depositHeld = m.settlements
-                .filter((st: any) => !isJobFullyDone(st))
-                .reduce((acc: number, st: any) => acc + Number(st.deposit_held || 0), 0);
+      // ── GROSS & TRANSPORT ────────────────────────────────────────
+      const totalGross = settlements.reduce(
+        (acc: number, st: any) => acc + Number(st.gross_amount || 0), 0
+      );
+      const totalTransport = settlements.reduce(
+        (acc: number, st: any) => acc + Number(st.transport_deducted || 0), 0
+      );
 
-              const totalMisc = m.settlements.reduce(
-                (acc: number, st: any) => acc + Number(st.total_misc || 0), 0
-              );
+      // ── DEPOSIT (permanent only) ─────────────────────────────────
+      const isJobFullyDone = (st: any) => {
+        const acts = st.activities || [];
+        return acts.length > 0 && acts.every((a: any) => a.work_status === 'completed');
+      };
+      const depositHeld = settlements
+        .filter((st: any) => !isJobFullyDone(st))
+        .reduce((acc: number, st: any) => acc + Number(st.deposit_held || 0), 0);
 
-              // ── SHOOT SELECTION CHECK (permanent only) ───────────────────
-              const isShootSelectionDone = (st: any) => {
-                const acts = st.activities || [];
-                return acts.some((a: any) => {
-                  const name = (a.activity_name || '').toLowerCase();
-                  return ((name.includes('shoot') && name.includes('select')) ||
-                         (a.activity_name || '').includes('विरळणी')) &&
-                         a.work_status === 'completed';
-                });
-              };
+      const totalMisc = settlements.reduce(
+        (acc: number, st: any) => acc + Number(st.total_misc || 0), 0
+      );
 
-              // ── NET PAYABLE ──────────────────────────────────────────────
-              // updown: all 'calculated' settlements count (no shoot selection gate)
-              // permanent: only where shoot selection is done
-              const netPayableOverall = isUpdown
-                ? m.settlements
-                    .filter((st: any) => st.status === 'calculated')
-                    .reduce((acc: number, st: any) => acc + Number(st.net_payable), 0)
-                : m.settlements
-                    .filter((st: any) => st.status === 'calculated' && isShootSelectionDone(st))
-                    .reduce((acc: number, st: any) => acc + Number(st.net_payable), 0);
+      // ── SHOOT SELECTION CHECK (permanent only) ───────────────────
+      const isShootSelectionDone = (st: any) => {
+        const acts = st.activities || [];
+        return acts.some((a: any) => {
+          const name = (a.activity_name || '').toLowerCase();
+          return ((name.includes('shoot') && name.includes('select')) ||
+                 (a.activity_name || '').includes('विरळणी')) &&
+                 a.work_status === 'completed';
+        });
+      };
 
-              const jobsReadyToPay = isUpdown
-                ? m.settlements.filter((st: any) =>
-                    st.status === 'calculated' && Number(st.net_payable) > 0.01
-                  )
-                : m.settlements.filter((st: any) =>
-                    st.status === 'calculated' &&
-                    Number(st.net_payable) > 0.01 &&
-                    isShootSelectionDone(st)
-                  );
+      const netPayableOverall = isUpdown
+        ? settlements
+            .filter((st: any) => st.status === 'calculated')
+            .reduce((acc: number, st: any) => acc + Number(st.net_payable || 0), 0)
+        : settlements
+            .filter((st: any) => st.status === 'calculated' && isShootSelectionDone(st))
+            .reduce((acc: number, st: any) => acc + Number(st.net_payable || 0), 0);
 
-              const staleSettlements = isUpdown
-                ? []
-                : m.settlements.filter((st: any) =>
-                    st.status === 'calculated' && !isShootSelectionDone(st)
-                  );
+      const jobsReadyToPay = isUpdown
+        ? settlements.filter((st: any) => st.status === 'calculated' && Number(st.net_payable) > 0.01)
+        : settlements.filter((st: any) => st.status === 'calculated' && Number(st.net_payable) > 0.01 && isShootSelectionDone(st));
 
-              const canPay = netPayableOverall > 0.01 && jobsReadyToPay.length > 0;
-              const hasDue = canPay;
+      const staleSettlements = isUpdown
+        ? []
+        : settlements.filter((st: any) => st.status === 'calculated' && !isShootSelectionDone(st));
 
-              return (
-                <div key={expandKey} style={{ border: `1.5px solid ${hasDue ? '#fde68a' : '#e5e7eb'}`, borderRadius: '12px', background: '#fff', overflow: 'hidden' }}>
-
-                  {/* ── COLLAPSED HEADER ── */}
-                  <div onClick={() => setExpandedKey(isOpen ? null : expandKey)} style={{ padding: '12px 16px', cursor: 'pointer' }}>
-
-                    {/* Row 1: name + badges */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#111827' }}>{m.mukkadam_name}</span>
-                          {/* updown badge */}
-                          {isUpdown && (
-                            <span style={{ fontSize: '0.58rem', padding: '2px 7px', borderRadius: '999px', fontWeight: 700, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
-                              🚗 Updown
-                            </span>
-                          )}
-                          {/* weekly due badge — permanent only */}
-                          {weeklyDueToday && (
-                            <span style={{ fontSize: '0.6rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: '#fef9c3', color: '#b45309' }}>📅 Weekly Due</span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: '0.66rem', color: '#6b7280', marginTop: '2px' }}>
-                          📞 {m.mobile || m.mobile_numbers || '—'} · {m.crew_size} workers
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }} onClick={e => e.stopPropagation()}>
-                        <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: '0.6rem', color: '#9ca3af', textTransform: 'uppercase', fontWeight: 600 }}>Net Payable</div>
-                          <div style={{ fontWeight: 800, fontSize: '1.1rem', color: canPay ? '#dc2626' : netPayableOverall < -0.01 ? '#16a34a' : '#6b7280' }}>
-                            {canPay ? `₹${netPayableOverall.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : netPayableOverall < -0.01 ? '✓ In Credit' : '—'}
-                          </div>
-                        </div>
-                        {canPay && jobsReadyToPay.map((st: any) => (
-                          <button key={st.job_id}
-                            onClick={() => handleMukkadamPay(m.mukkadam_id, st.job_id, netPayableOverall, m.mukkadam_name)}
-                            disabled={mukkadamPaying === `${m.mukkadam_id}-${st.job_id}`}
-                            style={{ padding: '5px 10px', borderRadius: '7px', border: 'none', background: '#14b8a6', color: '#fff', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                            🏦 Pay ₹{netPayableOverall.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                          </button>
-                        ))}
-                        {/* weekly due button — permanent only */}
-                        {weeklyDueToday && (
-                          <button onClick={() => handleAddWeeklyPayment(m.mukkadam_id, assignmentId, weeklyPaymentAmount, m.mukkadam_name)}
-                            style={{ padding: '5px 10px', borderRadius: '7px', border: 'none', background: '#d97706', color: '#fff', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer' }}>
-                            + Weekly ₹{Number(weeklyPaymentAmount).toLocaleString('en-IN')}
-                          </button>
-                        )}
-                        {/* missed payments badge — permanent only */}
-                        {!isUpdown && (m.missed_weekly_dates || []).length > 0 && (
-                          <span style={{ fontSize: '0.6rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: '#fef2f2', color: '#dc2626' }}>
-                            ⚠️ {m.missed_weekly_dates.length} missed payment{m.missed_weekly_dates.length > 1 ? 's' : ''}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* ── SUMMARY GRID ── */}
-                    {(() => {
-                      const totalPaidOut = m.settlements.reduce((acc: number, st: any) =>
-                        acc + (st.payments_made || []).reduce((s: number, p: any) => s + Number(p.amount), 0), 0);
-                      const totalNetPayable = m.settlements.reduce((acc: number, st: any) => acc + Number(st.net_payable || 0), 0);
-                      const remaining = totalNetPayable - totalPaidOut;
-
-                      // updown: Gross | +Transport | Net | Paid Out | Remaining  (5 cols)
-                      // permanent: Gross | 10% Deposit | Advance | Weekly | Settlement Paid | Remaining  (6 cols)
-                      const cells = isUpdown ? [
-                        { label: 'Gross Earned',  val: `₹${totalGross.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,                                                            color: '#0f766e' },
-                        { label: '+ Transport',   val: totalTransport > 0 ? `+₹${totalTransport.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—',                            color: '#0369a1' },
-                        { label: 'Net Payable',   val: `₹${(totalGross + totalTransport).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,                                          color: '#dc2626' },
-                        { label: 'Paid Out',      val: totalPaidOut > 0 ? `−₹${totalPaidOut.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—',                                color: totalPaidOut > 0 ? '#16a34a' : '#9ca3af' },
-                        { label: 'Remaining',     val: remaining > 0.01 ? `₹${remaining.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '✓ Clear',                              color: remaining > 0.01 ? '#dc2626' : '#16a34a' },
-                      ] : [
-                        { label: 'Gross Earned',    val: `₹${totalGross.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,                                                           color: '#0f766e' },
-                        { label: '10% Deposit',     val: (() => {
-                            const totalDeposit = m.settlements.reduce((acc: number, st: any) => acc + Number(st.deposit_held || 0), 0);
-                            if (depositHeld <= 0 && totalDeposit > 0) return `✓ ₹${totalDeposit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} released`;
-                            if (depositHeld <= 0) return '—';
-                            return `₹${depositHeld.toLocaleString('en-IN', { maximumFractionDigits: 0 })} held`;
-                          })(),                                                                                                                                                             color: depositHeld > 0 ? '#b45309' : '#16a34a' },
-                        { label: 'Advance',         val: `−₹${Number(advancePaid).toLocaleString('en-IN')}`,                                                                              color: '#dc2626' },
-                        { label: 'Weekly Paid',     val: `−₹${Number(totalWeeklyPaid).toLocaleString('en-IN')}`,                                                                          color: '#dc2626' },
-                        { label: 'Settlement Paid', val: totalPaidOut > 0 ? `−₹${totalPaidOut.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—',                              color: totalPaidOut > 0 ? '#16a34a' : '#9ca3af' },
-                        { label: 'Remaining',       val: remaining > 0.01 ? `₹${remaining.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : remaining < -0.01 ? '✓ clear' : '✓ Clear', color: remaining > 0.01 ? '#dc2626' : '#16a34a' },
-                      ];
-
-                      return (
-                        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cells.length}, 1fr)`, gap: '6px', marginTop: '10px', padding: '8px 10px', background: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
-                          {cells.map((item, i) => (
-                            <div key={i} style={{ textAlign: 'center' }}>
-                              <div style={{ fontSize: '0.56rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>{item.label}</div>
-                              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: item.color }}>{item.val}</div>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })()}
-
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
-                      <span style={{ color: '#9ca3af', fontSize: '0.62rem' }}>{isOpen ? '▲' : '▼'} Details</span>
-                    </div>
-                  </div>
-
-                  {/* ── EXPANDED ── */}
-                  {isOpen && (
-                    <div style={{ borderTop: '1px solid #e5e7eb', padding: '14px 16px', background: '#fafafa', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-
-                      {/* ── 1. OVERALL SETTLEMENT ── */}
-                      <div style={{ background: '#fff', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '12px 14px' }}>
-                        <p style={{ margin: '0 0 10px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📊 Overall Settlement</p>
-                        <div style={{ fontSize: '0.76rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-
-                          {m.settlements.map((st: any) => {
-                            const stMeta = STATUS_META[st.status] || STATUS_META.pending;
-                            const stTransport = Number(st.transport_deducted || 0);
-
-                            // updown breakdown: Gross + Transport → Net
-                            // permanent breakdown: Gross → 10% → 90% → deductions → Net
-                            const breakdownRows = isUpdown ? [
-                              { label: 'Gross  (area × rate)', val: `₹${Number(st.gross_amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e' },
-                              ...(stTransport > 0 ? [{ label: '+ Transport', val: `+₹${stTransport.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0369a1' }] : []),
-                            ] : [
-                              { label: 'Gross', val: `₹${Number(st.gross_amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e' },
-                              { label: (() => { const acts = st.activities || []; const allDone = acts.length > 0 && acts.every((a: any) => a.work_status === 'completed'); return allDone ? '+ 10% released ✓' : '− 10% deposit held'; })(), val: (() => { const acts = st.activities || []; const allDone = acts.length > 0 && acts.every((a: any) => a.work_status === 'completed'); return (allDone ? '+' : '−') + `₹${Number(st.deposit_held).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; })(), color: (() => { const acts = st.activities || []; return acts.length > 0 && acts.every((a: any) => a.work_status === 'completed') ? '#16a34a' : '#b45309'; })() },
-                              { label: '= 90% payable', val: `₹${Number(st.payable_90pct).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#1f2937' },
-                              ...(st.deposit_carried_forward > 0  ? [{ label: '+ Deposit from prev job', val: `+₹${Number(st.deposit_carried_forward).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e' }] : []),
-                              ...(st.credit_carried_forward > 0   ? [{ label: '− Credit to next job',    val: `−₹${Number(st.credit_carried_forward).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#6b7280' }] : []),
-                              ...(st.advance_deducted > 0         ? [{ label: '− Advance (this job)',    val: `−₹${Number(st.advance_deducted).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,         color: '#dc2626' }] : []),
-                              ...(st.weekly_payments_deducted > 0 ? [{ label: '− Weekly payments',      val: `−₹${Number(st.weekly_payments_deducted).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#dc2626' }] : []),
-                              ...(st.total_misc > 0               ? [{ label: '− Misc costs',           val: `−₹${Number(st.total_misc).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,               color: '#dc2626' }] : []),
-                            ];
-
-                            return (
-                              <div key={st.job_id} style={{ background: '#f9fafb', borderRadius: '6px', padding: '6px 10px', marginBottom: '2px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                                  <span style={{ fontWeight: 700, color: '#374151', fontSize: '0.72rem' }}>#{st.job_id} {st.farmer_name}</span>
-                                  <span style={{ fontSize: '0.58rem', padding: '1px 6px', borderRadius: '999px', background: stMeta.bg, color: stMeta.text, fontWeight: 700 }}>{stMeta.label}</span>
-                                </div>
-
-                                {breakdownRows.map((row, ri) => (
-                                  <div key={ri} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', paddingBottom: '1px' }}>
-                                    <span style={{ color: '#9ca3af' }}>{row.label}</span>
-                                    <span style={{ fontWeight: 600, color: row.color }}>{row.val}</span>
-                                  </div>
-                                ))}
-
-                                {/* Net row */}
-                                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e5e7eb', paddingTop: '3px', marginTop: '3px', fontSize: '0.72rem', fontWeight: 800 }}>
-                                  <span>Net</span>
-                                  <span style={{ color: Number(st.net_payable) > 0.01 ? '#dc2626' : '#6b7280' }}>
-                                    {Number(st.net_payable) > 0.01
-                                      ? `To Pay ₹${Number(st.net_payable).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
-                                      : st.status === 'no_payment_needed' ? 'Credit → carried forward' : '₹0'}
-                                  </span>
-                                </div>
-
-                                {/* Payments made against this settlement */}
-                                {(st.payments_made || []).length > 0 && (
-                                  <div style={{ marginTop: '4px', borderTop: '1px dashed #e5e7eb', paddingTop: '4px' }}>
-                                    {(st.payments_made || []).map((pay: any, pi: number) => (
-                                      <div key={pi} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.67rem', paddingBottom: '2px' }}>
-                                        <span style={{ color: '#6b7280' }}>
-                                          ✅ Paid {pay.paid_at} · {pay.mode}
-                                          {pay.notes ? ` · ${pay.notes}` : ''}
-                                        </span>
-                                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                          <span style={{ fontWeight: 700, color: '#16a34a' }}>
-                                            −₹{Number(pay.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                                          </span>
-                                          {pay.proof_url && (
-                                            <a href={pay.proof_url} target="_blank" rel="noreferrer"
-                                              style={{ fontSize: '0.6rem', color: '#3b82f6', border: '1px solid #bfdbfe', borderRadius: '3px', padding: '0 4px', background: '#eff6ff', textDecoration: 'none' }}>
-                                              📎
-                                            </a>
-                                          )}
-                                        </span>
-                                      </div>
-                                    ))}
-                                    {Number(st.total_already_paid) > 0 && (
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e5e7eb', paddingTop: '3px', marginTop: '2px', fontSize: '0.72rem', fontWeight: 800 }}>
-                                        <span style={{ color: '#374151' }}>Remaining</span>
-                                        <span style={{ color: (Number(st.net_payable) - Number(st.total_already_paid)) > 0.01 ? '#dc2626' : '#16a34a' }}>
-                                          {(Number(st.net_payable) - Number(st.total_already_paid)) > 0.01
-                                            ? `₹${(Number(st.net_payable) - Number(st.total_already_paid)).toLocaleString('en-IN', { maximumFractionDigits: 0 })} still due`
-                                            : `✓ Fully Paid`}
-                                        </span>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-
-                          {/* Final net across all jobs */}
-                          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', background: canPay ? '#fef2f2' : '#f0fdf4', borderRadius: '8px', border: `1px solid ${canPay ? '#fecaca' : '#bbf7d0'}`, fontWeight: 800, marginTop: '4px' }}>
-                            <span style={{ color: '#111827', fontSize: '0.84rem' }}>Net Payable Now</span>
-                            <span style={{ fontSize: '1rem', color: canPay ? '#dc2626' : '#16a34a' }}>
-                              {canPay ? `₹${netPayableOverall.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : `✓ ₹0`}
-                            </span>
-                          </div>
-
-                          {!canPay && m.settlements.some((st: any) => st.status === 'no_payment_needed') && (
-                            <p style={{ margin: '2px 0 0', fontSize: '0.64rem', color: '#16a34a' }}>✓ Credit from earlier jobs absorbed — no payment needed</p>
-                          )}
-
-
-                          
-{isUpdown && (
-  <div style={{ background: '#fff', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '12px 14px' }}>
-    <p style={{ margin: '0 0 10px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>
-      🚜 All Allocations
-    </p>
-
-    {(m.updown_allocations || []).length === 0 ? (
-      <div style={{ fontSize: '0.74rem', color: '#9ca3af', textAlign: 'center', padding: '12px 0' }}>
-        No allocations assigned yet
-      </div>
-    ) : (m.updown_allocations || []).map((alloc: any) => {
-
-      const isCompleted  = alloc.work_status === 'completed';
-      const isFuture     = alloc.allocated_date && alloc.allocated_date > new Date().toISOString().slice(0, 10);
-      const isPending    = !isCompleted;
-
-      // Status label + color
-      const statusStyle =
-        isCompleted ? { bg: '#f0fdf4', border: '#bbf7d0', color: '#16a34a', label: '✓ Completed' } :
-        isFuture    ? { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8', label: '📅 Upcoming'  } :
-                      { bg: '#fef9c3', border: '#fde68a', color: '#b45309', label: '⏳ Pending'   };
-
-      // Show actual bill if completed, estimate if not
-      const gross     = isCompleted && alloc.actual_gross     != null ? alloc.actual_gross     : alloc.gross_estimate;
-      const transport = isCompleted && alloc.actual_transport != null ? alloc.actual_transport : alloc.transport_estimate;
-      const net       = isCompleted && alloc.actual_net       != null ? alloc.actual_net       : alloc.net_estimate;
-      const isEstimate = !isCompleted;
+      const canPay = netPayableOverall > 0.01 && jobsReadyToPay.length > 0;
+      const hasDue = canPay;
 
       return (
-        <div key={alloc.allocation_id} style={{
-          background: statusStyle.bg,
-          border: `1px solid ${statusStyle.border}`,
-          borderRadius: '8px',
-          padding: '10px 12px',
-          marginBottom: '6px',
-        }}>
-          {/* Row 1: activity + plot + status badge */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
-            <div>
-              <span style={{ fontWeight: 700, fontSize: '0.76rem', color: '#111827' }}>
-                {alloc.activity_name}
-              </span>
-              <span style={{ fontSize: '0.64rem', color: '#6b7280', marginLeft: '6px' }}>
-                {alloc.plot_code} · {alloc.plot_name}
-              </span>
-              <div style={{ fontSize: '0.62rem', color: '#6b7280', marginTop: '2px' }}>
-                👨‍🌾 {alloc.farmer_name} · #{alloc.job_id}
-                {alloc.allocated_date && ` · ${alloc.allocated_date}`}
+        <div key={expandKey} style={{ border: `1.5px solid ${hasDue ? '#fde68a' : '#e5e7eb'}`, borderRadius: '12px', background: '#fff', overflow: 'hidden' }}>
+
+          {/* ── COLLAPSED HEADER ── */}
+          <div onClick={() => setExpandedKey(isOpen ? null : expandKey)} style={{ padding: '12px 16px', cursor: 'pointer' }}>
+
+            {/* Row 1: name + badges */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#111827' }}>{m.mukkadam_name}</span>
+                  {isUpdown && (
+                    <span style={{ fontSize: '0.58rem', padding: '2px 7px', borderRadius: '999px', fontWeight: 700, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
+                      🚗 Updown
+                    </span>
+                  )}
+                  {weeklyDueToday && (
+                    <span style={{ fontSize: '0.6rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: '#fef9c3', color: '#b45309' }}>📅 Weekly Due</span>
+                  )}
+                </div>
+                <div style={{ fontSize: '0.66rem', color: '#6b7280', marginTop: '2px' }}>
+                  📞 {m.mobile || m.mobile_numbers || '—'} · {m.crew_size} workers
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }} onClick={e => e.stopPropagation()}>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '0.6rem', color: '#9ca3af', textTransform: 'uppercase', fontWeight: 600 }}>Net Payable</div>
+                  <div style={{ fontWeight: 800, fontSize: '1.1rem', color: canPay ? '#dc2626' : netPayableOverall < -0.01 ? '#16a34a' : '#6b7280' }}>
+                    {canPay ? `₹${netPayableOverall.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : netPayableOverall < -0.01 ? '✓ In Credit' : '—'}
+                  </div>
+                </div>
+                {canPay && jobsReadyToPay.map((st: any) => (
+                  <button key={st.job_id}
+                    onClick={() => handleMukkadamPay(m.mukkadam_id, st.job_id, netPayableOverall, m.mukkadam_name)}
+                    disabled={mukkadamPaying === `${m.mukkadam_id}-${st.job_id}`}
+                    style={{ padding: '5px 10px', borderRadius: '7px', border: 'none', background: '#14b8a6', color: '#fff', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    🏦 Pay ₹{netPayableOverall.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </button>
+                ))}
+                {weeklyDueToday && (
+                  <button onClick={() => handleAddWeeklyPayment(m.mukkadam_id, assignmentId, weeklyPaymentAmount, m.mukkadam_name)}
+                    style={{ padding: '5px 10px', borderRadius: '7px', border: 'none', background: '#d97706', color: '#fff', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer' }}>
+                    + Weekly ₹{Number(weeklyPaymentAmount).toLocaleString('en-IN')}
+                  </button>
+                )}
+                {!isUpdown && missedWeekly.length > 0 && (
+                  <span style={{ fontSize: '0.6rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: '#fef2f2', color: '#dc2626' }}>
+                    ⚠️ {missedWeekly.length} missed payment{missedWeekly.length > 1 ? 's' : ''}
+                  </span>
+                )}
               </div>
             </div>
-            <span style={{
-              fontSize: '0.58rem', padding: '2px 8px', borderRadius: '999px',
-              fontWeight: 700, background: statusStyle.bg,
-              color: statusStyle.color, border: `1px solid ${statusStyle.border}`,
-              whiteSpace: 'nowrap', marginLeft: '8px',
-            }}>
-              {statusStyle.label}
-            </span>
+
+            {/* ── SUMMARY GRID ── */}
+            {(() => {
+              const totalPaidOut = settlements.reduce((acc: number, st: any) =>
+                acc + (st.payments_made || []).reduce((s: number, p: any) => s + Number(p.amount), 0), 0);
+              const totalNetPayable = settlements.reduce((acc: number, st: any) => acc + Number(st.net_payable || 0), 0);
+              const remaining = totalNetPayable - totalPaidOut;
+
+              const cells = isUpdown ? [
+                { label: 'Gross Earned', val: `₹${totalGross.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,                                                         color: '#0f766e' },
+                { label: '+ Transport',  val: totalTransport > 0 ? `+₹${totalTransport.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—',                         color: '#0369a1' },
+                { label: 'Net Payable',  val: `₹${(totalGross + totalTransport).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,                                       color: '#dc2626' },
+                { label: 'Paid Out',     val: totalPaidOut > 0 ? `−₹${totalPaidOut.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—',                             color: totalPaidOut > 0 ? '#16a34a' : '#9ca3af' },
+                { label: 'Remaining',    val: remaining > 0.01 ? `₹${remaining.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '✓ Clear',                           color: remaining > 0.01 ? '#dc2626' : '#16a34a' },
+              ] : [
+                { label: 'Gross Earned',    val: `₹${totalGross.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,                                                      color: '#0f766e' },
+                { label: '10% Deposit',     val: (() => {
+                    const totalDeposit = settlements.reduce((acc: number, st: any) => acc + Number(st.deposit_held || 0), 0);
+                    if (depositHeld <= 0 && totalDeposit > 0) return `✓ ₹${totalDeposit.toLocaleString('en-IN', { maximumFractionDigits: 0 })} released`;
+                    if (depositHeld <= 0) return '—';
+                    return `₹${depositHeld.toLocaleString('en-IN', { maximumFractionDigits: 0 })} held`;
+                  })(),                                                                                                                                                        color: depositHeld > 0 ? '#b45309' : '#16a34a' },
+                { label: 'Advance',         val: `−₹${Number(advancePaid).toLocaleString('en-IN')}`,                                                                         color: '#dc2626' },
+                { label: 'Weekly Paid',     val: `−₹${Number(totalWeeklyPaid).toLocaleString('en-IN')}`,                                                                     color: '#dc2626' },
+                { label: 'Settlement Paid', val: totalPaidOut > 0 ? `−₹${totalPaidOut.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—',                         color: totalPaidOut > 0 ? '#16a34a' : '#9ca3af' },
+                { label: 'Remaining',       val: remaining > 0.01 ? `₹${remaining.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : remaining < -0.01 ? '✓ clear' : '✓ Clear', color: remaining > 0.01 ? '#dc2626' : '#16a34a' },
+              ];
+
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cells.length}, 1fr)`, gap: '6px', marginTop: '10px', padding: '8px 10px', background: '#f9fafb', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+                  {cells.map((item, i) => (
+                    <div key={i} style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.56rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '2px' }}>{item.label}</div>
+                      <div style={{ fontSize: '0.78rem', fontWeight: 700, color: item.color }}>{item.val}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+              <span style={{ color: '#9ca3af', fontSize: '0.62rem' }}>{isOpen ? '▲' : '▼'} Details</span>
+            </div>
           </div>
 
-          {/* Row 2: bill breakdown */}
-          <div style={{
-            display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
-            gap: '6px', marginBottom: isPending ? '8px' : '0',
-          }}>
-            {[
-              {
-                label: isEstimate ? 'Gross (est.)' : 'Gross',
-                val: `₹${Number(gross).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
-                sub: `${alloc.actual_area_done ?? alloc.allocated_area} ac × ₹${alloc.mukkadam_rate}`,
-                color: '#0f766e', bg: '#f0fdf4',
-              },
-              {
-                label: isEstimate ? 'Transport (est.)' : 'Transport',
-                val: Number(transport) > 0
-                  ? `+₹${Number(transport).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
-                  : '—',
-                sub: Number(transport) > 0 ? 'from assignment' : 'not applicable',
-                color: '#0369a1', bg: '#eff6ff',
-              },
-              {
-                label: isEstimate ? 'Net (est.)' : 'Net Payable',
-                val: `₹${Number(net).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
-                sub: isEstimate ? 'estimate' : alloc.settlement_status || '',
-                color: isCompleted ? '#16a34a' : '#dc2626', bg: isCompleted ? '#f0fdf4' : '#fff7ed',
-              },
-            ].map((cell, ci) => (
-              <div key={ci} style={{ background: cell.bg, borderRadius: '6px', padding: '5px 8px', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.54rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '1px' }}>
-                  {cell.label}
-                </div>
-                <div style={{ fontSize: '0.76rem', fontWeight: 800, color: cell.color }}>
-                  {cell.val}
-                </div>
-                <div style={{ fontSize: '0.54rem', color: '#9ca3af', marginTop: '1px' }}>
-                  {cell.sub}
+          {/* ── EXPANDED ── */}
+          {isOpen && (
+            <div style={{ borderTop: '1px solid #e5e7eb', padding: '14px 16px', background: '#fafafa', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+              {/* ── 1. OVERALL SETTLEMENT ── */}
+              <div style={{ background: '#fff', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '12px 14px' }}>
+                <p style={{ margin: '0 0 10px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📊 Overall Settlement</p>
+                <div style={{ fontSize: '0.76rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+
+                  {settlements.map((st: any) => {
+                    const stMeta = STATUS_META[st.status] || STATUS_META.pending;
+                    const stTransport = Number(st.transport_deducted || 0);
+
+                    const breakdownRows = isUpdown ? [
+                      { label: 'Gross  (area × rate)', val: `₹${Number(st.gross_amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e' },
+                      ...(stTransport > 0 ? [{ label: '+ Transport', val: `+₹${stTransport.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0369a1' }] : []),
+                    ] : [
+                      { label: 'Gross', val: `₹${Number(st.gross_amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e' },
+                      { label: (() => { const acts = st.activities || []; const allDone = acts.length > 0 && acts.every((a: any) => a.work_status === 'completed'); return allDone ? '+ 10% released ✓' : '− 10% deposit held'; })(), val: (() => { const acts = st.activities || []; const allDone = acts.length > 0 && acts.every((a: any) => a.work_status === 'completed'); return (allDone ? '+' : '−') + `₹${Number(st.deposit_held).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`; })(), color: (() => { const acts = st.activities || []; return acts.length > 0 && acts.every((a: any) => a.work_status === 'completed') ? '#16a34a' : '#b45309'; })() },
+                      { label: '= 90% payable', val: `₹${Number(st.payable_90pct).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#1f2937' },
+                      ...(st.deposit_carried_forward > 0  ? [{ label: '+ Deposit from prev job', val: `+₹${Number(st.deposit_carried_forward).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e' }] : []),
+                      ...(st.credit_carried_forward > 0   ? [{ label: '− Credit to next job',    val: `−₹${Number(st.credit_carried_forward).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#6b7280' }] : []),
+                      ...(st.advance_deducted > 0         ? [{ label: '− Advance (this job)',    val: `−₹${Number(st.advance_deducted).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,         color: '#dc2626' }] : []),
+                      ...(st.weekly_payments_deducted > 0 ? [{ label: '− Weekly payments',      val: `−₹${Number(st.weekly_payments_deducted).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#dc2626' }] : []),
+                      ...(st.total_misc > 0               ? [{ label: '− Misc costs',           val: `−₹${Number(st.total_misc).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,               color: '#dc2626' }] : []),
+                    ];
+
+                    return (
+                      <div key={st.job_id} style={{ background: '#f9fafb', borderRadius: '6px', padding: '6px 10px', marginBottom: '2px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                          <span style={{ fontWeight: 700, color: '#374151', fontSize: '0.72rem' }}>#{st.job_id} {st.farmer_name}</span>
+                          <span style={{ fontSize: '0.58rem', padding: '1px 6px', borderRadius: '999px', background: stMeta.bg, color: stMeta.text, fontWeight: 700 }}>{stMeta.label}</span>
+                        </div>
+
+                        {breakdownRows.map((row, ri) => (
+                          <div key={ri} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', paddingBottom: '1px' }}>
+                            <span style={{ color: '#9ca3af' }}>{row.label}</span>
+                            <span style={{ fontWeight: 600, color: row.color }}>{row.val}</span>
+                          </div>
+                        ))}
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e5e7eb', paddingTop: '3px', marginTop: '3px', fontSize: '0.72rem', fontWeight: 800 }}>
+                          <span>Net</span>
+                          <span style={{ color: Number(st.net_payable) > 0.01 ? '#dc2626' : '#6b7280' }}>
+                            {Number(st.net_payable) > 0.01
+                              ? `To Pay ₹${Number(st.net_payable).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                              : st.status === 'no_payment_needed' ? 'Credit → carried forward' : '₹0'}
+                          </span>
+                        </div>
+
+                        {(st.payments_made || []).length > 0 && (
+                          <div style={{ marginTop: '4px', borderTop: '1px dashed #e5e7eb', paddingTop: '4px' }}>
+                            {(st.payments_made || []).map((pay: any, pi: number) => (
+                              <div key={pi} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.67rem', paddingBottom: '2px' }}>
+                                <span style={{ color: '#6b7280' }}>
+                                  ✅ Paid {pay.paid_at} · {pay.mode}
+                                  {pay.notes ? ` · ${pay.notes}` : ''}
+                                </span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ fontWeight: 700, color: '#16a34a' }}>
+                                    −₹{Number(pay.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                                  </span>
+                                  {pay.proof_url && (
+                                    <a href={pay.proof_url} target="_blank" rel="noreferrer"
+                                      style={{ fontSize: '0.6rem', color: '#3b82f6', border: '1px solid #bfdbfe', borderRadius: '3px', padding: '0 4px', background: '#eff6ff', textDecoration: 'none' }}>
+                                      📎
+                                    </a>
+                                  )}
+                                </span>
+                              </div>
+                            ))}
+                            {Number(st.total_already_paid) > 0 && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e5e7eb', paddingTop: '3px', marginTop: '2px', fontSize: '0.72rem', fontWeight: 800 }}>
+                                <span style={{ color: '#374151' }}>Remaining</span>
+                                <span style={{ color: (Number(st.net_payable) - Number(st.total_already_paid)) > 0.01 ? '#dc2626' : '#16a34a' }}>
+                                  {(Number(st.net_payable) - Number(st.total_already_paid)) > 0.01
+                                    ? `₹${(Number(st.net_payable) - Number(st.total_already_paid)).toLocaleString('en-IN', { maximumFractionDigits: 0 })} still due`
+                                    : `✓ Fully Paid`}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', background: canPay ? '#fef2f2' : '#f0fdf4', borderRadius: '8px', border: `1px solid ${canPay ? '#fecaca' : '#bbf7d0'}`, fontWeight: 800, marginTop: '4px' }}>
+                    <span style={{ color: '#111827', fontSize: '0.84rem' }}>Net Payable Now</span>
+                    <span style={{ fontSize: '1rem', color: canPay ? '#dc2626' : '#16a34a' }}>
+                      {canPay ? `₹${netPayableOverall.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : `✓ ₹0`}
+                    </span>
+                  </div>
+
+                  {!canPay && settlements.some((st: any) => st.status === 'no_payment_needed') && (
+                    <p style={{ margin: '2px 0 0', fontSize: '0.64rem', color: '#16a34a' }}>✓ Credit from earlier jobs absorbed — no payment needed</p>
+                  )}
+
+                  {isUpdown && (
+                    <div style={{ background: '#fff', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '12px 14px' }}>
+                      <p style={{ margin: '0 0 10px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>
+                        🚜 All Allocations
+                      </p>
+                      {(m.updown_allocations || []).length === 0 ? (
+                        <div style={{ fontSize: '0.74rem', color: '#9ca3af', textAlign: 'center', padding: '12px 0' }}>
+                          No allocations assigned yet
+                        </div>
+                      ) : (m.updown_allocations || []).map((alloc: any) => {
+                        const isCompleted = alloc.work_status === 'completed';
+                        const isFuture    = alloc.allocated_date && alloc.allocated_date > new Date().toISOString().slice(0, 10);
+                        const isPending   = !isCompleted;
+                        const statusStyle =
+                          isCompleted ? { bg: '#f0fdf4', border: '#bbf7d0', color: '#16a34a', label: '✓ Completed' } :
+                          isFuture    ? { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8', label: '📅 Upcoming'  } :
+                                        { bg: '#fef9c3', border: '#fde68a', color: '#b45309', label: '⏳ Pending'   };
+                        const gross     = isCompleted && alloc.actual_gross     != null ? alloc.actual_gross     : alloc.gross_estimate;
+                        const transport = isCompleted && alloc.actual_transport != null ? alloc.actual_transport : alloc.transport_estimate;
+                        const net       = isCompleted && alloc.actual_net       != null ? alloc.actual_net       : alloc.net_estimate;
+                        const isEstimate = !isCompleted;
+
+                        return (
+                          <div key={alloc.allocation_id} style={{ background: statusStyle.bg, border: `1px solid ${statusStyle.border}`, borderRadius: '8px', padding: '10px 12px', marginBottom: '6px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                              <div>
+                                <span style={{ fontWeight: 700, fontSize: '0.76rem', color: '#111827' }}>{alloc.activity_name}</span>
+                                <span style={{ fontSize: '0.64rem', color: '#6b7280', marginLeft: '6px' }}>{alloc.plot_code} · {alloc.plot_name}</span>
+                                <div style={{ fontSize: '0.62rem', color: '#6b7280', marginTop: '2px' }}>
+                                  👨‍🌾 {alloc.farmer_name} · #{alloc.job_id}
+                                  {alloc.allocated_date && ` · ${alloc.allocated_date}`}
+                                </div>
+                              </div>
+                              <span style={{ fontSize: '0.58rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: statusStyle.bg, color: statusStyle.color, border: `1px solid ${statusStyle.border}`, whiteSpace: 'nowrap', marginLeft: '8px' }}>
+                                {statusStyle.label}
+                              </span>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: isPending ? '8px' : '0' }}>
+                              {[
+                                { label: isEstimate ? 'Gross (est.)' : 'Gross', val: `₹${Number(gross).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, sub: `${alloc.actual_area_done ?? alloc.allocated_area} ac × ₹${alloc.mukkadam_rate}`, color: '#0f766e', bg: '#f0fdf4' },
+                                { label: isEstimate ? 'Transport (est.)' : 'Transport', val: Number(transport) > 0 ? `+₹${Number(transport).toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '—', sub: Number(transport) > 0 ? 'from assignment' : 'not applicable', color: '#0369a1', bg: '#eff6ff' },
+                                { label: isEstimate ? 'Net (est.)' : 'Net Payable', val: `₹${Number(net).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, sub: isEstimate ? 'estimate' : alloc.settlement_status || '', color: isCompleted ? '#16a34a' : '#dc2626', bg: isCompleted ? '#f0fdf4' : '#fff7ed' },
+                              ].map((cell, ci) => (
+                                <div key={ci} style={{ background: cell.bg, borderRadius: '6px', padding: '5px 8px', textAlign: 'center' }}>
+                                  <div style={{ fontSize: '0.54rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: '1px' }}>{cell.label}</div>
+                                  <div style={{ fontSize: '0.76rem', fontWeight: 800, color: cell.color }}>{cell.val}</div>
+                                  <div style={{ fontSize: '0.54rem', color: '#9ca3af', marginTop: '1px' }}>{cell.sub}</div>
+                                </div>
+                              ))}
+                            </div>
+                            {isPending && (
+                              <button onClick={() => handleUpdownComplete(m.mukkadam_id, alloc.allocation_id)}
+                                style={{ width: '100%', padding: '7px', borderRadius: '7px', border: 'none', background: '#14b8a6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}>
+                                ✓ Mark Complete &amp; Generate Bill
+                              </button>
+                            )}
+                            {isCompleted && (
+                              <div style={{ fontSize: '0.62rem', color: '#6b7280', marginTop: '4px' }}>
+                                {alloc.actual_crew_size && `👥 ${alloc.actual_crew_size} workers · `}
+                                {alloc.actual_area_done != null ? `${alloc.actual_area_done} ac done` : `${alloc.allocated_area} ac (planned)`}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {!isUpdown && staleSettlements.length > 0 && (
+                    <div style={{ marginTop: '6px', background: '#fef9c3', border: '1px solid #fde047', borderRadius: '7px', padding: '8px 12px' }}>
+                      <p style={{ margin: '0 0 4px', fontSize: '0.64rem', fontWeight: 700, color: '#854d0e', textTransform: 'uppercase' }}>⚠️ Stale Settlement Detected</p>
+                      {staleSettlements.map((st: any) => (
+                        <div key={st.job_id} style={{ fontSize: '0.68rem', color: '#713f12' }}>
+                          Job #{st.job_id} ({st.farmer_name}) — settlement shows ₹{Number(st.net_payable).toLocaleString('en-IN')} but shoot selection is NOT completed.
+                        </div>
+                      ))}
+                      <p style={{ margin: '4px 0 0', fontSize: '0.64rem', color: '#854d0e' }}>
+                        👉 Go to Django Admin → MukkadamJobSettlement → reset status to 'pending' for these jobs, then recalculate when shoot selection is done.
+                      </p>
+                    </div>
+                  )}
+
+                  {canPay && jobsReadyToPay.map((st: any) => (
+                    <button key={st.job_id}
+                      onClick={() => handleMukkadamPay(m.mukkadam_id, st.job_id, netPayableOverall, m.mukkadam_name)}
+                      disabled={mukkadamPaying === `${m.mukkadam_id}-${st.job_id}`}
+                      style={{ width: '100%', marginTop: '4px', padding: '10px', borderRadius: '8px', border: 'none', background: '#14b8a6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}>
+                      🏦 Pay ₹{netPayableOverall.toLocaleString('en-IN', { maximumFractionDigits: 0 })} to {m.mukkadam_name}
+                    </button>
+                  ))}
                 </div>
               </div>
-            ))}
-          </div>
 
-          {/* Row 3: Mark Complete button — only for pending/upcoming */}
-          {isPending && (
-            <button
-              onClick={() => handleUpdownComplete(m.mukkadam_id, alloc.allocation_id)}
-              style={{
-                width: '100%', padding: '7px', borderRadius: '7px',
-                border: 'none', background: '#14b8a6', color: '#fff',
-                fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer',
-              }}>
-              ✓ Mark Complete &amp; Generate Bill
-            </button>
-          )}
+              {/* ── 2. WEEK-WISE LEDGER — permanent only ── */}
+              {!isUpdown && (() => {
+                const ledger: any[]      = m.week_ledger  || [];
+                const pendingWork: any[] = m.pending_work || [];
 
-          {/* If completed — show actual crew info */}
-          {isCompleted && (
-            <div style={{ fontSize: '0.62rem', color: '#6b7280', marginTop: '4px' }}>
-              {alloc.actual_crew_size && `👥 ${alloc.actual_crew_size} workers · `}
-              {alloc.actual_area_done != null
-                ? `${alloc.actual_area_done} ac done`
-                : `${alloc.allocated_area} ac (planned)`}
+                if (ledger.length === 0 && pendingWork.length === 0) return (
+                  <div style={{ padding: '10px 14px', background: '#f9fafb', borderRadius: '8px', fontSize: '0.72rem', color: '#9ca3af', textAlign: 'center' }}>
+                    No weekly payments recorded yet
+                  </div>
+                );
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <p style={{ margin: '0 0 4px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📅 Week-wise Running Ledger</p>
+                    {ledger.map((row: any, ri: number) => {
+                      const isAdvance  = row.type === 'advance';
+                      const isPositive = row.running_balance >= 0;
+                      const events: any[] = row.billing_events || [];
+                      return (
+                        <div key={ri} style={{ background: '#fff', borderRadius: '8px', border: `1px solid ${row.can_pay ? '#fde68a' : isAdvance ? '#fecaca' : '#e5e7eb'}`, overflow: 'hidden' }}>
+                          <div style={{ background: isAdvance ? '#fef2f2' : '#f9fafb', padding: '7px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: events.length > 0 || pendingWork.length > 0 ? '1px solid #e5e7eb' : 'none' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              {isAdvance ? (
+                                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#dc2626' }}>💰 Advance Given</span>
+                              ) : (
+                                <>
+                                  <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#374151' }}>Week {row.week_num} · {row.payment_date}</span>
+                                  <span style={{ fontSize: '0.6rem', padding: '1px 7px', borderRadius: '999px', background: '#fef2f2', color: '#dc2626', fontWeight: 600 }}>
+                                    Weekly −₹{Number(row.weekly_paid).toLocaleString('en-IN')}
+                                  </span>
+                                  {row.weekly_proof_url && (
+                                    <a href={row.weekly_proof_url} target="_blank" rel="noreferrer"
+                                      style={{ fontSize: '0.58rem', color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: '3px', padding: '0 4px', background: '#eff6ff' }}>📎</a>
+                                  )}
+                                  {row.payable_this_week > 0 && (
+                                    <span style={{ fontSize: '0.6rem', padding: '1px 7px', borderRadius: '999px', background: '#f0fdf4', color: '#16a34a', fontWeight: 600 }}>
+                                      +₹{Number(row.payable_this_week).toLocaleString('en-IN')} earned
+                                    </span>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                            <div style={{ textAlign: 'right', minWidth: '80px' }}>
+                              <div style={{ fontSize: '0.56rem', color: '#9ca3af', textTransform: 'uppercase', fontWeight: 600 }}>Running</div>
+                              <div style={{ fontSize: '0.82rem', fontWeight: 800, color: isAdvance ? '#dc2626' : isPositive ? '#16a34a' : '#dc2626' }}>
+                                {row.running_balance >= 0 ? '+' : ''}₹{Number(row.running_balance).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                              </div>
+                              {row.can_pay && <div style={{ fontSize: '0.58rem', color: '#b45309', fontWeight: 700 }}>⚡ PAY NOW</div>}
+                            </div>
+                          </div>
+                          {events.length > 0 && (
+                            <div style={{ padding: '6px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              {events.map((ev: any, ei: number) => (
+                                <div key={ei} style={{ background: ev.type === 'shoot_billing' ? '#f0fdf4' : ev.type === 'deposit_release' ? '#eff6ff' : '#f9fafb', border: `1px solid ${ev.type === 'shoot_billing' ? '#bbf7d0' : ev.type === 'deposit_release' ? '#bfdbfe' : '#e5e7eb'}`, borderRadius: '6px', padding: '6px 10px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: ev.activities?.length > 0 ? '5px' : '0' }}>
+                                    <div>
+                                      <span style={{ fontSize: '0.64rem', fontWeight: 700, color: ev.type === 'shoot_billing' ? '#16a34a' : '#1d4ed8' }}>
+                                        {ev.type === 'shoot_billing' ? '🌱 Shoot Selection Billed' : '✓ Deposit Released'}
+                                      </span>
+                                      <span style={{ fontSize: '0.62rem', color: '#6b7280', marginLeft: '6px' }}>{ev.farmer_name} · #{ev.job_id}</span>
+                                    </div>
+                                    <div style={{ textAlign: 'right' }}>
+                                      <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#16a34a' }}>+₹{Number(ev.payable).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
+                                      {ev.deposit_held > 0 && <div style={{ fontSize: '0.6rem', color: '#b45309' }}>10% held ₹{Number(ev.deposit_held).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>}
+                                      {ev.deposit_released > 0 && <div style={{ fontSize: '0.6rem', color: '#1d4ed8' }}>₹{Number(ev.deposit_released).toLocaleString('en-IN', { maximumFractionDigits: 0 })} released</div>}
+                                    </div>
+                                  </div>
+                                  {ev.activities?.length > 0 && (
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.64rem' }}>
+                                      <thead>
+                                        <tr>
+                                          {['Activity', 'Area', 'Rate', 'Amount'].map(h => (
+                                            <th key={h} style={{ padding: '2px 4px', textAlign: ['Area','Rate','Amount'].includes(h) ? 'right' : 'left', color: '#9ca3af', fontWeight: 600, borderBottom: '1px solid #f3f4f6' }}>{h}</th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {ev.activities.map((act: any, ai: number) => (
+                                          <tr key={ai}>
+                                            <td style={{ padding: '2px 4px', color: '#374151' }}>{act.activity_name}</td>
+                                            <td style={{ padding: '2px 4px', textAlign: 'right', color: '#6b7280' }}>{Number(act.area).toFixed(2)}</td>
+                                            <td style={{ padding: '2px 4px', textAlign: 'right', color: '#6b7280' }}>₹{Number(act.rate).toLocaleString('en-IN')}</td>
+                                            <td style={{ padding: '2px 4px', textAlign: 'right', fontWeight: 700, color: '#0f766e' }}>₹{Number(act.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {pendingWork.length > 0 && (
+                      <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '8px 12px' }}>
+                        <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#b45309', textTransform: 'uppercase' }}>⏳ Work Done — Shoot Selection Pending</p>
+                        {pendingWork.map((pw: any, pi: number) => (
+                          <div key={pi} style={{ marginBottom: pi < pendingWork.length - 1 ? '6px' : '0' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', marginBottom: '3px' }}>
+                              <span style={{ fontWeight: 700, color: '#374151' }}>{pw.farmer_name} · #{pw.job_id}</span>
+                              <span style={{ color: '#9ca3af' }}>₹{Number(pw.gross_so_far).toLocaleString('en-IN', { maximumFractionDigits: 0 })} earned (not yet payable)</span>
+                            </div>
+                            {pw.activities?.map((act: any, ai: number) => (
+                              <div key={ai} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.64rem', color: '#6b7280', paddingLeft: '8px' }}>
+                                <span>{act.activity_name}</span>
+                                <span>{Number(act.area).toFixed(2)} ac × ₹{Number(act.rate).toLocaleString('en-IN')} = ₹{Number(act.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* ── 3. TRANSACTION HISTORY ── */}
+              {(() => {
+                const txns: any[] = m.transaction_history || [];
+                if (txns.length === 0) return null;
+                const colorMap: any = {
+                  advance:            { bg: '#fef2f2', border: '#fecaca', text: '#dc2626', icon: '💰' },
+                  weekly:             { bg: '#fff7ed', border: '#fed7aa', text: '#ea580c', icon: '📅' },
+                  settlement_payment: { bg: '#f0fdf4', border: '#bbf7d0', text: '#16a34a', icon: '✅' },
+                  misc_deduction:     { bg: '#faf5ff', border: '#e9d5ff', text: '#7c3aed', icon: '⚠️' },
+                };
+                return (
+                  <div style={{ marginBottom: '4px' }}>
+                    <p style={{ margin: '0 0 6px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>🧾 Transaction History</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {txns.map((txn: any, ti: number) => {
+                        const c = colorMap[txn.type] || colorMap.weekly;
+                        const isCredit = txn.amount > 0;
+                        return (
+                          <div key={ti} style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: '8px', padding: '7px 12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ minWidth: '56px', textAlign: 'center' }}>
+                              <div style={{ fontSize: '1rem' }}>{c.icon}</div>
+                              <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600 }}>{txn.date?.slice(5)}</div>
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#1f2937', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{txn.label}</div>
+                              {txn.mode && txn.mode !== '—' && (
+                                <div style={{ fontSize: '0.6rem', color: '#6b7280' }}>{txn.mode}{txn.notes ? ` · ${txn.notes}` : ''}</div>
+                              )}
+                            </div>
+                            <div style={{ textAlign: 'right', minWidth: '80px' }}>
+                              <div style={{ fontSize: '0.82rem', fontWeight: 800, color: isCredit ? '#16a34a' : '#dc2626' }}>
+                                {isCredit ? '+' : ''}₹{Math.abs(txn.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                              </div>
+                              <div style={{ fontSize: '0.58rem', color: txn.running_balance >= 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
+                                Bal: {txn.running_balance >= 0 ? '+' : ''}₹{txn.running_balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                              </div>
+                            </div>
+                            {txn.proof_url && (
+                              <a href={txn.proof_url} target="_blank" rel="noreferrer"
+                                style={{ fontSize: '0.6rem', color: '#3b82f6', border: '1px solid #bfdbfe', borderRadius: '4px', padding: '2px 6px', background: '#eff6ff', whiteSpace: 'nowrap', textDecoration: 'none' }}>📎</a>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* ── 4. PER-JOB CARDS ── */}
+              <p style={{ margin: '4px 0 0', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>🌾 Job Details</p>
+              {settlements.length === 0 ? (
+                <p style={{ fontSize: '0.78rem', color: '#9ca3af', margin: 0 }}>No settlements yet</p>
+              ) : settlements.map((s: any) => {
+                const sm = STATUS_META[s.status] || STATUS_META.pending;
+                const stTransport = Number(s.transport_deducted || 0);
+                return (
+                  <div key={s.job_id} style={{ background: '#fff', borderRadius: '10px', border: `1px solid ${s.status === 'calculated' ? '#fde68a' : s.status === 'paid' ? '#bbf7d0' : '#e5e7eb'}`, padding: '12px 14px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                      <div>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8', fontSize: '0.8rem' }}>#{s.job_id}</span>
+                        <span style={{ marginLeft: '8px', fontSize: '0.8rem', color: '#374151', fontWeight: 700 }}>{s.farmer_name}</span>
+                        <div style={{ marginTop: '3px', display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '0.66rem', color: '#6b7280' }}>
+                          <span>{s.job_title?.split('—')[0]?.trim()}</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px' }}>
+                        <span style={{ fontSize: '0.64rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: sm.bg, color: sm.text }}>{sm.label}</span>
+                        {s.status === 'paid' && s.proof_url && (
+                          <a href={s.proof_url} target="_blank" rel="noreferrer"
+                            style={{ fontSize: '0.6rem', color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: '3px', padding: '0 5px', background: '#eff6ff' }}>📎 Payment proof</a>
+                        )}
+                      </div>
+                    </div>
+
+                    {isUpdown ? (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '10px' }}>
+                        {[
+                          { label: 'Gross Earned', val: `₹${Number(s.gross_amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e', bg: '#f0fdf4' },
+                          { label: '+ Transport',  val: stTransport > 0 ? `+₹${stTransport.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '₹0', color: '#0369a1', bg: '#eff6ff' },
+                        ].map((item, i) => (
+                          <div key={i} style={{ background: item.bg, borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '0.58rem', color: '#6b7280', marginBottom: '2px', fontWeight: 600 }}>{item.label}</div>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 800, color: item.color }}>{item.val}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
+                        {[
+                          { label: 'Gross Earned', val: `₹${Number(s.gross_amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e', bg: '#f0fdf4' },
+                          { label: (() => { const acts = s.activities || []; const allDone = acts.length > 0 && acts.every((a: any) => a.work_status === 'completed'); return allDone ? '10% Released ✓' : '10% Held'; })(), val: `₹${Number(s.deposit_held).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: (() => { const acts = s.activities || []; return acts.length > 0 && acts.every((a: any) => a.work_status === 'completed') ? '#16a34a' : '#b45309'; })(), bg: (() => { const acts = s.activities || []; return acts.length > 0 && acts.every((a: any) => a.work_status === 'completed') ? '#f0fdf4' : '#fffbeb'; })() },
+                          { label: '90% Payable', val: `₹${Number(s.payable_90pct).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#1d4ed8', bg: '#eff6ff' },
+                        ].map((item, i) => (
+                          <div key={i} style={{ background: item.bg, borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
+                            <div style={{ fontSize: '0.58rem', color: '#6b7280', marginBottom: '2px', fontWeight: 600 }}>{item.label}</div>
+                            <div style={{ fontSize: '0.8rem', fontWeight: 800, color: item.color }}>{item.val}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div style={{ border: '1px solid #e5e7eb', borderRadius: '7px', overflow: 'hidden', marginBottom: '8px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.68rem' }}>
+                        <thead>
+                          <tr style={{ background: '#f9fafb' }}>
+                            {['Activity', 'Plot', 'Date', 'Planned', 'Claimed', 'Crew', 'Rate', 'Earned', 'Status'].map(h => (
+                              <th key={h} style={{ padding: '4px 6px', textAlign: ['Planned','Claimed','Crew','Rate','Earned'].includes(h) ? 'right' : 'left', color: '#6b7280', fontWeight: 600, fontSize: '0.6rem', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(s.activities || []).map((act: any, idx: number) => {
+                            const claimed = act.mukkadam_claimed_area ?? act.actual_area_done;
+                            const billing = act.admin_override_area ?? (act.use_actual_for_settlement && claimed != null ? claimed : act.allocated_area);
+                            const billAmt = act.billing_locked ? 0 : billing * act.mukkadam_rate;
+                            const diff    = claimed != null ? (claimed - act.allocated_area) : 0;
+                            return (
+                              <tr key={idx} style={{ borderTop: idx > 0 ? '1px solid #f3f4f6' : 'none', background: act.billing_locked ? '#fff5f5' : 'transparent' }}>
+                                <td style={{ padding: '5px 6px', fontWeight: 600, color: '#111827' }}>
+                                  {act.activity_name}
+                                  {act.is_carry_forward && <span style={{ fontSize: '0.56rem', color: '#b45309', marginLeft: '2px' }}>↩</span>}
+                                </td>
+                                <td style={{ padding: '5px 6px', color: '#6b7280', fontFamily: 'monospace', fontSize: '0.62rem' }}>{act.plot_code}</td>
+                                <td style={{ padding: '5px 6px', color: '#6b7280', whiteSpace: 'nowrap' }}>{act.allocated_date?.slice(5) || act.scheduled_date?.slice(5) || '—'}</td>
+                                <td style={{ padding: '5px 6px', textAlign: 'right', color: '#6b7280' }}>{Number(act.allocated_area).toFixed(2)}</td>
+                                <td style={{ padding: '5px 6px', textAlign: 'right' }}>
+                                  {claimed != null ? (
+                                    <span style={{ fontWeight: 700, color: diff < 0 ? '#dc2626' : diff > 0 ? '#0f766e' : '#374151' }}>
+                                      {Number(claimed).toFixed(2)}
+                                      {diff !== 0 && <span style={{ fontSize: '0.56rem', marginLeft: '2px' }}>({diff > 0 ? '+' : ''}{diff.toFixed(2)})</span>}
+                                    </span>
+                                  ) : <span style={{ color: '#9ca3af' }}>—</span>}
+                                </td>
+                                <td style={{ padding: '5px 6px', textAlign: 'right', color: '#6b7280' }}>{act.actual_crew_size ?? act.allocated_workers}</td>
+                                <td style={{ padding: '5px 6px', textAlign: 'right', color: '#6b7280' }}>₹{Number(act.mukkadam_rate).toLocaleString('en-IN')}</td>
+                                <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700, color: act.billing_locked ? '#9ca3af' : '#0f766e' }}>
+                                  {act.billing_locked ? '🔒' : `₹${Number(billAmt).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
+                                </td>
+                                <td style={{ padding: '5px 6px' }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', alignItems: 'center' }}>
+                                    <WorkStatusBadge status={act.work_status || 'work_not_started'} />
+                                    <PaymentStatusBadge status={act.payment_status || 'pending'} />
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          <tr style={{ borderTop: '2px solid #e5e7eb', background: isUpdown ? '#eff6ff' : '#f0fdfa' }}>
+                            <td colSpan={3} style={{ padding: '5px 6px', fontWeight: 700, fontSize: '0.68rem' }}>Total</td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700, color: '#6b7280' }}>
+                              {(s.activities || []).reduce((t: number, a: any) => t + Number(a.allocated_area), 0).toFixed(2)}
+                            </td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700 }}>
+                              {(s.activities || []).some((a: any) => (a.mukkadam_claimed_area ?? a.actual_area_done) != null)
+                                ? (s.activities || []).reduce((t: number, a: any) => t + Number(a.mukkadam_claimed_area ?? a.actual_area_done ?? a.allocated_area), 0).toFixed(2)
+                                : '—'}
+                            </td>
+                            <td colSpan={2} />
+                            <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: '#0f766e' }}>
+                              ₹{s.gross_amount.toLocaleString('en-IN')}
+                            </td>
+                            <td />
+                          </tr>
+                          {isUpdown && stTransport > 0 && (
+                            <tr style={{ background: '#eff6ff' }}>
+                              <td colSpan={7} style={{ padding: '5px 6px', fontWeight: 700, fontSize: '0.68rem', color: '#0369a1' }}>🚗 Transport</td>
+                              <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: '#0369a1' }}>
+                                +₹{stTransport.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                              </td>
+                              <td />
+                            </tr>
+                          )}
+                          {isUpdown && (
+                            <tr style={{ background: '#f0fdf4', borderTop: '2px solid #e5e7eb' }}>
+                              <td colSpan={7} style={{ padding: '5px 6px', fontWeight: 800, fontSize: '0.7rem', color: '#0f766e' }}>= Net Payable</td>
+                              <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: '#dc2626' }}>
+                                ₹{Number(s.net_payable).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                              </td>
+                              <td />
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <MiscCostsSection
+                      mukkadamId={m.mukkadam_id}
+                      jobId={s.job_id}
+                      initialCosts={s.misc_costs || []}
+                      onCostChange={fetchData}
+                    />
+
+                    {s.status === 'paid' && (
+                      <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '10px 14px', marginTop: '8px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ fontSize: '0.62rem', color: '#16a34a', fontWeight: 700, textTransform: 'uppercase', marginBottom: '2px' }}>✓ Settlement Paid</div>
+                            <div style={{ fontSize: '0.72rem', color: '#374151' }}>on {s.paid_at || '—'}</div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '1rem', fontWeight: 800, color: '#16a34a' }}>₹{Number(s.net_payable).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
+                            {s.proof_url && (
+                              <a href={s.proof_url} target="_blank" rel="noreferrer"
+                                style={{ fontSize: '0.62rem', color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: '4px', padding: '1px 7px', background: '#eff6ff', display: 'inline-block', marginTop: '2px' }}>
+                                📎 View Proof
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* ── Weekly payment section — permanent only ── */}
+              {!isUpdown && weeklyDueToday && (
+                <div style={{ background: '#fefce8', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 12px' }}>
+                  <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#92400e', textTransform: 'uppercase' }}>📅 Weekly Payment Due Today</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <span style={{ fontWeight: 700, fontSize: '0.88rem' }}>₹{Number(weeklyPaymentAmount).toLocaleString('en-IN')}</span>
+                      <span style={{ color: '#6b7280', fontSize: '0.7rem', marginLeft: 6 }}>{m.crew_size} workers · {weeklyPaymentDayLabel}</span>
+                    </div>
+                    <button onClick={() => handleAddWeeklyPayment(m.mukkadam_id, assignmentId, weeklyPaymentAmount, m.mukkadam_name)}
+                      style={{ background: '#d97706', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontWeight: 700, cursor: 'pointer', fontSize: '0.74rem' }}>
+                      + Add Payment
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!isUpdown && alreadyPaidToday && (
+                <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '8px 12px', fontSize: '0.74rem', color: '#16a34a', fontWeight: 700 }}>
+                  ✓ Weekly payment already added today
+                </div>
+              )}
+
+              {!isUpdown && missedWeekly.length > 0 && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 12px' }}>
+                  <p style={{ margin: '0 0 8px', fontSize: '0.64rem', fontWeight: 700, color: '#dc2626', textTransform: 'uppercase' }}>
+                    ⚠️ Missed Weekly Payments
+                  </p>
+                  {missedWeekly.map((missedDate: string) => (
+                    <div key={missedDate} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <div>
+                        <span style={{ fontWeight: 700, fontSize: '0.82rem' }}>₹{Number(weeklyPaymentAmount).toLocaleString('en-IN')}</span>
+                        <span style={{ color: '#9ca3af', fontSize: '0.68rem', marginLeft: 6 }}>was due on {missedDate}</span>
+                        <span style={{ marginLeft: 6, fontSize: '0.6rem', padding: '1px 6px', borderRadius: '999px', background: '#fef2f2', color: '#dc2626', fontWeight: 700 }}>Late</span>
+                      </div>
+                      <button
+                        onClick={() => setWeeklyModal({ mukkadamId: m.mukkadam_id, assignmentId: assignmentId, amount: weeklyPaymentAmount, name: m.mukkadam_name, paymentDate: missedDate })}
+                        style={{ background: '#dc2626', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 12px', fontWeight: 700, cursor: 'pointer', fontSize: '0.72rem' }}>
+                        Pay Now (Late)
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
             </div>
           )}
         </div>
@@ -3174,436 +3481,6 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
     })}
   </div>
 )}
-
-                          {/* stale settlement warning — permanent only */}
-                          {!isUpdown && staleSettlements.length > 0 && (
-                            <div style={{ marginTop: '6px', background: '#fef9c3', border: '1px solid #fde047', borderRadius: '7px', padding: '8px 12px' }}>
-                              <p style={{ margin: '0 0 4px', fontSize: '0.64rem', fontWeight: 700, color: '#854d0e', textTransform: 'uppercase' }}>⚠️ Stale Settlement Detected</p>
-                              {staleSettlements.map((st: any) => (
-                                <div key={st.job_id} style={{ fontSize: '0.68rem', color: '#713f12' }}>
-                                  Job #{st.job_id} ({st.farmer_name}) — settlement shows ₹{Number(st.net_payable).toLocaleString('en-IN')} but shoot selection is NOT completed.
-                                  Activities were reset after settlement was calculated.
-                                </div>
-                              ))}
-                              <p style={{ margin: '4px 0 0', fontSize: '0.64rem', color: '#854d0e' }}>
-                                👉 Go to Django Admin → MukkadamJobSettlement → reset status to 'pending' for these jobs, then recalculate when shoot selection is done.
-                              </p>
-                            </div>
-                          )}
-
-                          {canPay && jobsReadyToPay.map((st: any) => (
-                            <button key={st.job_id}
-                              onClick={() => handleMukkadamPay(m.mukkadam_id, st.job_id, netPayableOverall, m.mukkadam_name)}
-                              disabled={mukkadamPaying === `${m.mukkadam_id}-${st.job_id}`}
-                              style={{ width: '100%', marginTop: '4px', padding: '10px', borderRadius: '8px', border: 'none', background: '#14b8a6', color: '#fff', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}>
-                              🏦 Pay ₹{netPayableOverall.toLocaleString('en-IN', { maximumFractionDigits: 0 })} to {m.mukkadam_name}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* ── 2. WEEK-WISE LEDGER — permanent only ── */}
-                      {!isUpdown && (() => {
-                        const ledger: any[] = m.week_ledger || [];
-                        const pendingWork: any[] = m.pending_work || [];
-
-                        if (ledger.length === 0 && pendingWork.length === 0) return (
-                          <div style={{ padding: '10px 14px', background: '#f9fafb', borderRadius: '8px', fontSize: '0.72rem', color: '#9ca3af', textAlign: 'center' }}>
-                            No weekly payments recorded yet
-                          </div>
-                        );
-
-                        return (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            <p style={{ margin: '0 0 4px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>📅 Week-wise Running Ledger</p>
-
-                            {ledger.map((row: any, ri: number) => {
-                              const isAdvance  = row.type === 'advance';
-                              const isPositive = row.running_balance >= 0;
-                              const events: any[] = row.billing_events || [];
-
-                              return (
-                                <div key={ri} style={{ background: '#fff', borderRadius: '8px', border: `1px solid ${row.can_pay ? '#fde68a' : isAdvance ? '#fecaca' : '#e5e7eb'}`, overflow: 'hidden' }}>
-                                  <div style={{ background: isAdvance ? '#fef2f2' : '#f9fafb', padding: '7px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: events.length > 0 || pendingWork.length > 0 ? '1px solid #e5e7eb' : 'none' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                      {isAdvance ? (
-                                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#dc2626' }}>💰 Advance Given</span>
-                                      ) : (
-                                        <>
-                                          <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#374151' }}>Week {row.week_num} · {row.payment_date}</span>
-                                          <span style={{ fontSize: '0.6rem', padding: '1px 7px', borderRadius: '999px', background: '#fef2f2', color: '#dc2626', fontWeight: 600 }}>
-                                            Weekly −₹{Number(row.weekly_paid).toLocaleString('en-IN')}
-                                          </span>
-                                          {row.weekly_proof_url && (
-                                            <a href={row.weekly_proof_url} target="_blank" rel="noreferrer"
-                                              style={{ fontSize: '0.58rem', color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: '3px', padding: '0 4px', background: '#eff6ff' }}>📎</a>
-                                          )}
-                                          {row.payable_this_week > 0 && (
-                                            <span style={{ fontSize: '0.6rem', padding: '1px 7px', borderRadius: '999px', background: '#f0fdf4', color: '#16a34a', fontWeight: 600 }}>
-                                              +₹{Number(row.payable_this_week).toLocaleString('en-IN')} earned
-                                            </span>
-                                          )}
-                                        </>
-                                      )}
-                                    </div>
-                                    <div style={{ textAlign: 'right', minWidth: '80px' }}>
-                                      <div style={{ fontSize: '0.56rem', color: '#9ca3af', textTransform: 'uppercase', fontWeight: 600 }}>Running</div>
-                                      <div style={{ fontSize: '0.82rem', fontWeight: 800, color: isAdvance ? '#dc2626' : isPositive ? '#16a34a' : '#dc2626' }}>
-                                        {row.running_balance >= 0 ? '+' : ''}₹{Number(row.running_balance).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                                      </div>
-                                      {row.can_pay && (
-                                        <div style={{ fontSize: '0.58rem', color: '#b45309', fontWeight: 700 }}>⚡ PAY NOW</div>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {events.length > 0 && (
-                                    <div style={{ padding: '6px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                      {events.map((ev: any, ei: number) => (
-                                        <div key={ei} style={{ background: ev.type === 'shoot_billing' ? '#f0fdf4' : ev.type === 'deposit_release' ? '#eff6ff' : '#f9fafb', border: `1px solid ${ev.type === 'shoot_billing' ? '#bbf7d0' : ev.type === 'deposit_release' ? '#bfdbfe' : '#e5e7eb'}`, borderRadius: '6px', padding: '6px 10px' }}>
-                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: ev.activities?.length > 0 ? '5px' : '0' }}>
-                                            <div>
-                                              <span style={{ fontSize: '0.64rem', fontWeight: 700, color: ev.type === 'shoot_billing' ? '#16a34a' : '#1d4ed8' }}>
-                                                {ev.type === 'shoot_billing' ? '🌱 Shoot Selection Billed' : '✓ Deposit Released'}
-                                              </span>
-                                              <span style={{ fontSize: '0.62rem', color: '#6b7280', marginLeft: '6px' }}>{ev.farmer_name} · #{ev.job_id}</span>
-                                            </div>
-                                            <div style={{ textAlign: 'right' }}>
-                                              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#16a34a' }}>+₹{Number(ev.payable).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
-                                              {ev.deposit_held > 0 && <div style={{ fontSize: '0.6rem', color: '#b45309' }}>10% held ₹{Number(ev.deposit_held).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>}
-                                              {ev.deposit_released > 0 && <div style={{ fontSize: '0.6rem', color: '#1d4ed8' }}>₹{Number(ev.deposit_released).toLocaleString('en-IN', { maximumFractionDigits: 0 })} released</div>}
-                                            </div>
-                                          </div>
-                                          {ev.activities?.length > 0 && (
-                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.64rem' }}>
-                                              <thead>
-                                                <tr>
-                                                  {['Activity', 'Area', 'Rate', 'Amount'].map(h => (
-                                                    <th key={h} style={{ padding: '2px 4px', textAlign: ['Area','Rate','Amount'].includes(h) ? 'right' : 'left', color: '#9ca3af', fontWeight: 600, borderBottom: '1px solid #f3f4f6' }}>{h}</th>
-                                                  ))}
-                                                </tr>
-                                              </thead>
-                                              <tbody>
-                                                {ev.activities.map((act: any, ai: number) => (
-                                                  <tr key={ai}>
-                                                    <td style={{ padding: '2px 4px', color: '#374151' }}>{act.activity_name}</td>
-                                                    <td style={{ padding: '2px 4px', textAlign: 'right', color: '#6b7280' }}>{Number(act.area).toFixed(2)}</td>
-                                                    <td style={{ padding: '2px 4px', textAlign: 'right', color: '#6b7280' }}>₹{Number(act.rate).toLocaleString('en-IN')}</td>
-                                                    <td style={{ padding: '2px 4px', textAlign: 'right', fontWeight: 700, color: '#0f766e' }}>₹{Number(act.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
-                                                  </tr>
-                                                ))}
-                                              </tbody>
-                                            </table>
-                                          )}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-
-                            {pendingWork.length > 0 && (
-                              <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '8px 12px' }}>
-                                <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#b45309', textTransform: 'uppercase' }}>⏳ Work Done — Shoot Selection Pending</p>
-                                {pendingWork.map((pw: any, pi: number) => (
-                                  <div key={pi} style={{ marginBottom: pi < pendingWork.length - 1 ? '6px' : '0' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', marginBottom: '3px' }}>
-                                      <span style={{ fontWeight: 700, color: '#374151' }}>{pw.farmer_name} · #{pw.job_id}</span>
-                                      <span style={{ color: '#9ca3af' }}>₹{Number(pw.gross_so_far).toLocaleString('en-IN', { maximumFractionDigits: 0 })} earned (not yet payable)</span>
-                                    </div>
-                                    {pw.activities?.map((act: any, ai: number) => (
-                                      <div key={ai} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.64rem', color: '#6b7280', paddingLeft: '8px' }}>
-                                        <span>{act.activity_name}</span>
-                                        <span>{Number(act.area).toFixed(2)} ac × ₹{Number(act.rate).toLocaleString('en-IN')} = ₹{Number(act.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-
-                      {/* ── 3. TRANSACTION HISTORY ── */}
-                      {(() => {
-                        const txns: any[] = m.transaction_history || [];
-                        if (txns.length === 0) return null;
-
-                        const colorMap: any = {
-                          advance:             { bg: '#fef2f2', border: '#fecaca', text: '#dc2626', icon: '💰' },
-                          weekly:              { bg: '#fff7ed', border: '#fed7aa', text: '#ea580c', icon: '📅' },
-                          settlement_payment:  { bg: '#f0fdf4', border: '#bbf7d0', text: '#16a34a', icon: '✅' },
-                          misc_deduction:      { bg: '#faf5ff', border: '#e9d5ff', text: '#7c3aed', icon: '⚠️' },
-                        };
-
-                        return (
-                          <div style={{ marginBottom: '4px' }}>
-                            <p style={{ margin: '0 0 6px', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>🧾 Transaction History</p>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                              {txns.map((txn: any, ti: number) => {
-                                const c = colorMap[txn.type] || colorMap.weekly;
-                                const isCredit = txn.amount > 0;
-                                return (
-                                  <div key={ti} style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: '8px', padding: '7px 12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <div style={{ minWidth: '56px', textAlign: 'center' }}>
-                                      <div style={{ fontSize: '1rem' }}>{c.icon}</div>
-                                      <div style={{ fontSize: '0.58rem', color: '#9ca3af', fontWeight: 600 }}>{txn.date?.slice(5)}</div>
-                                    </div>
-                                    <div style={{ flex: 1, minWidth: 0 }}>
-                                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#1f2937', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{txn.label}</div>
-                                      {txn.mode && txn.mode !== '—' && (
-                                        <div style={{ fontSize: '0.6rem', color: '#6b7280' }}>{txn.mode}{txn.notes ? ` · ${txn.notes}` : ''}</div>
-                                      )}
-                                    </div>
-                                    <div style={{ textAlign: 'right', minWidth: '80px' }}>
-                                      <div style={{ fontSize: '0.82rem', fontWeight: 800, color: isCredit ? '#16a34a' : '#dc2626' }}>
-                                        {isCredit ? '+' : ''}₹{Math.abs(txn.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                                      </div>
-                                      <div style={{ fontSize: '0.58rem', color: txn.running_balance >= 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
-                                        Bal: {txn.running_balance >= 0 ? '+' : ''}₹{txn.running_balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                                      </div>
-                                    </div>
-                                    {txn.proof_url && (
-                                      <a href={txn.proof_url} target="_blank" rel="noreferrer"
-                                        style={{ fontSize: '0.6rem', color: '#3b82f6', border: '1px solid #bfdbfe', borderRadius: '4px', padding: '2px 6px', background: '#eff6ff', whiteSpace: 'nowrap', textDecoration: 'none' }}>📎</a>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* ── 4. PER-JOB CARDS ── */}
-                      <p style={{ margin: '4px 0 0', fontSize: '0.66rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>🌾 Job Details</p>
-                      {m.settlements.length === 0 ? (
-                        <p style={{ fontSize: '0.78rem', color: '#9ca3af', margin: 0 }}>No settlements yet</p>
-                      ) : m.settlements.map((s: any) => {
-                        const sm = STATUS_META[s.status] || STATUS_META.pending;
-                        const stTransport = Number(s.transport_deducted || 0);
-
-                        return (
-                          <div key={s.job_id} style={{ background: '#fff', borderRadius: '10px', border: `1px solid ${s.status === 'calculated' ? '#fde68a' : s.status === 'paid' ? '#bbf7d0' : '#e5e7eb'}`, padding: '12px 14px' }}>
-
-                            {/* Job header */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
-                              <div>
-                                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8', fontSize: '0.8rem' }}>#{s.job_id}</span>
-                                <span style={{ marginLeft: '8px', fontSize: '0.8rem', color: '#374151', fontWeight: 700 }}>{s.farmer_name}</span>
-                                <div style={{ marginTop: '3px', display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '0.66rem', color: '#6b7280' }}>
-                                  <span>{s.job_title?.split('—')[0]?.trim()}</span>
-                                </div>
-                              </div>
-                              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px' }}>
-                                <span style={{ fontSize: '0.64rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 700, background: sm.bg, color: sm.text }}>{sm.label}</span>
-                                {s.status === 'paid' && s.proof_url && (
-                                  <a href={s.proof_url} target="_blank" rel="noreferrer"
-                                    style={{ fontSize: '0.6rem', color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: '3px', padding: '0 5px', background: '#eff6ff' }}>📎 Payment proof</a>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Pills: updown = 2 pills (Gross + Transport), permanent = 3 pills (Gross + 10% + 90%) */}
-                            {isUpdown ? (
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '10px' }}>
-                                {[
-                                  { label: 'Gross Earned', val: `₹${Number(s.gross_amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e', bg: '#f0fdf4' },
-                                  { label: '+ Transport',  val: stTransport > 0 ? `+₹${stTransport.toLocaleString('en-IN', { maximumFractionDigits: 0 })}` : '₹0', color: '#0369a1', bg: '#eff6ff' },
-                                ].map((item, i) => (
-                                  <div key={i} style={{ background: item.bg, borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
-                                    <div style={{ fontSize: '0.58rem', color: '#6b7280', marginBottom: '2px', fontWeight: 600 }}>{item.label}</div>
-                                    <div style={{ fontSize: '0.8rem', fontWeight: 800, color: item.color }}>{item.val}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
-                                {[
-                                  { label: 'Gross Earned', val: `₹${Number(s.gross_amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#0f766e', bg: '#f0fdf4' },
-                                  { label: (() => { const acts = s.activities || []; const allDone = acts.length > 0 && acts.every((a: any) => a.work_status === 'completed'); return allDone ? '10% Released ✓' : '10% Held'; })(), val: `₹${Number(s.deposit_held).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: (() => { const acts = s.activities || []; return acts.length > 0 && acts.every((a: any) => a.work_status === 'completed') ? '#16a34a' : '#b45309'; })(), bg: (() => { const acts = s.activities || []; return acts.length > 0 && acts.every((a: any) => a.work_status === 'completed') ? '#f0fdf4' : '#fffbeb'; })() },
-                                  { label: '90% Payable', val: `₹${Number(s.payable_90pct).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#1d4ed8', bg: '#eff6ff' },
-                                ].map((item, i) => (
-                                  <div key={i} style={{ background: item.bg, borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
-                                    <div style={{ fontSize: '0.58rem', color: '#6b7280', marginBottom: '2px', fontWeight: 600 }}>{item.label}</div>
-                                    <div style={{ fontSize: '0.8rem', fontWeight: 800, color: item.color }}>{item.val}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* Activity table */}
-                            <div style={{ border: '1px solid #e5e7eb', borderRadius: '7px', overflow: 'hidden', marginBottom: '8px' }}>
-                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.68rem' }}>
-                                <thead>
-                                  <tr style={{ background: '#f9fafb' }}>
-                                    {['Activity', 'Plot', 'Date', 'Planned', 'Claimed', 'Crew', 'Rate', 'Earned', 'Status'].map(h => (
-                                      <th key={h} style={{ padding: '4px 6px', textAlign: ['Planned','Claimed','Crew','Rate','Earned'].includes(h) ? 'right' : 'left', color: '#6b7280', fontWeight: 600, fontSize: '0.6rem', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
-                                    ))}
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {s.activities.map((act: any, idx: number) => {
-                                    const claimed  = act.mukkadam_claimed_area ?? act.actual_area_done;
-                                    const billing  = act.admin_override_area ?? (act.use_actual_for_settlement && claimed != null ? claimed : act.allocated_area);
-                                    const billAmt  = act.billing_locked ? 0 : billing * act.mukkadam_rate;
-                                    const diff     = claimed != null ? (claimed - act.allocated_area) : 0;
-                                    return (
-                                      <tr key={idx} style={{ borderTop: idx > 0 ? '1px solid #f3f4f6' : 'none', background: act.billing_locked ? '#fff5f5' : 'transparent' }}>
-                                        <td style={{ padding: '5px 6px', fontWeight: 600, color: '#111827' }}>
-                                          {act.activity_name}
-                                          {act.is_carry_forward && <span style={{ fontSize: '0.56rem', color: '#b45309', marginLeft: '2px' }}>↩</span>}
-                                        </td>
-                                        <td style={{ padding: '5px 6px', color: '#6b7280', fontFamily: 'monospace', fontSize: '0.62rem' }}>{act.plot_code}</td>
-                                        <td style={{ padding: '5px 6px', color: '#6b7280', whiteSpace: 'nowrap' }}>{act.allocated_date?.slice(5) || act.scheduled_date?.slice(5) || '—'}</td>
-                                        <td style={{ padding: '5px 6px', textAlign: 'right', color: '#6b7280' }}>{Number(act.allocated_area).toFixed(2)}</td>
-                                        <td style={{ padding: '5px 6px', textAlign: 'right' }}>
-                                          {claimed != null ? (
-                                            <span style={{ fontWeight: 700, color: diff < 0 ? '#dc2626' : diff > 0 ? '#0f766e' : '#374151' }}>
-                                              {Number(claimed).toFixed(2)}
-                                              {diff !== 0 && <span style={{ fontSize: '0.56rem', marginLeft: '2px' }}>({diff > 0 ? '+' : ''}{diff.toFixed(2)})</span>}
-                                            </span>
-                                          ) : <span style={{ color: '#9ca3af' }}>—</span>}
-                                        </td>
-                                        <td style={{ padding: '5px 6px', textAlign: 'right', color: '#6b7280' }}>{act.actual_crew_size ?? act.allocated_workers}</td>
-                                        <td style={{ padding: '5px 6px', textAlign: 'right', color: '#6b7280' }}>₹{Number(act.mukkadam_rate).toLocaleString('en-IN')}</td>
-                                        <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700, color: act.billing_locked ? '#9ca3af' : '#0f766e' }}>
-                                          {act.billing_locked ? '🔒' : `₹${Number(billAmt).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
-                                        </td>
-                                        <td style={{ padding: '5px 6px' }}>
-                                          <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', alignItems: 'center' }}>
-                                            <WorkStatusBadge status={act.work_status || 'work_not_started'} />
-                                            <PaymentStatusBadge status={act.payment_status || 'pending'} />
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                  {/* Total row */}
-                                  <tr style={{ borderTop: '2px solid #e5e7eb', background: isUpdown ? '#eff6ff' : '#f0fdfa' }}>
-                                    <td colSpan={3} style={{ padding: '5px 6px', fontWeight: 700, fontSize: '0.68rem' }}>Total</td>
-                                    <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700, color: '#6b7280' }}>
-                                      {s.activities.reduce((t: number, a: any) => t + Number(a.allocated_area), 0).toFixed(2)}
-                                    </td>
-                                    <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 700 }}>
-                                      {s.activities.some((a: any) => (a.mukkadam_claimed_area ?? a.actual_area_done) != null)
-                                        ? s.activities.reduce((t: number, a: any) => t + Number(a.mukkadam_claimed_area ?? a.actual_area_done ?? a.allocated_area), 0).toFixed(2)
-                                        : '—'}
-                                    </td>
-                                    <td colSpan={2} />
-                                    <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: '#0f766e' }}>
-                                      ₹{s.gross_amount.toLocaleString('en-IN')}
-                                    </td>
-                                    <td />
-                                  </tr>
-                                  {/* Transport row — updown only */}
-                                  {isUpdown && stTransport > 0 && (
-                                    <tr style={{ background: '#eff6ff' }}>
-                                      <td colSpan={7} style={{ padding: '5px 6px', fontWeight: 700, fontSize: '0.68rem', color: '#0369a1' }}>🚗 Transport</td>
-                                      <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: '#0369a1' }}>
-                                        +₹{stTransport.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                                      </td>
-                                      <td />
-                                    </tr>
-                                  )}
-                                  {/* Net payable row — updown only */}
-                                  {isUpdown && (
-                                    <tr style={{ background: '#f0fdf4', borderTop: '2px solid #e5e7eb' }}>
-                                      <td colSpan={7} style={{ padding: '5px 6px', fontWeight: 800, fontSize: '0.7rem', color: '#0f766e' }}>= Net Payable</td>
-                                      <td style={{ padding: '5px 6px', textAlign: 'right', fontWeight: 800, color: '#dc2626' }}>
-                                        ₹{Number(s.net_payable).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                                      </td>
-                                      <td />
-                                    </tr>
-                                  )}
-                                </tbody>
-                              </table>
-                            </div>
-
-                            <MiscCostsSection
-                              mukkadamId={m.mukkadam_id}
-                              jobId={s.job_id}
-                              initialCosts={s.misc_costs || []}
-                              onCostChange={fetchData}
-                            />
-
-                            {s.status === 'paid' && (
-                              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '10px 14px', marginTop: '8px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <div>
-                                    <div style={{ fontSize: '0.62rem', color: '#16a34a', fontWeight: 700, textTransform: 'uppercase', marginBottom: '2px' }}>✓ Settlement Paid</div>
-                                    <div style={{ fontSize: '0.72rem', color: '#374151' }}>on {s.paid_at || '—'}</div>
-                                  </div>
-                                  <div style={{ textAlign: 'right' }}>
-                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: '#16a34a' }}>₹{Number(s.net_payable).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
-                                    {s.proof_url && (
-                                      <a href={s.proof_url} target="_blank" rel="noreferrer"
-                                        style={{ fontSize: '0.62rem', color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: '4px', padding: '1px 7px', background: '#eff6ff', display: 'inline-block', marginTop: '2px' }}>
-                                        📎 View Proof
-                                      </a>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-
-                      {/* ── Weekly payment section — permanent only ── */}
-                      {!isUpdown && weeklyDueToday && (
-                        <div style={{ background: '#fefce8', border: '1px solid #fde68a', borderRadius: 8, padding: '10px 12px' }}>
-                          <p style={{ margin: '0 0 6px', fontSize: '0.64rem', fontWeight: 700, color: '#92400e', textTransform: 'uppercase' }}>📅 Weekly Payment Due Today</p>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <span style={{ fontWeight: 700, fontSize: '0.88rem' }}>₹{Number(weeklyPaymentAmount).toLocaleString('en-IN')}</span>
-                              <span style={{ color: '#6b7280', fontSize: '0.7rem', marginLeft: 6 }}>{m.crew_size} workers · {weeklyPaymentDayLabel}</span>
-                            </div>
-                            <button onClick={() => handleAddWeeklyPayment(m.mukkadam_id, assignmentId, weeklyPaymentAmount, m.mukkadam_name)}
-                              style={{ background: '#d97706', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontWeight: 700, cursor: 'pointer', fontSize: '0.74rem' }}>
-                              + Add Payment
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {!isUpdown && alreadyPaidToday && (
-                        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '8px 12px', fontSize: '0.74rem', color: '#16a34a', fontWeight: 700 }}>
-                          ✓ Weekly payment already added today
-                        </div>
-                      )}
-
-                      {!isUpdown && (m.missed_weekly_dates || []).length > 0 && (
-                        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 12px' }}>
-                          <p style={{ margin: '0 0 8px', fontSize: '0.64rem', fontWeight: 700, color: '#dc2626', textTransform: 'uppercase' }}>
-                            ⚠️ Missed Weekly Payments
-                          </p>
-                          {m.missed_weekly_dates.map((missedDate: string) => (
-                            <div key={missedDate} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                              <div>
-                                <span style={{ fontWeight: 700, fontSize: '0.82rem' }}>₹{Number(weeklyPaymentAmount).toLocaleString('en-IN')}</span>
-                                <span style={{ color: '#9ca3af', fontSize: '0.68rem', marginLeft: 6 }}>was due on {missedDate}</span>
-                                <span style={{ marginLeft: 6, fontSize: '0.6rem', padding: '1px 6px', borderRadius: '999px', background: '#fef2f2', color: '#dc2626', fontWeight: 700 }}>Late</span>
-                              </div>
-                              <button
-                                onClick={() => setWeeklyModal({ mukkadamId: m.mukkadam_id, assignmentId: assignmentId, amount: weeklyPaymentAmount, name: m.mukkadam_name, paymentDate: missedDate })}
-                                style={{ background: '#dc2626', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 12px', fontWeight: 700, cursor: 'pointer', fontSize: '0.72rem' }}>
-                                Pay Now (Late)
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
 
 

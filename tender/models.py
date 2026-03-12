@@ -284,6 +284,8 @@ class ClusterActivityRate(models.Model):
     
     def __str__(self):
         return f"{self.cluster.name} - {self.activity.name}: ₹{self.rate_per_acre}/ac"
+
+
 import logging
 
 logger = logging.getLogger(__name__)
