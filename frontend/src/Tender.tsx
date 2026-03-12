@@ -26,6 +26,11 @@ interface Cluster {
   districts?: string[];
   talukas?: string[];
   villages?: string[];
+   village_codes?: string[];      // ← needed
+  district_codes?: string[];     // ← needed
+        // ← needed
+  taluka_codes?: string[];       // ← needed
+   
   farmer_due: number;    // ← new
   mukkadam_due: number;
 }
@@ -60,23 +65,34 @@ interface VillageOption {
 interface SelectedLocation {
   village: VillageOption;
   talukaName: string;
+  talukaCode: string;       // maps to village.subdistrictcode
   districtName: string;
-  talukaCode: string;
-  districtCode: string;
+  districtCode: string;     // maps to village.districtcode
 }
 
 // ─── LocationSearch ───────────────────────────────────────────────────────────
 interface LocationSearchProps {
   stateCode: string;
   onSelectionChange: (locations: SelectedLocation[]) => void;
+  initialSelections?: SelectedLocation[];   // ← add this
 }
 
-const LocationSearch: React.FC<LocationSearchProps> = ({ stateCode, onSelectionChange }) => {
+const LocationSearch: React.FC<LocationSearchProps> = ({ 
+  stateCode, 
+  onSelectionChange, 
+  initialSelections = []   // ← default empty
+}) => {
+  const [selected, setSelected] = useState<SelectedLocation[]>(initialSelections); // ← pre-fill
+  
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<VillageOption[]>([]);
-  const [selected, setSelected] = useState<SelectedLocation[]>([]);
+
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    onSelectionChange(initialSelections);
+  }, []);
 
   // Use refs for lookup maps — avoids stale closure issues entirely
   const talukaMapRef = useRef<Map<string, TalukaOption>>(new Map());
@@ -426,16 +442,34 @@ interface EditClusterModalProps {
 }
 
 const EditClusterModal: React.FC<EditClusterModalProps> = ({ cluster, onClose, onSaved }) => {
-  const [name, setName]                       = useState(cluster.name);
-  const [selectedState, setSelectedState]     = useState<string>('MH');
-  const [selectedLocations, setSelectedLocations] = useState<SelectedLocation[]>([]);
-  const [saving, setSaving]                   = useState(false);
+  const [name, setName] = useState(cluster.name);
+  const [selectedState, setSelectedState] = useState<string>('MH');
+  
+  // Pre-populate with existing villages
+  const [selectedLocations, setSelectedLocations] = useState<SelectedLocation[]>(
+  () => (cluster.villages ?? []).map((villageName: string, i: number) => ({
+    village: {
+      villagecode:        cluster.village_codes?.[i] ?? '',
+      villagenameenglish: villageName,
+      villagelocalname:   '',
+      subdistrictcode:    cluster.taluka_codes?.[i] ?? '',
+      districtcode:       cluster.district_codes?.[i] ?? '',
+    },
+    talukaCode:   cluster.taluka_codes?.[i]   ?? '',
+    talukaName:   cluster.talukas?.[i]         ?? '',
+    districtCode: cluster.district_codes?.[i]  ?? '',
+    districtName: cluster.districts?.[i]       ?? '',
+  }))
+);
+
+  const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
     try {
       const body: any = { name };
 
+      // Always send locations (pre-filled or newly selected)
       if (selectedLocations.length > 0) {
         body.district_codes = [...new Set(selectedLocations.map(l => l.districtCode).filter(Boolean))];
         body.taluka_codes   = [...new Set(selectedLocations.map(l => l.talukaCode).filter(Boolean))];
@@ -506,17 +540,18 @@ const EditClusterModal: React.FC<EditClusterModalProps> = ({ cluster, onClose, o
         )}
 
         {/* New villages — optional, only updates if selections made */}
+        {/* Villages */}
         <label className="form-label" style={{ marginTop: '16px', display: 'block' }}>
-          Replace villages (optional)
+          Villages
           <p style={{ fontSize: '0.75rem', color: '#9ca3af', margin: '2px 0 6px' }}>
-            Leave empty to keep existing villages. Select new ones to replace all.
+            Existing villages are pre-loaded. Add or remove as needed.
           </p>
           <select
             className="form-input"
             value={selectedState}
             onChange={e => {
               setSelectedState(e.target.value);
-              setSelectedLocations([]);
+              // Don't reset selectedLocations here anymore
             }}
             style={{ marginBottom: '8px' }}
           >
@@ -527,6 +562,7 @@ const EditClusterModal: React.FC<EditClusterModalProps> = ({ cluster, onClose, o
           <LocationSearch
             key={selectedState}
             stateCode={selectedState}
+            initialSelections={selectedLocations}   // ← pass existing
             onSelectionChange={setSelectedLocations}
           />
         </label>
@@ -1268,10 +1304,7 @@ const fetchClusters = useCallback(async (q: string) => {
   }
 }, []);
 
-useEffect(() => {
-  fetchClusters('');
-  // loadStates stays same
-}, [fetchClusters]);
+
 useEffect(() => {
   const id = setTimeout(() => {
     fetchClusters(searchTerm);
@@ -1290,64 +1323,17 @@ useEffect(() => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const loadClusters = async () => {
-      setLoading(true);
-      try {
-        const res  = await fetch(`${API_BASE_URL}/api/clusters/`);
-        const data = await res.json();
-        setClusters(data);
-      } finally {
-        setLoading(false);
-      }
-    };
+    
     const loadStates = async () => {
       const res  = await fetch(`${API_BASE_URL}/locations/states/`);
       const data = await res.json();
       setStates(data);
     };
-    loadClusters();
+
     loadStates();
   }, []);
 
-  const handleCreateCluster = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (selectedLocations.length === 0) return;
-    setLoading(true);
-    try {
-      const districtNames = [...new Set(selectedLocations.map(l => l.districtName).filter(Boolean))];
-      const talukaNames   = [...new Set(selectedLocations.map(l => l.talukaName).filter(Boolean))];
-      const villageNames  = selectedLocations.map(l => l.village.villagenameenglish);
-      const districtCodes = [...new Set(selectedLocations.map(l => l.districtCode).filter(Boolean))];
-      const talukaCodes   = [...new Set(selectedLocations.map(l => l.talukaCode).filter(Boolean))];
-      const villageCodes  = selectedLocations.map(l => l.village.villagecode);
 
-      const token = localStorage.getItem('auth_token');
-
-    const res = await fetch(`${API_BASE_URL}/api/clusters/`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Token ${token}` } : {}),
-      },
-        body: JSON.stringify({
-          name: newName,
-          state_code: selectedState,
-          district_codes: districtCodes,
-          taluka_codes: talukaCodes,
-          village_codes: villageCodes,
-          districts: districtNames,
-          talukas: talukaNames,
-          villages: villageNames,
-        }),
-      });
-      const cluster = await res.json();
-      setClusters(prev => [...prev, cluster]);
-      // ✅ Navigate directly to new cluster page
-      navigate(`/cluster/${cluster.id}`);
-    } finally {
-      setLoading(false);
-    }
-  };
 return (
   <div className="min-h-screen bg-slate-50 px-6 py-5">
     {/* Top bar */}

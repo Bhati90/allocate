@@ -2546,121 +2546,134 @@ class ClusterViewSet(viewsets.ModelViewSet):
         serializer.save(last_modified_by=user)
     
 
-    def list(self, request, *args, **kwargs):
-        from datetime import date
-        from decimal import Decimal
-        from django.db.models import Sum
+    # def list(self, request, *args, **kwargs):
+    #     from datetime import date
+    #     from decimal import Decimal
+    #     from django.db.models import Sum
 
-        today = date.today()
-        qs    = self.get_queryset()
+    #     today = date.today()
+    #     qs    = self.get_queryset()
+    #     result = []
+
+    #     for c in qs:
+    #         # ── FARMER DUE ────────────────────────────────────────────────────
+    #         # Same logic as cluster_payment_dashboard — total_billable − total_paid
+    #         farmer_due         = Decimal('0')
+    #         farmers_in_cluster = Farmer.objects.filter(clusters__id=c.id).distinct()
+
+    #         for farmer in farmers_in_cluster:
+    #             jobs = Job.objects.filter(
+    #                 farmer=farmer,
+    #                 activities__plot__clusters__id=c.id
+    #             ).distinct().prefetch_related('activities', 'booking')
+
+    #             for job in jobs:
+    #                 try:
+    #                     booking = job.booking
+    #                 except Exception:
+    #                     booking = None
+
+    #                 activities = job.activities.filter(
+    #                     plot__clusters__id=c.id
+    #                 ).select_related('activity', 'plot').order_by('scheduled_date')
+
+    #                 # ── Total billable — same effective area logic as payment dashboard ──
+    #                 total_billable = Decimal('0')
+    #                 for act in activities:
+    #                     is_past      = bool(act.scheduled_date and act.scheduled_date <= today)
+    #                     act_allocs   = Allocation.objects.filter(job_activity=act)
+    #                     should_bill  = is_past or any(a.farmer_agreed is True for a in act_allocs)
+    #                     if not should_bill:
+    #                         continue
+
+    #                     for a in act_allocs:
+    #                         # Skip disputed without override
+    #                         is_locked = (
+    #                             getattr(a, 'payment_status', None) == 'dispute'
+    #                             and not getattr(a, 'use_actual_for_settlement', False)
+    #                             and getattr(a, 'admin_override_area', None) is None
+    #                         ) or (
+    #                             a.farmer_agreed is False
+    #                             and getattr(a, 'admin_override_area', None) is None
+    #                             and not getattr(a, 'use_actual_for_settlement', False)
+    #                         )
+    #                         if is_locked:
+    #                             continue
+
+    #                         if getattr(a, 'admin_override_area', None) is not None:
+    #                             eff = Decimal(str(a.admin_override_area))
+    #                         elif getattr(a, 'use_actual_for_settlement', False) and a.actual_area_done is not None:
+    #                             eff = Decimal(str(a.actual_area_done))
+    #                         elif a.farmer_agreed is True and a.actual_area_done is not None:
+    #                             eff = Decimal(str(a.actual_area_done))
+    #                         else:
+    #                             eff = Decimal(str(a.allocated_area or 0))
+
+    #                         if act.rate_per_acre:
+    #                             total_billable += (eff * Decimal(str(act.rate_per_acre))).quantize(Decimal('0.01'))
+
+    #                 # ── Total paid — advance + FarmerPayments (same as dashboard) ──
+    #                 advance_paid    = Decimal(str(booking.advance_paid)) if booking else Decimal('0')
+    #                 additional_paid = Decimal('0')
+
+    #                 if booking:
+    #                     fps = FarmerPayment.objects.filter(booking=booking)
+    #                     confirmed = [p for p in fps if getattr(p, 'paid_status', True) is not False]
+    #                     additional_paid = sum(Decimal(str(p.amount)) for p in confirmed)
+
+    #                 total_paid  = additional_paid if additional_paid > 0 else advance_paid
+    #                 balance_due = total_billable - total_paid
+
+    #                 if balance_due > Decimal('0.01'):
+    #                     farmer_due += balance_due
+
+    #         # ── MUKKADAM DUE ──────────────────────────────────────────────────
+    #         # Sum net_payable from all calculated settlements for this cluster
+    #         mukkadam_due = Decimal('0')
+    #         assignments  = ClusterMukkadamAssignment.objects.filter(
+    #             cluster=c
+    #         ).select_related('mukkadam')
+
+
+    #         for assignment in assignments:
+    #             mukkadam = assignment.mukkadam
+
+    #             # Sum all 'calculated' settlements for this mukkadam
+    #             # where the job has activities in this cluster
+    #             settlements = MukkadamJobSettlement.objects.filter(
+    #                 mukkadam=mukkadam,
+    #                 status='calculated',
+    #                 job__activities__plot__clusters__id=c.id,
+    #             ).distinct()
+
+    #             for s in settlements:
+    #                 net = s.net_payable or Decimal('0')
+    #                 if net > Decimal('0.01'):
+    #                     mukkadam_due += net
+
+    #         serialized                 = self.get_serializer(c).data
+    #         serialized['farmer_due']   = '0'
+    #         serialized['mukkadam_due'] = '0'
+
+    #         serialized['farmer_count'] = c.farmer_count
+    #         serialized['mukkadam_count'] = c.mukkadam_count
+    #         result.append(serialized)
+
+    #     return Response(result)
+    
+    def list(self, request, *args, **kwargs):
+        qs = self.get_queryset()
         result = []
 
         for c in qs:
-            # ── FARMER DUE ────────────────────────────────────────────────────
-            # Same logic as cluster_payment_dashboard — total_billable − total_paid
-            farmer_due         = Decimal('0')
-            farmers_in_cluster = Farmer.objects.filter(clusters__id=c.id).distinct()
-
-            for farmer in farmers_in_cluster:
-                jobs = Job.objects.filter(
-                    farmer=farmer,
-                    activities__plot__clusters__id=c.id
-                ).distinct().prefetch_related('activities', 'booking')
-
-                for job in jobs:
-                    try:
-                        booking = job.booking
-                    except Exception:
-                        booking = None
-
-                    activities = job.activities.filter(
-                        plot__clusters__id=c.id
-                    ).select_related('activity', 'plot').order_by('scheduled_date')
-
-                    # ── Total billable — same effective area logic as payment dashboard ──
-                    total_billable = Decimal('0')
-                    for act in activities:
-                        is_past      = bool(act.scheduled_date and act.scheduled_date <= today)
-                        act_allocs   = Allocation.objects.filter(job_activity=act)
-                        should_bill  = is_past or any(a.farmer_agreed is True for a in act_allocs)
-                        if not should_bill:
-                            continue
-
-                        for a in act_allocs:
-                            # Skip disputed without override
-                            is_locked = (
-                                getattr(a, 'payment_status', None) == 'dispute'
-                                and not getattr(a, 'use_actual_for_settlement', False)
-                                and getattr(a, 'admin_override_area', None) is None
-                            ) or (
-                                a.farmer_agreed is False
-                                and getattr(a, 'admin_override_area', None) is None
-                                and not getattr(a, 'use_actual_for_settlement', False)
-                            )
-                            if is_locked:
-                                continue
-
-                            if getattr(a, 'admin_override_area', None) is not None:
-                                eff = Decimal(str(a.admin_override_area))
-                            elif getattr(a, 'use_actual_for_settlement', False) and a.actual_area_done is not None:
-                                eff = Decimal(str(a.actual_area_done))
-                            elif a.farmer_agreed is True and a.actual_area_done is not None:
-                                eff = Decimal(str(a.actual_area_done))
-                            else:
-                                eff = Decimal(str(a.allocated_area or 0))
-
-                            if act.rate_per_acre:
-                                total_billable += (eff * Decimal(str(act.rate_per_acre))).quantize(Decimal('0.01'))
-
-                    # ── Total paid — advance + FarmerPayments (same as dashboard) ──
-                    advance_paid    = Decimal(str(booking.advance_paid)) if booking else Decimal('0')
-                    additional_paid = Decimal('0')
-
-                    if booking:
-                        fps = FarmerPayment.objects.filter(booking=booking)
-                        confirmed = [p for p in fps if getattr(p, 'paid_status', True) is not False]
-                        additional_paid = sum(Decimal(str(p.amount)) for p in confirmed)
-
-                    total_paid  = additional_paid if additional_paid > 0 else advance_paid
-                    balance_due = total_billable - total_paid
-
-                    if balance_due > Decimal('0.01'):
-                        farmer_due += balance_due
-
-            # ── MUKKADAM DUE ──────────────────────────────────────────────────
-            # Sum net_payable from all calculated settlements for this cluster
-            mukkadam_due = Decimal('0')
-            assignments  = ClusterMukkadamAssignment.objects.filter(
-                cluster=c
-            ).select_related('mukkadam')
-
-
-            for assignment in assignments:
-                mukkadam = assignment.mukkadam
-
-                # Sum all 'calculated' settlements for this mukkadam
-                # where the job has activities in this cluster
-                settlements = MukkadamJobSettlement.objects.filter(
-                    mukkadam=mukkadam,
-                    status='calculated',
-                    job__activities__plot__clusters__id=c.id,
-                ).distinct()
-
-                for s in settlements:
-                    net = s.net_payable or Decimal('0')
-                    if net > Decimal('0.01'):
-                        mukkadam_due += net
-
-            serialized                 = self.get_serializer(c).data
-            serialized['farmer_due']   = '0'
-            serialized['mukkadam_due'] = '0'
-
-            serialized['farmer_count'] = c.farmer_count
+            serialized = self.get_serializer(c).data
+            serialized['farmer_due']     = '0'
+            serialized['mukkadam_due']   = '0'
+            serialized['farmer_count']   = c.farmer_count
             serialized['mukkadam_count'] = c.mukkadam_count
             result.append(serialized)
 
         return Response(result)
-    
     
     
     @action(detail=True, methods=['post'])

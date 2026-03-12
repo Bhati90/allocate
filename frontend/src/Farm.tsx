@@ -2777,9 +2777,11 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
       0
     )
   : 0;
-              const totalTransport = m.settlements.reduce(
-                (acc: number, st: any) => acc + Number(st.transport_deducted || 0), 0
-              );
+         const totalTransport =
+  m.settlements?.reduce(
+    (acc: number, st: any) => acc + Number(st.transport_deducted || 0),
+    0
+  ) ?? 0;
 
               // ── DEPOSIT (permanent only) ─────────────────────────────────
               const isJobFullyDone = (st: any) => {
