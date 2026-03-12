@@ -16,7 +16,7 @@ from .views import (
     get_cluster_plots,get_districts,get_states,get_talukas,get_villages,UserSearchView,
     insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,
     reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,JobNoteViewSet,
-    search_villages,farmer_work_verification_detail,
+    search_villages,farmer_work_verification_detail,tender_activity_count_from_api,
     suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs
 )
 
@@ -53,6 +53,9 @@ router.register(r'leaves', LeaveViewSet, basename='leave')
 router.register(r'planning', PlanningViewSet, basename='planning')
 urlpatterns = [
     path('api/', include(router.urls)),
+
+    path('api/tender-activity-count/', tender_activity_count_from_api, name='tender_activity_count_from_api'),
+
 # path('api/activities/insert_between/', insert_activity_between, name='insert_activity_between'),
 path('locations/search_villages/', search_villages),
     path('locations/states/', get_states, name='get-states'),

@@ -1,0 +1,60 @@
+{
+  "summary": {
+    "total_api_jobs_seen": 369,
+    "total_tender_jobs_in_api": 123,
+    "total_tender_jobs_in_db": 122,
+    "jobs_with_activities_in_api_not_db": 1,
+    "jobs_with_activities_in_db_not_api": 0
+  },
+  "in_api_not_in_db": [
+    {
+      "job_id": "2213",
+      "missing_in_db": [
+        {
+          "activity_name": "1st Lateral Removal (बगल काढणे)",
+          "plot_code": "23172"
+        },
+        {
+          "activity_name": "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)",
+          "plot_code": "23172"
+        },
+        {
+          "activity_name": "Pruning (छाटणी)",
+          "plot_code": "23172"
+        },
+        {
+          "activity_name": "Shenda Stopping (शेंडा स्टॉपिंग)",
+          "plot_code": "23172"
+        },
+        {
+          "activity_name": "Shoot Selection (विरळणी)",
+          "plot_code": "23172"
+        }
+      ],
+      "api_pairs": [
+        {
+          "activity_name": "1st Lateral Removal (बगल काढणे)",
+          "plot_code": "23172"
+        },
+        {
+          "activity_name": "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)",
+          "plot_code": "23172"
+        },
+        {
+          "activity_name": "Pruning (छाटणी)",
+          "plot_code": "23172"
+        },
+        {
+          "activity_name": "Shenda Stopping (शेंडा स्टॉपिंग)",
+          "plot_code": "23172"
+        },
+        {
+          "activity_name": "Shoot Selection (विरळणी)",
+          "plot_code": "23172"
+        }
+      ],
+      "db_pairs": []
+    }
+  ],
+  "in_db_not_in_api": []
+}

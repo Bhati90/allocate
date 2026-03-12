@@ -372,6 +372,76 @@ def reset_cluster_activity_override(request, cluster_id, activity_id):
         return Response({'error': 'Not found'}, status=404)
 
 
+import requests
+from django.http import JsonResponse
+from django.views.decorators.http import require_GET
+
+EXTERNAL_API_URL = "https://ops.bharatintelligence.ai/ops/allocation_booked_visits/"
+EXTERNAL_API_TOKEN = "89b9fd0698faed6c12c1a8e714fca12c86ee2000"  # replace with your actual token
+
+@require_GET
+def tender_activity_count_from_api(request):
+    all_activities = []
+    url = EXTERNAL_API_URL
+    page = 1
+
+    try:
+        # Paginate through all pages
+        while url:
+            response = requests.get(
+                url,
+                headers={"Authorization": f"Token {EXTERNAL_API_TOKEN}"},
+                timeout=15
+            )
+
+            if response.status_code != 200:
+                return JsonResponse({
+                    "status": "error",
+                    "message": f"External API returned {response.status_code}",
+                }, status=502)
+
+            payload = response.json()
+
+            # Handle both paginated and non-paginated responses
+            jobs = payload.get("data") or payload.get("results") or []
+
+            for job in jobs:
+                # Only process tender booking_type
+                booking = job.get("booking") or {}
+                booking_type = booking.get("booking_type", "")
+
+                if booking_type.lower() != "tender":
+                    continue
+
+                activities = job.get("activities") or []
+                for act in activities:
+                    all_activities.append({
+                        "job_id":        job.get("id"),
+                        "farmer_id":     job.get("farmer_id"),
+                        "activity_id":   act.get("id"),
+                        "activity_name": act.get("activity_name"),
+                        "status":        job.get("status"),
+                        "scheduled_date": job.get("scheduled_date"),
+                    })
+
+            # Move to next page if paginated
+            url = payload.get("next")  # None if no more pages
+            page += 1
+
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({
+            "status": "error",
+            "message": str(e),
+        }, status=502)
+
+    return JsonResponse({
+        "status": "success",
+        "data": {
+            "total_activity_count": len(all_activities),
+            "activities": all_activities,
+        }
+    })
+
 class FarmerViewSet(viewsets.ModelViewSet):
     queryset = Farmer.objects.all().prefetch_related('clusters')
 
