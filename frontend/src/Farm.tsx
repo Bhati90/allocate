@@ -2730,8 +2730,6 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
   </div>
 )}
 
-        {/* ════ MUKKADAMS TAB ════ */}
-        {/* ════ MUKKADAMS TAB ════ */}
         {tab === 'mukkadams' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {data.mukkadams.filter((m: any) => {
@@ -2742,7 +2740,7 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
               <div style={{ textAlign: 'center', padding: '48px', color: '#9ca3af', fontSize: '0.82rem' }}>
                 No active mukkadams (all work not started yet)
               </div>
-            ) : data.mukkadams.filter((m: any) => {
+            ) :  data.mukkadams.map((m: any) => {
               if (m.already_paid_today === false && m.weekly_payment_day_value !== null && m.weekly_payment_day_value !== undefined) {
                 const todayJs = new Date().getDay();
                 const todayPy = todayJs === 0 ? 6 : todayJs - 1;
@@ -2773,9 +2771,12 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
               const weeklyDueToday = !isUpdown && weeklyPaymentDayValue === todayPy && !alreadyPaidToday;
 
               // ── GROSS & TRANSPORT ────────────────────────────────────────
-              const totalGross = m.settlements.reduce(
-                (acc: number, st: any) => acc + Number(st.gross_amount), 0
-              );
+              const totalGross = Array.isArray(m.settlements)
+  ? m.settlements.reduce(
+      (acc: number, st: any) => acc + Number(st.gross_amount),
+      0
+    )
+  : 0;
               const totalTransport = m.settlements.reduce(
                 (acc: number, st: any) => acc + Number(st.transport_deducted || 0), 0
               );

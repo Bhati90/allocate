@@ -1,0 +1,282 @@
+Jobs OK          : 62
+Jobs with issues : 59
+Not in API       : 0
+============================================================
+
+Job 2069 | Prakash Dawange
+  [BOOKING]  advance_paid        : local=0.0 | api=96800.0
+  [BOOKING]  balance             : local=464000.0 | api=367200.0
+
+Job 2095 | Sunil Madhavrao Shinde
+  [BOOKING]  advance_paid        : local=0.0 | api=18970.0
+  [BOOKING]  balance             : local=91330.0 | api=72360.0
+
+Job 2065 | Lata Manohar Patole
+  [BOOKING]  advance_paid        : local=0.0 | api=12740.0
+  [BOOKING]  balance             : local=63700.0 | api=50960.0
+  [PAYMENT]  MISSING LOCALLY : id=955 amount=12740.0 mode=CHEQUE
+
+Job 1785 | Subhash Bhagwant Gade
+  [BOOKING]  total_amount        : local=63500.0 | api=64200.0
+  [BOOKING]  balance             : local=50660.0 | api=51360.0
+
+Job 1824 | Valuba Namdev Gachale
+  [BOOKING]  total_amount        : local=99000.0 | api=100100.0
+  [BOOKING]  advance_paid        : local=0.0 | api=20900.0
+  [BOOKING]  balance             : local=99000.0 | api=79200.0
+
+Job 2025 | Yogesh Suresh Nikam
+  [BOOKING]  advance_paid        : local=0.0 | api=21774.0
+  [BOOKING]  balance             : local=104286.0 | api=82512.0
+  [PAYMENT]  MISSING LOCALLY : id=986 amount=21774.0 mode=CHEQUE
+
+Job 2027 | Sandeep Shankar Shinde
+  [BOOKING]  advance_paid        : local=0.0 | api=11590.0
+  [BOOKING]  balance             : local=55510.0 | api=43920.0
+
+Job 1786 | Sandip Ramchandra Chaure
+  [BOOKING]  total_amount        : local=76500.0 | api=77350.0
+  [BOOKING]  balance             : local=60350.0 | api=61200.0
+
+Job 2063 | Balaji Patole (Lodhai Mala)
+  [BOOKING]  advance_paid        : local=0.0 | api=39990.0
+  [BOOKING]  balance             : local=199950.0 | api=159960.0
+  [PAYMENT]  MISSING LOCALLY : id=954 amount=39990.0 mode=CHEQUE
+
+Job 1978 | Ashok Namdev Patil
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[4798, 4798, 63535, 76325, 76326] | api=[4798, 63535, 76325, 76326]
+
+Job 1998 | Anil Sarode
+  [BOOKING]  advance_paid        : local=0.0 | api=9500.0
+  [BOOKING]  balance             : local=45500.0 | api=36000.0
+
+Job 2023 | Ravindra Tukaram Borade
+  [BOOKING]  advance_paid        : local=0.0 | api=100000.0
+  [BOOKING]  balance             : local=472640.0 | api=372640.0
+
+Job 2087 | Rohan Shrihari Mogal
+  [BOOKING]  advance_paid        : local=0.0 | api=7410.0
+  [BOOKING]  balance             : local=35490.0 | api=28080.0
+
+Job 2088 | Tushar Kishor Nikam
+  [BOOKING]  advance_paid        : local=0.0 | api=16872.0
+  [BOOKING]  balance             : local=80808.0 | api=63936.0
+
+Job 1830 | Hemant Motilal Rathi
+  [BOOKING]  advance_paid        : local=0.0 | api=41600.0
+  [BOOKING]  balance             : local=195600.0 | api=154000.0
+
+Job 2032 | Arun Ashok Shinde
+  [BOOKING]  advance_paid        : local=0.0 | api=107500.0
+  [BOOKING]  balance             : local=537480.0 | api=429980.0
+  [PAYMENT]  MISSING LOCALLY : id=985 amount=107500.0 mode=CHEQUE
+
+Job 2094 | Ramrao Daulatrao Bhalerao
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[23609, 23609, 23609, 23609, 76457, 76458, 76459, 76460] | api=[23609, 76457, 76458, 76459, 76460]
+
+Job 2049 | Dnyaneshwar Sampat Shinde
+  [BOOKING]  total_amount        : local=60250.0 | api=60850.0
+  [BOOKING]  balance             : local=47600.0 | api=48200.0
+
+Job 2038 | Hirabai Keshav Kale
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[52825, 9161, 9161] | api=[52825, 9161]
+  [BOOKING]  advance_paid        : local=0.0 | api=114950.0
+  [BOOKING]  balance             : local=114950.0 | api=0.0
+
+Job 1513 | Yogeshwar Bajirao Thombare
+  [ACTIVITY] PLOT MISMATCH   : "Shenda Stopping (शेंडा स्टॉपिंग)" | local=[76087] | api=[76087, 76088]
+  [ACTIVITY] PLOT MISMATCH   : "Cane Tying with Clips (काडी बांधणे - क्लिप्स)" | local=[76087] | api=[76087, 76088]
+  [ACTIVITY] PLOT MISMATCH   : "Shoot Selection (विरळणी)" | local=[76087] | api=[76087, 76088]
+  [ACTIVITY] PLOT MISMATCH   : "One Time Subcane (सबकेन)" | local=[76087] | api=[76087, 76088]
+  [ACTIVITY] PLOT MISMATCH   : "1st Lateral Removal (बगल काढणे)" | local=[76087] | api=[76087, 76088]
+  [ACTIVITY] PLOT MISMATCH   : "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)" | local=[76087] | api=[76087, 76088]
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[76087] | api=[76087, 76088]
+
+Job 1556 | Balasaheb Sahane
+  [PAYMENT]  MISSING LOCALLY : id=945 amount=4000.0 mode=UPI
+
+Job 1596 | Vinod Ugale
+  [PAYMENT]  EXTRA LOCALLY   : id=693 amount=8000.00 mode=OTHER
+
+Job 1599 | satish varpe
+  [BOOKING]  advance_paid        : local=0.0 | api=1000.0
+  [BOOKING]  balance             : local=30400.0 | api=29400.0
+  [PAYMENT]  MISSING LOCALLY : id=1038 amount=1000.0 mode=UPI
+  [PAYMENT]  EXTRA LOCALLY   : id=694 amount=1000.00 mode=OTHER
+
+Job 1563 | Pravin Arjun Varpe
+  [ACTIVITY] PLOT MISMATCH   : "Shenda Stopping (शेंडा स्टॉपिंग)" | local=[76115] | api=[76115, 76116, 76117]
+  [ACTIVITY] PLOT MISMATCH   : "Shoot Selection (विरळणी)" | local=[76115] | api=[76115, 76116, 76117]
+  [ACTIVITY] PLOT MISMATCH   : "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)" | local=[76115] | api=[76115, 76116, 76117]
+  [ACTIVITY] PLOT MISMATCH   : "Hand Pasting (पेस्टींग)" | local=[76115] | api=[76115, 76116, 76117]
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[76115] | api=[76115, 76116, 76117]
+
+Job 1940 | Tushar Dighe
+  [BOOKING]  advance_paid        : local=0.0 | api=102500.0
+  [BOOKING]  balance             : local=356000.0 | api=253500.0
+
+Job 1577 | Kiran Varpe
+  [PAYMENT]  MISSING LOCALLY : id=1044 amount=4000.0 mode=UPI
+
+Job 1581 | Sahebrao Savitra Hande
+  [ACTIVITY] PLOT MISMATCH   : "Shenda Stopping (शेंडा स्टॉपिंग)" | local=[1161] | api=[1160, 1161]
+  [ACTIVITY] PLOT MISMATCH   : "Shoot Selection (विरळणी)" | local=[1161] | api=[1160, 1161]
+  [ACTIVITY] PLOT MISMATCH   : "1st Lateral Removal (बगल काढणे)" | local=[1161] | api=[1160, 1161]
+  [ACTIVITY] PLOT MISMATCH   : "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)" | local=[1161] | api=[1160, 1161]
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[1161] | api=[1160, 1161]
+  [BOOKING]  total_amount        : local=59200.0 | api=51025.0
+  [BOOKING]  balance             : local=43600.0 | api=35425.0
+
+Job 1883 | Chaya Dnyaneshwar Pagar
+  [BOOKING]  total_amount        : local=68820.0 | api=69564.0
+  [BOOKING]  balance             : local=54312.0 | api=55056.0
+
+Job 1897 | Vishwanath karbhari pagar
+  [BOOKING]  total_amount        : local=68880.0 | api=69454.0
+  [BOOKING]  balance             : local=54530.0 | api=55104.0
+
+Job 1905 | Dattu Bhaguji Paagr
+  [BOOKING]  total_amount        : local=33540.0 | api=33798.0
+  [BOOKING]  balance             : local=26574.0 | api=26832.0
+
+Job 1904 | Nivrutti Santu Pagar
+  [BOOKING]  total_amount        : local=79875.0 | api=80525.0
+  [BOOKING]  balance             : local=63250.0 | api=63900.0
+
+Job 1888 | Vasant Suresh Pagar
+  [BOOKING]  total_amount        : local=100100.0 | api=101120.0
+  [BOOKING]  balance             : local=79880.0 | api=80900.0
+
+Job 1900 | Appaji Ramdas Pagar
+  [BOOKING]  total_amount        : local=23500.0 | api=23700.0
+  [BOOKING]  balance             : local=18600.0 | api=18800.0
+
+Job 1892 | Saurabh V. Pagar
+  [BOOKING]  total_amount        : local=27750.0 | api=28050.0
+  [BOOKING]  balance             : local=21900.0 | api=22200.0
+
+Job 1875 | Ravindra Ramnath Pagar
+  [BOOKING]  total_amount        : local=88125.0 | api=88875.0
+  [BOOKING]  balance             : local=69750.0 | api=70500.0
+
+Job 1886 | Seema Ramkrushna Pagar
+  [BOOKING]  total_amount        : local=18500.0 | api=18700.0
+  [BOOKING]  balance             : local=14600.0 | api=14800.0
+
+Job 1898 | Ramnath Trambak Pagar
+  [BOOKING]  total_amount        : local=52400.0 | api=52870.0
+  [BOOKING]  balance             : local=41450.0 | api=41920.0
+
+Job 1895 | Bhausaheb Valu Pagar
+  [BOOKING]  total_amount        : local=29600.0 | api=29920.0
+  [BOOKING]  balance             : local=23360.0 | api=23680.0
+
+Job 1889 | Kiran Laxman Pagar
+  [BOOKING]  total_amount        : local=42000.0 | api=42350.0
+  [BOOKING]  balance             : local=33530.0 | api=33880.0
+
+Job 1885 | Dipak Chindu Shinde
+  [BOOKING]  total_amount        : local=23125.0 | api=23375.0
+  [BOOKING]  balance             : local=18250.0 | api=18500.0
+
+Job 1902 | Santu Bala Pagar
+  [BOOKING]  total_amount        : local=54250.0 | api=54750.0
+  [BOOKING]  balance             : local=42900.0 | api=43400.0
+
+Job 1896 | Tukaram  Karbhari Pagar
+  [BOOKING]  total_amount        : local=37000.0 | api=37400.0
+  [BOOKING]  balance             : local=29200.0 | api=29600.0
+
+Job 1893 | Sanjay Suresh Pagar
+  [BOOKING]  total_amount        : local=46250.0 | api=46750.0
+  [BOOKING]  balance             : local=36500.0 | api=37000.0
+
+Job 1894 | Bapu Laxman Pagar
+  [BOOKING]  total_amount        : local=32500.0 | api=32750.0
+  [BOOKING]  balance             : local=25750.0 | api=26000.0
+
+Job 1891 | Yogesh Ramnath Pagar
+  [BOOKING]  total_amount        : local=18500.0 | api=18700.0
+  [BOOKING]  balance             : local=14600.0 | api=14800.0
+
+Job 1833 | Prakash Valu Nigal
+  [BOOKING]  advance_paid        : local=0.0 | api=13650.0
+  [BOOKING]  balance             : local=64050.0 | api=50400.0
+
+Job 1508 | Krushna Nandkumar Sonawane
+  [ACTIVITY] PLOT MISMATCH   : "Shenda Stopping (शेंडा स्टॉपिंग)" | local=[76097, 76097, 76097] | api=[76097]
+  [ACTIVITY] PLOT MISMATCH   : "Cane Tying with Clips (काडी बांधणे - क्लिप्स)" | local=[76097, 76097, 76097] | api=[76097]
+  [ACTIVITY] PLOT MISMATCH   : "Shoot Selection (विरळणी)" | local=[76097, 76097, 76097] | api=[76097]
+  [ACTIVITY] PLOT MISMATCH   : "One Time Subcane (सबकेन)" | local=[76097, 76097, 76097] | api=[76097]
+  [ACTIVITY] PLOT MISMATCH   : "1st Lateral Removal (बगल काढणे)" | local=[76097, 76097, 76097] | api=[76097]
+  [ACTIVITY] PLOT MISMATCH   : "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)" | local=[76097, 76097, 76097] | api=[76097]
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[76097, 76097, 76097] | api=[76097]
+  [BOOKING]  total_amount        : local=97660.0 | api=32125.0
+  [BOOKING]  balance             : local=91160.0 | api=25625.0
+  [PAYMENT]  EXTRA LOCALLY   : id=658 amount=6760.00 mode=UPI
+
+Job 1756 | Gokul Deshmukh
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[76186, 76186, 76186] | api=[76186]
+
+Job 1813 | Anita Kailas Chavan
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[25258, 25258] | api=[25258]
+  [BOOKING]  total_amount        : local=72000.0 | api=73200.0
+  [BOOKING]  balance             : local=56400.0 | api=57600.0
+
+Job 1760 | Shobha Trambakrao Chavan
+  [ACTIVITY] PLOT MISMATCH   : "Shenda Stopping (शेंडा स्टॉपिंग)" | local=[76187] | api=[41341, 76187, 76188, 76189]
+  [ACTIVITY] PLOT MISMATCH   : "Shoot Selection (विरळणी)" | local=[76187] | api=[41341, 76187, 76188, 76189]
+  [ACTIVITY] PLOT MISMATCH   : "One Time Subcane (सबकेन)" | local=[76187] | api=[41341, 76187, 76188, 76189]
+  [ACTIVITY] PLOT MISMATCH   : "1st Lateral Removal (बगल काढणे)" | local=[76187] | api=[41341, 76187, 76188, 76189]
+  [ACTIVITY] PLOT MISMATCH   : "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)" | local=[76187] | api=[41341, 76187, 76188, 76189]
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[76187] | api=[41341, 76187, 76188, 76189]
+  [BOOKING]  total_amount        : local=198000.0 | api=201300.0
+  [BOOKING]  advance_paid        : local=0.0 | api=42900.0
+  [BOOKING]  balance             : local=198000.0 | api=158400.0
+
+Job 1512 | Navnath Kumbharkar
+  [ACTIVITY] PLOT MISMATCH   : "Shenda Stopping (शेंडा स्टॉपिंग)" | local=[76090] | api=[76090, 76091, 76092]
+  [ACTIVITY] PLOT MISMATCH   : "Cane Tying with Clips (काडी बांधणे - क्लिप्स)" | local=[76090] | api=[76090, 76091, 76092]
+  [ACTIVITY] PLOT MISMATCH   : "Shoot Selection (विरळणी)" | local=[76090] | api=[76090, 76091, 76092]
+  [ACTIVITY] PLOT MISMATCH   : "One Time Subcane (सबकेन)" | local=[76090] | api=[76090, 76091, 76092]
+  [ACTIVITY] PLOT MISMATCH   : "1st Lateral Removal (बगल काढणे)" | local=[76090] | api=[76090, 76091, 76092]
+  [ACTIVITY] PLOT MISMATCH   : "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)" | local=[76090] | api=[76090, 76091, 76092]
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[76090] | api=[76090, 76091, 76092]
+
+Job 878 | Nilesh Keda Chavan (Patil)
+  [BOOKING]  total_amount        : local=0.0 | api=26555.0
+  [BOOKING]  balance             : local=-5000.0 | api=21555.0
+
+Job 877 | Nilesh Keda Chavan (Patil)
+  [BOOKING]  total_amount        : local=0.0 | api=23500.0
+  [BOOKING]  balance             : local=-5000.0 | api=18500.0
+
+Job 1201 | Nilesh Keda Chavan (Patil)
+  [BOOKING]  advance_paid        : local=0.0 | api=3500.0
+  [BOOKING]  balance             : local=16450.0 | api=12950.0
+
+Job 872 | Nilesh Keda Chavan (Patil)
+  [BOOKING]  total_amount        : local=0.0 | api=14805.0
+  [BOOKING]  balance             : local=-5000.0 | api=9805.0
+
+Job 875 | Nilesh Keda Chavan (Patil)
+  [BOOKING]  total_amount        : local=0.0 | api=32665.0
+  [BOOKING]  balance             : local=-5000.0 | api=27665.0
+
+Job 871 | Nilesh Keda Chavan (Patil)
+  [BOOKING]  total_amount        : local=0.0 | api=68620.0
+  [BOOKING]  balance             : local=-10000.0 | api=58620.0
+
+Job 901 | Bablu wagh
+  [BOOKING]  total_amount        : local=0.0 | api=23500.0
+  [BOOKING]  advance_paid        : local=0.0 | api=5000.0
+  [BOOKING]  balance             : local=0.0 | api=18500.0
+  [PAYMENT]  MISSING LOCALLY : id=475 amount=5000.0 mode=UPI
+
+Job 1774 | Nilesh Dnyaneshwar Chavan
+  [ACTIVITY] PLOT MISMATCH   : "Pruning (छाटणी)" | local=[75363, 75363, 75363, 75363, 75364] | api=[75363, 75364]
+  [BOOKING]  total_amount        : local=157250.0 | api=159800.0
+  [BOOKING]  balance             : local=123250.0 | api=125800.0
+
+
+Problem Job IDs: ['2069', '2095', '2065', '1785', '1824', '2025', '2027', '1786', '2063', '1978', '1998', '2023', '2087', '2088', '1830', '2032', '2094', '2049', '2038', '1513', '1556', '1596', '1599', '1563', '1940', '1577', '1581', '1883', '1897', '1905', '1904', '1888', '1900', '1892', '1875', '1886', '1898', '1895', '1889', '1885', '1902', '1896', '1893', '1894', '1891', '1833', '1508', '1756', '1813', '1760', '1512', '878', '877', '1201', '872', '875', '871', '901', '1774']

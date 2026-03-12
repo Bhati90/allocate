@@ -957,60 +957,6 @@ const [extraCrewCount, setExtraCrewCount] = useState(1);
 const [maxCapacity, setMaxCapacity] = useState<number | null>(null);
 const [availableWorkers, setAvailableWorkers] = useState<number | null>(null);
 
-// Fetch capacity when mukkadam or date changes
-useEffect(() => {
-  if (!editingAllocation || !editForm.mukkadam_id || !editForm.allocated_date) {
-    setMaxCapacity(null);
-    setAvailableWorkers(null);
-    return;
-  }
-// Add this handler inside DayDetailModal component
-
-  const fetchCapacity = async () => {
-    try {
-      const mukkadam = mukkadams.find(m => m.mukkadam_id === editForm.mukkadam_id);
-      if (!mukkadam) return;
-
-      // Get remaining capacity
-      const res = await fetch(
-        `${API_BASE_URL}/api/mukkadams/${editForm.mukkadam_id}/remaining_capacity/?date=${editForm.allocated_date}&cluster_id=${clusterId}`
-      );
-      const data = await res.json();
-      const available = data.available_crew_size as number;
-
-      // Get productivity for this activity
-      const activity = (allJobs || jobs)
-        .find(j => j.job_id === editingAllocation.job_id)
-        ?.activities?.find(a => a.activity_name === editingAllocation.activity_name);
-
-      if (!activity) return;
-
-      const rate = mukkadam.activity_rates?.find(
-        (r: any) =>
-          r.activity_id === activity.activity_id ||
-          r.activity_name === activity.activity_name
-      );
-
-      if (rate) {
-        const productivity = Number(rate.productivity_per_worker);
-        const maxArea = editForm.allocated_workers * productivity;
-        
-        setMaxCapacity(maxArea);
-        setAvailableWorkers(available);
-        
-        // Auto-update mukkadam rate
-        setEditForm(prev => ({
-          ...prev,
-          mukkadam_rate: Number(rate.rate_per_acre)
-        }));
-      }
-    } catch (error) {
-      console.error('Failed to fetch capacity:', error);
-    }
-  };
-
-  fetchCapacity();
-}, [editForm.mukkadam_id, editForm.allocated_date, editForm.allocated_workers, editingAllocation]);
 
 // Handle edit allocation
 const handleEditAllocation = async () => {
@@ -1062,27 +1008,6 @@ const handleEditAllocation = async () => {
 
 const [availableMukkadamIds, setAvailableMukkadamIds] = useState<Set<number>>(new Set());
 
-useEffect(() => {
-  const fetchAvailable = async () => {
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/mukkadams/daily_capacity_all/?date=${isoDate}&cluster_id=${clusterId}`
-      );
-      const data = await res.json();
-      // data = [{mukkadam_id: 1, available_crew_size: 24}, ...]
-      // Only keep mukkadams with available_crew_size > 0
-      const ids = new Set<number>(
-        (data as any[])
-          .filter(d => d.available_crew_size > 0)
-          .map(d => d.mukkadam_id)
-      );
-      setAvailableMukkadamIds(ids);
-    } catch (e) {
-      console.error('Failed to fetch daily capacity', e);
-    }
-  };
-  fetchAvailable();
-}, [isoDate, clusterId]);
 // // workers already allocated on this day, per mukkadam
 // const usedWorkersByMukkadam = new Map<number, number>();
 
@@ -1257,15 +1182,6 @@ const [noteJobId, setNoteJobId] = useState<string | null>(null);
     const unresolvedNotesCount = dayNotes.filter(n => !n.is_resolved).length;
 
 
-    useEffect(() => {
-      if (activeTab !== 'Notes') return;
-      setNotesLoading(true);
-      fetch(`${API_BASE_URL}/api/job-notes/?date=${isoDate}&cluster_id=${clusterId}`)
-        .then(r => r.json())
-        .then(data => setDayNotes(data))
-        .finally(() => setNotesLoading(false));
-    }, [activeTab, isoDate, clusterId]);
-
 mukkadams.forEach((m: any) => {
   if (!availableMukkadamIds.has(m.mukkadam_id)) return;
 
@@ -1303,7 +1219,92 @@ mukkadams.forEach((m: any) => {
   canDoAcToday += maxAc;
 });
 
+useEffect(() => {
+  // ── 1. Notes ──────────────────────────────────────────────────
+  
+    setNotesLoading(true);
+    fetch(`${API_BASE_URL}/api/job-notes/?date=${isoDate}&cluster_id=${clusterId}`)
+      .then(r => r.json())
+      .then(data => setDayNotes(data))
+      .finally(() => setNotesLoading(false));
+  
 
+  // ── 2. Available mukkadams for the day ────────────────────────
+  const fetchAvailable = async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/mukkadams/daily_capacity_all/?date=${isoDate}&cluster_id=${clusterId}`
+      );
+      const data = await res.json();
+      const ids = new Set<number>(
+        (data as any[])
+          .filter(d => d.available_crew_size > 0)
+          .map(d => d.mukkadam_id)
+      );
+      setAvailableMukkadamIds(ids);
+    } catch (e) {
+      console.error('Failed to fetch daily capacity', e);
+    }
+  };
+  fetchAvailable();
+
+  // ── 3. Capacity for editing allocation ────────────────────────
+  if (!editingAllocation || !editForm.mukkadam_id || !editForm.allocated_date) {
+    setMaxCapacity(null);
+    setAvailableWorkers(null);
+    return;
+  }
+
+  const fetchCapacity = async () => {
+    try {
+      const mukkadam = mukkadams.find(m => m.mukkadam_id === editForm.mukkadam_id);
+      if (!mukkadam) return;
+
+      const res = await fetch(
+        `${API_BASE_URL}/api/mukkadams/${editForm.mukkadam_id}/remaining_capacity/?date=${editForm.allocated_date}&cluster_id=${clusterId}`
+      );
+      const data = await res.json();
+      const available = data.available_crew_size as number;
+
+      const activity = (allJobs || jobs)
+        .find(j => j.job_id === editingAllocation.job_id)
+        ?.activities?.find(a => a.activity_name === editingAllocation.activity_name);
+
+      if (!activity) return;
+
+      const rate = mukkadam.activity_rates?.find(
+        (r: any) =>
+          r.activity_id === activity.activity_id ||
+          r.activity_name === activity.activity_name
+      );
+
+      if (rate) {
+        const productivity = Number(rate.productivity_per_worker);
+        const maxArea = editForm.allocated_workers * productivity;
+
+        setMaxCapacity(maxArea);
+        setAvailableWorkers(available);
+
+        setEditForm(prev => ({
+          ...prev,
+          mukkadam_rate: Number(rate.rate_per_acre),
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to fetch capacity:', error);
+    }
+  };
+  fetchCapacity();
+
+}, [
+
+  isoDate,
+  clusterId,
+  editingAllocation,
+  editForm.mukkadam_id,
+  editForm.allocated_date,
+  editForm.allocated_workers,
+]);
 
 return (
   <div

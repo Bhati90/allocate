@@ -1963,6 +1963,13 @@ class MukkadamJobSettlement(models.Model):
         help_text="10% deposit released from previous job"
     )
 
+    allocation = models.OneToOneField(
+        'Allocation',
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='updown_settlement',
+    )
+
     # Deductions
     advance_deducted = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
@@ -2010,7 +2017,7 @@ class MukkadamJobSettlement(models.Model):
 
     class Meta:
         db_table = 'mukkadam_job_settlements'
-        unique_together = ['mukkadam', 'job', 'plot']
+        # unique_together = ['mukkadam', 'job', 'plot']
         ordering = ['-created_at']
 
     def __str__(self):

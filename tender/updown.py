@@ -78,38 +78,28 @@ UPDOWN_TYPE = 'updown'
 # HELPER: get active updown assignment
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_updown_assignment(mukkadam):
-    """Return the first active updown assignment for this mukkadam, or None."""
-    return (
+def _get_updown_assignment(mukkadam, cluster_id=None):
+    """
+    Return the updown assignment for this mukkadam.
+    If cluster_id given, return that cluster's assignment.
+    Otherwise return the first active updown assignment.
+    """
+    qs = (
         ClusterMukkadamAssignment.objects
         .filter(mukkadam=mukkadam, is_active=True, mukkadam_type=UPDOWN_TYPE)
         .select_related('cluster')
-        .first()
     )
-
-
+    if cluster_id:
+        qs = qs.filter(cluster_id=cluster_id)
+    return qs.first()
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPER: resolve transport cost for a given allocation date
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _resolve_transport_cost(mukkadam, cluster_id, allocation_date):
+def _resolve_transport_cost(mukkadam, cluster_id, alloc_date):
     """
-    Find the correct transport_price for this mukkadam on allocation_date.
-
-    Logic:
-      - Fetch ALL assignments for (mukkadam, cluster) ordered by joined_at ASC
-      - Walk through them; the LAST assignment whose joined_at.date() <= allocation_date
-        is the one in effect on that date.
-      - If no assignment qualifies, return Decimal('0').
-
-    Example:
-      Assignment A: joined 2025-03-01, transport = 8000
-      Assignment B: joined 2025-03-08, transport = 2000
-
-      allocation_date = 2025-03-05  → A qualifies, B does not yet  → 8000
-      allocation_date = 2025-03-08  → both qualify, B is latest    → 2000
-      allocation_date = 2025-03-15  → both qualify, B is latest    → 2000
-      allocation_date = 2025-02-28  → neither qualifies            → 0
+    Find the transport_price for this mukkadam+cluster on the given date.
+    Picks the assignment where joined_at.date() <= alloc_date (latest wins).
     """
     assignments = (
         ClusterMukkadamAssignment.objects
@@ -117,22 +107,17 @@ def _resolve_transport_cost(mukkadam, cluster_id, allocation_date):
             mukkadam=mukkadam,
             cluster_id=cluster_id,
             mukkadam_type=UPDOWN_TYPE,
+            is_active=True,
         )
-        .order_by('joined_at')  # oldest first → last match wins
+        .order_by('joined_at')
     )
 
-    applicable_transport = Decimal('0')
+    transport = Decimal('0')
     for asgn in assignments:
-        asgn_date = asgn.joined_at.date() if asgn.joined_at else None
-        if asgn_date is None:
-            continue
-        if asgn_date <= allocation_date:
-            # Keep overwriting — last assignment that qualifies wins
-            applicable_transport = Decimal(str(asgn.transport_price or 0))
+        if asgn.joined_at and asgn.joined_at.date() <= alloc_date:
+            transport = Decimal(str(asgn.transport_price or 0))
 
-    return applicable_transport
-
-
+    return transport
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPER: effective area for updown billing
 # ─────────────────────────────────────────────────────────────────────────────
@@ -152,65 +137,48 @@ def _effective_area(allocation):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_bill_payload(mukkadam, allocation, settlement, assignment):
-    """Full bill payload for webhook and API response."""
     ja     = allocation.job_activity
     job    = ja.job
     plot   = ja.plot
     farmer = job.farmer
 
-    eff_area  = _effective_area(allocation)
-    rate      = Decimal(str(allocation.mukkadam_rate or 0))
-    gross     = (eff_area * rate).quantize(Decimal('0.01'))
+    # Use settlement values (cumulative) not per-allocation recalc
+    gross     = Decimal(str(settlement.gross_amount))
     transport = Decimal(str(settlement.transport_deducted or 0))
 
     return {
-        # ── Mukkadam ──────────────────────────────────────────────────
         'mukkadam_id':   str(mukkadam.pk),
         'mukkadam_name': mukkadam.mukkadam_name,
         'mobile':        mukkadam.mobile_numbers,
         'mukkadam_type': UPDOWN_TYPE,
-
-        # ── Assignment / cluster ──────────────────────────────────────
         'assignment_id': assignment.id,
         'cluster_id':    assignment.cluster_id,
         'cluster_name':  assignment.cluster.name if assignment.cluster else '—',
-
-        # ── Job / farmer ──────────────────────────────────────────────
-        'job_id':      str(job.job_id),
-        'farmer_id':   str(farmer.farmer_id) if farmer else None,
-        'farmer_name': farmer.farmer_name    if farmer else '—',
-
-        # ── Activity / plot ───────────────────────────────────────────
+        'job_id':        str(job.job_id),
+        'farmer_id':     str(farmer.farmer_id) if farmer else None,
+        'farmer_name':   farmer.farmer_name    if farmer else '—',
         'allocation_id':  allocation.id,
         'activity_name':  ja.activity.name if ja.activity else '—',
         'plot_code':      plot.plot_code   if plot else '—',
         'plot_name':      plot.name        if plot else '—',
         'allocated_date': str(allocation.allocated_date) if allocation.allocated_date else None,
         'completed_at':   str(timezone.now()),
-
-        # ── Work detail ───────────────────────────────────────────────
         'allocated_area':   float(allocation.allocated_area or 0),
         'actual_area_done': float(allocation.actual_area_done) if allocation.actual_area_done is not None else None,
-        'effective_area':   float(eff_area),
-        'mukkadam_rate':    float(rate),
-
-        # ── Bill breakdown ────────────────────────────────────────────
+        'effective_area':   float(_effective_area(allocation)),
+        'mukkadam_rate':    float(allocation.mukkadam_rate or 0),
         'bill': {
-            'gross_amount':     float(gross),
-            'transport_cost':   float(transport),
-            'deposit_held':     0.0,   # updown → no deposit
-            'advance_deducted': 0.0,   # updown → no advance
-            'weekly_deducted':  0.0,   # updown → no weekly
+            'gross_amount':     float(gross),       # cumulative across all completed allocs
+            'transport_cost':   float(transport),   # charged once per job
+            'deposit_held':     0.0,
+            'advance_deducted': 0.0,
+            'weekly_deducted':  0.0,
             'net_payable':      float(settlement.net_payable),
         },
-
-        # ── Settlement ────────────────────────────────────────────────
         'settlement_id':     settlement.id,
         'settlement_status': settlement.status,
         'net_payable':       float(settlement.net_payable),
     }
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPER: fire webhook
 # ─────────────────────────────────────────────────────────────────────────────
@@ -235,66 +203,60 @@ def _fire_webhook(payload):
 
 @transaction.atomic
 def create_updown_settlement(mukkadam, allocation, assignment):
-    """
-    Creates (or idempotently updates) a MukkadamJobSettlement for
-    a single updown allocation completion.
-
-    Formula:
-        gross            = effective_area × mukkadam_rate
-        transport        = transport_price from matching assignment date range
-        net_payable      = gross + transport
-        everything else  = 0  (no deposit / advance / weekly for updown team)
-    """
     ja   = allocation.job_activity
     job  = ja.job
     plot = ja.plot
 
-    eff_area  = _effective_area(allocation)
-    rate      = Decimal(str(allocation.mukkadam_rate or 0))
-    gross     = (eff_area * rate).quantize(Decimal('0.01'))
+    # Gross for THIS allocation only
+    area  = Decimal(str(allocation.actual_area_done or allocation.allocated_area or 0))
+    rate  = Decimal(str(allocation.mukkadam_rate or 0))
+    gross = (area * rate).quantize(Decimal('0.01'))
 
-    # Resolve transport cost based on allocation date vs assignment history
-    cluster_id = assignment.cluster_id
-    alloc_date = allocation.allocated_date
-    transport  = (
-        _resolve_transport_cost(mukkadam, cluster_id, alloc_date)
-        if alloc_date else Decimal('0')
-    )
+    # Transport for THIS allocation's cluster + date only
+    transport = Decimal('0')
+    if allocation.allocated_date:
+        transport = _resolve_transport_cost(
+            mukkadam, allocation.cluster_id, allocation.allocated_date
+        )
 
     net    = (gross + transport).quantize(Decimal('0.01'))
     status = 'calculated' if net > Decimal('0') else 'no_payment_needed'
 
-    settlement, created = MukkadamJobSettlement.objects.get_or_create(
-    mukkadam=mukkadam,
-    job=job,
-    plot=plot,
-    defaults={
-        'gross_amount':           gross,
-        'transport_deducted':     transport,
-        'deposit_percent':        Decimal('0'),
-        'payable_amount':         gross + transport,
-        'advance_deducted':       Decimal('0'),
-        'weekly_payments_deducted': Decimal('0'),
-        'net_payable':            gross + transport,
-        'status':                 'calculated',
-    }
-)
+    # One settlement per allocation — use allocation as the unique key
+    try:
+        settlement = MukkadamJobSettlement.objects.get(
+            allocation=allocation
+        )
+        # Update if not paid
+        if settlement.status not in ('paid',):
+            settlement.gross_amount       = gross
+            settlement.transport_deducted = transport
+            settlement.payable_amount     = net
+            settlement.net_payable        = net
+            settlement.calculated_at      = timezone.now()
+            settlement.status             = status
+            settlement.save(update_fields=[
+                'gross_amount', 'transport_deducted', 'payable_amount',
+                'net_payable', 'calculated_at', 'status',
+            ])
+        return settlement
 
-    if not created:
-        # Idempotent recalc in case actual_area_done was updated at complete time
-        settlement.gross_amount       = gross
-        settlement.payable_amount     = gross
-        settlement.transport_deducted = transport
-        settlement.net_payable        = net
-        settlement.status             = status
-        settlement.calculated_at      = timezone.now()
-        settlement.save(update_fields=[
-            'gross_amount', 'payable_amount', 'transport_deducted',
-            'net_payable', 'status', 'calculated_at',
-        ])
-
-    return settlement
-
+    except MukkadamJobSettlement.DoesNotExist:
+        return MukkadamJobSettlement.objects.create(
+            mukkadam              = mukkadam,
+            job                   = job,
+            plot                  = plot,
+            allocation            = allocation,   # ← unique per allocation
+            gross_amount          = gross,
+            transport_deducted    = transport,
+            deposit_percent       = Decimal('0'),
+            payable_amount        = net,
+            advance_deducted      = Decimal('0'),
+            weekly_payments_deducted = Decimal('0'),
+            net_payable           = net,
+            status                = status,
+            calculated_at         = timezone.now(),
+        )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VIEW 1 — list non-completed updown allocations (work detail screen)
@@ -397,38 +359,13 @@ def updown_allocation_list(request, mukkadam_id):
 # ─────────────────────────────────────────────────────────────────────────────
 # VIEW 2 — mark complete → create bill → fire webhook
 # ─────────────────────────────────────────────────────────────────────────────
-
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def updown_complete_allocation(request, mukkadam_id, allocation_id):
-    """
-    POST /api/mukkadam/<id>/updown-allocations/<allocation_id>/complete/
-
-    Optional body:
-    {
-        "actual_area_done": 2.5,    // overrides allocated_area for billing
-        "actual_crew_size": 8
-    }
-
-    Steps:
-      1. Validate mukkadam is updown type
-      2. Mark allocation work_status = 'completed'
-      3. Resolve transport cost from assignment date ranges
-      4. Create MukkadamJobSettlement:
-             gross         = effective_area × mukkadam_rate
-             transport     = resolved transport_price
-             net_payable   = gross + transport
-      5. Fire webhook
-      6. Return full bill
-    """
     try:
         mukkadam = Mukkadam.objects.get(pk=mukkadam_id)
     except Mukkadam.DoesNotExist:
         return Response({'error': 'Mukkadam not found'}, status=404)
-
-    assignment = _get_updown_assignment(mukkadam)
-    if not assignment:
-        return Response({'error': 'No active updown assignment for this mukkadam'}, status=400)
 
     try:
         allocation = Allocation.objects.select_related(
@@ -441,23 +378,27 @@ def updown_complete_allocation(request, mukkadam_id, allocation_id):
     except Allocation.DoesNotExist:
         return Response({'error': 'Allocation not found'}, status=404)
 
-    # ── Already completed — idempotent response ───────────────────────────────
+    # ── Get assignment for THIS allocation's cluster ──────────────────
+    assignment = _get_updown_assignment(mukkadam, cluster_id=allocation.cluster_id)
+    if not assignment:
+        return Response(
+            {'error': f'No active updown assignment for cluster {allocation.cluster_id}'},
+            status=400
+        )
+
+    # ── Idempotent — already completed ───────────────────────────────
     if allocation.work_status == 'completed':
         existing = MukkadamJobSettlement.objects.filter(
-            mukkadam=mukkadam,
-            job=allocation.job_activity.job,
-            plot=allocation.job_activity.plot,
-        ).first()
+    allocation=allocation
+).first()
         if existing:
             payload = _build_bill_payload(mukkadam, allocation, existing, assignment)
             return Response({'already_completed': True, 'bill': payload})
 
-    # ── Parse optional body ───────────────────────────────────────────────────
     actual_area = request.data.get('actual_area_done')
     actual_crew = request.data.get('actual_crew_size')
 
     with transaction.atomic():
-        # 1. Update allocation
         update_fields = ['work_status']
         allocation.work_status = 'completed'
 
@@ -470,10 +411,9 @@ def updown_complete_allocation(request, mukkadam_id, allocation_id):
 
         allocation.save(update_fields=update_fields)
 
-        # 2. Create / update settlement with transport resolved inside
+        # settlement now accumulates all completed allocs for this job+plot
         settlement = create_updown_settlement(mukkadam, allocation, assignment)
 
-    # 3. Fire webhook outside transaction — failure must not roll back the bill
     payload = _build_bill_payload(mukkadam, allocation, settlement, assignment)
     _fire_webhook(payload)
 
