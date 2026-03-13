@@ -1294,7 +1294,38 @@ class MukkadamAvailability(models.Model):
 # ============================================================================
 # ALLOCATION & SCHEDULING MODELS
 # ============================================================================
+# models.py
+class AllocationAuditLog(models.Model):
+    ACTION_CHOICES = [
+        ('created',  'Created'),
+        ('deleted',  'Deleted'),
+        ('moved',    'Moved'),
+        ('verified', 'Verified'),
+        ('disputed', 'Disputed'),
+    ]
 
+    action          = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    allocation_id   = models.IntegerField()  # store raw ID, not FK — so it survives deletion
+    job_activity_id = models.IntegerField(null=True, blank=True)
+    job_id          = models.CharField(max_length=50, blank=True)
+    mukkadam_id     = models.IntegerField(null=True, blank=True)
+    mukkadam_name   = models.CharField(max_length=255, blank=True)
+    farmer_name     = models.CharField(max_length=255, blank=True)
+    activity_name   = models.CharField(max_length=255, blank=True)
+    allocated_date  = models.DateField(null=True, blank=True)
+    allocated_area  = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    allocated_workers = models.IntegerField(null=True, blank=True)
+    snapshot        = models.JSONField(default=dict)  # full before-state
+    changed_by      = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    changed_at      = models.DateTimeField(auto_now_add=True)
+    notes           = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'allocation_audit_logs'
+        ordering = ['-changed_at']
+
+    def __str__(self):
+        return f"{self.action} — alloc#{self.allocation_id} by {self.changed_by} at {self.changed_at}"
 class Allocation(models.Model):
     """
     Core allocation model - assigns job activities to mukkadams

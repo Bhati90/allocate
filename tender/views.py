@@ -4213,28 +4213,59 @@ class AllocationViewSet(viewsets.ModelViewSet):
         allocation = self.get_object()
 
         with transaction.atomic():
-            # 1) Restore job activity area
             job_activity = allocation.job_activity
-            job_activity.allocated_area -= allocation.allocated_area
+
+            # 1) ✅ Log BEFORE deleting
+            AllocationAuditLog.objects.create(
+                action           = 'deleted',
+                allocation_id    = allocation.id,
+                job_activity_id  = job_activity.id,
+                job_id           = job_activity.job.job_id,
+                mukkadam_id      = allocation.mukkadam.mukkadam_id,
+                mukkadam_name    = allocation.mukkadam.mukkadam_name,
+                farmer_name      = job_activity.job.farmer.farmer_name,
+                activity_name    = job_activity.activity.name,
+                allocated_date   = allocation.allocated_date,
+                allocated_area   = allocation.allocated_area,
+                allocated_workers= allocation.allocated_workers,
+                snapshot         = {
+                    'allocated_area':    str(allocation.allocated_area),
+                    'allocated_workers': allocation.allocated_workers,
+                    'allocated_date':    str(allocation.allocated_date),
+                    'mukkadam_rate':     str(allocation.mukkadam_rate),
+                    'farmer_rate':       str(allocation.farmer_rate),
+                    'work_status':       allocation.work_status,
+                    'payment_status':    allocation.payment_status,
+                    'notes':             allocation.notes,
+                },
+                changed_by = request.user if request.user.is_authenticated else None,
+                notes      = f"Deleted via dashboard — restored {allocation.allocated_area}ac to activity",
+            )
+
+            # 2) Restore job activity area
+            job_activity.allocated_area = max(
+                Decimal('0'),
+                job_activity.allocated_area - allocation.allocated_area
+            )
             job_activity.save()
 
-            # 2) Restore mukkadam availability
+            # 3) Restore mukkadam availability
+            from .models import MukkadamAvailability
             avail = MukkadamAvailability.objects.filter(
                 mukkadam=allocation.mukkadam,
                 date=allocation.allocated_date
             ).first()
             if avail:
-                avail.allocated_workers -= allocation.allocated_workers
+                avail.allocated_workers = max(0, avail.allocated_workers - allocation.allocated_workers)
                 avail.save()
 
-            # 3) Now delete
+            # 4) Delete
             allocation.delete()
 
         return Response(
             {'success': True, 'message': 'Allocation deleted'},
-            status=status.HTTP_204_NO_CONTENT,
+            status=status.HTTP_200_OK,
         )
-
 
 
 from rest_framework.decorators import api_view

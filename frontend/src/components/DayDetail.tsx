@@ -16,6 +16,7 @@ import ReactDOM from 'react-dom';
 import { JobNoteModal } from './JobNoteModel';
 import { useCurrentUser } from '../hooks/currentUser';
 import { notifyWhatsAppGroup } from '@/utils/whatsapp';
+import { useAuth } from '@/context/auth';
 
 // TagChip component
 const TagChip: React.FC<{ tagKey: string; small?: boolean }> = ({ tagKey, small }) => {
@@ -416,159 +417,6 @@ const getJobLabel = (jobId: string): string =>
     </div>
   );
 };
-function MoveJobButton({ job, act }: {
-  job: any;
-  act: any;
-  
-}) {const MOVE_REASONS = [
-  'Not strict job — can reschedule',
-  'Easy farmer — farmer agreed to move',
-];
-
-// Add to state:
-const [moveReason, setMoveReason] = useState('');
-  const [open, setOpen] = useState(false);
-  const [moveDate, setMoveDate] = useState('');
-  const [moveArea, setMoveArea] = useState<number>(Number(act.remaining_area));
-  const [saving, setSaving] = useState(false);
-const handleSubmit = async () => {
-  if (!moveDate) { toast.error('Select a date'); return; }
-  if (!moveArea || moveArea <= 0) { toast.error('Enter valid area'); return; }
-  if (!moveReason.trim()) { toast.error('Please provide a reason'); return; }
-  if (moveArea > Number(act.remaining_area)) { toast.error('Exceeds remaining area'); return; }
-  const token = localStorage.getItem('auth_token')
-  setSaving(true);
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/job-activities/${act.id}/move/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json','Authorization': `Token ${token}`},
-      body: JSON.stringify({ new_date: moveDate, area: moveArea, reason: moveReason }),
-    });
-    if (res.ok) {
-      toast.success('Job moved');
-      setOpen(false);
-            window.location.reload();
-
-      // onSuccess?.();
-    } else {
-      const err = await res.json();
-      toast.error(err.error || 'Failed to move job');
-    }
-  } catch {
-    toast.error('Network error');
-  } finally {
-    setSaving(false);
-  }
-};
-
-  return (
-    <>
-      <button
-        onClick={() => setOpen(true)}
-        className="px-3 py-1.5 bg-orange-50 text-orange-600 border border-orange-200 text-xs font-semibold rounded-lg hover:bg-orange-100 transition"
-      >
-        Move
-      </button>
-
-{open && ReactDOM.createPortal(
-  <div
-    className="fixed inset-0 flex items-center justify-center"
-    style={{ background: 'rgba(0,0,0,0.4)', zIndex: 99999 }}
-    onClick={() => setOpen(false)}
-  >
-    <div
-      className="bg-white rounded-2xl shadow-2xl p-6 w-80"
-      onClick={e => e.stopPropagation()}
-    >
-      <h4 className="font-bold text-gray-900 mb-4">Move Job Activity</h4>
-
-      <div className="space-y-4">
-
-        {/* Date */}
-        <div>
-          <label className="text-xs font-semibold text-gray-600 block mb-1">New Date</label>
-          <input
-            type="date"
-            value={moveDate}
-            onChange={e => setMoveDate(e.target.value)}
-            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-          />
-        </div>
-
-        {/* Area */}
-        <div>
-          <label className="text-xs font-semibold text-gray-600 block mb-1">Area to Move (ac)</label>
-          <input
-            type="number"
-            step="0.01"
-            min="0.01"
-            max={act.remaining_area}
-            value={moveArea}
-            onChange={e => setMoveArea(parseFloat(e.target.value) || 0)}
-            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-          />
-          <p className="text-xs text-gray-400 mt-1">Max: {act.remaining_area} ac (remaining)</p>
-          {moveArea > Number(act.remaining_area) && (
-            <p className="text-xs text-red-500 mt-1">⚠ Exceeds remaining area</p>
-          )}
-        </div>
-
-        {/* Reason — quick select */}
-        <div>
-          <label className="text-xs font-semibold text-gray-600 block mb-2">
-            Reason <span className="text-red-400">*</span>
-          </label>
-          <div className="flex flex-col gap-2 mb-2">
-            {MOVE_REASONS.map(r => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setMoveReason(r)}
-                className={`text-left px-3 py-2 rounded-lg border text-xs font-medium transition ${
-                  moveReason === r
-                    ? 'bg-orange-50 border-orange-400 text-orange-700'
-                    : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-orange-300 hover:bg-orange-50'
-                }`}
-              >
-                {moveReason === r ? '✓ ' : ''}{r}
-              </button>
-            ))}
-          </div>
-          <textarea
-            value={moveReason}
-            onChange={e => setMoveReason(e.target.value)}
-            placeholder="Or type a custom reason..."
-            rows={2}
-            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-300 resize-none"
-          />
-          {!moveReason.trim() && (
-            <p className="text-xs text-red-400 mt-1">Reason is required</p>
-          )}
-        </div>
-      </div>
-
-      <div className="flex gap-2 mt-5">
-        <button
-          onClick={() => setOpen(false)}
-          className="flex-1 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-200"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={handleSubmit}
-          disabled={saving || !moveReason.trim() || moveArea > Number(act.remaining_area)}
-          className="flex-1 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-bold hover:bg-orange-600 disabled:opacity-50 transition"
-        >
-          {saving ? 'Moving...' : 'Confirm Move'}
-        </button>
-      </div>
-    </div>
-  </div>,
-  document.body
-)}
-    </>
-  );
-}
 
 
 const TeamDropdown: React.FC<{
@@ -695,6 +543,161 @@ const [activeTab, setActiveTab] =
     'jobs'
   );
 
+function MoveJobButton({ job, act }: {
+  job: any;
+  act: any;
+  
+}) {const MOVE_REASONS = [
+  'Not strict job — can reschedule',
+  'Easy farmer — farmer agreed to move',
+];
+
+// Add to state:
+const [moveReason, setMoveReason] = useState('');
+  const [open, setOpen] = useState(false);
+  const [moveDate, setMoveDate] = useState('');
+  const [moveArea, setMoveArea] = useState<number>(Number(act.remaining_area));
+  const [saving, setSaving] = useState(false);
+const handleSubmit = async () => {
+  if (!moveDate) { toast.error('Select a date'); return; }
+  if (!moveArea || moveArea <= 0) { toast.error('Enter valid area'); return; }
+  if (!moveReason.trim()) { toast.error('Please provide a reason'); return; }
+  if (moveArea > Number(act.remaining_area)) { toast.error('Exceeds remaining area'); return; }
+  const token = localStorage.getItem('auth_token')
+  setSaving(true);
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/job-activities/${act.id}/move/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json','Authorization': `Token ${token}`},
+      body: JSON.stringify({ new_date: moveDate, area: moveArea, reason: moveReason }),
+    });
+    if (res.ok) {
+      toast.success('Job moved');
+      setOpen(false);
+            // window.location.reload();
+onLeavesUpdated();
+      // onSuccess?.();
+    } else {
+      const err = await res.json();
+      toast.error(err.error || 'Failed to move job');
+    }
+  } catch {
+    toast.error('Network error');
+  } finally {
+    setSaving(false);
+  }
+};
+
+
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="px-3 py-1.5 bg-orange-50 text-orange-600 border border-orange-200 text-xs font-semibold rounded-lg hover:bg-orange-100 transition"
+      >
+        Move
+      </button>
+
+{open && ReactDOM.createPortal(
+  <div
+    className="fixed inset-0 flex items-center justify-center"
+    style={{ background: 'rgba(0,0,0,0.4)', zIndex: 99999 }}
+    onClick={() => setOpen(false)}
+  >
+    <div
+      className="bg-white rounded-2xl shadow-2xl p-6 w-80"
+      onClick={e => e.stopPropagation()}
+    >
+      <h4 className="font-bold text-gray-900 mb-4">Move Job Activity</h4>
+
+      <div className="space-y-4">
+
+        {/* Date */}
+        <div>
+          <label className="text-xs font-semibold text-gray-600 block mb-1">New Date</label>
+          <input
+            type="date"
+            value={moveDate}
+            onChange={e => setMoveDate(e.target.value)}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+          />
+        </div>
+
+        {/* Area */}
+        <div>
+          <label className="text-xs font-semibold text-gray-600 block mb-1">Area to Move (ac)</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0.01"
+            max={act.remaining_area}
+            value={moveArea}
+            onChange={e => setMoveArea(parseFloat(e.target.value) || 0)}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+          />
+          <p className="text-xs text-gray-400 mt-1">Max: {act.remaining_area} ac (remaining)</p>
+          {moveArea > Number(act.remaining_area) && (
+            <p className="text-xs text-red-500 mt-1">⚠ Exceeds remaining area</p>
+          )}
+        </div>
+
+        {/* Reason — quick select */}
+        <div>
+          <label className="text-xs font-semibold text-gray-600 block mb-2">
+            Reason <span className="text-red-400">*</span>
+          </label>
+          <div className="flex flex-col gap-2 mb-2">
+            {MOVE_REASONS.map(r => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setMoveReason(r)}
+                className={`text-left px-3 py-2 rounded-lg border text-xs font-medium transition ${
+                  moveReason === r
+                    ? 'bg-orange-50 border-orange-400 text-orange-700'
+                    : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-orange-300 hover:bg-orange-50'
+                }`}
+              >
+                {moveReason === r ? '✓ ' : ''}{r}
+              </button>
+            ))}
+          </div>
+          <textarea
+            value={moveReason}
+            onChange={e => setMoveReason(e.target.value)}
+            placeholder="Or type a custom reason..."
+            rows={2}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-300 resize-none"
+          />
+          {!moveReason.trim() && (
+            <p className="text-xs text-red-400 mt-1">Reason is required</p>
+          )}
+        </div>
+      </div>
+
+      <div className="flex gap-2 mt-5">
+        <button
+          onClick={() => setOpen(false)}
+          className="flex-1 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-200"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSubmit}
+          disabled={saving || !moveReason.trim() || moveArea > Number(act.remaining_area)}
+          className="flex-1 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-bold hover:bg-orange-600 disabled:opacity-50 transition"
+        >
+          {saving ? 'Moving...' : 'Confirm Move'}
+        </button>
+      </div>
+    </div>
+  </div>,
+  document.body
+)}
+    </>
+  );
+}
 
   const [moveModal, setMoveModal] = useState<{
   allocation: AllocationWithReport;
@@ -748,6 +751,24 @@ const handleMoveSubmit = async () => {
     toast.error('Network error');
   } finally {
     setMoveLoading(false);
+  }
+};
+const handleDeleteAllocation = async (allocationId: number) => {
+  try {
+    const token = localStorage.getItem('auth_token')
+    const res = await fetch(`${API_BASE_URL}/api/allocations/${allocationId}/delete_allocation/`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json','Authorization': `Token ${token}` },
+    });
+    if (res.ok) {
+      toast.success('✅ Allocation deleted and area restored.');
+      onLeavesUpdated(); // reuse same refresh trigger
+    } else {
+      const result = await res.json();
+      toast.error(result.message || 'Failed to delete allocation');
+    }
+  } catch {
+    toast.error('Network error');
   }
 };
   const dateStr = date.toLocaleDateString('en-US', {
@@ -868,6 +889,8 @@ const [halfDayDialog, setHalfDayDialog] = useState<{
   targetDate: string;  // ← ADD THIS
 } | null>(null);
 
+
+const { isAdmin, userData, logout: authLogout, isLoading } = useAuth();
 
 const [allowsSecondJob, setAllowsSecondJob] = useState(false);
 
@@ -1044,7 +1067,8 @@ const handleSaveExtraCrew = async () => {
     if (res.ok) {
       toast.success(`Successfully added workers`);
       setShowExtraCrewModal(false);
-            window.location.reload();
+            // window.location.reload();
+            onLeavesUpdated();
       // Trigger global refresh using the existing pattern
       if (onAllocationDelete) onAllocationDelete({ id: -1 } as any);
     } else {
@@ -1227,6 +1251,9 @@ useEffect(() => {
       .then(r => r.json())
       .then(data => setDayNotes(data))
       .finally(() => setNotesLoading(false));
+
+      onLeavesUpdated();
+
   
 
   // ── 2. Available mukkadams for the day ────────────────────────
@@ -1890,36 +1917,25 @@ return (
               )}
 
               {/* ── Delete/Edit actions (bottom) ── */}
-              <div className="px-4 pb-3 flex justify-end gap-2 border-t border-gray-100 pt-2">
-                {/* <button
-                  className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                  onClick={() => {
-                    setEditingAllocation(a);
-                    setEditForm({
-                      mukkadam_id: a.mukkadam,
-                      allocated_date: a.allocated_date,
-                      allocated_workers: a.allocated_workers,
-                      allocated_area: a.allocated_area,
-                      mukkadam_rate: a.mukkadam_rate,
-                    });
-                    setShowEditAllocationModal(true);
-                  }}
-                >
-                  Edit
-                </button> */}
-                  <button
+              {/* ── Delete/Edit actions (bottom) ── */}
+<div className="px-4 pb-3 flex justify-end gap-2 border-t border-gray-100 pt-2">
+  <button
     className="px-3 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-50 rounded-lg transition"
     onClick={() => setMoveModal({ allocation: a, maxArea: Number(a.allocated_area) })}
   >
     📅 Move
   </button>
-                {/* <button
-                  className="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition"
-                  onClick={() => onAllocationDelete(a)}
-                >
-                  Remove
-                </button> */}
-              </div>
+{isAdmin &&(  <button
+    className="px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition"
+    onClick={() => {
+      if (confirm(`Delete this allocation of ${Number(a.allocated_area).toFixed(2)} ac by ${m?.mukkadam_name || 'mukkadam'}? This will restore the area back to the activity.`)) {
+        handleDeleteAllocation(a.id);
+      }
+    }}
+  >
+    🗑 Delete
+  </button>) }
+</div>
             </div>
           );
         })}
