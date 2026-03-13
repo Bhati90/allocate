@@ -290,29 +290,29 @@ def log_farmer_payment_changes(sender, instance, created, **kwargs):
 
 from decimal import Decimal
 
-@receiver(post_save, sender=FarmerPayment)
-def update_booking_on_payment(sender, instance, **kwargs):
-    booking = instance.booking
+# @receiver(post_save, sender=FarmerPayment)
+# def update_booking_on_payment(sender, instance, **kwargs):
+#     booking = instance.booking
     
-    # Get total paid — keep as Decimal
-    total_paid = booking.payments.aggregate(
-        total=Sum('amount')
-    )['total'] or Decimal('0')
+#     # Get total paid — keep as Decimal
+#     total_paid = booking.payments.aggregate(
+#         total=Sum('amount')
+#     )['total'] or Decimal('0')
 
-    # Cast everything to Decimal before arithmetic
-    total_amount = Decimal(str(booking.total_amount or 0))
+#     # Cast everything to Decimal before arithmetic
+#     total_amount = Decimal(str(booking.total_amount or 0))
     
-    booking.advance_paid = total_paid
-    booking.balance      = total_amount - total_paid   # both Decimal now
+#     booking.advance_paid = total_paid
+#     booking.balance      = total_amount - total_paid   # both Decimal now
 
-    if total_paid <= 0:
-        booking.status = 'UNPAID'
-    elif total_paid >= total_amount:
-        booking.status = 'PAID'
-    else:
-        booking.status = 'PARTIALLY_PAID'
+#     if total_paid <= 0:
+#         booking.status = 'UNPAID'
+#     elif total_paid >= total_amount:
+#         booking.status = 'PAID'
+#     else:
+#         booking.status = 'PARTIALLY_PAID'
 
-    booking.save(update_fields=['advance_paid', 'balance', 'status'])
+#     booking.save(update_fields=['advance_paid', 'balance', 'status'])
 
 @receiver(pre_save, sender=MukkadamPayment)
 def track_mukkadam_payment_changes(sender, instance, **kwargs):

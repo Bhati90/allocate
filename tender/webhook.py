@@ -206,42 +206,71 @@ def sync_job(job_id: str, farmer: Farmer, webhook_data: dict,
     return job, created
 
 def sync_booking(job: Job, booking_data: dict):
-    """Create or update JobBooking"""
     booking_id = booking_data.get('id')
     if not booking_id:
         return None
 
     total_amount = Decimal(str(booking_data.get('total_amount', 0)))
     advance_paid = Decimal(str(booking_data.get('advance_paid', 0)))
-    balance = Decimal(str(booking_data.get('balance', total_amount - advance_paid)))
+    balance      = Decimal(str(booking_data.get('balance', total_amount - advance_paid)))
 
-    # Map status
     raw_status = booking_data.get('status', 'BOOKED').upper()
-    if raw_status in ['PAID']:
+    if raw_status == 'PAID':
         status = 'PAID'
     elif raw_status in ['PARTIAL', 'PARTIALLY_PAID']:
         status = 'PARTIALLY_PAID'
-    elif raw_status in ['REFUNDED']:
+    elif raw_status == 'REFUNDED':
         status = 'REFUNDED'
     else:
         status = 'UNPAID'
 
-    booking, created = JobBooking.objects.update_or_create(
-        job=job,
-        defaults={
-            'booking_id': int(booking_id),
-            'status': status,
-            'total_amount': total_amount,
-            'advance_paid': advance_paid,
-            'balance': balance,
-            'assignee_number': booking_data.get('assignee_number', '') or '',
-        }
-    )
+    try:
+        booking = JobBooking.objects.get(booking_id=int(booking_id))
 
-    # ✅ Sync payments
+        changed_fields = []
+        if booking.status != status:
+            booking.status = status
+            changed_fields.append('status')
+        # ✅ Round both sides to 2dp before comparing to avoid Decimal precision mismatch
+        if booking.total_amount.quantize(Decimal('0.01')) != total_amount.quantize(Decimal('0.01')):
+            booking.total_amount = total_amount
+            changed_fields.append('total_amount')
+        if booking.advance_paid.quantize(Decimal('0.01')) != advance_paid.quantize(Decimal('0.01')):
+            booking.advance_paid = advance_paid
+            changed_fields.append('advance_paid')
+        if booking.balance.quantize(Decimal('0.01')) != balance.quantize(Decimal('0.01')):
+            booking.balance = balance
+            changed_fields.append('balance')
+        assignee = booking_data.get('assignee_number', '') or ''
+        if booking.assignee_number != assignee:
+            booking.assignee_number = assignee
+            changed_fields.append('assignee_number')
+
+        if changed_fields:
+            booking.save(update_fields=changed_fields)
+            logger.info(f"Booking {booking_id} updated: {changed_fields}")
+        else:
+            logger.info(f"Booking {booking_id} unchanged — skipped")
+
+    except JobBooking.DoesNotExist:
+        booking = JobBooking.objects.create(
+            job=job,
+            booking_id=int(booking_id),
+            status=status,
+            total_amount=total_amount,
+            advance_paid=advance_paid,
+            balance=balance,
+            assignee_number=booking_data.get('assignee_number', '') or '',
+        )
+        logger.info(f"Booking {booking_id} created for job {job.job_id}")
+
+    # ✅ Payments — only create new ones
+    existing_payment_ids = set(
+        booking.payments.values_list('payment_id', flat=True)
+    )
     for payment_data in booking_data.get('payments', []):
         payment_id = payment_data.get('id')
-        if not payment_id:
+        if not payment_id or int(payment_id) in existing_payment_ids:
             continue
 
         paid_at_raw = payment_data.get('paid_at')
@@ -252,25 +281,22 @@ def sync_booking(job: Job, booking_data: dict):
             from django.utils.timezone import now
             paid_at = now()
 
-        # Map payment mode
         raw_mode = (payment_data.get('mode') or 'CASH').upper()
-        valid_modes = {'CASH', 'UPI', 'BANK_TRANSFER', 'CHEQUE', 'WILL_PAY_LATER', 'OTHER'}
+        valid_modes = {'CASH', 'UPI', 'ZOHO_PAYMENT', 'BANK_TRANSFER', 'CHEQUE', 'WILL_PAY_LATER', 'OTHER'}
         mode = raw_mode if raw_mode in valid_modes else 'OTHER'
 
-        FarmerPayment.objects.update_or_create(
-            payment_id=int(payment_id),
-            defaults={
-                'booking': booking,
-                'mode': mode,
-                'amount': Decimal(str(payment_data.get('amount', 0))),
-                'notes': payment_data.get('notes', '') or '',
-                'paid_status': payment_data.get('paid_status', True),
-                'paid_at': paid_at,
-            }
+        FarmerPayment.objects.create(
+            payment_id  = int(payment_id),
+            booking     = booking,
+            mode        = mode,
+            amount      = Decimal(str(payment_data.get('amount', 0))),
+            notes       = payment_data.get('notes', '') or '',
+            paid_status = payment_data.get('paid_status', True),
+            paid_at     = paid_at,
         )
+        logger.info(f"Payment {payment_id} created for booking {booking_id}")
 
     return booking
-
 def get_scheduled_date_for_activity(activity_catalog, job, pruning_date):
     from datetime import timedelta
     from .models import ClusterActivityScheduleRule, ActivityScheduleRule
@@ -601,81 +627,194 @@ def run_mukkadam_sync(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def booking_webhook(request):
-    """
-    Webhook: receives merged tender job data.
-    - Only processes booking_type='tender'
-    - Creates/updates: Farmer, Plot, Job, JobActivity, JobBooking, FarmerPayment
-    - Clusters NOT auto-assigned (manual only)
-    """
+    webhook_data = request.data
+    
+    # ✅ Add this debug line temporarily
+    print("RAW DATA:", webhook_data)
+    print("JOB ID:", webhook_data.get('id'))
+    
 
     webhook_data = request.data
-
-    import json
-    print("=" * 80)
-    print("INCOMING WEBHOOK PAYLOAD:")
-    print(json.dumps(webhook_data, indent=2, default=str))
-    print("=" * 80)
-
-    log_data = {
-        'webhook_data': webhook_data,
-        'status': 'failed',
-        'error_type': None,
-        'error_message': None,
-        'farmer_id': None,
-        'job_id': None,
-        'cluster_matched': False,
-        'cluster_id': None,
-        'activities_processed': 0,
-        'activities_failed': 0,
-        'plots_created': 0,
-    }
+    job_id       = str(webhook_data.get('id', ''))
+    booking_data = webhook_data.get('booking', {})
 
     try:
-        # ✅ STEP 0: Validate booking_type
-        booking = webhook_data.get('booking', {})
-        
-        # ✅ STEP 1: Extract core fields
-        farmer_id = str(webhook_data.get('farmer_id', ''))
-        job_id = str(webhook_data.get('id', ''))
-        activities_data = webhook_data.get('activities', [])
+        # ── Job exists → only check booking ─────────────────
+        job = Job.objects.get(job_id=job_id)
+        sync_booking(job, booking_data)
+        return JsonResponse({
+            'status': 'success',
+            'action': 'booking_checked',
+            'job_id': job_id,
+        }, status=200)
 
-        # In booking_webhook, plot_code extraction:
-        plot_code = str(webhook_data.get('plot_id') or '')
+    except Job.DoesNotExist:
+        # ── New job → full create ────────────────────────────
+        log_data = {
+            'webhook_data': webhook_data,
+            'status': 'failed',
+            'error_type': None,
+            'error_message': None,
+            'farmer_id': None,
+            'job_id': None,
+            'cluster_matched': False,
+            'cluster_id': None,
+            'activities_processed': 0,
+            'activities_failed': 0,
+            'plots_created': 0,
+        }
+
+        farmer_id       = str(webhook_data.get('farmer_id', ''))
+        activities_data = webhook_data.get('activities', [])
+        plot_code       = str(webhook_data.get('plot_id') or '')
+
         if not plot_code and activities_data:
-            # ✅ Find first activity with a non-empty plot_id
             for act in activities_data:
                 pid = str(act.get('plot_id') or '')
-                if pid and pid not in ('None', 'null', ''):
+                if pid not in ('', 'None', 'null'):
                     plot_code = pid
                     break
-        logger.info(f"Resolved plot_code: '{plot_code}'")
 
-        # ✅ STEP 2: Fetch farmer details
         farmer_details, api_error = fetch_farmer_details(farmer_id)
         if api_error:
-            logger.warning(f"Farmer API error for {farmer_id}: {api_error}")
             farmer_details = {}
 
         with transaction.atomic():
-
-            # ✅ STEP 3: Sync Farmer — only the job's plot
             farmer = sync_farmer(farmer_id, farmer_details or {}, webhook_data,
-                                target_plot_code=plot_code)
+                                 target_plot_code=plot_code)
 
-            # ✅ Get crop/variety from farmer API for this specific plot
+            crop_name, variety = '', ''
+            if farmer_details and plot_code:
+                for pd in farmer_details.get('plots', []):
+                    pid = str(pd.get('plot_id') or pd.get('id') or '')
+                    if pid == plot_code:
+                        crop_name = pd.get('crop', '') or ''
+                        variety   = pd.get('variety', '') or ''
+                        break
+
+            from django.utils.dateparse import parse_datetime, parse_date
+            pruning_date = None
+            for act in activities_data:
+                name = act.get('activity_name', '')
+                if 'pruning' in name.lower() or 'छाटणी' in name:
+                    raw = act.get('date_time') or act.get('scheduled_date')
+                    if raw:
+                        try:
+                            pruning_date = parse_datetime(str(raw)).date() if 'T' in str(raw) else parse_date(str(raw))
+                        except Exception:
+                            pass
+                    break
+
+            plot = None
+            if plot_code:
+                plot, created = get_or_create_plot(
+                    plot_code, farmer,
+                    activities_data[0].get('acres', 0) if activities_data else 0,
+                    crop_name=crop_name, variety=variety,
+                )
+                if created:
+                    log_data['plots_created'] += 1
+
+                update_fields = []
+                if pruning_date:
+                    plot.pruning_date = pruning_date
+                    update_fields.append('pruning_date')
+                if crop_name and not plot.crop_name:
+                    plot.crop_name = crop_name
+                    plot.variety   = variety
+                    update_fields.extend(['crop_name', 'variety'])
+                if update_fields:
+                    plot.save(update_fields=update_fields)
+
+            job, _ = sync_job(job_id, farmer, webhook_data, plot=plot,
+                              crop_name=crop_name, variety=variety)
+
+            if plot:
+                for c in plot.clusters.all():
+                    job.clusters.add(c)
+                    log_data['cluster_matched'] = True
+                    log_data['cluster_id'] = c.id
+
+            sync_booking(job, booking_data)
+            sync_activities(job, farmer, activities_data, log_data)
+
+            
+        log_data['status'] = 'success' if log_data['activities_failed'] == 0 else 'partial'
+        WebhookLog.objects.create(**log_data)
+
+        return JsonResponse({
+            'status': 'success',
+            'action': 'created',
+            'job_id': job_id,
+            'activities_processed': log_data['activities_processed'],
+        }, status=200)
+
+    except Exception as e:
+        logger.error(f"Webhook failed: {e}", exc_info=True)
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+def sync_webhook(request):
+    webhook_data = request.data
+    job_id = str(webhook_data.get('id', ''))
+    booking_data = webhook_data.get('booking', {})
+
+    try:
+        # ── Job exists ──────────────────────────────────────
+        job = Job.objects.get(job_id=job_id)
+        
+        # Only check booking
+        sync_booking(job, booking_data)
+        
+        return JsonResponse({
+            'status': 'success',
+            'action': 'booking_checked',
+            'job_id': job_id,
+        }, status=200)
+
+    except Job.DoesNotExist:
+        # ── Brand new job — full create ──────────────────────
+        log_data = {
+            'webhook_data': webhook_data,
+            'status': 'failed',
+            'error_type': None,
+            'error_message': None,
+            'farmer_id': None,
+            'job_id': None,
+            'cluster_matched': False,
+            'cluster_id': None,
+            'activities_processed': 0,
+            'activities_failed': 0,
+            'plots_created': 0,
+        }
+
+        farmer_id = str(webhook_data.get('farmer_id', ''))
+        plot_code = str(webhook_data.get('plot_id') or '')
+        activities_data = webhook_data.get('activities', [])
+
+        if not plot_code and activities_data:
+            for act in activities_data:
+                pid = str(act.get('plot_id') or '')
+                if pid not in ('', 'None', 'null'):
+                    plot_code = pid
+                    break
+
+        farmer_details, api_error = fetch_farmer_details(farmer_id)
+        if api_error:
+            farmer_details = {}
+
+        with transaction.atomic():
+            farmer = sync_farmer(farmer_id, farmer_details or {}, webhook_data,
+                                 target_plot_code=plot_code)
+
             crop_name, variety = '', ''
             if farmer_details and plot_code:
                 for plot_data in farmer_details.get('plots', []):
                     pid = str(plot_data.get('plot_id') or plot_data.get('id') or '')
                     if pid == plot_code:
-                        crop_name = plot_data.get('crop', '') or plot_data.get('crop_name', '') or ''
-                        variety = plot_data.get('variety', '') or ''
-                        logger.info(f"Got crop='{crop_name}' variety='{variety}' from farmer API plot {plot_code}")
+                        crop_name = plot_data.get('crop', '') or ''
+                        variety   = plot_data.get('variety', '') or ''
                         break
 
-            # ✅ Extract pruning date from webhook activities
             from django.utils.dateparse import parse_datetime, parse_date
-
             pruning_date_for_plot = None
             for act in activities_data:
                 name = act.get('activity_name', '')
@@ -683,111 +822,59 @@ def booking_webhook(request):
                     raw = act.get('date_time') or act.get('scheduled_date')
                     if raw:
                         try:
-                            if 'T' in str(raw):
-                                p = parse_datetime(str(raw))
-                                pruning_date_for_plot = p.date() if p else None
-                            else:
-                                pruning_date_for_plot = parse_date(str(raw))
+                            pruning_date_for_plot = parse_datetime(str(raw)).date() if 'T' in str(raw) else parse_date(str(raw))
                         except Exception:
                             pass
-                    logger.info(f"Pruning date for plot: {pruning_date_for_plot}")
                     break
 
-            # ✅ STEP 3.5: Get plot object
             plot = None
             if plot_code:
-                plot = Plot.objects.filter(plot_code=plot_code, farmer=farmer).first()
-                if not plot:
-                    plot, created = get_or_create_plot(
-                        plot_code, farmer,
-                        activities_data[0].get('acres', 0) if activities_data else 0,
-                        crop_name=crop_name,
-                        variety=variety,
-                    )
-                    if created:
-                        log_data['plots_created'] += 1
+                plot, created = get_or_create_plot(
+                    plot_code, farmer,
+                    activities_data[0].get('acres', 0) if activities_data else 0,
+                    crop_name=crop_name, variety=variety,
+                )
+                if created:
+                    log_data['plots_created'] += 1
 
-                # ✅ Always update pruning_date + crop from webhook on this specific plot
                 update_fields = []
                 if pruning_date_for_plot:
                     plot.pruning_date = pruning_date_for_plot
                     update_fields.append('pruning_date')
                 if crop_name and not plot.crop_name:
                     plot.crop_name = crop_name
-                    plot.variety = variety
+                    plot.variety   = variety
                     update_fields.extend(['crop_name', 'variety'])
                 if update_fields:
                     plot.save(update_fields=update_fields)
-                    logger.info(f"Updated plot {plot_code}: pruning_date={pruning_date_for_plot} crop='{crop_name}'")
 
-                logger.info(f"Job {job_id} → Plot id={plot.id} plot_code={plot.plot_code}")
-            # ✅ STEP 4: sync_job with crop_name & variety
-            job, job_created = sync_job(job_id, farmer, webhook_data, plot=plot,
-                                        crop_name=crop_name, variety=variety)
-            logger.info(f"{'Created' if job_created else 'Updated'} job {job_id}")
+            job, _ = sync_job(job_id, farmer, webhook_data, plot=plot,
+                              crop_name=crop_name, variety=variety)
 
             if plot:
-                plot_clusters = list(plot.clusters.all())
-                if plot_clusters:
-                    for c in plot_clusters:
-                        job.clusters.add(c)
+                for c in plot.clusters.all():
+                    job.clusters.add(c)
                     log_data['cluster_matched'] = True
-                    log_data['cluster_id'] = plot_clusters[0].id
+                    log_data['cluster_id'] = c.id
 
-            # ✅ STEP 5: Sync Booking + Payments
-            sync_booking(job, booking)
-
-            # ✅ STEP 6: Sync Activities (create new + update existing)
+            sync_booking(job, booking_data)
             sync_activities(job, farmer, activities_data, log_data)
 
-            try:
-                sync_tender_mukkadams()
-                # log_data['mukkadam_sync_attempted'] = True # Add this field to your WebhookLog model
-            except Exception as e:
-                logger.error(f"Mukkadam sync failed during webhook: {e}")
+            
 
-        # ✅ STEP 7: Determine status
-        if log_data['activities_failed'] == 0:
-            log_data['status'] = 'success'
-        elif log_data['activities_processed'] > 0:
-            log_data['status'] = 'partial'
-        else:
-            log_data['status'] = 'failed'
-
+        log_data['status'] = 'success' if log_data['activities_failed'] == 0 else 'partial'
         WebhookLog.objects.create(**log_data)
 
         return JsonResponse({
-            'status': log_data['status'],
-            'farmer_id': farmer_id,
+            'status': 'success',
+            'action': 'created',
             'job_id': job_id,
-            'job_created': job_created,
             'activities_processed': log_data['activities_processed'],
-            'activities_failed': log_data['activities_failed'],
-            'plots_created': log_data['plots_created'],
-            'message': (
-                f"Job {'created' if job_created else 'updated'} with "
-                f"{log_data['activities_processed']} activities"
-            )
         }, status=200)
-    
-
 
     except Exception as e:
-        logger.error(f"Webhook failed: {str(e)}", exc_info=True)
-        log_data['status'] = 'failed'
-        log_data['error_type'] = 'processing_error'
-        log_data['error_message'] = str(e)
-
-        WebhookLog.objects.create(**log_data)
-
-
-
-        return JsonResponse({
-            'status': 'error',
-            'message': str(e)
-        }, status=500)
-
-
+        logger.error(f"Webhook failed: {e}", exc_info=True)
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 def fetch_plot_crop_details(farmer_id: str, plot_code: str):
     """Fetch crop/variety for a specific plot from farmer API"""
     try:
@@ -867,8 +954,8 @@ def send_farmer_bill_to_webhook(request):
         if auth_token:
             try:
                 user_response = requests.get(
-                    # 'https://tender.bharatintelligence.ai/tender/auth/me/',
-                    'http://localhost:8002/tender/auth/me/',
+                    'https://tender.bharatintelligence.ai/tender/auth/me/',
+                    # 'http://localhost:8002/tender/auth/me/',
                     headers={
                         'Authorization': f'Token {auth_token}',
                         'Content-Type': 'application/json',
