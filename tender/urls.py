@@ -15,7 +15,7 @@ from .views import (
     PlotViewSet,tender_dashboard,list_all_settlements,pay_mukkadam_settlement,add_misc_cost,
     get_cluster_plots,get_districts,get_states,get_talukas,get_villages,UserSearchView,
     insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,
-    reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,JobNoteViewSet,
+    reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,JobNoteViewSet,activity_dashboard,
     search_villages,farmer_work_verification_detail,tender_activity_count_from_api,
     suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs
 )
@@ -127,6 +127,8 @@ path('api/cluster/<int:cluster_id>/payment-dashboard/', cluster_payment_dashboar
 
 path('api/farmer-bill/send-webhook/', send_farmer_bill_to_webhook),
 
+
+path('api/activity-dashboard/', activity_dashboard, name='activity-dashboard'),
 
     path('api/mukkadam/<int:mukkadam_id>/settlement/<str:job_id>/pay/',
      pay_mukkadam_settlement),

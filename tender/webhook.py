@@ -867,7 +867,8 @@ def send_farmer_bill_to_webhook(request):
         if auth_token:
             try:
                 user_response = requests.get(
-                    'https://tender.bharatintelligence.ai/tender/auth/me/',
+                    # 'https://tender.bharatintelligence.ai/tender/auth/me/',
+                    'http://localhost:8002/tender/auth/me/',
                     headers={
                         'Authorization': f'Token {auth_token}',
                         'Content-Type': 'application/json',

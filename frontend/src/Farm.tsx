@@ -1431,6 +1431,12 @@ function PaymentDashboard({ clusterId }: { clusterId: number }) {
   const [tab, setTab] = useState<'farmers' | 'mukkadams'>('farmers');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [expandedAlloc, setExpandedAlloc] = useState<number | null>(null);
+// New state
+const [billBuilder, setBillBuilder] = useState<{
+  farmer: any;
+  jobs: any[];
+} | null>(null);
+
 
   // Farmer payment modal
   const [payModal, setPayModal] = useState<{
@@ -1521,54 +1527,6 @@ const [weeklyModal, setWeeklyModal] = useState<{
   };
 
   useEffect(() => { fetchData(); }, [clusterId],);
-
-  const handleFarmerPay = async () => {
-    if (!payModal || !payAmount || parseFloat(payAmount) <= 0) return;
-    if (!proofFile) { alert('Please attach payment proof before recording'); return; }
-    setProofUploading(true);
-    let proofS3Key: string | null = null;
-    try {
-      // Use existing S3 upload util — same as rest of the app
-      // const { uploadFileToS3, getFileExtension } = await import('../utils/s3Upload');
-      const userToken = localStorage.getItem('authToken') || localStorage.getItem('token') || '';
-      const ext = getFileExtension(proofFile);
-      const s3Name = `payments/farmer/${payModal.farmerId}/job_${payModal.jobId}_${Date.now()}.${ext}`;
-      proofS3Key = await uploadFileToS3(proofFile, s3Name, userToken);
-      if (!proofS3Key) { alert('❌ Proof upload failed. Please try again.'); return; }
-    } catch(e) {
-      alert('❌ Proof upload error'); return;
-    } finally {
-      setProofUploading(false);
-    }
-
-    setPayLoading(true);
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/farmer/${payModal.farmerId}/job/${payModal.jobId}/payment/`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            amount: parseFloat(payAmount),
-            mode: payMode,
-            notes: payNotes,
-            proof_s3_key: proofS3Key,
-          }),
-        }
-      );
-      const result = await res.json();
-      if (res.ok) {
-        alert(`✅ ${result.message}`);
-        setPayModal(null); setProofFile(null);
-        fetchData();
-        
-      } else {
-        alert(`❌ ${result.error}`);
-      }
-    } finally {
-      setPayLoading(false);
-    }
-  };
 
   const handleMukkadamPay = (mukkadamId: number, jobId: string, amount: number, name: string) => {
     setMukkadamPayModal({ mukkadamId, jobId, amount, name });
@@ -1787,6 +1745,241 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
   }
 };
 
+
+const BillBuilderModal = ({ farmer, jobs, onClose, onSent }: any) => {
+  // All activities from all jobs, each toggleable
+  const allActivities = jobs.flatMap((j: any) =>
+    (j.activities || []).flatMap((act: any) =>
+      (act.allocations || [{ ...act }]).map((alloc: any) => ({
+        ...act, ...alloc,
+        job_id:    j.job_id,
+        plot_name: j.plot_name,
+        crop_name: j.crop_name,
+        _key: `${j.job_id}-${act.activity_id}-${alloc.allocation_id}`,
+      }))
+    )
+  );
+
+  const [selected, setSelected] = useState<Set<string>>(
+    new Set(allActivities.map((a: any) => a._key))  // all selected by default
+  );
+
+  const toggle = (key: string) =>
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+
+  // Recalculate totals based on selected activities only
+  const selectedActivities = allActivities.filter((a: any) => selected.has(a._key));
+  
+  const totalBilled = selectedActivities.reduce((sum: number, a: any) => {
+    const area = a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0;
+    return sum + (Number(area) * Number(a.rate_per_acre || 0));
+  }, 0);
+
+  const totalPaid = jobs.reduce((sum: number, j: any) =>
+    sum + (j.summary?.total_paid || 0), 0
+  );
+
+  const balanceDue = totalBilled - totalPaid;
+
+  // All payment history across selected jobs
+  const allPayments = jobs.flatMap((j: any) => j.payment_history || []);
+
+  const handleSend = async () => {
+    const token = localStorage.getItem('auth_token');
+    const payload = {
+      timestamp: new Date().toISOString(),
+      auth_token: token,
+      farmer: {
+        id:    farmer.farmer_id,
+        name:  farmer.farmer_name,
+        phone: farmer.phone_number || farmer.mobile_number || '',
+      },
+      job: {
+        // Use first selected job's info, or combined
+        id:   selectedActivities[0]?.job_id || jobs[0]?.job_id,
+        crop: jobs.map((j: any) => j.crop_name).join(', '),
+        plot: jobs.map((j: any) => j.plot_name).join(', '),
+      },
+      mukkadam: {
+        name:   jobs[0]?.mukkadam_name || '',
+        mobile: jobs[0]?.mukkadam_mobile || '',
+      },
+      work_done: selectedActivities.map((a: any) => ({
+  activity:      a.activity_name,
+  plot_name:     a.plot_name || '',
+  date:          a.allocated_date || a.scheduled_date || '',
+  acres_done:    a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0,
+  actual_acres:  a.actual_area_done ?? null,
+  workers:       a.actual_crew_size || a.allocated_workers || 0,
+  mukkadam:      a.mukkadam_name || jobs[0]?.mukkadam_name || '',
+  rate_per_acre: a.rate_per_acre || 0,
+  amount:        Number(a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0) * Number(a.rate_per_acre || 0),
+})),
+      payment_history: allPayments,
+      bill_summary: {
+        total_billed:       totalBilled,
+        total_already_paid: totalPaid,
+        balance_due_now:    balanceDue,
+        why_this_bill:      `Bill for ${selectedActivities.length} activities across ${new Set(selectedActivities.map((a: any) => a.plot_name)).size} plot(s)`,
+      },
+    };
+
+
+    await fetch(`${API_BASE_URL}/api/farmer-bill/send-webhook/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' ,'Authorization': `Token ${token}`},
+      body: JSON.stringify(payload),
+    });
+
+    onSent();
+    onClose();
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e => e.stopPropagation()}
+        style={{ maxWidth: '600px', width: '100%', borderRadius: '16px', padding: '24px', maxHeight: '85vh', overflowY: 'auto' }}>
+        
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
+          <h3 style={{ fontWeight: 700, fontSize: '1rem', color: '#111827' }}>
+            📋 Build Bill — {farmer.farmer_name}
+          </h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+        </div>
+
+        {/* Activity selection grouped by plot */}
+        {jobs.map((j: any) => {
+          const jobActivities = allActivities.filter((a: any) => a.job_id === j.job_id);
+          if (jobActivities.length === 0) return null;
+          return (
+            <div key={j.job_id} style={{ marginBottom: '14px' }}>
+              {/* Plot header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                <span style={{ fontWeight: 700, fontSize: '0.78rem', color: '#111827' }}>{j.plot_name || j.crop_name}</span>
+                <span style={{ fontSize: '0.64rem', color: '#9ca3af' }}>#{j.job_id}</span>
+                <button
+                  onClick={() => {
+                    const allKeys = jobActivities.map((a: any) => a._key);
+                    const allSelected = allKeys.every(k => selected.has(k));
+                    setSelected(prev => {
+                      const next = new Set(prev);
+                      allKeys.forEach(k => allSelected ? next.delete(k) : next.add(k));
+                      return next;
+                    });
+                  }}
+                  style={{ fontSize: '0.6rem', padding: '1px 8px', borderRadius: '999px', border: '1px solid #e5e7eb', background: '#f9fafb', cursor: 'pointer', marginLeft: 'auto' }}
+                >
+                  {jobActivities.every((a: any) => selected.has(a._key)) ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+
+              {/* Activities */}
+           
+{jobActivities.map((a: any) => {
+  // CORRECT area priority: admin_override > actual_done > allocated
+  const area   = a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0;
+  const amount = Number(area) * Number(a.rate_per_acre || 0);
+  const isSelected = selected.has(a._key);
+  
+  // CORRECT date: prefer actual work date
+  const workDate = a.actual_start_time
+    ? new Date(a.actual_start_time).toLocaleDateString('en-IN')
+    : a.allocated_date || a.scheduled_date || '—';
+
+  // Area label — show what type of area we're using
+  const areaLabel = a.admin_override_area != null
+    ? `${Number(a.admin_override_area).toFixed(2)} ac (admin)`
+    : a.actual_area_done != null
+    ? `${Number(a.actual_area_done).toFixed(2)} ac (actual)`
+    : `${Number(a.allocated_area || 0).toFixed(2)} ac (allocated)`;
+
+  return (
+    <div key={a._key}
+      onClick={() => toggle(a._key)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '10px',
+        padding: '8px 10px', borderRadius: '8px', marginBottom: '4px',
+        border: `1px solid ${isSelected ? '#bfdbfe' : '#e5e7eb'}`,
+        background: isSelected ? '#eff6ff' : '#f9fafb',
+        cursor: 'pointer', opacity: isSelected ? 1 : 0.5,
+      }}>
+      <input type="checkbox" checked={isSelected} onChange={() => toggle(a._key)}
+        style={{ accentColor: '#3b82f6', flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Activity name + plot name */}
+        <div style={{ fontSize: '0.76rem', fontWeight: 600, color: '#111827' }}>
+          {a.activity_name}
+          {a.plot_name && a.plot_name !== j.plot_name && (
+            <span style={{ fontSize: '0.62rem', color: '#6b7280', marginLeft: '6px' }}>· {a.plot_name}</span>
+          )}
+        </div>
+        {/* Date + area + rate */}
+        <div style={{ fontSize: '0.62rem', color: '#6b7280', marginTop: '2px' }}>
+          📅 {workDate} · 🌾 {areaLabel} × ₹{Number(a.rate_per_acre).toLocaleString('en-IN')}/ac
+        </div>
+        {/* Mukkadam */}
+        {(a.mukkadam_name || j.mukkadam_name) && (
+          <div style={{ fontSize: '0.6rem', color: '#9ca3af', marginTop: '1px' }}>
+            👷 {a.mukkadam_name || j.mukkadam_name}
+            {(a.mukkadam_mobile || j.mukkadam_mobile) && ` · ${a.mukkadam_mobile || j.mukkadam_mobile}`}
+          </div>
+        )}
+        {/* Workers */}
+        {(a.actual_crew_size || a.allocated_workers) && (
+          <div style={{ fontSize: '0.6rem', color: '#9ca3af', marginTop: '1px' }}>
+            👥 {a.actual_crew_size || a.allocated_workers} workers
+          </div>
+        )}
+      </div>
+      <span style={{ fontWeight: 700, fontSize: '0.82rem', color: isSelected ? '#0f766e' : '#9ca3af', flexShrink: 0 }}>
+        ₹{Math.round(amount).toLocaleString('en-IN')}
+      </span>
+    </div>
+  );
+})}
+            </div>
+          );
+        })}
+
+        {/* Summary */}
+        <div style={{ background: '#f9fafb', borderRadius: '10px', padding: '12px 14px', marginTop: '8px', border: '1px solid #e5e7eb' }}>
+          {[
+            { label: 'Total Billed (selected)', val: `₹${Math.round(totalBilled).toLocaleString('en-IN')}`, color: '#0f766e' },
+            { label: '− Already Collected',     val: `−₹${Math.round(totalPaid).toLocaleString('en-IN')}`, color: '#16a34a' },
+          ].map((row, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: '6px' }}>
+              <span style={{ color: '#6b7280' }}>{row.label}</span>
+              <span style={{ fontWeight: 700, color: row.color }}>{row.val}</span>
+            </div>
+          ))}
+          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1.5px solid #e5e7eb', paddingTop: '8px', fontWeight: 800, fontSize: '0.9rem' }}>
+            <span>Balance Due Now</span>
+            <span style={{ color: balanceDue > 0 ? '#dc2626' : '#16a34a' }}>
+              {balanceDue > 0 ? `₹${Math.round(balanceDue).toLocaleString('en-IN')}` : '✓ Clear'}
+            </span>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+          <button onClick={onClose}
+            style={{ flex: 1, padding: '10px', borderRadius: '10px', border: '1px solid #e5e7eb', background: '#fff', fontWeight: 600, cursor: 'pointer' }}>
+            Cancel
+          </button>
+          <button onClick={handleSend} disabled={selected.size === 0 || balanceDue <= 0}
+            style={{ flex: 2, padding: '10px', borderRadius: '10px', border: 'none', background: selected.size === 0 ? '#9ca3af' : '#3b82f6', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}>
+            📤 Send Bill ₹{Math.round(Math.max(balanceDue, 0)).toLocaleString('en-IN')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
   // ── Work + Payment status badges (BI team naming) ──────────────────────
   const WorkStatusBadge = ({ status }: { status: string }) => {
@@ -2483,31 +2676,36 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
   </div>
 ) : (
   s.balance_due > 0.01 && (
+    // <button
+    //   onClick={() => {
+    //     setDetailModal({
+    //       farmerName:     f.farmer_name,
+    //       farmerId:       f.farmer_id,
+    //       phone:          f.phone_number || f.mobile_number || '—',
+    //       jobId:          j.job_id,
+    //       cropName:       j.crop_name,
+    //       plotName:       j.plot_name || '',
+    //       mukkadamName:   j.mukkadam_name || '',
+    //       mukkadamMobile: j.mukkadam_mobile || '',
+    //       activities:     (j.activities || []).flatMap((act: any) =>
+    //         (act.allocations || [{ ...act }]).map((alloc: any) => ({ ...act, ...alloc }))
+    //       ),
+    //       paymentHistory: (j.payment_history || []).filter((p: any) => p.type !== 'advance'),
+    //       totalBilled:    s.total_billable_so_far,
+    //       totalPaid:      s.total_paid,
+    //       balanceDue:     s.balance_due,
+    //     });
+    //     setWebhookSent(false);
+    //   }}
+    //   style={{ padding: '5px 14px', borderRadius: '7px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+    // >
+    //   + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')}
+    // </button>
     <button
-      onClick={() => {
-        setDetailModal({
-          farmerName:     f.farmer_name,
-          farmerId:       f.farmer_id,
-          phone:          f.phone_number || f.mobile_number || '—',
-          jobId:          j.job_id,
-          cropName:       j.crop_name,
-          plotName:       j.plot_name || '',
-          mukkadamName:   j.mukkadam_name || '',
-          mukkadamMobile: j.mukkadam_mobile || '',
-          activities:     (j.activities || []).flatMap((act: any) =>
-            (act.allocations || [{ ...act }]).map((alloc: any) => ({ ...act, ...alloc }))
-          ),
-          paymentHistory: (j.payment_history || []).filter((p: any) => p.type !== 'advance'),
-          totalBilled:    s.total_billable_so_far,
-          totalPaid:      s.total_paid,
-          balanceDue:     s.balance_due,
-        });
-        setWebhookSent(false);
-      }}
-      style={{ padding: '5px 14px', borderRadius: '7px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
-    >
-      + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')}
-    </button>
+  onClick={() => setBillBuilder({ farmer: f, jobs })}
+  style={{ padding: '5px 14px', borderRadius: '7px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}>
+  📋 Build & Send Bill
+</button>
   )
 )}
                 })}
@@ -2669,31 +2867,36 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
   </div>
 ) : (
   s.balance_due > 0.01 && (
+    // <button
+    //   onClick={() => {
+    //     setDetailModal({
+    //       farmerName:     f.farmer_name,
+    //       farmerId:       f.farmer_id,
+    //       phone:          f.phone_number || f.mobile_number || '—',
+    //       jobId:          j.job_id,
+    //       cropName:       j.crop_name,
+    //       plotName:       j.plot_name || '',
+    //       mukkadamName:   j.mukkadam_name || '',
+    //       mukkadamMobile: j.mukkadam_mobile || '',
+    //       activities:     (j.activities || []).flatMap((act: any) =>
+    //         (act.allocations || [{ ...act }]).map((alloc: any) => ({ ...act, ...alloc }))
+    //       ),
+    //       paymentHistory: (j.payment_history || []).filter((p: any) => p.type !== 'advance'),
+    //       totalBilled:    s.total_billable_so_far,
+    //       totalPaid:      s.total_paid,
+    //       balanceDue:     s.balance_due,
+    //     });
+    //     setWebhookSent(false);
+    //   }}
+    //   style={{ padding: '5px 14px', borderRadius: '7px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+    // >
+    //   + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')}
+    // </button>
     <button
-      onClick={() => {
-        setDetailModal({
-          farmerName:     f.farmer_name,
-          farmerId:       f.farmer_id,
-          phone:          f.phone_number || f.mobile_number || '—',
-          jobId:          j.job_id,
-          cropName:       j.crop_name,
-          plotName:       j.plot_name || '',
-          mukkadamName:   j.mukkadam_name || '',
-          mukkadamMobile: j.mukkadam_mobile || '',
-          activities:     (j.activities || []).flatMap((act: any) =>
-            (act.allocations || [{ ...act }]).map((alloc: any) => ({ ...act, ...alloc }))
-          ),
-          paymentHistory: (j.payment_history || []).filter((p: any) => p.type !== 'advance'),
-          totalBilled:    s.total_billable_so_far,
-          totalPaid:      s.total_paid,
-          balanceDue:     s.balance_due,
-        });
-        setWebhookSent(false);
-      }}
-      style={{ padding: '5px 14px', borderRadius: '7px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
-    >
-      + Collect ₹{Math.round(s.balance_due).toLocaleString('en-IN')}
-    </button>
+  onClick={() => setBillBuilder({ farmer: f, jobs })}
+  style={{ padding: '5px 14px', borderRadius: '7px', border: 'none', background: '#3b82f6', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}>
+  📋 Build & Send Bill
+</button>
   )
 )}
                   </div>
@@ -2728,6 +2931,16 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
       );
     })}
   </div>
+)}
+
+
+{billBuilder && (
+  <BillBuilderModal
+    farmer={billBuilder.farmer}
+    jobs={billBuilder.jobs}
+    onClose={() => setBillBuilder(null)}
+    onSent={() => { fetchData(); setBillBuilder(null); }}
+  />
 )}
 
 {tab === 'mukkadams' && (

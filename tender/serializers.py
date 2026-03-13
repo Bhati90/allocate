@@ -592,7 +592,77 @@ class ExtraWorkerSerializer(serializers.ModelSerializer):
 # =============================================================================
 # NESTED SERIALIZERS (for specific endpoints)
 # =============================================================================
+class JobSerializer(serializers.ModelSerializer):
+    farmer_name   = serializers.CharField(source='farmer.farmer_name', read_only=True)
+    farmer_phone  = serializers.CharField(source='farmer.phone_number', read_only=True)
+    plot_name     = serializers.CharField(source='plot.name', read_only=True)
+    plot_code     = serializers.CharField(source='plot.plot_code', read_only=True)
+    cluster_names = serializers.SerializerMethodField()
+    booking_data  = serializers.SerializerMethodField()
+    activities_data = serializers.SerializerMethodField()
 
+    def get_cluster_names(self, obj):
+        return [{'id': c.id, 'name': c.name} for c in obj.clusters.all()]
+
+    def get_booking_data(self, obj):
+        try:
+            b = obj.booking
+            return {
+                'total_amount': float(b.total_amount),
+                'advance_paid': float(b.advance_paid),
+                'balance':      float(b.balance),
+                'status':       b.status,
+            }
+        except:
+            return None
+
+    def get_activities_data(self, obj):
+        result = []
+        for a in obj.activities.all():
+            allocations = []
+            for alloc in a.allocations.select_related('mukkadam').order_by('allocated_date'):
+                allocations.append({
+                    'allocation_id':    alloc.id,
+                    'mukkadam_id':      alloc.mukkadam.mukkadam_id,
+                    'mukkadam_name':    alloc.mukkadam.mukkadam_name,
+                    'mukkadam_mobile':  alloc.mukkadam.mobile_numbers,
+                    'allocated_date':   str(alloc.allocated_date) if alloc.allocated_date else None,
+                    'allocated_area':   float(alloc.allocated_area or 0),
+                    'allocated_workers':alloc.allocated_workers or 0,
+                    'actual_area_done': float(alloc.actual_area_done) if alloc.actual_area_done else None,
+                    'actual_crew_size': alloc.actual_crew_size,
+                    'work_status':      alloc.work_status,
+                    'payment_status':   alloc.payment_status,
+                    'mukkadam_rate':    float(alloc.mukkadam_rate or 0),
+                    'farmer_rate':      float(alloc.farmer_rate or 0),
+                    'mukkadam_amount':  float(alloc.mukkadam_amount or 0),
+                    'report_submitted': alloc.report_submitted,
+                    'farmer_agreed':    alloc.farmer_agreed,
+                })
+            result.append({
+                'id':                a.id,
+                'name':              a.activity.name,
+                'total_area':        float(a.total_area),
+                'allocated_area':    float(a.allocated_area),
+                'remaining_area':    float(a.remaining_area),
+                'allocation_status': a.allocation_status,
+                'scheduled_date':    str(a.scheduled_date) if a.scheduled_date else None,
+                'total_price':       float(a.total_price),
+                'allocations':       allocations,
+            })
+        return result
+
+    class Meta:
+        model = Job
+        fields = [
+            'job_id', 'work_id', 'status', 'priority',
+            'crop_name', 'variety', 'booking_type',
+            'scheduled_date', 'completed_date', 'created_at',
+            'farmer_name', 'farmer_phone',
+            'plot_name', 'plot_code',
+            'cluster_names', 'booking_data', 'activities_data',
+            'total_activities_amount',
+        ]
 class JobSerializer(serializers.ModelSerializer):
     farmer = serializers.PrimaryKeyRelatedField(
         queryset=Farmer.objects.all(), write_only=True

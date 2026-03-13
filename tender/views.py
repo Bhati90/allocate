@@ -1390,6 +1390,249 @@ class JobViewSet(viewsets.ModelViewSet):
         })
 
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def activity_dashboard(request):
+    from datetime import date, timedelta
+    from decimal import Decimal
+
+    today = date.today()
+    
+    cluster_id    = request.query_params.get('cluster_id')
+    status_filter = request.query_params.get('status')
+    date_from     = request.query_params.get('date_from')
+    date_to       = request.query_params.get('date_to')
+    search        = request.query_params.get('search')
+    upcoming      = request.query_params.get('upcoming')
+    last10        = request.query_params.get('last10')
+
+    qs = JobActivity.objects.filter(
+        job__booking_type='tender',
+        total_area__gt=0,
+        is_lost=False,
+    ).select_related(
+        'job__farmer',
+        'activity',
+        'plot',
+    ).prefetch_related(
+        'job__clusters',
+        'plot__clusters',
+        Prefetch(
+            'allocations',
+            queryset=Allocation.objects.select_related('mukkadam', 'cluster').order_by('allocated_date'),
+        )
+    ).order_by('scheduled_date', 'job__farmer__farmer_name')
+
+    if cluster_id:
+        qs = qs.filter(
+            models.Q(plot__clusters__id=cluster_id) |
+            models.Q(job__farmer__clusters__id=cluster_id)
+        ).distinct()
+
+    if status_filter:
+        if status_filter == 'pending':
+            qs = qs.filter(allocation_status='pending')
+
+        elif status_filter == 'in_progress':
+            qs = qs.filter(
+                allocation_status__in=['partially_allocated', 'fully_allocated']
+            ).exclude(
+                id__in=JobActivity.objects.filter(
+                    allocation_status__in=['partially_allocated', 'fully_allocated']
+                ).annotate(
+                    total_allocs=models.Count('allocations'),
+                    done_allocs=models.Count(
+                        'allocations',
+                        filter=models.Q(allocations__work_status='completed')
+                    )
+                ).filter(
+                    total_allocs__gt=0,
+                    total_allocs=models.F('done_allocs')
+                ).values_list('id', flat=True)
+            )
+
+        elif status_filter == 'completed':
+            qs = qs.annotate(
+                total_allocs=models.Count('allocations'),
+                done_allocs=models.Count(
+                    'allocations',
+                    filter=models.Q(allocations__work_status='completed')
+                )
+            ).filter(
+                total_allocs__gt=0,
+                total_allocs=models.F('done_allocs')
+            )
+
+        else:
+            qs = qs.filter(allocation_status=status_filter)
+
+    if date_from:
+        qs = qs.filter(scheduled_date__gte=date_from)
+    if date_to:
+        qs = qs.filter(scheduled_date__lte=date_to)
+    if upcoming == '1':
+        qs = qs.filter(
+            scheduled_date__gte=today,
+            scheduled_date__lte=today + timedelta(days=10),
+        )
+    if last10 == '1':
+        qs = qs.filter(
+            scheduled_date__gte=today - timedelta(days=10),
+            scheduled_date__lte=today,
+        )
+    if search:
+        qs = qs.filter(
+            models.Q(job__farmer__farmer_name__icontains=search) |
+            models.Q(job__job_id__icontains=search) |
+            models.Q(activity__name__icontains=search) |
+            models.Q(plot__name__icontains=search)
+        )
+
+    # ── Build data with dedup by (job_id, plot_id, api_activity_id) ──
+    STATUS_PRIORITY = {
+        'pending': 0,
+        'partially_allocated': 1,
+        'fully_allocated': 2,
+        'in_progress': 3,
+        'completed': 4,
+    }
+
+    # key → merged item
+    merged: dict = {}
+
+    for a in qs:
+        job    = a.job
+        farmer = job.farmer
+        plot   = a.plot
+
+        clusters = list(plot.clusters.all()) if plot else []
+        if not clusters:
+            clusters = list(job.clusters.all())
+        if not clusters:
+            clusters = list(farmer.clusters.all())
+
+        allocations = list(a.allocations.all())
+
+        alloc_data = []
+        total_mukkadam_est = Decimal('0')
+        for alloc in allocations:
+            area = alloc.actual_area_done or alloc.allocated_area or Decimal('0')
+            mukkadam_est = (area * Decimal(str(alloc.mukkadam_rate or 0))).quantize(Decimal('0.01'))
+            total_mukkadam_est += mukkadam_est
+            alloc_data.append({
+                'allocation_id':     alloc.id,
+                'mukkadam_id':       alloc.mukkadam.mukkadam_id,
+                'mukkadam_name':     alloc.mukkadam.mukkadam_name,
+                'mukkadam_mobile':   alloc.mukkadam.mobile_numbers,
+                'cluster_name':      alloc.cluster.name if alloc.cluster else None,
+                'allocated_date':    str(alloc.allocated_date) if alloc.allocated_date else None,
+                'allocated_area':    float(alloc.allocated_area or 0),
+                'allocated_workers': alloc.allocated_workers or 0,
+                'actual_area_done':  float(alloc.actual_area_done) if alloc.actual_area_done else None,
+                'actual_crew_size':  alloc.actual_crew_size,
+                'mukkadam_rate':     float(alloc.mukkadam_rate or 0),
+                'farmer_rate':       float(alloc.farmer_rate or 0),
+                'mukkadam_est':      float(mukkadam_est),
+                'work_status':       alloc.work_status,
+                'payment_status':    alloc.payment_status,
+                'report_submitted':  alloc.report_submitted,
+                'farmer_agreed':     alloc.farmer_agreed,
+                # which split this allocation belongs to
+                'split_activity_id': a.id,
+            })
+
+        days_until = (a.scheduled_date - today).days if a.scheduled_date else None
+
+        # Dedup key — same logic as summary card
+        dedup_key = (job.job_id, plot.id if plot else None, a.api_activity_id or a.activity.name)
+
+        if dedup_key not in merged:
+            merged[dedup_key] = {
+                # Primary activity id (first split)
+                'activity_id':        a.id,
+                'activity_name':      a.activity.name,
+                'api_activity_id':    a.api_activity_id,
+                'allocation_status':  a.allocation_status,
+                'scheduled_date':     str(a.scheduled_date) if a.scheduled_date else None,
+                'days_until':         days_until,
+                'total_area':         float(a.total_area),
+                'allocated_area':     float(a.allocated_area),
+                'remaining_area':     float(a.remaining_area),
+                'rate_per_acre':      float(a.rate_per_acre or 0),
+                'total_price':        float(a.total_price or 0),
+                'total_mukkadam_est': float(total_mukkadam_est),
+                # Job
+                'job_id':             job.job_id,
+                'job_status':         job.status,
+                'crop_name':          job.crop_name,
+                'variety':            getattr(job, 'variety', ''),
+                # Farmer
+                'farmer_id':          farmer.farmer_id,
+                'farmer_name':        farmer.farmer_name,
+                'farmer_phone':       farmer.phone_number,
+                # Plot
+                'plot_id':            plot.id if plot else None,
+                'plot_name':          plot.name if plot else '—',
+                'plot_code':          plot.plot_code if plot else '—',
+                'plot_area':          float(plot.area_acres) if plot else 0,
+                # Clusters
+                'clusters':           [{'id': c.id, 'name': c.name} for c in clusters],
+                # Allocations (merged across splits)
+                'allocations':        alloc_data,
+                'allocation_count':   len(alloc_data),
+                # Split tracking
+                'is_split':           False,
+                'splits': [{
+                    'activity_id':       a.id,
+                    'scheduled_date':    str(a.scheduled_date) if a.scheduled_date else None,
+                    'total_area':        float(a.total_area),
+                    'allocated_area':    float(a.allocated_area),
+                    'remaining_area':    float(a.remaining_area),
+                    'allocation_status': a.allocation_status,
+                    'allocation_count':  len(alloc_data),
+                }],
+            }
+        else:
+            # ── Merge this split into existing entry ──
+            existing = merged[dedup_key]
+            existing['is_split']           = True
+            existing['total_area']         += float(a.total_area)
+            existing['allocated_area']     += float(a.allocated_area)
+            existing['remaining_area']     += float(a.remaining_area)
+            existing['total_price']        += float(a.total_price or 0)
+            existing['total_mukkadam_est'] += float(total_mukkadam_est)
+            existing['allocations']        += alloc_data
+            existing['allocation_count']   += len(alloc_data)
+
+            # Keep earliest scheduled_date
+            if a.scheduled_date and (
+                existing['scheduled_date'] is None or
+                str(a.scheduled_date) < existing['scheduled_date']
+            ):
+                existing['scheduled_date'] = str(a.scheduled_date)
+                existing['days_until']     = days_until
+
+            # Keep worst (lowest priority) status
+            if STATUS_PRIORITY.get(a.allocation_status, 0) < STATUS_PRIORITY.get(existing['allocation_status'], 0):
+                existing['allocation_status'] = a.allocation_status
+
+            existing['splits'].append({
+                'activity_id':       a.id,
+                'scheduled_date':    str(a.scheduled_date) if a.scheduled_date else None,
+                'total_area':        float(a.total_area),
+                'allocated_area':    float(a.allocated_area),
+                'remaining_area':    float(a.remaining_area),
+                'allocation_status': a.allocation_status,
+                'allocation_count':  len(alloc_data),
+            })
+
+    data = list(merged.values())
+
+    return Response({
+        'count': len(data),
+        'activities': data,
+    })
+
 from rest_framework.decorators import api_view
 from datetime import datetime, timedelta
 
@@ -4770,18 +5013,72 @@ def tender_dashboard(request):
                 'balance': farmer_total - farmer_advance,
             },
             'plots_by_cluster': list(plots_by_cluster.values()),
+            # ── ADD THIS LINE ──
+            'newest_job_date': str(max((j.created_at for j in all_jobs), default=None)) if all_jobs else None,
         })
 
+
+                
     # ============ SUMMARY STATS ============
+    from django.db.models import Sum, Q, Max
+
+    activity_qs = JobActivity.objects.filter(
+        job__booking_type='tender',
+        total_area__gt=0,
+        plot__isnull=False,
+    )
+    if cluster_id_int:
+        activity_qs = activity_qs.filter(
+            Q(plot__clusters__id=cluster_id_int) |
+            Q(job__farmer__clusters__id=cluster_id_int)
+        ).distinct()
+
+    job_filter = {'booking_type': 'tender'}
+    if cluster_id_int:
+        job_filter['farmer__clusters__id'] = cluster_id_int
+    jobs_qs = Job.objects.filter(**job_filter).distinct()
+
+    booking_qs = JobBooking.objects.filter(job__booking_type='tender')
+    if cluster_id_int:
+        booking_qs = booking_qs.filter(
+            Q(job__farmer__clusters__id=cluster_id_int) |
+            Q(job__activities__plot__clusters__id=cluster_id_int)
+        ).distinct()
+
+    total_activities    = activity_qs.values('job', 'plot', 'api_activity_id').distinct().count()
+    total_plots         = activity_qs.values('plot').distinct().count()
+    total_acres         = activity_qs.values('plot').distinct().aggregate(
+                            total=Sum('plot__area_acres')
+                        )['total'] or 0
+
+    booking_stats       = booking_qs.aggregate(
+                            total_booking_value=Sum('total_amount'),
+                            total_advance_paid=Sum('advance_paid'),
+                        )
+    total_booking_value = booking_stats['total_booking_value'] or 0
+    total_advance_paid  = booking_stats['total_advance_paid'] or 0
+    paid_count          = booking_qs.filter(status='PAID').count()
+    partial_paid_count  = booking_qs.filter(status='PARTIALLY_PAID').count()
     return Response({
         'summary': {
-            'total_mukkadams': len(mukkadams_data),
-            'total_farmers': len(farmers_data),
-            'total_tender_jobs': Job.objects.filter(booking_type='tender').count(),
+            'total_mukkadams':     len(mukkadams_data),
+            'total_farmers':       len(farmers_data),
+            'total_tender_jobs':   jobs_qs.count(),
+            'total_activities':    total_activities,
+            'total_plots':         total_plots,
+            'total_acres':         float(total_acres),
+            'total_booking_value': float(total_booking_value),
+            'total_advance_paid':  float(total_advance_paid),
+            'total_balance':       float(total_booking_value - total_advance_paid),
+            'paid_jobs':           paid_count,
+            'partial_paid_jobs':   partial_paid_count,
         },
         'mukkadams': mukkadams_data,
-        'farmers': farmers_data,
+        'farmers':   farmers_data,
     })
+
+    # ============ SUMMARY STATS ============
+
 
 # views.py
 from .ervices.settlement import is_settlement_triggered,create_or_update_settlement
