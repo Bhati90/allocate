@@ -5567,29 +5567,40 @@ def cluster_payment_dashboard(request, cluster_id):
                 else:                                        farmer_agreed = None
                 report_submitted = any(a.report_submitted for a in act_allocations)
 
+                
                 act_billable = Decimal('0')
-                should_bill = is_past or any(a.farmer_agreed is True for a in act_allocations)
-                if should_bill:
-                    for a in act_allocations:
-                        bl = (
-                            getattr(a, 'payment_status', None) == 'dispute'
-                            and not getattr(a, 'use_actual_for_settlement', False)
-                            and getattr(a, 'admin_override_area', None) is None
-                            or (a.farmer_agreed is False and getattr(a, 'admin_override_area', None) is None and not getattr(a, 'use_actual_for_settlement', False))
-                        )
-                        if bl: continue
-                        if getattr(a, 'admin_override_area', None) is not None:
-                            eff = Decimal(str(a.admin_override_area))
-                        elif getattr(a, 'use_actual_for_settlement', False) and a.actual_area_done is not None:
-                            eff = Decimal(str(a.actual_area_done))
-                        elif a.farmer_agreed is True and a.actual_area_done is not None:
-                            eff = Decimal(str(a.actual_area_done))
-                        else:
-                            eff = Decimal(str(a.allocated_area or 0))
-                        if act.rate_per_acre:
-                            act_billable += (eff * Decimal(str(act.rate_per_acre))).quantize(Decimal('0.01'))
+                # Always calculate billable based on allocated area × rate
+                # regardless of whether it's past or not
+                for a in act_allocations:
+                    bl = (
+                        getattr(a, 'payment_status', None) == 'dispute'
+                        and not getattr(a, 'use_actual_for_settlement', False)
+                        and getattr(a, 'admin_override_area', None) is None
+                        or (a.farmer_agreed is False 
+                            and getattr(a, 'admin_override_area', None) is None 
+                            and not getattr(a, 'use_actual_for_settlement', False))
+                    )
+                    if bl:
+                        continue
+                    if getattr(a, 'admin_override_area', None) is not None:
+                        eff = Decimal(str(a.admin_override_area))
+                    elif getattr(a, 'use_actual_for_settlement', False) and a.actual_area_done is not None:
+                        eff = Decimal(str(a.actual_area_done))
+                    elif a.farmer_agreed is True and a.actual_area_done is not None:
+                        eff = Decimal(str(a.actual_area_done))
+                    else:
+                        eff = Decimal(str(a.allocated_area or 0))
+                    if act.rate_per_acre:
+                        act_billable += (eff * Decimal(str(act.rate_per_acre))).quantize(Decimal('0.01'))
+
+                # If no allocations exist yet, use total_area as estimate
+                if not act_allocations and act.rate_per_acre:
+                    act_billable = (
+                        Decimal(str(act.total_area or 0)) * Decimal(str(act.rate_per_acre))
+                    ).quantize(Decimal('0.01'))
 
                 total_billable += act_billable
+                # REPLACE the activity_rows.append() with these additional fields:
                 activity_rows.append({
                     'activity_id':       act.id,
                     'activity_name':     act.activity.name,
@@ -5601,6 +5612,9 @@ def cluster_payment_dashboard(request, cluster_id):
                     'total_area':        float(act.total_area or 0),
                     'rate_per_acre':     float(act.rate_per_acre or 0),
                     'billable_amount':   float(act_billable),
+                    'estimated_amount':  float(  # ← ADD: always total_area × rate for display
+                        (Decimal(str(act.total_area or 0)) * Decimal(str(act.rate_per_acre or 0))).quantize(Decimal('0.01'))
+                    ),
                     'allocation_status': act.allocation_status,
                     'actual_area_done':  float(actual_area) if actual_area is not None else None,
                     'actual_crew_size':  actual_crew,
@@ -5608,6 +5622,12 @@ def cluster_payment_dashboard(request, cluster_id):
                     'report_submitted':  report_submitted,
                     'allocation_count':  len(act_allocations),
                     'allocations':       alloc_details,
+                    # ← ADD: mukkadam info at activity level
+                    'mukkadam_name':     (
+                        act_allocations[0].mukkadam.mukkadam_name
+                        if act_allocations and act_allocations[0].mukkadam
+                        else None
+                    ),
                 })
 
             # ── Farmer Payments ──────────────────────────────────────────
@@ -5702,11 +5722,31 @@ def cluster_payment_dashboard(request, cluster_id):
 
         total_balance = sum(Decimal(str(j['summary']['balance_due'])) for j in job_rows)
         total_amount  = sum(Decimal(str(j['total_job_amount'])) for j in job_rows)
+        # REPLACE the farmer_data.append() — fix total_acres to use total_area not allocated_area:
         farmer_data.append({
             'farmer_id':     farmer.farmer_id,
             'farmer_name':   farmer.farmer_name,
             'mobile_number': getattr(farmer, 'phone_number', '') or getattr(farmer, 'mobile_number', ''),
-            'total_acres':   float(sum(Decimal(str(act['allocated_area'])) for j in job_rows for act in j['activities'])),
+            
+            # ← FIX: use total_area not allocated_area
+            'total_acres':   float(sum(
+                Decimal(str(act['total_area'])) 
+                for j in job_rows 
+                for act in j['activities']
+            )),
+            
+            # ← ADD: total job value = sum of booking totals
+            'total_job_value': float(sum(
+                Decimal(str(j['total_job_amount'])) for j in job_rows
+            )),
+            
+            # ← ADD: total plots count
+            'total_plots': len(set(
+                act['plot_name'] 
+                for j in job_rows 
+                for act in j['activities']
+            )),
+            
             'total_amount':  float(total_amount),
             'total_balance': float(total_balance),
             'jobs':          job_rows,

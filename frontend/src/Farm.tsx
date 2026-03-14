@@ -19,6 +19,7 @@ import { getFileExtension, uploadFileToS3 } from './utils/s3';
 type PotentialStatus = 'PARTIAL' | 'NONE';
 
 import * as XLSX from 'xlsx';
+import { Navigate } from 'react-router-dom';
 export function formatDate(d: Date) {
   return d.toISOString().slice(0, 10);
 }
@@ -5397,8 +5398,13 @@ const varietyOptions = [
         <div className="center-panel">
 
 {
+
+  
   currentMode === 'payments' ? (
-    <PaymentDashboard clusterId={clusterId} />
+  <Navigate to={`/payment?cluster=${clusterId}`} replace />
+
+  // currentMode === 'payments' ? (
+  //   <PaymentDashboard clusterId={clusterId} />
   ) : currentMode === 'insights' ? (
 // ✅ use this instead
 <ClusterInsightsContainer clusterId={clusterId} />

@@ -26,6 +26,7 @@ import TenderFront from "./Tender";
 import TenderDashboard from "./TenderDashboard";
 import ClusterPage from "./ClusterPage";
 import { GlobalInsightsPanel } from "./Global";
+import FarmerBillingPage from "./components/FarmerBillPage";
 // import MukkadamPerformanceDashboard from "./analyatics";
 // import ActiveMukkadamsDashboard from "./analyatics";
 const queryClient = new QueryClient();
@@ -55,6 +56,10 @@ const App = () => (
 
           <Route path="/" element={
            <ProtectedRoute><TenderFront /></ProtectedRoute>
+          } />
+
+          <Route path="/payment" element={
+           <ProtectedRoute><FarmerBillingPage /></ProtectedRoute>
           } />
 
           <Route path="/global" element={
