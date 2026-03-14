@@ -1576,7 +1576,10 @@ def activity_dashboard(request):
                 'plot_code':          plot.plot_code if plot else '—',
                 'plot_area':          float(plot.area_acres) if plot else 0,
                 # Clusters
+                # Clusters (plot/job clusters — used for display)
                 'clusters':           [{'id': c.id, 'name': c.name} for c in clusters],
+                # Farmer's own clusters — used for capacity lookup
+                'farmer_clusters':    [{'id': c.id, 'name': c.name} for c in farmer.clusters.all()],
                 # Allocations (merged across splits)
                 'allocations':        alloc_data,
                 'allocation_count':   len(alloc_data),
@@ -6454,7 +6457,19 @@ def verify_start_otp(request):
 
 
 # ── END OF WORK: Mukkadam submits report + OTP goes to FARMER ────────────
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def mark_allocation_complete(request, allocation_id):
+    try:
+        allocation = Allocation.objects.get(id=allocation_id)
+    except Allocation.DoesNotExist:
+        return Response({'error': 'Allocation not found'}, status=404)
 
+    allocation.work_status = 'completed'
+    allocation.status      = 'completed'
+    allocation.save(update_fields=['work_status', 'status', 'updated_at'])
+
+    return Response({'success': True, 'allocation_id': allocation.id})
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def submit_day_end_report(request):

@@ -1,7 +1,7 @@
 
 
 // pages/TenderDashboard.tsx
-import { useCallback, useEffect,useMemo,useRef, useState } from "react";
+import React, { useCallback, useEffect,useMemo,useRef, useState } from "react";
 import axios from "axios";
 import {Pencil,Pen,Check,X,
   Users, Briefcase, ChevronDown, ChevronUp,
@@ -10,7 +10,7 @@ import {Pencil,Pen,Check,X,
   Clock, AlertCircle, Building2, User, PlusCircle
 } from "lucide-react";
 import { useNavigate } from 'react-router-dom';
-
+import { JobNoteModal } from "./components/JobNoteModel";
 import { AddToClusterModal } from "./Tender";
 import { API_BASE_URL } from "./types/config";
 // const API_BASE = "http://localhost:8002/tender";
@@ -20,6 +20,119 @@ import toast from "react-hot-toast";
 import Dialpad from "./call";
 // ─── Types ───────────────────────────────────────────────
 // interface Activity { name: string; price: string; }
+
+
+function CompleteAllocationsButton({ allocations, activityName, farmerName, onSuccess }: {
+  allocations: any[];
+  activityName: string;
+  farmerName: string;
+  onSuccess: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Only show for allocations not yet completed
+  const pending = allocations.filter(
+    (al: any) => al.work_status !== 'completed',
+  );
+
+  if (pending.length === 0) return null;
+
+  const handleConfirm = async () => {
+    setSaving(true);
+    const token = localStorage.getItem('auth_token');
+    try {
+      // Mark all pending allocations complete in parallel
+      const results = await Promise.all(
+        pending.map((al: any) =>
+          fetch(`${API_BASE_URL}/api/allocations/${al.allocation_id}/mark_complete/`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Token ${token}`,
+            },
+          }).then(r => r.json()),
+        ),
+      );
+      const allOk = results.every((r: any) => r.success);
+      if (allOk) {
+        toast.success(`✅ ${pending.length} allocation${pending.length > 1 ? 's' : ''} marked complete`);
+        setConfirmOpen(false);
+        onSuccess();
+      } else {
+        toast.error('Some allocations failed to update');
+      }
+    } catch {
+      toast.error('Network error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setConfirmOpen(true)}
+        style={{ padding: '5px 12px', borderRadius: 8, background: 'linear-gradient(135deg,#059669,#047857)', color: '#fff', border: 'none', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+      >
+        ✓ Complete
+      </button>
+
+      {confirmOpen && ReactDOM.createPortal(
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 999999, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setConfirmOpen(false)}
+        >
+          <div
+            style={{ background: '#fff', borderRadius: 16, padding: 24, width: 360, boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 700, fontSize: 15, color: '#111827', marginBottom: 4 }}>
+              Mark as Complete?
+            </div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 16 }}>
+              {activityName} · {farmerName}
+            </div>
+
+            {/* Allocation summary */}
+            <div style={{ background: '#f9fafb', borderRadius: 10, padding: 12, marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', color: '#9ca3af', marginBottom: 8 }}>
+                Allocations to complete
+              </div>
+              {pending.map((al: any, i: number) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0', borderTop: i > 0 ? '1px solid #f3f4f6' : 'none' }}>
+                  <span style={{ fontWeight: 600, color: '#374151' }}>👷 {al.mukkadam_name}</span>
+                  <span style={{ color: '#6b7280' }}>{Number(al.allocated_area).toFixed(2)} ac · {al.allocated_date}</span>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ fontSize: 11, color: '#f59e0b', background: '#fffbeb', border: '1px solid #fef3c7', borderRadius: 8, padding: '8px 12px', marginBottom: 16 }}>
+              ⚠️ This will mark work_status = completed. The mukkadam should ideally submit a day-end report first.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setConfirmOpen(false)}
+                style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', color: '#374151', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={saving}
+                style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: saving ? '#86efac' : '#059669', color: '#fff', fontSize: 12, fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}
+              >
+                {saving ? 'Saving...' : `✓ Confirm Complete`}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
 interface Mukkadam {
   id: number;
   name: string;
@@ -280,7 +393,49 @@ function ClusterItem({ name, alreadyIn, saving, onClick }: {
     </button>
   );
 }
-
+// ─────────────────────────────────────────────────────────────────────────────
+// SHARED STYLE TOKENS  (copy once near top of file, outside components)
+// ─────────────────────────────────────────────────────────────────────────────
+const S = {
+  // colours
+  stone25:  '#fdfcfb', stone50: '#fafaf9', stone100: '#f5f5f4',
+  stone200: '#e7e5e4', stone300: '#d6d3d1', stone400: '#a8a29e',
+  stone500: '#78716c', stone600: '#57534e', stone700: '#44403c',
+  stone800: '#292524', stone900: '#1c1917',
+  brand:    '#059669', brandDark: '#047857', brandLight: '#ecfdf5',
+  brandBorder: '#d1fae5',
+  red50:'#fff1f2', red100:'#ffe4e6', red600:'#e11d48', red700:'#be123c',
+  amber50:'#fffbeb', amber100:'#fef3c7', amber600:'#d97706', amber700:'#b45309',
+  green50:'#ecfdf5', green100:'#d1fae5', green600:'#059669', green700:'#047857',
+  sky50:'#f0f9ff', sky100:'#e0f2fe', sky600:'#0284c7', sky700:'#0369a1',
+  violet50:'#f5f3ff', violet100:'#ede9fe', violet600:'#7c3aed', violet700:'#6d28d9',
+  orange500:'#f97316',
+  // shadows
+  shadowCard: '0 0 0 1px rgba(28,25,23,.06),0 1px 3px rgba(28,25,23,.06),0 4px 12px rgba(28,25,23,.04)',
+  shadowSm:   '0 1px 3px rgba(28,25,23,.07),0 1px 2px rgba(28,25,23,.04)',
+  // fonts
+  mono: "'JetBrains Mono','Fira Code',monospace",
+  sans: "'DM Sans',-apple-system,BlinkMacSystemFont,sans-serif",
+};
+ 
+// helper: initials from name
+const mkInitials = (name: string) =>
+  name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+ 
+// avatar colour pairs (index by id hash)
+const AV_COLORS = [
+  { bg: S.sky50,    fg: S.sky700    },
+  { bg: S.green50,  fg: S.green700  },
+  { bg: S.violet50, fg: S.violet700 },
+  { bg: S.amber50,  fg: S.amber700  },
+  { bg: S.red50,    fg: S.red700    },
+];
+const avColor = (id: string | number) => {
+  let h = 0;
+  String(id).split('').forEach(c => { h = c.charCodeAt(0) + ((h << 5) - h); });
+  return AV_COLORS[Math.abs(h) % AV_COLORS.length];
+};
+ 
 const WEEKDAY_OPTIONS = [
   { value: 0, label: 'Monday' },
   { value: 1, label: 'Tuesday' },
@@ -438,8 +593,7 @@ function ActivityRowWithEfficiency({ activity, mukkadamEfficiency }: {
     </tr>
   );
 }
-// ─── Mukkadam Card ───────────────────────────────────────
-function MukkadamCard({ m, clusters, onSuccess ,onCallClick,isAdmin = false}: {
+function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false }: {
   m: Mukkadam;
   clusters: ClusterOption[];
   onSuccess: () => void;
@@ -447,237 +601,198 @@ function MukkadamCard({ m, clusters, onSuccess ,onCallClick,isAdmin = false}: {
   isAdmin?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-
+  const av = avColor(m.id);
+  const totalRate = (m.activity_rates || m.activities || []).reduce(
+    (s: number, a: any) => s + Number(a.rate_per_acre ?? parseFloat(a.price || '0')), 0
+  );
+ 
+  /* ── row styles ── */
+  const tdBase: React.CSSProperties = {
+    padding: '10px 14px', borderBottom: expanded ? 'none' : `1px solid ${S.stone100}`,
+    verticalAlign: 'middle', fontSize: 12,
+  };
+ 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      {/* Header */}
-      <div
-        className="p-4 cursor-pointer hover:bg-gray-50 transition"
+    <>
+      {/* ── MAIN ROW ── */}
+      <tr
+        style={{ cursor: 'pointer', background: expanded ? S.brandLight : 'transparent', transition: 'background 150ms' }}
+        onMouseEnter={e => { if (!expanded) (e.currentTarget as HTMLElement).style.background = S.stone25; }}
+        onMouseLeave={e => { if (!expanded) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
         onClick={() => setExpanded(!expanded)}
       >
-        <div className="flex justify-between items-start">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-9 h-9 bg-teal-100 rounded-full flex items-center justify-center">
-                <User size={18} className="text-teal-600" />
+        {/* Mukkadam name */}
+        <td style={{ ...tdBase, paddingLeft: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: av.bg, color: av.fg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11, letterSpacing: '.3px' }}>
+                {mkInitials(m.name)}
               </div>
-              <div>
-                <p className="font-bold text-gray-900">{m.name}</p>
-                <p className="text-xs text-gray-500 flex items-center gap-2">
-  <span className="inline-flex items-center gap-1">
-    <Phone size={11} /> {m.mobile}
-  </span>
-  <button
-    type="button"
-    onClick={(e) => {
-  e.stopPropagation();
-  console.log('Call clicked for', m.mobile);
-  onCallClick(m.mobile);
-}}
-
-    className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-green-50 text-green-700 border border-green-200 hover:bg-green-100"
-  >
-    Call
-  </button>
-</p>
-
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2 mt-2 items-center">
-              <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">
-                Crew: {m.crew_size}/{m.max_crew_capacity}
-              </span>
-              <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-xs font-medium">
-                {m.activities.length} Activities
-              </span>
-
-              {/* Cluster pills with edit button */}
-              {m.clusters.length === 0 ? (
-                <span className="px-2 py-0.5 bg-red-50 text-red-500 rounded text-xs">
-                  No Cluster
-                </span>
-              ) : (
-                m.clusters.map((c: ClusterOption) => (
-                  
-                  <span
-                    key={c.id}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      padding: '2px 8px',
-                      borderRadius: '6px',
-                      fontSize: '0.72rem',
-                      fontWeight: 600,
-                      background:
-                        c.mukkadam_type === 'updown' ? '#fff7ed' : '#f0fdfa',
-                      color:
-                        c.mukkadam_type === 'updown' ? '#c2410c' : '#0f766e',
-                      border: `1px solid ${
-                        c.mukkadam_type === 'updown' ? '#fed7aa' : '#99f6e4'
-                      }`,
-                    }}
-                  >
-                    {c.mukkadam_type === 'updown' ? '📅' : '🏠'} {c.name}
-                    {c.mukkadam_type === 'updown' && (
-                      <span style={{ opacity: 0.7, fontWeight: 400 }}>
-                        {c.updown_mode === 'range'
-                          ? ` · ${c.updown_from_date} → ${c.updown_to_date}`
-                          : ` · ${(c.updown_specific_dates || []).length} days`}
-                      </span>
-                    )}
-
-                    {/* ✎ Edit assignment for this cluster */}
-                     <MukkadamAddToCluster
-                      mukkadam={m}
-                      clusters={clusters}
-                      onSuccess={onSuccess}
-                      mode="edit"
-                      clusterToEdit={c}
-                    />
-
-                    {isAdmin && (
-  <button
-    onClick={async (e) => {
-      const token = localStorage.getItem('auth_token')
-      e.stopPropagation();
-      if (!confirm(`Remove ${m.name} from "${c.name}"?`)) return;
-      await fetch(`${API_BASE_URL}/api/clusters/${c.id}/remove_mukkadam/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json','Authorization': `Token ${token}`, },
-        
-        body: JSON.stringify({ mukkadam_id: m.id }),
-      });
-      onSuccess();
-    }}
-    title="Remove from cluster"
-    style={{
-      background: 'none',
-      border: 'none',
-      cursor: 'pointer',
-      padding: '0 2px',
-      lineHeight: 1,
-      color: '#ef4444',
-      opacity: 0.7,
-      fontSize: '0.75rem',
-    }}
-    onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-    onMouseLeave={e => (e.currentTarget.style.opacity = '0.7')}
-  >
-    ✕
-  </button>
-)}
-                  </span>
-                  
-                ))
+              {m.clusters.length > 0 && (
+                <div style={{ position: 'absolute', inset: -3, borderRadius: 13, border: `2px solid ${S.violet600}`, pointerEvents: 'none' }} />
               )}
-
-              {/* Add to Cluster — separate trigger */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                }}
-              >
-                 <MukkadamAddToCluster
-                mukkadam={m}
-                clusters={clusters}
-                onSuccess={onSuccess}
-                mode="add"
-              />
-              </div>
             </div>
-          </div>
-
-          <div className="text-right ml-4">
-            {expanded ? (
-              <ChevronUp size={16} className="ml-auto text-gray-400 mt-1" />
-            ) : (
-              <ChevronDown size={16} className="ml-auto text-gray-400 mt-1" />
-            )}
-          </div>
-        </div>
-      </div>
-      {/* Expanded */}
-      {expanded && (
-        <div className="border-t border-gray-100 px-5 pb-5">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-4">
-
-            {/* Activities table with inline efficiency edit */}
             <div>
-              <p className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-1">
-                <Briefcase size={14} /> Activities & Rates
-              </p>
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="text-left px-3 py-2 text-gray-600 font-semibold text-xs">Activity</th>
-                      <th className="text-right px-3 py-2 text-gray-600 font-semibold text-xs">Price/ac</th>
-                      <th className="text-right px-3 py-2 text-gray-600 font-semibold text-xs">Efficiency</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                   {(m.activity_rates || m.activities || []).map((a: any, i: number) => (
-  <ActivityRowWithEfficiency
-    key={a.rate_id ?? i}
-    activity={a}
-    mukkadamEfficiency={m.efficiency}
-  />
-))}
-
-                    <tr className="border-t-2 border-gray-200 bg-teal-50">
-                      {/* <td className="px-3 py-2 font-bold text-gray-800">Total</td>
-                      <td className="px-3 py-2 text-right font-bold text-teal-700">{fmt(m.total_price)}</td> */}
-                      <td />
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              <div style={{ fontWeight: 700, fontSize: 13, letterSpacing: '-.1px', color: S.stone900 }}>{m.name}</div>
+              <div style={{ fontFamily: S.mono, fontSize: 10, color: S.stone400, marginTop: 2 }}>{m.mobile}</div>
             </div>
-
-            {/* Location + reference image */}
-            <div className="space-y-3">
-              <div>
-                <p className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-1">
-                  <MapPin size={14} /> Location & Availability
-                 
-          {/* <MukkadamSettlementsTab mukkadamId={m.id} /> */}
-        
-                </p>
-                <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600 space-y-1">
-                  <p><span className="font-medium">Village:</span> {m.location.village}, {m.location.taluka}</p>
-                  <p><span className="font-medium">District:</span> {m.location.district}, {m.location.state}</p>
-                  {m.availability.start_date && (
-                    <p className="flex items-center gap-1 mt-1">
-                      <Calendar size={11} />
-                      {m.availability.start_date} → {m.availability.end_date || '?'}
-                    </p>
+          </div>
+        </td>
+ 
+        {/* Location */}
+        <td style={{ ...tdBase, color: S.stone600 }}>
+          {m.location?.village}{m.location?.village && m.location?.district ? ', ' : ''}{m.location?.district}
+        </td>
+ 
+        {/* Crew */}
+        <td style={{ ...tdBase, textAlign: 'center' }}>
+          <span style={{ fontWeight: 700, color: S.violet600, fontSize: 13 }}>{m.crew_size}</span>
+          <span style={{ color: S.stone400, fontSize: 12 }}>/{m.max_crew_capacity}</span>
+        </td>
+ 
+        {/* Activities count */}
+        <td style={{ ...tdBase, textAlign: 'center', fontWeight: 700, fontSize: 13 }}>
+          {(m.activity_rates || m.activities || []).length}
+        </td>
+ 
+        {/* Cluster pills */}
+        <td style={{ ...tdBase }}>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+            {m.clusters.length === 0 ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: S.amber50, border: `1px solid ${S.amber100}`, color: S.amber700 }}>
+                ⚠ No Cluster
+              </span>
+            ) : m.clusters.map((c: any) => (
+              <span key={c.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: c.mukkadam_type === 'updown' ? '#fff7ed' : S.green50, color: c.mukkadam_type === 'updown' ? S.amber700 : S.green700, border: `1px solid ${c.mukkadam_type === 'updown' ? S.amber100 : S.green100}` }}>
+                {c.mukkadam_type === 'updown' ? '📅' : '🏠'} {c.name}
+                <MukkadamAddToCluster mukkadam={m} clusters={clusters} onSuccess={onSuccess} mode="edit" clusterToEdit={c} />
+                {isAdmin && (
+                  <button onClick={async e => {
+                    e.stopPropagation();
+                    if (!confirm(`Remove ${m.name} from "${c.name}"?`)) return;
+                    const token = localStorage.getItem('auth_token');
+                    await fetch(`${API_BASE_URL}/api/clusters/${c.id}/remove_mukkadam/`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${token}` }, body: JSON.stringify({ mukkadam_id: m.id }) });
+                    onSuccess();
+                  }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', opacity: .7, fontSize: 11, padding: '0 2px', lineHeight: 1 }}
+                    onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                    onMouseLeave={e => (e.currentTarget.style.opacity = '.7')}
+                  >✕</button>
+                )}
+              </span>
+            ))}
+            <div onClick={e => { e.stopPropagation(); e.preventDefault(); }}>
+              <MukkadamAddToCluster mukkadam={m} clusters={clusters} onSuccess={onSuccess} mode="add" />
+            </div>
+          </div>
+        </td>
+ 
+        {/* Total rate */}
+        <td style={{ ...tdBase, textAlign: 'right', fontFamily: S.mono, fontWeight: 700, fontSize: 12, color: S.green700 }}>
+          ₹{totalRate.toLocaleString('en-IN')}
+        </td>
+ 
+        {/* Actions */}
+        <td style={{ ...tdBase, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            <button onClick={() => onCallClick(m.mobile)}
+              style={{ padding: '5px 12px', borderRadius: 8, background: S.green50, color: S.green700, border: `1px solid ${S.green100}`, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              📞 Call
+            </button>
+          </div>
+        </td>
+ 
+        {/* Chevron */}
+        <td style={{ ...tdBase, textAlign: 'center', width: 44 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: `1px solid ${expanded ? S.brand : S.stone200}`, background: expanded ? S.brand : '#fff', color: expanded ? '#fff' : S.stone400, fontSize: 11, transition: 'all 250ms', transform: expanded ? 'rotate(180deg)' : 'none', boxShadow: expanded ? '0 2px 6px rgba(5,150,105,.3)' : 'none' }}>▾</div>
+        </td>
+      </tr>
+ 
+      {/* ── EXPANDED DETAIL ROW ── */}
+      {expanded && (
+        <tr>
+          <td colSpan={8} style={{ padding: 0, borderBottom: `1px solid ${S.stone200}`, background: S.stone25 }}>
+            <div style={{ padding: '20px 24px' }}>
+ 
+              {/* Stat strip */}
+              <div style={{ display: 'flex', borderRadius: 14, overflow: 'hidden', background: '#fff', marginBottom: 16, boxShadow: S.shadowCard }}>
+                {[
+                  { val: <><span style={{ color: S.violet600, fontWeight: 800 }}>{m.crew_size}</span><span style={{ fontSize: 12, color: S.stone400, fontWeight: 500 }}>/{m.max_crew_capacity}</span></>, lbl: 'Crew Size' },
+                  { val: (m.activity_rates || m.activities || []).length, lbl: 'Activities' },
+                  { val: m.clusters.length > 0 ? m.clusters[0].name : <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: S.amber50, color: S.amber700, border: `1px solid ${S.amber100}` }}>No Cluster</span>, lbl: 'Cluster' },
+                  { val: <span style={{ color: S.green600 }}>₹{totalRate.toLocaleString('en-IN')}</span>, lbl: 'Total Rate/ac' },
+                  { val: m.efficiency ?? '0.15', lbl: 'Avg ac/worker' },
+                ].map((s, i) => (
+                  <div key={i} style={{ flex: 1, padding: '12px 14px', textAlign: 'center', borderRight: i < 4 ? `1px solid ${S.stone100}` : 'none', position: 'relative' }}>
+                    <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 24, height: 2, borderRadius: 1, background: S.green100 }} />
+                    <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-.3px', lineHeight: 1.3, marginTop: 4 }}>{s.val}</div>
+                    <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginTop: 3 }}>{s.lbl}</div>
+                  </div>
+                ))}
+              </div>
+ 
+              {/* Two-col body */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', background: '#fff', borderRadius: 14, boxShadow: S.shadowCard, overflow: 'hidden' }}>
+ 
+                {/* Left: Activities & Rates */}
+                <div style={{ padding: '16px 20px' }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8, borderBottom: `1px solid ${S.stone100}` }}>
+                    <span style={{ fontSize: 14 }}>📋</span> Activities &amp; Rates
+                  </div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        {['Activity', 'Price/ac', 'Efficiency'].map((h, i) => (
+                          <th key={i} style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: S.stone400, padding: '6px 0', textAlign: i === 0 ? 'left' : 'right', borderBottom: `2px solid ${S.stone200}` }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(m.activity_rates || m.activities || []).map((a: any, i: number) => (
+                        <ActivityRowWithEfficiency key={a.rate_id ?? i} activity={a} mukkadamEfficiency={m.efficiency} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+ 
+                {/* Right: Location */}
+                <div style={{ padding: '16px 20px', borderLeft: `1px solid ${S.stone100}` }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8, borderBottom: `1px solid ${S.stone100}` }}>
+                    <span style={{ fontSize: 14 }}>📍</span> Location &amp; Availability
+                  </div>
+                  <div style={{ background: S.stone50, borderRadius: 10, padding: '10px 14px', border: `1px solid ${S.stone200}`, marginBottom: 14 }}>
+                    {[
+                      { k: 'Village', v: `${m.location?.village || '—'}, ${m.location?.taluka || '—'}` },
+                      { k: 'District', v: `${m.location?.district || '—'}, ${m.location?.state || '—'}` },
+                      { k: 'Status', v: <span style={{ color: S.green600 }}>● Available</span> },
+                    ].map((r, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0', borderTop: i > 0 ? `1px solid ${S.stone100}` : 'none' }}>
+                        <span style={{ color: S.stone500 }}>{r.k}</span>
+                        <span style={{ fontWeight: 600, color: S.stone800 }}>{r.v}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {m.availability?.start_date && (
+                    <div style={{ fontSize: 11, color: S.stone500, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      📅 {m.availability.start_date} → {m.availability.end_date || '?'}
+                    </div>
+                  )}
+                  {m.reference_image_url && (
+                    <>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, margin: '14px 0 8px', paddingTop: 12, borderTop: `1px solid ${S.stone100}` }}>🏷 Rate Card Reference</div>
+                      <img src={m.reference_image_url} alt="Rate card"
+                        style={{ borderRadius: 10, border: `1px solid ${S.stone200}`, width: '100%', maxHeight: 140, objectFit: 'cover', cursor: 'pointer' }}
+                        onClick={() => window.open(m.reference_image_url, '_blank')} />
+                    </>
                   )}
                 </div>
               </div>
-              {m.reference_image_url && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-600 mb-1">Rate Card Reference</p>
-                  <img
-                    src={m.reference_image_url}
-                    alt="Rate card"
-                    className="rounded-lg border border-gray-200 w-full max-h-40 object-cover cursor-pointer"
-                    onClick={() => window.open(m.reference_image_url, '_blank')}
-                  />
-                </div>
-              )}
-
-              
             </div>
-          </div>
-        </div>
+          </td>
+        </tr>
       )}
-    </div>
+    </>
   );
 }
-
   function getNearestPruningDate(farmer: Farmer): Date | null {
   const dates: Date[] = [];
   farmer.plots_by_cluster.forEach(group => {
@@ -742,6 +857,7 @@ interface PlotClusterControlProps {
 // import { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import { GlobalInsightsPanel } from "./Global";
+import { useCurrentUser } from "./hooks/currentUser";
 
 // ─── Plot Cluster Control ─────────────────────────────────
 function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess }: {
@@ -1133,6 +1249,26 @@ function AddToClusterTrigger({ farmer, clusters, onSuccess }: {
     </>
   );
 }
+
+const classifyFarmer = (f: any) => {
+  const plotsByCluster: any[] = f.plots_by_cluster || [];
+  
+  // Count plots with NO cluster
+  const noneGroup = plotsByCluster.find((g: any) => g.cluster_id === null);
+  const plotsWithoutCluster = noneGroup ? noneGroup.plots.length : 0;
+  
+  // Count plots WITH a cluster
+  const plotsWithCluster = plotsByCluster
+    .filter((g: any) => g.cluster_id !== null)
+    .reduce((sum: number, g: any) => sum + g.plots.length, 0);
+
+  const totalPlots = f.total_plots || 0;
+
+  if (plotsWithCluster === 0) return 'none';
+  if (plotsWithoutCluster === 0 || plotsWithCluster >= totalPlots) return 'full';
+  return 'partial';
+};
+
 // ─── Farmer Card ─────────────────────────────────────────
 interface FarmerCardProps {
   farmer: Farmer;
@@ -1150,247 +1286,395 @@ function formatPruningDate(date: Date | null): React.ReactNode {
     </span>
   );
 }
-function FarmerCard({ farmer, clusters, onSuccess,isAdmin = false }: FarmerCardProps) {
-  const [expanded, setExpanded] = useState(false);
+
+ 
+// ─────────────────────────────────────────────────────────────────────────────
+// FARMER CARD  — replace the whole existing FarmerCard function
+// ─────────────────────────────────────────────────────────────────────────────
+function FarmerCard({ farmer, clusters, onSuccess, isAdmin = false }: FarmerCardProps) {
+  const [expanded, setExpanded]       = useState(false);
   const [expandedPlot, setExpandedPlot] = useState<number | null>(null);
-  const [expandedJob, setExpandedJob] = useState<string | null>(null);
-const [farmerTab, setFarmerTab] = useState<'details' | 'billing'>('details');
-
-
-
+ 
+  const av           = avColor(farmer.farmer_id);
+  const inCluster    = countPlotsInCluster(farmer.plots_by_cluster);
+  const prunDate     = getNearestPruningDate(farmer);
+  const clusterStatus = classifyFarmer(farmer);
+  const ringColor    = clusterStatus === 'full' ? S.brand : clusterStatus === 'partial' ? S.amber600 : 'transparent';
+ 
+  const tdBase: React.CSSProperties = {
+    padding: '10px 14px', borderBottom: expanded ? 'none' : `1px solid ${S.stone100}`,
+    verticalAlign: 'middle', fontSize: 12,
+  };
+ 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-      {/* Farmer Header */}
-      <div
-        className="p-4 cursor-pointer hover:bg-gray-50 transition"
+    <>
+      {/* ── MAIN ROW ── */}
+      <tr
+        style={{ cursor: 'pointer', background: expanded ? S.brandLight : 'transparent', transition: 'background 150ms' }}
+        onMouseEnter={e => { if (!expanded) (e.currentTarget as HTMLElement).style.background = S.stone25; }}
+        onMouseLeave={e => { if (!expanded) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
         onClick={() => setExpanded(!expanded)}
       >
-
-        {/* <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb', marginBottom: '12px' }}>
-  {[
-    { key: 'details', label: '📋 Details' },
-    { key: 'billing', label: '💰 Billing' },
-  ].map(t => (
-    <button
-      key={t.key}
-      onClick={() => setFarmerTab(t.key as any)}
-      style={{
-        padding: '8px 16px', fontSize: '0.78rem', fontWeight: 600,
-        border: 'none', background: 'none', cursor: 'pointer',
-        borderBottom: farmerTab === t.key ? '2px solid #3b82f6' : '2px solid transparent',
-        color: farmerTab === t.key ? '#3b82f6' : '#6b7280',
-      }}
-    >
-      {t.label}
-    </button>
-  ))}
-</div> */}
-
-
-{farmerTab === 'details' && (
-        <div className="flex justify-between items-start">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-9 h-9 bg-blue-100 rounded-full flex items-center justify-center shrink-0">
-                <User size={18} className="text-blue-600" />
+        {/* Farmer name */}
+        <td style={{ ...tdBase, paddingLeft: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: av.bg, color: av.fg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11, letterSpacing: '.3px' }}>
+                {mkInitials(farmer.farmer_name)}
               </div>
-              <div className="min-w-0">
-                <p className="font-bold text-gray-900">{farmer.farmer_name}</p>
-                <p className="text-xs text-gray-500 flex items-center gap-1">
-                  <Phone size={11} /> {farmer.phone_number}
-                  <span className="mx-1">•</span>
-                  <MapPin size={11} /> {farmer.location}
-                </p>
-              </div>
+              {ringColor !== 'transparent' && (
+                <div style={{ position: 'absolute', inset: -3, borderRadius: 13, border: `2px solid ${ringColor}`, pointerEvents: 'none' }} />
+              )}
             </div>
-
-            <div className="flex flex-wrap gap-2 mt-2 items-center">
-              <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">
-                {farmer.total_plots} Plots
-              </span>
-              <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs">
-                {farmer.total_jobs} Jobs
-              </span>
-{farmer.clusters.length === 0 ? (
-  <span className="px-2 py-0.5 bg-red-50 text-red-600 rounded text-xs">No Cluster</span>
-) : farmer.clusters.map(c => (
-  <span key={c.id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-teal-50 text-teal-700 rounded text-xs">
-    {c.name}
-
-    {isAdmin && (
-      <button
-        onClick={async (e) => {
-          e.stopPropagation();
-          if (!confirm(`Remove ${farmer.farmer_name} from "${c.name}"?`)) return;
-          const token = localStorage.getItem('auth_token');
-          await fetch(`${API_BASE_URL}/api/clusters/${c.id}/remove_farmer/`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Token ${token}`,
-            },
-            body: JSON.stringify({ farmer_id: farmer.farmer_id }),
-          });
-          onSuccess();
-        }}
-        title="Remove from cluster"
-        className="ml-0.5 text-red-400 hover:text-red-600 leading-none"
-      >
-        ✕
-      </button>
-    )}
-  </span>
-))}
-
-{/* ← ADD THIS */}
-{(() => {
-  const nearest = getNearestPruningDate(farmer);
-  return formatPruningDate(nearest);
-})()}
-              {/* ── Add to Cluster trigger (stops card expand click) ── */}
-              <div onClick={e => e.stopPropagation()}>
-                <AddToClusterTrigger
-                farmer={farmer}
-                clusters={clusters}
-                onSuccess={onSuccess}
-                />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, letterSpacing: '-.1px', color: S.stone900 }}>{farmer.farmer_name}</div>
+              <div style={{ fontFamily: S.mono, fontSize: 10, color: S.stone400, marginTop: 2 }}>{farmer.phone_number}</div>
             </div>
-            </div>
-
-            {/* ── Cluster Coverage Bar (replaces payment bar) ── */}
-            <ClusterCoverageBar farmer={farmer} />
           </div>
-
-          <div className="ml-3 shrink-0 mt-1">
-            {expanded
-              ? <ChevronUp size={16} className="text-gray-400" />
-              : <ChevronDown size={16} className="text-gray-400" />
-            }
+        </td>
+ 
+        {/* Location */}
+        <td style={{ ...tdBase, color: S.stone600 }}>{farmer.location || '—'}</td>
+ 
+        {/* Plots */}
+        <td style={{ ...tdBase, textAlign: 'center', fontWeight: 700, fontSize: 13 }}>{farmer.total_plots}</td>
+ 
+        {/* Jobs */}
+        <td style={{ ...tdBase, textAlign: 'center', fontWeight: 700, fontSize: 13 }}>{farmer.total_jobs}</td>
+ 
+        {/* Cluster */}
+        <td style={{ ...tdBase }}>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+            {farmer.clusters.length === 0 ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: S.amber50, border: `1px solid ${S.amber100}`, color: S.amber700 }}>⚠ No Cluster</span>
+            ) : farmer.clusters.map(c => (
+              <span key={c.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: S.green50, color: S.green700, border: `1px solid ${S.green100}` }}>
+                {c.name}
+                {isAdmin && (
+                  <button onClick={async e => {
+                    e.stopPropagation();
+                    if (!confirm(`Remove ${farmer.farmer_name} from "${c.name}"?`)) return;
+                    const token = localStorage.getItem('auth_token');
+                    await fetch(`${API_BASE_URL}/api/clusters/${c.id}/remove_farmer/`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${token}` }, body: JSON.stringify({ farmer_id: farmer.farmer_id }) });
+                    onSuccess();
+                  }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', marginLeft: 2, fontSize: 10, padding: 0, lineHeight: 1 }}>✕</button>
+                )}
+              </span>
+            ))}
           </div>
-        </div>
-)}
-      </div>
-
-      {/* Expanded: plots by cluster */}
+        </td>
+ 
+        {/* Activities count */}
+        <td style={{ ...tdBase, textAlign: 'center', fontWeight: 700, fontSize: 13 }}>
+          {farmer.plots_by_cluster.reduce((s, g) => s + g.plots.reduce((ss, p) => ss + (p.jobs?.reduce((sss, j) => sss + (j.activities?.length || 0), 0) || 0), 0), 0)}
+        </td>
+ 
+        {/* Pruning */}
+        <td style={{ ...tdBase }}>
+          {prunDate ? formatPruningBadge(prunDate) : null}
+        </td>
+ 
+        {/* Actions */}
+        <td style={{ ...tdBase, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+            <AddToClusterTrigger farmer={farmer} clusters={clusters} onSuccess={onSuccess} />
+          </div>
+        </td>
+ 
+        {/* Chevron */}
+        <td style={{ ...tdBase, textAlign: 'center', width: 44 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: `1px solid ${expanded ? S.brand : S.stone200}`, background: expanded ? S.brand : '#fff', color: expanded ? '#fff' : S.stone400, fontSize: 11, transition: 'all 250ms', transform: expanded ? 'rotate(180deg)' : 'none', boxShadow: expanded ? '0 2px 6px rgba(5,150,105,.3)' : 'none' }}>▾</div>
+        </td>
+      </tr>
+ 
+      {/* ── EXPANDED DETAIL ROW ── */}
       {expanded && (
-        <div className="border-t border-gray-100 px-4 pb-4">
-          {farmer.plots_by_cluster.map((clusterGroup, gi) => (
-            <div key={gi} className="mt-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Building2 size={14} className="text-teal-600" />
-                <p className="text-sm font-bold text-teal-700">{clusterGroup.cluster_name}</p>
-                <span className="text-xs text-gray-400">({clusterGroup.plots.length} plots)</span>
+        <tr>
+          <td colSpan={9} style={{ padding: 0, borderBottom: `1px solid ${S.stone200}`, background: S.stone25 }}>
+            <div style={{ padding: '20px 24px' }}>
+ 
+              {/* Stat strip */}
+              <div style={{ display: 'flex', borderRadius: 14, overflow: 'hidden', background: '#fff', marginBottom: 16, boxShadow: S.shadowCard }}>
+                {[
+                  { val: <span style={{ color: S.sky600 }}>{farmer.total_plots}</span>, lbl: 'Plots' },
+                  { val: farmer.total_jobs, lbl: 'Jobs' },
+                  { val: farmer.clusters.length > 0
+                    ? <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: S.green50, color: S.green700, border: `1px solid ${S.green100}`, fontWeight: 700 }}>{farmer.clusters[0].name}</span>
+                    : <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: S.amber50, color: S.amber700, border: `1px solid ${S.amber100}`, fontWeight: 700 }}>No Cluster</span>,
+                    lbl: 'Cluster' },
+                  { val: prunDate ? <><span style={{ fontSize: 16 }}>🌿</span></> : '—', lbl: prunDate ? prunDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No pruning' },
+                  { val: farmer.plots_by_cluster.reduce((s, g) => s + g.plots.reduce((ss, p) => ss + (p.jobs?.reduce((sss, j) => sss + (j.activities?.length || 0), 0) || 0), 0), 0), lbl: 'Activities' },
+                ].map((s, i) => (
+                  <div key={i} style={{ flex: 1, padding: '12px 14px', textAlign: 'center', borderRight: i < 4 ? `1px solid ${S.stone100}` : 'none', position: 'relative' }}>
+                    <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 24, height: 2, borderRadius: 1, background: S.green100 }} />
+                    <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: '-.3px', lineHeight: 1.3, marginTop: 4 }}>{s.val}</div>
+                    <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginTop: 3 }}>{s.lbl}</div>
+                  </div>
+                ))}
               </div>
-
-              <div className="space-y-2 pl-4 border-l-2 border-teal-100">
-                {clusterGroup.plots.map(plot => (
-                  <div key={plot.plot_id} className="border border-gray-200 rounded-lg overflow-hidden">
-                    {/* Plot Header */}
-                    <div
-                      className="px-3 py-2.5 bg-gray-50 cursor-pointer hover:bg-gray-100 flex justify-between items-center"
-                      onClick={() => setExpandedPlot(expandedPlot === plot.plot_id ? null : plot.plot_id)}
-                    >
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-gray-800">
-                            Plot {plot.plot_code}
-                            {plot.name !== `Plot ${plot.plot_code}` && (
-                              <span className="ml-1 text-gray-500 font-normal">({plot.name})</span>
-                            )}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {plot.area_acres} ac • {plot.crop_name}
-                            {plot.variety && ` • ${plot.variety}`}
-                            {plot.pruning_date && ` • Pruning: ${plot.pruning_date}`}
-                            {' '}· {plot.jobs?.reduce((t, j) => t + (j.activities?.length || 0), 0)} activities
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Plot cluster control — stop expand propagation */}
-                      <div onClick={e => e.stopPropagation()} className="ml-3 shrink-0">
-                            <PlotClusterControl
-                            plot={plot}
-                            clusterGroups={farmer.plots_by_cluster}
-                            clusters={clusters}
-                            farmerId={farmer.farmer_id}
-                            onSuccess={onSuccess}
-                            />
-                        </div>
+ 
+              {/* Cluster coverage bar */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#fff', borderRadius: 10, marginBottom: 16, boxShadow: S.shadowSm }}>
+                <div style={{ flex: 1, height: 6, background: S.stone200, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', borderRadius: 3, background: 'linear-gradient(135deg,#059669 0%,#0d9488 100%)', width: `${Math.min((inCluster / Math.max(farmer.total_plots, 1)) * 100, 100)}%` }} />
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 600, color: S.stone500, whiteSpace: 'nowrap' }}>{inCluster}/{farmer.total_plots} in cluster</span>
+              </div>
+ 
+              {/* Plots by cluster */}
+              <div style={{ background: '#fff', borderRadius: 14, boxShadow: S.shadowCard, overflow: 'hidden' }}>
+                {farmer.plots_by_cluster.map((cg, gi) => (
+                  <div key={gi}>
+                    {/* cluster section title */}
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, padding: '12px 20px 8px', display: 'flex', alignItems: 'center', gap: 6, borderBottom: `1px solid ${S.stone100}`, background: S.stone50 }}>
+                      <span style={{ fontSize: 14 }}>🏗</span> {cg.cluster_name}
+                      <span style={{ marginLeft: 'auto', padding: '2px 8px', borderRadius: 999, background: '#fff', border: `1px solid ${S.stone200}`, color: S.stone600, fontWeight: 600, fontSize: 10 }}>{cg.plots.length} plot{cg.plots.length !== 1 ? 's' : ''}</span>
                     </div>
-
-                    {/* Plot expanded: jobs */}
-                    {expandedPlot === plot.plot_id && (
-                      <div className="px-3 pb-3 pt-2 space-y-2">
-                        {plot.jobs.length === 0 ? (
-                          <p className="text-xs text-gray-400 italic">No tender jobs for this plot</p>
-                        ) : plot.jobs.map(job => (
-                          <div key={job.job_id} className="border border-blue-100 rounded-lg overflow-hidden">
-                            <div
-                              className="px-3 py-2 bg-blue-50 cursor-pointer hover:bg-blue-100 flex justify-between items-center"
-                              onClick={() => setExpandedJob(expandedJob === job.job_id ? null : job.job_id)}
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-mono text-blue-700 font-bold">#{job.job_id}</span>
-                                <span className="text-xs text-gray-500">{job.activities.length} activities</span>
-                              </div>
-                              <div className="flex items-center gap-3">
-                                {expandedJob === job.job_id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+ 
+                    <div style={{ padding: '10px 20px' }}>
+                      {cg.plots.map(plot => (
+                        <div key={plot.plot_id} style={{ background: '#fff', borderRadius: 14, boxShadow: S.shadowSm, marginBottom: 10, overflow: 'hidden', border: `1px solid ${S.stone200}` }}>
+                          {/* plot header */}
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: `1px solid ${S.stone100}`, background: 'linear-gradient(180deg,#fff 0%,#fdfcfb 100%)', cursor: 'pointer' }}
+                            onClick={() => setExpandedPlot(expandedPlot === plot.plot_id ? null : plot.plot_id)}>
+                            <div>
+                              <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: '-.2px' }}>Plot {plot.plot_code}</div>
+                              <div style={{ fontSize: 11, color: S.stone500, marginTop: 1 }}>
+                                {plot.area_acres} ac · {plot.crop_name}{plot.variety ? ` · ${plot.variety}` : ''}{plot.pruning_date ? ` · Pruning: ${plot.pruning_date}` : ''} · {plot.jobs?.reduce((t, j) => t + (j.activities?.length || 0), 0)} activities
                               </div>
                             </div>
-
-                            {expandedJob === job.job_id && (
-                              <div className="px-3 pb-3 pt-2 space-y-3">
-                                <div>
-                                  <p className="text-xs font-bold text-gray-600 mb-1 flex items-center gap-1">
-                                    <Layers size={12} /> Activities
-                                  </p>
-                                  <div className="space-y-1">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <div onClick={e => e.stopPropagation()}>
+                                <PlotClusterControl plot={plot} clusterGroups={farmer.plots_by_cluster} clusters={clusters} farmerId={farmer.farmer_id} onSuccess={onSuccess} />
+                              </div>
+                              <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, border: `1px solid ${S.stone200}`, background: '#fff', fontSize: 10, color: S.stone400, transition: 'transform 200ms', transform: expandedPlot === plot.plot_id ? 'rotate(180deg)' : 'none' }}>▾</div>
+                            </div>
+                          </div>
+ 
+                          {/* plot jobs expanded */}
+                          {expandedPlot === plot.plot_id && (
+                            <div style={{ padding: '10px 14px' }}>
+                              {plot.jobs.length === 0 ? (
+                                <p style={{ fontSize: 11, color: S.stone400, fontStyle: 'italic' }}>No tender jobs for this plot</p>
+                              ) : plot.jobs.map(job => (
+                                <div key={job.job_id} style={{ marginBottom: 8 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: 'linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%)', borderRadius: 8, marginBottom: 6, border: `1px solid ${S.sky100}` }}>
+                                    <span style={{ fontSize: 11, fontWeight: 700, color: S.sky700 }}>#{job.job_id}</span>
+                                    <span style={{ fontSize: 11, color: S.sky600 }}>{job.activities.length} activities</span>
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                     {job.activities.map(a => (
-                                      <div key={a.id} className="flex items-center gap-2 text-xs">
-                                        <span className="w-24 text-gray-700 font-medium truncate">{a.name}</span>
-                                        <span className="text-gray-400">{a.total_area}ac</span>
-                                        {/* <AllocationBar allocated={a.allocated_area} total={a.total_area} /> */}
-                                        <span className={`px-1.5 py-0.5 rounded text-xs ${
-                                          a.allocation_status === 'fully_allocated' ? 'bg-green-100 text-green-700' :
-                                          a.allocation_status === 'partially_allocated' ? 'bg-yellow-100 text-yellow-700' :
-                                          'bg-gray-100 text-gray-500'
-                                        }`}>{a.allocation_status.replace('_', ' ')}</span>
+                                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderRadius: 6, fontSize: 12, transition: 'background 150ms' }}
+                                        onMouseEnter={e => (e.currentTarget.style.background = S.stone50)}
+                                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                                        <div style={{ flex: 1, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
+                                        <div style={{ fontFamily: S.mono, fontSize: 10, color: S.stone500, minWidth: 50, textAlign: 'right' }}>{a.total_area} ac</div>
+                                        <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', background: a.allocation_status === 'fully_allocated' || a.allocation_status === 'completed' ? S.green50 : a.allocation_status === 'partially_allocated' ? S.sky50 : S.amber50, color: a.allocation_status === 'fully_allocated' || a.allocation_status === 'completed' ? S.green700 : a.allocation_status === 'partially_allocated' ? S.sky700 : S.amber700 }}>
+                                          {a.allocation_status === 'fully_allocated' ? 'Allocated' : a.allocation_status === 'partially_allocated' ? 'Partial' : a.allocation_status === 'completed' ? 'Done' : 'Pending'}
+                                        </span>
                                       </div>
                                     ))}
                                   </div>
                                 </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
+ 
             </div>
-          ))}
-        </div>
+          </td>
+        </tr>
       )}
-    </div>
+    </>
   );
 }
 
+function MoveJobButtonTender({ act, onSuccess }: {
+  act: any;
+  onSuccess: () => void;
+}) {
+  const MOVE_REASONS = [
+    'Not strict job — can reschedule',
+    'Easy farmer — farmer agreed to move',
+  ];
 
+  const [open, setOpen]           = useState(false);
+const [moveDate, setMoveDate] = useState('');
+const [moveArea, setMoveArea] = useState('');
+const [moveReason, setMoveReason] = useState('');
+const [moveSaving, setMoveSaving] = useState(false);
+  const [saving, setSaving]       = useState(false);
 
+  const handleSubmit = async () => {
+    if (!moveDate)                              return toast.error('Select a date');
+    if (!moveArea || moveArea <= 0)             return toast.error('Enter valid area');
+    if (!moveReason.trim())                     return toast.error('Please provide a reason');
+    if (moveArea > Number(act.remaining_area ?? act.total_area ?? 0))
+                                                return toast.error('Exceeds remaining area');
+    const token = localStorage.getItem('auth_token');
+    setSaving(true);
+    try {
+      const actId = act.id ?? act.activity_id;
+      const res = await fetch(`${API_BASE_URL}/api/job-activities/${actId}/move/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Token ${token}` },
+        body: JSON.stringify({ new_date: moveDate, area: moveArea, reason: moveReason }),
+      });
+      if (res.ok) {
+        toast.success('Job moved');
+        setOpen(false);
+        setMoveDate('');
+        setMoveReason('');
+        onSuccess();
+      } else {
+        const err = await res.json();
+        toast.error(err.error || 'Failed to move job');
+      }
+    } catch {
+      toast.error('Network error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const maxArea = Number(act.remaining_area ?? act.total_area ?? 0);
+
+  return (
+    <>
+      <button
+        onClick={() => {
+          setMoveArea(maxArea);
+          setMoveDate('');
+          setMoveReason('');
+          setOpen(true);
+        }}
+        className="px-3 py-1.5 bg-orange-50 text-orange-600 border border-orange-200 text-xs font-semibold rounded-lg hover:bg-orange-100 transition"
+      >
+        Move
+      </button>
+
+      {open && ReactDOM.createPortal(
+        <div
+          className="fixed inset-0 flex items-center justify-center"
+          style={{ background: 'rgba(0,0,0,0.4)', zIndex: 99999 }}
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl p-6 w-80"
+            onClick={e => e.stopPropagation()}
+          >
+            <h4 className="font-bold text-gray-900 mb-4">Move Job Activity</h4>
+
+            <div className="space-y-4">
+
+              {/* Date */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">New Date</label>
+                <input
+                  type="date"
+                  value={moveDate}
+                  onChange={e => setMoveDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                />
+              </div>
+
+              {/* Area */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">
+                  Area to Move (ac)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max={maxArea}
+                  value={moveArea}
+                  onChange={e => setMoveArea(parseFloat(e.target.value) || 0)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                />
+                <p className="text-xs text-gray-400 mt-1">Max: {maxArea} ac (remaining)</p>
+                {moveArea > maxArea && (
+                  <p className="text-xs text-red-500 mt-1">⚠ Exceeds remaining area</p>
+                )}
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-2">
+                  Reason <span className="text-red-400">*</span>
+                </label>
+                <div className="flex flex-col gap-2 mb-2">
+                  {MOVE_REASONS.map(r => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setMoveReason(r)}
+                      className={`text-left px-3 py-2 rounded-lg border text-xs font-medium transition ${
+                        moveReason === r
+                          ? 'bg-orange-50 border-orange-400 text-orange-700'
+                          : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-orange-300 hover:bg-orange-50'
+                      }`}
+                    >
+                      {moveReason === r ? '✓ ' : ''}{r}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  value={moveReason}
+                  onChange={e => setMoveReason(e.target.value)}
+                  placeholder="Or type a custom reason..."
+                  rows={2}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-orange-300 resize-none"
+                />
+                {!moveReason.trim() && (
+                  <p className="text-xs text-red-400 mt-1">Reason is required</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-5">
+              <button
+                onClick={() => setOpen(false)}
+                className="flex-1 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={saving || !moveReason.trim() || moveArea > maxArea}
+                className="flex-1 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-bold hover:bg-orange-600 disabled:opacity-50 transition"
+              >
+                {saving ? 'Moving...' : 'Confirm Move'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
 // ─── Main Page ───────────────────────────────────────────
 export default function TenderDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
 
+const [jobNotes, setJobNotes]               = useState<Record<string, any[]>>({}); // jobId → notes[]
+const [notesLoading, setNotesLoading]       = useState(false);
 
   const [farmerSubTab, setFarmerSubTab] = useState<'all' | 'full' | 'partial' | 'none' | 'new'>('all');
    const navigate = useNavigate();
 
    const [isAdmin, setIsAdmin] = useState(false);
 
-
+const { user: currentUser } = useCurrentUser();
+  const currentUserId   = currentUser?.id   ?? 0;
+  const currentUserName = currentUser?.full_name ?? currentUser?.username ?? '';
    
 
 useEffect(() => {
@@ -1589,7 +1873,43 @@ const fetchActivities = useCallback(async () => {
   } finally {
     setActLoading(false);
   }
-}, [actCluster, actDateFrom, actDateTo, actSearch, actSubTab]); // ← allActivities REMOVED
+}, [actCluster, actDateFrom, actDateTo, actSearch, actSubTab]);
+
+
+// Fetch notes for all loaded activities' job IDs
+useEffect(() => {
+  if (tab !== 'jobs' || activities.length === 0) return;
+
+  const jobIds = [...new Set(activities.map((a: any) => a.job_id))];
+  if (jobIds.length === 0) return;
+
+  const token = localStorage.getItem('auth_token');
+  setNotesLoading(true);
+
+  // Fetch notes filtered by these job IDs
+  // Use actCluster if set, otherwise fetch without cluster filter
+  const cid = actCluster || '';
+  const params = new URLSearchParams();
+  if (cid) params.set('cluster_id', cid);
+  // API supports job_ids as comma-separated or multiple params
+  jobIds.forEach(id => params.append('job_id', id));
+
+  fetch(`${API_BASE_URL}/api/job-notes/?${params.toString()}`, {
+    headers: { Authorization: `Token ${token}` },
+  })
+    .then(r => r.json())
+    .then((data: any[]) => {
+      // Group by job_id
+      const grouped: Record<string, any[]> = {};
+      (Array.isArray(data) ? data : data.results ?? []).forEach((n: any) => {
+        if (!grouped[n.job_id]) grouped[n.job_id] = [];
+        grouped[n.job_id].push(n);
+      });
+      setJobNotes(grouped);
+    })
+    .catch(() => {})
+    .finally(() => setNotesLoading(false));
+}, [activities, tab, actCluster]);// ← allActivities REMOVED
 useEffect(() => {
   if (tab !== 'jobs') return;
   fetchActivities();
@@ -1628,24 +1948,6 @@ const in10Days  = new Date(); in10Days.setDate(today.getDate() + 10);
 const sevenDaysAgo = new Date(today);
 sevenDaysAgo.setDate(today.getDate() - 7);
 
-const classifyFarmer = (f: any) => {
-  const plotsByCluster: any[] = f.plots_by_cluster || [];
-  
-  // Count plots with NO cluster
-  const noneGroup = plotsByCluster.find((g: any) => g.cluster_id === null);
-  const plotsWithoutCluster = noneGroup ? noneGroup.plots.length : 0;
-  
-  // Count plots WITH a cluster
-  const plotsWithCluster = plotsByCluster
-    .filter((g: any) => g.cluster_id !== null)
-    .reduce((sum: number, g: any) => sum + g.plots.length, 0);
-
-  const totalPlots = f.total_plots || 0;
-
-  if (plotsWithCluster === 0) return 'none';
-  if (plotsWithoutCluster === 0 || plotsWithCluster >= totalPlots) return 'full';
-  return 'partial';
-};
 
 // New farmer check
 const isNewFarmer = (f: any) => {
@@ -1670,6 +1972,68 @@ const subTabFilteredFarmers = filteredFarmers.filter((f: any) => {
 });
 
 const [expandedJobKey, setExpandedJobKey] = useState<string | null>(null);
+
+// ── Jobs tab: allocation + move + note ───────────────────────────────────────
+const [jobsHalfDayDialog, setJobsHalfDayDialog] = useState<{
+  open: boolean;
+  jobId: string;
+  act: any;
+  mukkadam: any;
+  rate: any;
+  availableWorkers: number;
+  neededWorkers: number;
+  remainingArea: number;
+  isSecondJob: boolean;
+  jobSlotsUsed: number;
+  targetDate: string;
+} | null>(null);
+const [jobsAllowsMoreJobs, setJobsAllowsMoreJobs] = useState(false);
+const [jobsNoteJobId, setJobsNoteJobId]     = useState<string | null>(null);
+const [jobsNoteJobLabel, setJobsNoteJobLabel] = useState('');
+
+// per-activity availability — fetched once per activity click
+const [jobsAvailableMukkadams, setJobsAvailableMukkadams] = useState<Map<string, any[]>>(new Map());
+const [jobsMaxWorkRows, setJobsMaxWorkRows] = useState<any[]>([]);
+const [jobsCapacityDate, setJobsCapacityDate] = useState<string | null>(null);
+// ── Allocation dialog (jobs tab) ─────────────────────────────────────────────
+const [allocDialog, setAllocDialog] = useState<{
+  open: boolean;
+  act: any;
+  job: any;
+  isoDate: string;
+  mukkadams: any[];        // fetched on click
+  loadingMukkadams: boolean;
+} | null>(null);
+
+const [allocHalfDay, setAllocHalfDay] = useState<{
+  open: boolean;
+  act: any;
+  job: any;
+  mukkadam: any;
+  rate: any;
+  availableWorkers: number;
+  remainingArea: number;
+  isoDate: string;
+  jobSlotsUsed: number;
+} | null>(null);
+const [allocAllowsMore, setAllocAllowsMore] = useState(false);
+
+// ── Move dialog (jobs tab) ───────────────────────────────────────────────────
+const [moveDialog, setMoveDialog] = useState<{
+  act: any;
+  job: any;
+} | null>(null);
+const [moveDate, setMoveDate] = useState('');
+const [moveReason, setMoveReason] = useState('');
+const [moveSaving, setMoveSaving] = useState(false);
+
+// ── Note modal (jobs tab) ────────────────────────────────────────────────────
+const [noteDialog, setNoteDialog] = useState<{
+  jobId: string;
+  label: string;
+} | null>(null);
+const [noteText, setNoteText] = useState('');
+const [noteSaving, setNoteSaving] = useState(false);
 // Compute stats from currently visible farmers when sub-tab is active
 const displaySummary = useMemo(() => {
   if (!data) return null;
@@ -1750,8 +2114,329 @@ const displaySummary = useMemo(() => {
 
 
 
+// ── Open allocate dialog: fetch mukkadams for this cluster+date ───────────────
+const handleOpenAllocate = async (act: any, job: any) => {
+  const isoDate = act.scheduled_date?.slice(0, 10) ?? '';
+  // optimistically open with loading state
+  setAllocDialog({ open: true, act, job, isoDate, mukkadams: [], loadingMukkadams: true });
 
+  try {
+    const token = localStorage.getItem('auth_token');
+    // fetch cluster mukkadams with their capacity for this date
+    const res = await fetch(
+      `${API_BASE_URL}/api/cluster/${clusterFilter || clusterId}/mukkadams-capacity/?date=${isoDate}&activity_id=${act.activity_id ?? ''}`,
+      { headers: { Authorization: `Token ${token}` } },
+    );
+    if (res.ok) {
+      const d = await res.json();
+      setAllocDialog(prev =>
+        prev ? { ...prev, mukkadams: d.mukkadams ?? d ?? [], loadingMukkadams: false } : prev,
+      );
+    } else {
+      // fallback: use already-loaded mukkadams from dashboard data
+      const fallback = (data?.mukkadams ?? []).filter((m: any) =>
+        m.clusters?.some((c: any) => String(c.id) === String(clusterFilter || clusterId)),
+      );
+      setAllocDialog(prev =>
+        prev ? { ...prev, mukkadams: fallback, loadingMukkadams: false } : prev,
+      );
+    }
+  } catch {
+    const fallback = data?.mukkadams ?? [];
+    setAllocDialog(prev =>
+      prev ? { ...prev, mukkadams: fallback, loadingMukkadams: false } : prev,
+    );
+  }
+};
 
+const handleConfirmAllocate = async () => {
+  if (!allocHalfDay) return;
+  const { act, job, mukkadam, rate, availableWorkers, remainingArea, isoDate, jobSlotsUsed } = allocHalfDay;
+  const slotsUsed  = jobSlotsUsed ?? 0;
+  const isLastSlot = slotsUsed >= 2;
+  const isMidSlot  = slotsUsed === 1;
+  const allowsMoreJobsToSend = isLastSlot ? false : isMidSlot ? true : allocAllowsMore;
+
+  // Resolve cluster_id from activity's farmer_clusters, then plot clusters, then filter
+  const resolvedClusterId =
+    act?.farmer_clusters?.[0]?.id ??
+    act?.clusters?.[0]?.id ??
+    actCluster ??
+    clusterFilter ??
+    null;
+
+  if (!resolvedClusterId) {
+    toast.error('Cannot determine cluster for this activity. Add the farmer/plot to a cluster first.');
+    return;
+  }
+
+  const token = localStorage.getItem('auth_token');
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Token ${token}` },
+      body: JSON.stringify({
+        job_activity_id:   act.id ?? act.activity_id,
+        mukkadam_id:       mukkadam.mukkadam_id,
+        allocated_date:    isoDate,
+        allocated_area:    remainingArea,
+        allocated_workers: availableWorkers,
+        farmer_rate:       act.rate_per_acre ?? 0,
+        mukkadam_rate:     Number(rate?.rate_per_acre || 0),
+        cluster_id:        resolvedClusterId,
+        skip_strict_check: false,
+        allows_second_job: allowsMoreJobsToSend,
+        job_slot:          slotsUsed + 1,
+      }),
+    });
+
+    // Log the actual error for debugging
+    const d = await res.json();
+    console.log('Allocation response:', res.status, d);
+
+    if (res.ok) {
+      const slotLabel = ['1st', '2nd', '3rd'][slotsUsed] ?? `${slotsUsed + 1}th`;
+      toast.success(
+        allowsMoreJobsToSend
+          ? `✅ Allocated to ${mukkadam.mukkadam_name} (⅓ day – ${slotLabel} job)`
+          : `✅ Allocated to ${mukkadam.mukkadam_name} (${slotLabel} job – day complete)`,
+      );
+      setAllocHalfDay(null);
+      setAllocDialog(null);
+      setAllocAllowsMore(false);
+      fetchActivities(); // refresh the jobs list too
+      fetchDataSilent();
+    } else {
+      // Show the actual backend error message
+      toast.error(d.error || d.detail || d.message || JSON.stringify(d) || 'Allocation failed');
+    }
+  } catch (e) {
+    console.error('Allocation error:', e);
+    toast.error('Network error — check console');
+  }
+};
+// ── Move job activity to a new date ──────────────────────────────────────────
+const handleMoveJob = async () => {
+  if (!moveDialog || !moveDate) return;
+  if (!moveReason.trim()) { toast.error('Please provide a reason'); return; }
+  const maxArea = Number(moveDialog.act.remaining_area ?? moveDialog.act.total_area ?? 0);
+  const areaToMove = moveArea ? parseFloat(moveArea) : maxArea;
+  if (isNaN(areaToMove) || areaToMove <= 0) { toast.error('Enter valid area'); return; }
+  if (areaToMove > maxArea) { toast.error('Exceeds remaining area'); return; }
+
+  setMoveSaving(true);
+  const token = localStorage.getItem('auth_token');
+  try {
+    const actId = moveDialog.act.id ?? moveDialog.act.activity_id;
+    const res = await fetch(`${API_BASE_URL}/api/job-activities/${actId}/move/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Token ${token}` },
+      body: JSON.stringify({ new_date: moveDate, area: areaToMove, reason: moveReason }),
+    });
+    if (res.ok) {
+      toast.success(`Moved to ${moveDate}`);
+      setMoveDialog(null);
+      setMoveDate('');
+      setMoveArea('');
+      setMoveReason('');
+      fetchDataSilent();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      toast.error(d.error || 'Move failed');
+    }
+  } catch {
+    toast.error('Move failed');
+  } finally {
+    setMoveSaving(false);
+  }
+};
+// ── Save note ─────────────────────────────────────────────────────────────────
+const handleSaveNote = async () => {
+  if (!noteDialog || !noteText.trim()) return;
+  setNoteSaving(true);
+  const token = localStorage.getItem('auth_token');
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/job-notes/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Token ${token}` },
+      body: JSON.stringify({
+        job_id:   noteDialog.jobId,
+        text:     noteText.trim(),
+        note_date: new Date().toISOString().slice(0, 10),
+        tags:     [],
+      }),
+    });
+    if (res.ok) {
+      toast.success('Note saved');
+      setNoteDialog(null);
+      setNoteText('');
+    } else {
+      toast.error('Failed to save note');
+    }
+  } catch {
+    toast.error('Failed to save note');
+  } finally {
+    setNoteSaving(false);
+  }
+};
+// ── Fetch mukkadams capacity for a given date (jobs tab) ─────────────────────
+const fetchJobsCapacity = async (isoDate: string, act?: any) => {
+  if (jobsCapacityDate === isoDate) return; // already loaded for this date
+  try {
+    const token = localStorage.getItem('auth_token');
+    // Use the farmer's own cluster — first one from farmer_clusters
+    // Fallback chain: farmer_clusters[0] → act.clusters[0] → clusterFilter → clusterId
+    const farmerClusterId =
+      act?.farmer_clusters?.[0]?.id ??
+      act?.clusters?.[0]?.id ??
+      clusterFilter ??
+      clusterId;
+    const cid = farmerClusterId;
+    const res = await fetch(
+      `${API_BASE_URL}/api/mukkadams/daily_capacity_all/?date=${isoDate}&cluster_id=${cid}`,
+      { headers: { Authorization: `Token ${token}` } },
+    );
+    const capacityData: any[] = await res.json();
+
+                        // Deduplicate capacity by mukkadam_id, keep highest crew size
+                        const capacityMap = new Map<number, number>();
+                        capacityData.forEach((d: any) => {
+                          const existing = capacityMap.get(d.mukkadam_id) ?? 0;
+                          if (d.available_crew_size > existing) {
+                            capacityMap.set(d.mukkadam_id, d.available_crew_size);
+                          }
+                        });
+
+                        // Fetch mukkadam details (name, rates) from mukkadams API
+                        const mukkadamIds = Array.from(capacityMap.keys());
+                        let mukkadamDetails: any[] = [];
+                        try {
+                          const mukkRes = await fetch(
+                            `${API_BASE_URL}/api/mukkadams/?cluster_id=${cid}`,
+                            { headers: { Authorization: `Token ${token}` } },
+                          );
+                          const mukkData = await mukkRes.json();
+                          // API may return array or { results: [] }
+                          mukkadamDetails = Array.isArray(mukkData)
+                            ? mukkData
+                            : (mukkData.results ?? mukkData.mukkadams ?? []);
+                        } catch {
+                          // fallback to dashboard mukkadams if fetch fails
+                          mukkadamDetails = data?.mukkadams ?? [];
+                        }
+
+                        // Build enriched list — only mukkadams with capacity today
+                        const enriched = mukkadamIds.map(mukkadamId => {
+                          const availCrew = capacityMap.get(mukkadamId) ?? 0;
+                          const detail = mukkadamDetails.find(
+                            (m: any) => m.mukkadam_id === mukkadamId,
+                          );
+                          const activityRates: any[] = detail?.activity_rates ?? [];
+                          const matchedRate = activityRates.find((r: any) =>
+                            r.activity_id === act.activity_id ||
+                            r.activity_name === act.activity_name,
+                          );
+                          const productivity = Number(
+                            matchedRate?.productivity_per_worker ?? 0.15,
+                          );
+                          const maxArea = availCrew * productivity;
+
+                          return {
+                            mukkadam_id:         mukkadamId,
+                            mukkadam_name:       detail?.mukkadam_name ?? `Mukkadam #${mukkadamId}`,
+                            mobile_numbers:      detail?.mobile_numbers ?? '—',
+                            crew_size:           detail?.crew_size ?? availCrew,
+                            available_crew_size: availCrew,
+                            activity_rates:      activityRates,
+                            max_area:            maxArea,
+                            rate:                matchedRate,
+                          };
+                        }).filter(m => m.available_crew_size > 0); // exclude holidays
+
+                        setAllocDialog(prev =>
+                          prev ? { ...prev, mukkadams: enriched, loadingMukkadams: false } : prev,
+                        );
+    // Build maxWorkRows same way DayDetailModal does
+    const usedWorkers = new Map<number, number>();
+    // no allocations context here so start from 0 — will show full capacity
+    const rows: any[] = [];
+    capacityData.forEach((m: any) => {
+      if ((m.available_crew_size ?? 0) <= 0) return;
+      const remaining = m.available_crew_size ?? m.crew_size ?? 0;
+      (m.activity_rates || []).forEach((rate: any) => {
+        const productivity = Number(rate.productivity_per_worker || 0);
+        if (!productivity) return;
+        rows.push({
+          mukkadamId:       m.mukkadam_id,
+          mukkadamName:     m.mukkadam_name,
+          mobileNumbers:    m.mobile_numbers,
+          crewSize:         m.crew_size,
+          activityId:       rate.activity_id,
+          activityName:     rate.activity_name,
+          productivity,
+          availableWorkers: remaining,
+          maxArea:          remaining * productivity,
+          rate,
+          mukkadamObj:      m,
+        });
+      });
+    });
+
+    setJobsMaxWorkRows(rows);
+    setJobsCapacityDate(isoDate);
+  } catch (e) {
+    console.error('Failed to fetch jobs capacity', e);
+  }
+};
+
+// ── Confirm ⅓-day allocation from Jobs tab ───────────────────────────────────
+const handleJobsConfirmAllocation = async () => {
+  if (!jobsHalfDayDialog) return;
+  const { act, mukkadam, rate, availableWorkers, remainingArea, jobSlotsUsed, targetDate } = jobsHalfDayDialog;
+  const slotsUsed = jobSlotsUsed ?? 0;
+  const isLastSlot = slotsUsed >= 2;
+  const isMidSlot  = slotsUsed === 1;
+  const allowsMoreJobsToSend = isLastSlot ? false : isMidSlot ? true : jobsAllowsMoreJobs;
+
+  const token = localStorage.getItem('auth_token');
+  const cid = clusterFilter || clusterId;
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Token ${token}` },
+      body: JSON.stringify({
+        job_activity_id:   act.id ?? act.activity_id,
+        mukkadam_id:       mukkadam.mukkadam_id,
+        allocated_date:    targetDate,
+        allocated_area:    remainingArea,
+        allocated_workers: availableWorkers,
+        farmer_rate:       act.rate_per_acre ?? 0,
+        mukkadam_rate:     Number(rate?.rate_per_acre || 0),
+        cluster_id:        cid,
+        skip_strict_check: false,
+        allows_second_job: allowsMoreJobsToSend,
+        job_slot:          slotsUsed + 1,
+      }),
+    });
+    const d = await res.json();
+    if (res.ok) {
+      const slotLabel = ['1st', '2nd', '3rd'][slotsUsed] ?? `${slotsUsed + 1}th`;
+      toast.success(
+        allowsMoreJobsToSend
+          ? `✅ Allocated to ${mukkadam.mukkadam_name} (⅓ day – ${slotLabel} job)`
+          : `✅ Allocated to ${mukkadam.mukkadam_name} (${slotLabel} job – day complete)`,
+      );
+      setJobsHalfDayDialog(null);
+      setJobsAllowsMoreJobs(false);
+      setJobsCapacityDate(null); // invalidate cache so next click re-fetches
+      fetchDataSilent();
+    } else {
+      toast.error(d.error || 'Allocation failed');
+    }
+  } catch {
+    toast.error('Allocation failed');
+  }
+};
   
 // Handler — add this near your other handlers (handleMukkadamPay etc.)
 const handleUpdownComplete = async (mukkadamId: number, allocationId: number) => {
@@ -1771,643 +2456,1171 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
   }
 };
 
+
   return (
-    <div className="min-h-screen bg-gray-50">
-
-      
-      {/* Top Bar */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Tender Dashboard</h1>
-            <p className="text-sm text-gray-500">Mukkadams & Farmers for tender operations</p>
-          </div>
-         
-      <button
-        onClick={() => navigate('/')}
-        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-700 bg-white hover:bg-gray-50"
-      >
-        ← Back
-      </button>
+    <div style={{ minHeight: '100vh', background: '#f0eeeb', fontFamily: S.sans, fontSize: 13, color: S.stone900 }}>
  
-        </div>
-
-        {displaySummary && (
-  <div style={{ marginBottom: '16px' }}>
-    {/* Row 1 — existing 3 stats */}
-    <div className="grid grid-cols-3 gap-3 mb-3">
-      {[
-        { label: 'Mukkadams',   value: displaySummary?.total_mukkadams,   color: 'text-teal-600',   bg: 'bg-teal-50' },
-        { label: 'Farmers',     value: displaySummary?.total_farmers,     color: 'text-blue-600',   bg: 'bg-blue-50' },
-        { label: 'Tender Jobs', value: displaySummary?.total_tender_jobs, color: 'text-purple-600', bg: 'bg-purple-50' },
-      ].map(s => (
-        <div key={s.label} className={`${s.bg} rounded-xl p-3 text-center`}>
-          <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-          <p className="text-xs text-gray-500">{s.label}</p>
-        </div>
-      ))}
-    </div>
-
-    {/* Row 2 — new stats */}
-    <div className="grid grid-cols-3 gap-3 mb-3">
-      {[
-        { label: 'Activities',  value: displaySummary?.total_activities,  color: 'text-orange-600', bg: 'bg-orange-50' },
-        { label: 'Plots',       value: displaySummary?.total_plots,       color: 'text-pink-600',   bg: 'bg-pink-50' },
-        { label: 'Total Acres', value: displaySummary?.total_acres ? `${Number(displaySummary.total_acres).toFixed(1)} ac` : '—', color: 'text-green-600', bg: 'bg-green-50' },
-      ].map(s => (
-        <div key={s.label} className={`${s.bg} rounded-xl p-3 text-center`}>
-          <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
-          <p className="text-xs text-gray-500">{s.label}</p>
-        </div>
-      ))}
-    </div>
-
-    {/* Row 3 — financial stats */}
-    <div className="grid grid-cols-3 gap-3">
-      <div className="bg-indigo-50 rounded-xl p-3 text-center">
-        <p className="text-lg font-bold text-indigo-600">
-          ₹{Number(displaySummary?.total_booking_value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-        </p>
-        <p className="text-xs text-gray-500">Booking Value</p>
-      </div>
-      <div className="bg-emerald-50 rounded-xl p-3 text-center">
-        <p className="text-lg font-bold text-emerald-600">
-          ₹{Number(displaySummary?.total_advance_paid || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-        </p>
-        <p className="text-xs text-gray-500">Advance Collected</p>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginTop: '3px' }}>
-          <span style={{ fontSize: '0.58rem', background: '#dcfce7', color: '#15803d', padding: '1px 6px', borderRadius: '999px', fontWeight: 600 }}>
-            ✅ {displaySummary?.paid_jobs} Paid
-          </span>
-          <span style={{ fontSize: '0.58rem', background: '#fef9c3', color: '#b45309', padding: '1px 6px', borderRadius: '999px', fontWeight: 600 }}>
-            ⚡ {displaySummary?.partial_paid_jobs} Partial
+      {/* ══════════════════════ TOP BAR ══════════════════════ */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '0 24px', height: 60, background: 'linear-gradient(180deg,#fff 0%,#fdfcfb 100%)', borderBottom: `1px solid ${S.stone200}`, position: 'sticky', top: 0, zIndex: 100, boxShadow: '0 1px 8px rgba(28,25,23,.04)' }}>
+ 
+        {/* Logo */}
+        {/* <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingRight: 20, marginRight: 8, borderRight: `1px solid ${S.stone200}` }}>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: 'linear-gradient(135deg,#059669,#065f46)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, boxShadow: '0 2px 8px rgba(5,150,105,.25)' }}>🌿</div>
+          <span style={{ fontWeight: 800, fontSize: 17, letterSpacing: '-.3px', color: S.stone800 }}>
+            Farm<span style={{ color: S.brand }}>Ops</span>
           </span>
         </div>
+        
+  */}
+  <button onClick={() => navigate('/')}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 10, border: `1px solid ${S.stone200}`, background: '#fff', fontSize: 12, color: S.stone600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+          ← Back
+        </button>
+        {/* Tab group */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: S.stone100, borderRadius: 14, padding: 3, border: `1px solid ${S.stone200}` }}>
+          {([
+            { key: 'mukkadams', icon: '👥', label: 'Mukkadams', count: data?.mukkadams?.length || 0 },
+            { key: 'farmers',   icon: '👨‍🌾', label: 'Farmers',   count: data?.farmers?.length   || 0 },
+            { key: 'jobs',      icon: '📋', label: 'Jobs',       count: tab === 'jobs' && (actSubTab !== 'all' || actSearch || actCluster || actDateFrom || actDateTo) ? activities.length : (data?.summary?.total_activities || 0) },
+          ] as const).map(t => {
+            const isActive = tab === t.key;
+            const isJobs   = t.key === 'jobs';
+            return (
+              <button key={t.key}
+                onClick={() => { setTab(t.key); setNoCluster(false); setClusterFilter(''); if (t.key === 'farmers') setFarmerSubTab('all'); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 18px', borderRadius: 11, fontSize: 12, fontWeight: 600, background: isActive ? (isJobs ? S.orange500 : '#fff') : 'transparent', color: isActive ? (isJobs ? '#fff' : S.stone900) : S.stone500, border: 'none', cursor: 'pointer', transition: 'all 250ms', fontFamily: 'inherit', boxShadow: isActive && !isJobs ? '0 1px 3px rgba(28,25,23,.08)' : isActive && isJobs ? '0 2px 8px rgba(249,115,22,.3)' : 'none' }}>
+                <span style={{ fontSize: 14 }}>{t.icon}</span>
+                {t.label}
+                <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 999, background: isActive ? (isJobs ? 'rgba(255,255,255,.25)' : S.brand) : S.stone200, color: isActive ? '#fff' : S.stone500, boxShadow: isActive && !isJobs ? '0 1px 4px rgba(5,150,105,.3)' : 'none' }}>
+                  {t.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+ 
+        {/* Search */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: '#fff', border: `1px solid ${S.stone200}`, borderRadius: 14, fontSize: 12, color: S.stone400, maxWidth: 300, flex: 1, transition: 'all 150ms' }}>
+          <span>🔍</span>
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder={tab === 'mukkadams' ? 'Search mukkadams...' : tab === 'farmers' ? 'Search farmers...' : 'Search...'}
+            style={{ border: 'none', outline: 'none', background: 'transparent', flex: 1, fontSize: 12, color: S.stone900, fontFamily: 'inherit' }} />
+        </div>
+ 
+        {/* Back */}
+        
       </div>
-      <div className="bg-red-50 rounded-xl p-3 text-center">
-        <p className="text-lg font-bold text-red-600">
-          ₹{Number(displaySummary?.total_balance || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-        </p>
-        <p className="text-xs text-gray-500">Balance Due</p>
-      </div>
-    </div>
-  </div>
-)}
-
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex border border-gray-200 rounded-lg overflow-hidden">
-  <button
-    onClick={() => { setTab('mukkadams'); setNoCluster(false); setClusterFilter(''); }}
-    className={`px-5 py-2 text-sm font-medium transition ${tab === 'mukkadams' ? 'bg-teal-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-  >
-    <Users size={15} className="inline mr-1" />
-    Mukkadams ({data?.mukkadams?.length || 0})
-  </button>
-  
-<button
-  onClick={() => { setTab('farmers'); setNoCluster(false); setClusterFilter(''); setFarmerSubTab('all'); }}
-  className={`px-5 py-2 text-sm font-medium transition ${tab === 'farmers' ? 'bg-blue-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
->
-  <User size={15} className="inline mr-1" />
-  Farmers ({data?.farmers?.length || 0})
-</button>
-
-<button
-  onClick={() => { setTab('jobs'); setNoCluster(false); setClusterFilter(''); }}
-  className={`px-5 py-2 text-sm font-medium transition ${tab === 'jobs' ? 'bg-green-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
->
-
-💼 Jobs ({
-  tab === 'jobs' && (actSubTab !== 'all' || actSearch || actCluster || actDateFrom || actDateTo)
-    ? activities.length
-    : data?.summary?.total_activities || 0
-})
-
-</button>
-</div>
-
-<div className="flex items-center gap-2 flex-wrap flex-1">
-  {/* Search */}
-  <div className="relative" style={{ minWidth: '160px', flex: 1 }}>
-    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-    <input
-      value={search}
-      onChange={e => setSearch(e.target.value)}
-      placeholder={tab === 'mukkadams' ? 'Search mukkadams...' : 'Search farmers...'}
-      className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-    />
-  </div>
-
-  {/* Pruning date range — farmers only */}
-  {tab === 'farmers' && (
-    <div className="flex items-center gap-1 shrink-0">
-      <span className="text-xs text-gray-400 whitespace-nowrap">🌿</span>
-      <input
-        type="date"
-        value={pruningFrom}
-        onChange={e => setPruningFrom(e.target.value)}
-        style={{ width: '130px' }}
-        className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-      />
-      <span className="text-xs text-gray-400">–</span>
-      <input
-        type="date"
-        value={pruningTo}
-        onChange={e => setPruningTo(e.target.value)}
-        style={{ width: '130px' }}
-        className="border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
-      />
-      {(pruningFrom || pruningTo) && (
-        <button
-          onClick={() => { setPruningFrom(''); setPruningTo(''); }}
-          className="text-gray-400 hover:text-gray-600 text-xs px-1"
-        >✕</button>
+ 
+      {/* ══════════════════════ STAT CARDS ══════════════════════ */}
+      {displaySummary && (
+        <div style={{ display: 'flex', gap: 1, background: S.stone200, borderBottom: `1px solid ${S.stone200}` }}>
+          {[
+            { label: 'Mukkadams',       val: displaySummary.total_mukkadams,   color: '#7c3aed', bg: '#f5f3ff' },
+            { label: 'Farmers',         val: displaySummary.total_farmers,     color: S.sky700,  bg: S.sky50   },
+            { label: 'Jobs',            val: displaySummary.total_tender_jobs, color: S.stone700, bg: '#fff'   },
+            { label: 'Activities',      val: displaySummary.total_activities,  color: S.orange500, bg: '#fff7ed' },
+            { label: 'Total Acres',     val: `${Number(displaySummary.total_acres || 0).toFixed(1)} ac`, color: S.green700, bg: S.green50 },
+            { label: 'Booking Value',   val: `₹${Number(displaySummary.total_booking_value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: '#1d4ed8', bg: S.sky50 },
+            { label: 'Collected',       val: `₹${Number(displaySummary.total_advance_paid || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, color: S.green700, bg: S.green50 },
+            { label: 'Balance Due',     val: `₹${Number(displaySummary.total_balance || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,    color: S.red700,  bg: S.red50   },
+          ].map((s, i) => (
+            <div key={i} style={{ flex: 1, padding: '10px 14px', background: s.bg, textAlign: 'center' }}>
+              <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: '-.5px', lineHeight: 1.2, color: s.color }}>{s.val}</div>
+              <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginTop: 3 }}>{s.label}</div>
+            </div>
+          ))}
+        </div>
       )}
-    </div>
-  )}
-
-  {/* Mukkadam cluster filter */}
-  {tab === 'mukkadams' && (
-    <select
-      key="mukkadam-filter"
-      value={noCluster ? 'NO_CLUSTER' : ''}
-      onChange={e => setNoCluster(e.target.value === 'NO_CLUSTER')}
-      className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 shrink-0"
-    >
-      <option value="">All Mukkadams</option>
-      <option value="NO_CLUSTER">⚠ No Cluster</option>
-    </select>
-  )}
-
-  {/* Farmer cluster filter */}
-  {tab === 'farmers' && (
-    <select
-      key="farmer-filter"
-      value={noCluster ? 'NO_CLUSTER' : clusterFilter}
-      onChange={e => {
-        if (e.target.value === 'NO_CLUSTER') {
-          setNoCluster(true);
-          setClusterFilter('');
-        } else {
-          setNoCluster(false);
-          setClusterFilter(e.target.value);
-        }
-      }}
-      className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300 shrink-0"
-    >
-      <option value="">All Clusters</option>
-      <option value="NO_CLUSTER">⚠ No Cluster</option>
-      {clusters.map(c => (
-        <option key={c.id} value={c.id}>{c.name}</option>
-      ))}
-    </select>
-  )}
-</div>
-        </div>
-      </div>
-
-      {/* Content */}
-{/* Content */}
-<div className="p-6">
-  {loading ? (
-    <div className="flex justify-center items-center py-24">
-      <RefreshCw size={32} className="animate-spin text-teal-400" />
-    </div>
-  ) : tab === 'mukkadams' ? (
-    <div className="space-y-3">
-      {filteredMukkadams.length === 0
-        ? <div className="text-center py-16 text-gray-400">No mukkadams found</div>
-        : filteredMukkadams.map(m => (
-            <MukkadamCard
-              key={m.id}
-              m={m}
-              clusters={clusters}
-              isAdmin={isAdmin}
-              onSuccess={fetchDataSilent}
-              onCallClick={(num: string) => {
-                setDialpadNumber(num || '');
-                setDialpadOpen(true);
-              }}
-            />
-          ))
-      }
-      <Dialpad
-        isOpen={dialpadOpen}
-        number={dialpadNumber}
-        onClose={() => setDialpadOpen(false)}
-        onNumberChange={setDialpadNumber}
-      />
-    </div>
-
-  ) : tab === 'farmers' ? (
-    <div className="space-y-3">
-      {/* ── Farmer Sub-tabs ── */}
-      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '4px' }}>
-        {([
-          { key: 'all',     label: '📋 All',        color: '#6b7280', bg: '#f3f4f6', activeBg: '#374151', activeText: '#fff' },
-          { key: 'new',     label: '🆕 New',         color: '#0369a1', bg: '#e0f2fe', activeBg: '#0369a1', activeText: '#fff' },
-          { key: 'full',    label: '✅ Full',         color: '#15803d', bg: '#dcfce7', activeBg: '#15803d', activeText: '#fff' },
-          { key: 'partial', label: '⚡ Partial',     color: '#b45309', bg: '#fef9c3', activeBg: '#b45309', activeText: '#fff' },
-          { key: 'none',    label: '⚠️ No Cluster',  color: '#dc2626', bg: '#fef2f2', activeBg: '#dc2626', activeText: '#fff' },
+ 
+      {/* ══════════════════════ FILTER BAR ══════════════════════ */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '10px 24px', background: 'linear-gradient(180deg,#fdfcfb 0%,#faf9f7 100%)', borderBottom: `1px solid ${S.stone200}` }}>
+ 
+        {/* Farmers sub-pills */}
+        {tab === 'farmers' && ([
+          { key: 'all',     label: '📁 All',        count: farmerCounts.all     },
+          { key: 'new',     label: '🆕 New',         count: farmerCounts.new     },
+          { key: 'full',    label: '✅ Clustered',   count: farmerCounts.full    },
+          { key: 'partial', label: '⚡ Partial',     count: farmerCounts.partial },
+          { key: 'none',    label: '⚠ No Cluster',  count: farmerCounts.none    },
         ] as const).map(t => {
-          const isActive = farmerSubTab === t.key;
+          const active = farmerSubTab === t.key;
           return (
-            <button
-              key={t.key}
-              onClick={() => setFarmerSubTab(t.key)}
-              style={{
-                padding: '5px 12px', borderRadius: '999px',
-                border: `1.5px solid ${isActive ? t.activeBg : t.bg}`,
-                background: isActive ? t.activeBg : t.bg,
-                color: isActive ? t.activeText : t.color,
-                fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer',
-                transition: 'all 0.15s', display: 'flex', alignItems: 'center', gap: '5px',
-              }}
-            >
+            <button key={t.key} onClick={() => setFarmerSubTab(t.key)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 14px', borderRadius: 999, fontSize: 11, fontWeight: 600, color: active ? '#fff' : S.stone500, background: active ? S.stone800 : '#fff', border: `1px solid ${active ? S.stone800 : S.stone200}`, cursor: 'pointer', transition: 'all 150ms', whiteSpace: 'nowrap', boxShadow: active ? '0 2px 6px rgba(28,25,23,.2)' : '0 1px 2px rgba(0,0,0,.03)', fontFamily: 'inherit' }}>
               {t.label}
-              <span style={{
-                background: isActive ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.08)',
-                borderRadius: '999px', padding: '0px 6px', fontSize: '0.65rem', fontWeight: 700,
-              }}>
-                {farmerCounts[t.key]}
-              </span>
+              <span style={{ fontWeight: 800, fontSize: 10, padding: '1px 6px', borderRadius: 999, background: active ? 'rgba(255,255,255,.2)' : 'rgba(0,0,0,.06)' }}>{t.count}</span>
             </button>
           );
         })}
+ 
+        {/* Jobs sub-pills */}
+        {tab === 'jobs' && ([
+          { key: 'all',           label: '📋 All',           count: actCounts.all           },
+          { key: 'upcoming',      label: '📅 Next 10 Days',  count: actCounts.upcoming      },
+          { key: 'last10',        label: '🕐 Last 10 Days',  count: actCounts.last10        },
+          { key: 'split',         label: '🔀 Split',         count: actCounts.split         },
+          { key: 'not_allocated', label: '⚠️ Not Allocated', count: actCounts.not_allocated },
+          { key: 'in_progress',   label: '⚡ In Progress',   count: actCounts.in_progress   },
+          { key: 'completed',     label: '✅ Completed',     count: actCounts.completed     },
+        ] as const).map(t => {
+          const active = actSubTab === t.key;
+          return (
+            <button key={t.key} onClick={() => setActSubTab(t.key)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 14px', borderRadius: 999, fontSize: 11, fontWeight: 600, color: active ? '#fff' : S.stone500, background: active ? S.stone800 : '#fff', border: `1px solid ${active ? S.stone800 : S.stone200}`, cursor: 'pointer', transition: 'all 150ms', whiteSpace: 'nowrap', boxShadow: active ? '0 2px 6px rgba(28,25,23,.2)' : '0 1px 2px rgba(0,0,0,.03)', fontFamily: 'inherit' }}>
+              {t.label}
+              <span style={{ fontWeight: 800, fontSize: 10, padding: '1px 6px', borderRadius: 999, background: active ? 'rgba(255,255,255,.2)' : 'rgba(0,0,0,.06)' }}>{t.count}</span>
+            </button>
+          );
+        })}
+ 
+        {/* Mukkadams: no-cluster filter */}
+        {tab === 'mukkadams' && (
+          <select value={noCluster ? 'NO_CLUSTER' : ''} onChange={e => setNoCluster(e.target.value === 'NO_CLUSTER')}
+            style={{ padding: '6px 12px', borderRadius: 10, fontSize: 11, fontWeight: 600, border: `1px solid ${S.stone200}`, background: '#fff', color: S.stone700, cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,.03)', fontFamily: 'inherit' }}>
+            <option value="">All Mukkadams</option>
+            <option value="NO_CLUSTER">⚠ No Cluster</option>
+          </select>
+        )}
+ 
+        {/* Right side controls */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+ 
+          {/* Pruning range — farmers */}
+          {tab === 'farmers' && (
+            <>
+              <span style={{ fontSize: 11, color: S.stone400 }}>🌿</span>
+              <input type="date" value={pruningFrom} onChange={e => setPruningFrom(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', color: S.stone600, width: 122, fontFamily: 'inherit' }} />
+              <span style={{ color: S.stone300, fontSize: 11 }}>–</span>
+              <input type="date" value={pruningTo} onChange={e => setPruningTo(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', color: S.stone600, width: 122, fontFamily: 'inherit' }} />
+              {(pruningFrom || pruningTo) && (
+                <button onClick={() => { setPruningFrom(''); setPruningTo(''); }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: S.stone400, fontSize: 12 }}>✕</button>
+              )}
+            </>
+          )}
+ 
+          {/* Cluster filter — farmers */}
+          {tab === 'farmers' && (
+            <select value={noCluster ? 'NO_CLUSTER' : clusterFilter}
+              onChange={e => { if (e.target.value === 'NO_CLUSTER') { setNoCluster(true); setClusterFilter(''); } else { setNoCluster(false); setClusterFilter(e.target.value); } }}
+              style={{ padding: '6px 12px', borderRadius: 10, fontSize: 11, fontWeight: 600, border: `1px solid ${S.stone200}`, background: '#fff', color: S.stone700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <option value="">All Clusters</option>
+              <option value="NO_CLUSTER">⚠ No Cluster</option>
+              {clusters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          )}
+ 
+          {/* Jobs filters */}
+          {tab === 'jobs' && (
+            <>
+              <input placeholder="🔍 Search farmer / activity / plot" value={actSearch} onChange={e => setActSearch(e.target.value)}
+                style={{ padding: '6px 12px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', minWidth: 200, fontFamily: 'inherit', color: S.stone900 }} />
+              <select value={actCluster} onChange={e => { setActCluster(e.target.value); setActSubTab('all'); }}
+                style={{ padding: '6px 12px', borderRadius: 10, fontSize: 11, fontWeight: 600, border: `1px solid ${S.stone200}`, background: '#fff', color: S.stone700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                <option value="">All Clusters</option>
+                {clusters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <input type="date" value={actDateFrom} onChange={e => setActDateFrom(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', width: 122, fontFamily: 'inherit' }} />
+              <span style={{ color: S.stone300, fontSize: 11 }}>–</span>
+              <input type="date" value={actDateTo} onChange={e => setActDateTo(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', width: 122, fontFamily: 'inherit' }} />
+              {(actDateFrom || actDateTo) && (
+                <button onClick={() => { setActDateFrom(''); setActDateTo(''); }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: S.stone400, fontSize: 12 }}>✕</button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+ 
+      {/* ══════════════════════ CONTENT ══════════════════════ */}
+      <div style={{ padding: '20px 24px' }}>
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '80px 0' }}>
+            <RefreshCw size={32} style={{ color: S.brand, animation: 'spin 1s linear infinite' }} />
+          </div>
+ 
+        ) : tab === 'mukkadams' ? (
+          <>
+            <table style={{ width: '100%', background: '#fff', borderRadius: 18, boxShadow: S.shadowCard, overflow: 'hidden', borderCollapse: 'separate', borderSpacing: 0 }}>
+              <thead>
+                <tr>
+                  {[
+                    { h: 'Mukkadam', pl: 20 },
+                    { h: 'Location' },
+                    { h: 'Crew',      ac: true },
+                    { h: 'Activities', ac: true },
+                    { h: 'Cluster' },
+                    { h: 'Rate/ac',   ar: true },
+                    { h: 'Actions',   ar: true },
+                    { h: '' },
+                  ].map((col, i) => (
+                    <th key={i} style={{ background: 'linear-gradient(180deg,#fafaf9 0%,#f7f6f4 100%)', padding: `10px ${col.pl ?? 14}px`, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, textAlign: col.ac ? 'center' : col.ar ? 'right' : 'left', borderBottom: `2px solid ${S.stone200}`, whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 10 }}>
+                      {col.h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredMukkadams.length === 0
+                  ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 48, color: S.stone400 }}>No mukkadams found</td></tr>
+                  : filteredMukkadams.map(m => (
+                    <MukkadamCard key={m.id} m={m} clusters={clusters} isAdmin={isAdmin} onSuccess={fetchDataSilent}
+                      onCallClick={(num: string) => { setDialpadNumber(num || ''); setDialpadOpen(true); }} />
+                  ))
+                }
+              </tbody>
+            </table>
+            <Dialpad isOpen={dialpadOpen} number={dialpadNumber} onClose={() => setDialpadOpen(false)} onNumberChange={setDialpadNumber} />
+          </>
+ 
+        ) : tab === 'farmers' ? (
+          <table style={{ width: '100%', background: '#fff', borderRadius: 18, boxShadow: S.shadowCard, overflow: 'hidden', borderCollapse: 'separate', borderSpacing: 0 }}>
+            <thead>
+              <tr>
+                {[
+                  { h: 'Farmer',     pl: 20 },
+                  { h: 'Location' },
+                  { h: 'Plots',      ac: true },
+                  { h: 'Jobs',       ac: true },
+                  { h: 'Cluster' },
+                  { h: 'Activities', ac: true },
+                  { h: 'Pruning' },
+                  { h: 'Actions',    ar: true },
+                  { h: '' },
+                ].map((col, i) => (
+                  <th key={i} style={{ background: 'linear-gradient(180deg,#fafaf9 0%,#f7f6f4 100%)', padding: `10px ${col.pl ?? 14}px`, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, textAlign: col.ac ? 'center' : col.ar ? 'right' : 'left', borderBottom: `2px solid ${S.stone200}`, whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 10 }}>
+                    {col.h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {subTabFilteredFarmers.length === 0
+                ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 48, color: S.stone400 }}>No farmers found</td></tr>
+                : subTabFilteredFarmers.map((f: any) => (
+                  <FarmerCard key={f.farmer_id} farmer={f} clusters={clusters} isAdmin={isAdmin} onSuccess={fetchDataSilent} />
+                ))
+              }
+            </tbody>
+          </table>
+ 
+        ) : tab === 'jobs' ? (
+          <>
+            {actLoading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '64px 0' }}>
+                <RefreshCw size={28} style={{ color: S.brand, animation: 'spin 1s linear infinite' }} />
+              </div>
+            ) : activities.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '64px 0', color: S.stone400 }}>No activities found</div>
+            ) : (() => {
+              // group by activity_name
+              const grouped: Record<string, any[]> = {};
+              activities.forEach((a: any) => {
+                const k = a.activity_name || 'Unknown';
+                if (!grouped[k]) grouped[k] = [];
+                grouped[k].push(a);
+              });
+ 
+              return Object.entries(grouped).map(([actName, acts]) => {
+                const totalArea  = acts.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0);
+                const totalValue = acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0);
+                const unalloc    = acts.filter((a: any) => a.allocation_status === 'pending').length;
+                const ov30       = acts.filter((a: any) => a.days_until !== null && a.days_until < -30).length;
+                const ov7        = acts.filter((a: any) => a.days_until !== null && a.days_until >= -30 && a.days_until < -7).length;
+ 
+                return (
+                  <GroupedActivitySection
+                    key={actName}
+                    actName={actName}
+                    acts={acts}
+                    totalArea={totalArea}
+                    totalValue={totalValue}
+                    unalloc={unalloc}
+                    ov30={ov30}
+                    ov7={ov7}
+                    expandedActJob={expandedActJob}
+                    setExpandedActJob={setExpandedActJob}
+                    isAdmin={isAdmin}
+                    handleUpdownComplete={handleUpdownComplete}
+                    maxWorkRows={jobsMaxWorkRows}
+                    onAllocate={async (act: any, isoDate: string) => {
+                      // Open dialog immediately with loading state
+                      setAllocDialog({
+                        open: true,
+                        act,
+                        job: { job_id: act.job_id, farmer_name: act.farmer_name },
+                        isoDate,
+                        mukkadams: [],
+                        loadingMukkadams: true,
+                      });
+                      // fetchJobsCapacity fetches capacity + mukkadam details,
+                      // enriches them, and calls setAllocDialog with the result
+                      await fetchJobsCapacity(isoDate, act);
+                    }}
+                    onAllocateWithMukkadam={(act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => {
+                      setJobsHalfDayDialog({
+                        open: true,
+                        jobId: act.job_id,
+                        act,
+                        mukkadam: workerRow.mukkadamObj,
+                        rate: workerRow.rate,
+                        availableWorkers: workerRow.availableWorkers,
+                        neededWorkers: 0,
+                        remainingArea,
+                        isSecondJob: slotsUsed >= 1,
+                        jobSlotsUsed: slotsUsed,
+                        targetDate: isoDate,
+                      });
+                    }}
+                    jobNotes={jobNotes}
+                    onSuccess={fetchDataSilent}
+                    onNote={(jobId: string, label: string) => {
+                      setJobsNoteJobId(jobId);
+                      setJobsNoteJobLabel(label);
+                    }}
+                  />
+                );
+              });
+            })()}
+          </>
+ 
+        ) : tab === 'global' ? (
+          <GlobalInsightsPanel />
+        ) : null}
       </div>
 
-      {/* ── Farmer List ── */}
-      {subTabFilteredFarmers.length === 0
-        ? <div className="text-center py-16 text-gray-400">No farmers found</div>
-        : subTabFilteredFarmers.map((f: any) => (
-            <FarmerCard key={f.farmer_id} farmer={f} clusters={clusters} isAdmin={isAdmin} onSuccess={fetchDataSilent} />
-          ))
-      }
-    </div>
+      {/* ══════ ALLOCATE DIALOG ══════ */}
+      {allocDialog?.open && ReactDOM.createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+          onClick={() => setAllocDialog(null)}>
+          <div style={{ background: '#fff', borderRadius: 16, width: 480, maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}
+            onClick={e => e.stopPropagation()}>
 
- ) : tab === 'jobs' ? (
-  <div>
-    {/* Sub-tabs */}
-    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
-      {([
-        { key: 'all',           label: '📋 All',           color: '#6b7280', activeBg: '#374151' },
-        { key: 'upcoming',      label: '📅 Next 10 Days',   color: '#0369a1', activeBg: '#0369a1' },
-        { key: 'last10', label: '🕐 Last 10 Days', color: '#6b21a8', activeBg: '#6b21a8'},
-          { key: 'split', label: '🔀 Split', color: '#7c3aed', activeBg: '#7c3aed' },
-        { key: 'not_allocated', label: '⚠️ Not Allocated',  color: '#dc2626', activeBg: '#dc2626' },
-        { key: 'in_progress',   label: '⚡ In Progress',    color: '#b45309', activeBg: '#b45309' },
-        { key: 'completed',     label: '✅ Completed',      color: '#15803d', activeBg: '#15803d' },
-      ] as const).map(t => {
-        const isActive = actSubTab === t.key;
-        return (
-          <button key={t.key} onClick={() => setActSubTab(t.key)} style={{
-            padding: '5px 12px', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 600,
-            cursor: 'pointer', border: 'none',
-            background: isActive ? t.activeBg : '#f3f4f6',
-            color: isActive ? '#fff' : t.color,
-          }}>
-            {t.label}
-            <span style={{ marginLeft: '5px', background: 'rgba(0,0,0,0.1)', borderRadius: '999px', padding: '0 6px', fontSize: '0.65rem' }}>
-              {actCounts[t.key]}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-
-    {/* Filters */}
-    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
-      <input
-        placeholder="🔍 Search farmer / activity / plot"
-        value={actSearch}
-        onChange={e => setActSearch(e.target.value)}
-        style={{ flex: 1, minWidth: '160px', padding: '7px 12px', borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: '0.82rem' }}
-      />
-      
-<select value={actCluster} onChange={e => { 
-  setActCluster(e.target.value); 
-  setActSubTab('all');  // ← ADD THIS
-}}
-  style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: '0.82rem' }}>
-  <option value="">All Clusters</option>
-  {clusters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-</select>
-      <input type="date" value={actDateFrom} onChange={e => setActDateFrom(e.target.value)}
-        style={{ padding: '7px 10px', borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: '0.82rem' }} />
-      <span style={{ alignSelf: 'center', color: '#9ca3af' }}>–</span>
-      <input type="date" value={actDateTo} onChange={e => setActDateTo(e.target.value)}
-        style={{ padding: '7px 10px', borderRadius: '8px', border: '1px solid #e5e7eb', fontSize: '0.82rem' }} />
-      {(actDateFrom || actDateTo) && (
-        <button onClick={() => { setActDateFrom(''); setActDateTo(''); }}
-          style={{ padding: '4px 8px', borderRadius: '8px', border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer', fontSize: '0.72rem', color: '#6b7280' }}>✕</button>
-      )}
-    </div>
-
-    {/* Activity Cards */}
-    {actLoading ? (
-      <div className="flex justify-center py-16"><RefreshCw size={28} className="animate-spin text-green-400" /></div>
-    ) : activities.length === 0 ? (
-      <div className="text-center py-16 text-gray-400">No activities found</div>
-    ) : (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {activities.map((a: any) => {
-          const isExpanded   = expandedActJob === String(a.activity_id);
-          const isPending    = a.allocation_status === 'pending';
-          const isCompleted = a.allocations?.some((alloc: any) => alloc.work_status === 'completed');
-  console.log(isCompleted)
-          const isUpcoming   = a.days_until !== null && a.days_until >= 0 && a.days_until <= 10;
-
-          return (
-            <div key={a.activity_id} style={{
-              border: `1.5px solid ${isPending ? '#fecaca' : isCompleted ? '#bbf7d0' : '#e5e7eb'}`,
-              borderRadius: '12px', background: '#fff', overflow: 'hidden',
-            }}>
-
-              {/* ── COLLAPSED HEADER ── */}
-              <div
-                onClick={() => setExpandedActJob(isExpanded ? null : String(a.activity_id))}
-                style={{ padding: '10px 14px', cursor: 'pointer' }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    {/* Row 1 — activity name + status badges */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111827' }}>{a.activity_name}</span>
-                      {/* Allocation status */}
-                      <span style={{
-                        fontSize: '0.6rem', padding: '1px 7px', borderRadius: '999px', fontWeight: 600,
-                        background: isPending          ? '#fef2f2'
-                                  : isCompleted        ? '#f0fdf4'
-                                  : a.allocation_status === 'fully_allocated' ? '#dcfce7'
-                                  : '#fef9c3',
-                        color: isPending          ? '#dc2626'
-                             : isCompleted        ? '#16a34a'
-                             : a.allocation_status === 'fully_allocated' ? '#15803d'
-                             : '#b45309',
-                      }}>{a.allocation_status}</span>
-                      {isUpcoming && (
-                        <span style={{ fontSize: '0.6rem', padding: '1px 7px', borderRadius: '999px', fontWeight: 700, background: '#fef9c3', color: '#b45309' }}>
-                          📅 In {a.days_until}d
-                        </span>
-                      )}
-                      {a.days_until !== null && a.days_until < 0 && !isCompleted && (
-                        <span style={{ fontSize: '0.6rem', padding: '1px 7px', borderRadius: '999px', fontWeight: 700, background: '#fef2f2', color: '#dc2626' }}>
-                          ⚠ Overdue {Math.abs(a.days_until)}d
-                        </span>
-                      )}
-                      {/* After existing badges in Row 1 */}
-{a.is_split && (
-  <span style={{ 
-    fontSize: '0.6rem', padding: '1px 7px', borderRadius: '999px', 
-    fontWeight: 700, background: '#f3e8ff', color: '#7c3aed' 
-  }}>
-    🔀 Split {a.splits?.length}x
-  </span>
-)}
-                    </div>
-
-                    {/* Row 2 — farmer + plot + cluster */}
-                    <div style={{ fontSize: '0.7rem', color: '#374151', marginTop: '3px', fontWeight: 600 }}>
-                      👤 {a.farmer_name}
-                      <span style={{ fontWeight: 400, color: '#6b7280' }}> · 📞 {a.farmer_phone || '—'}</span>
-                    </div>
-                    <div style={{ fontSize: '0.68rem', color: '#6b7280', marginTop: '2px' }}>
-                      📍 {a.plot_name} {a.plot_code ? `[${a.plot_code}]` : ''} · {a.plot_area} ac
-                      {a.clusters?.length > 0 && ` · 🏘 ${a.clusters.map((c: any) => c.name).join(', ')}`}
-                    </div>
-
-                    {/* Row 3 — dates + area + rate */}
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '4px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '0.65rem', color: '#6b7280' }}>🗓 Scheduled: {a.scheduled_date || '—'}</span>
-                      <span style={{ fontSize: '0.65rem', color: '#0f766e' }}>🌾 {a.allocated_area}/{a.total_area} ac</span>
-                      <span style={{ fontSize: '0.65rem', color: '#6b7280' }}>₹{a.rate_per_acre}/ac</span>
-                      <span style={{ fontSize: '0.65rem', color: '#374151', fontWeight: 600 }}>
-                        Farmer: ₹{Number(a.total_price).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                      </span>
-                      {a.total_mukkadam_est > 0 && (
-                        <span style={{ fontSize: '0.65rem', color: '#7c3aed', fontWeight: 600 }}>
-                          Mukkadam: ₹{Number(a.total_mukkadam_est).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Right — allocation count + expand */}
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', marginLeft: '8px' }}>
-                    <span style={{
-                      fontSize: '0.65rem', padding: '2px 8px', borderRadius: '999px', fontWeight: 600,
-                      background: a.allocation_count > 0 ? '#eff6ff' : '#f3f4f6',
-                      color: a.allocation_count > 0 ? '#1d4ed8' : '#9ca3af',
-                    }}>
-                      👷 {a.allocation_count} alloc{a.allocation_count !== 1 ? 's' : ''}
-                    </span>
-                    <span style={{ fontSize: '0.62rem', color: '#9ca3af' }}>{isExpanded ? '▲' : '▼'}</span>
-                  </div>
-                </div>
+            {/* Header */}
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${S.stone200}` }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: S.stone900 }}>
+                Allocate — {allocDialog.act.activity_name}
               </div>
+              <div style={{ fontSize: 12, color: S.stone500, marginTop: 3 }}>
+                {allocDialog.job.farmer_name} · {allocDialog.act.total_area} ac · {allocDialog.isoDate}
+              </div>
+            </div>
 
-              {/* ── EXPANDED — Allocations ── */}
-              {isExpanded && (
-                <div style={{ borderTop: '1px solid #e5e7eb', background: '#fafafa', padding: '10px 14px' }}>
-                  {/* Job ref */}
-                  <div style={{ fontSize: '0.65rem', color: '#9ca3af', marginBottom: '8px' }}>
-                    Job <span style={{ fontFamily: 'monospace' }}>#{a.job_id}</span> · {a.crop_name} {a.variety ? `(${a.variety})` : ''} · Status: {a.job_status}
-                  </div>
-
-                  {/* After the job ref div inside expanded section */}
-{a.is_split && a.splits?.length > 1 && (
-  <div style={{ 
-    marginBottom: '8px', padding: '8px 10px', 
-    background: '#faf5ff', borderRadius: '8px',
-    border: '1px solid #e9d5ff'
-  }}>
-    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#7c3aed', marginBottom: '4px' }}>
-      🔀 Split into {a.splits.length} parts
-    </div>
-    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-      {a.splits.map((s: any, i: number) => (
-        <div key={i} style={{
-          fontSize: '0.62rem', padding: '3px 8px', borderRadius: '6px',
-          background: '#fff', border: '1px solid #e9d5ff', color: '#6b7280'
-        }}>
-          <span style={{ fontWeight: 600, color: '#7c3aed' }}>Part {i + 1}</span>
-          {' · '}{s.total_area} ac
-          {' · '}<span style={{
-            color: s.allocation_status === 'pending' ? '#dc2626' : '#15803d'
-          }}>{s.allocation_status}</span>
-          {s.scheduled_date && ` · ${s.scheduled_date}`}
-          {' · '}👷 {s.allocation_count} alloc{s.allocation_count !== 1 ? 's' : ''}
-        </div>
-      ))}
-    </div>
-  </div>
-)}
-
-                  {a.allocation_count === 0 ? (
-                    <div style={{ fontSize: '0.78rem', color: '#9ca3af', padding: '8px' }}>
-                      ⚠ No allocations yet for this activity
-                    </div>
-                  ) : (a.allocations || []).map((alloc: any, i: number) => {
-                    const isDone = alloc.work_status === 'completed';
-                    return (
-                      <div key={i} style={{
-                        display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
-                        padding: '8px 12px', marginBottom: '4px', borderRadius: '8px',
-                        background: isDone ? '#f0fdf4' : '#fff',
-                        border: `1px solid ${isDone ? '#bbf7d0' : '#e5e7eb'}`,
-                        fontSize: '0.72rem',
-                      }}>
-                        {/* Mukkadam */}
-                        <div style={{ minWidth: '130px' }}>
-                          <div style={{ fontWeight: 700, color: '#111827' }}>👷 {alloc.mukkadam_name}</div>
-                          {alloc.mukkadam_mobile && (
-                            <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>📞 {alloc.mukkadam_mobile}</div>
-                          )}
-                        </div>
-                        {/* Cluster */}
-                        {alloc.cluster_name && (
-                          <span style={{ fontSize: '0.65rem', background: '#eff6ff', color: '#1d4ed8', padding: '1px 7px', borderRadius: '999px' }}>
-                            🏘 {alloc.cluster_name}
-                          </span>
-                        )}
-                        {/* Dates */}
-                        <div>
-                          <div style={{ color: '#6b7280' }}>📅 Allocated: {alloc.allocated_date || '—'}</div>
-                        </div>
-                        {/* Area */}
-                        <div>
-                          <div style={{ color: '#0f766e' }}>🌾 {alloc.allocated_area} ac allocated</div>
-                          {alloc.actual_area_done != null && (
-                            <div style={{ color: '#15803d', fontSize: '0.65rem' }}>✓ {alloc.actual_area_done} ac actual</div>
-                          )}
-                        </div>
-                        {/* Workers */}
-                        <div>
-                          <div style={{ color: '#6b7280' }}>👥 {alloc.allocated_workers} workers</div>
-                          {alloc.actual_crew_size != null && (
-                            <div style={{ color: '#374151', fontSize: '0.65rem' }}>✓ {alloc.actual_crew_size} actual</div>
-                          )}
-                        </div>
-                        {/* Rate + payment */}
-                        <div>
-                          <div style={{ color: '#7c3aed', fontWeight: 600 }}>
-                            ₹{alloc.mukkadam_rate}/ac → ₹{Math.round(alloc.mukkadam_est).toLocaleString('en-IN')}
-                          </div>
-                          <div style={{ fontSize: '0.62rem', color: '#6b7280' }}>
-                            Farmer rate: ₹{alloc.farmer_rate}/ac
-                          </div>
-                        </div>
-                        {/* Status badges */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                          <span style={{
-                            fontSize: '0.6rem', padding: '1px 7px', borderRadius: '999px', fontWeight: 600,
-                            background: isDone ? '#dcfce7' : alloc.work_status === 'in_progress' ? '#dbeafe' : '#f3f4f6',
-                            color:      isDone ? '#15803d' : alloc.work_status === 'in_progress' ? '#1d4ed8' : '#6b7280',
-                          }}>{alloc.work_status}</span>
-                          {alloc.report_submitted && (
-                            <span style={{ fontSize: '0.6rem', color: '#0369a1' }}>📋 Report submitted</span>
-                          )}
-                          {alloc.farmer_agreed === true  && <span style={{ fontSize: '0.6rem', color: '#15803d' }}>✅ Farmer agreed</span>}
-                          {alloc.farmer_agreed === false && <span style={{ fontSize: '0.6rem', color: '#dc2626' }}>❌ Farmer disputed</span>}
-                        </div>
-
-                        {/* Mark Complete */}
-                        {!isDone && isAdmin && (
-                          <button
-                            onClick={() => {
-                              if (confirm(`Mark ${alloc.mukkadam_name}'s allocation as complete?`)) {
-                                handleUpdownComplete(alloc.mukkadam_id, alloc.allocation_id);
-                              }
-                            }}
-                            style={{
-                              marginLeft: 'auto', padding: '4px 12px', borderRadius: '7px',
-                              border: 'none', background: '#16a34a', color: '#fff',
-                              fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer',
-                            }}
-                          >
-                            ✅ Mark Complete
-                          </button>
-                        )}
-                        {isDone && (
-                          <span style={{ marginLeft: 'auto', fontSize: '0.68rem', color: '#15803d', fontWeight: 700 }}>✅ Done</span>
-                        )}
-                      </div>
-                    );
-                  })}
+            <div style={{ padding: '16px 22px' }}>
+              {allocDialog.loadingMukkadams ? (
+                <div style={{ textAlign: 'center', padding: '32px 0', color: S.stone400, fontSize: 13 }}>
+                  Loading mukkadams...
                 </div>
+              ) : allocDialog.mukkadams.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '32px 0' }}>
+                  <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: S.stone700 }}>No mukkadams in this cluster</div>
+                  <div style={{ fontSize: 12, color: S.stone400, marginTop: 4 }}>Add mukkadams to the cluster first</div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 10 }}>
+                    Select Mukkadam
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {allocDialog.mukkadams.map((mk: any) => {
+                      // capacity for this activity on this date
+                      const actRate = mk.rate ?? mk.activity_rates?.find(
+                        (r: any) => r.activity_id === allocDialog.act.activity_id || r.activity_name === allocDialog.act.activity_name,
+                      );
+                      // Try multiple field names the API might return
+                      const availCrew   = mk.available_crew_size ?? mk.crew_size ?? 0;
+                      const canDoAc     = Number(mk.max_area ?? 0);
+                      const remainingArea = Number(allocDialog.act.remaining_area ?? allocDialog.act.total_area ?? 0);
+                      const isOnHoliday = availCrew === 0;
+                      const fits        = !isOnHoliday && canDoAc > 0 && canDoAc >= remainingArea;
+                      // count existing allocations for this mukkadam on this date
+                      const slotsUsed = (data?.farmers ?? [])
+                        .flatMap((f: any) => f.jobs ?? [])
+                        .flatMap((j: any) => j.activities ?? [])
+                        .flatMap((a: any) => a.allocations ?? [])
+                        .filter((al: any) => al.mukkadam_id === mk.mukkadam_id && al.allocated_date === allocDialog.isoDate)
+                        .length;
+
+                      return (
+                        <button key={mk.mukkadam_id}
+                          onClick={() => {
+                            setAllocHalfDay({
+                              open: true,
+                              act: allocDialog.act,
+                              job: allocDialog.job,
+                              mukkadam: mk,
+                              rate: actRate,
+                              availableWorkers: mk.available_crew_size ?? mk.crew_size ?? 0,
+                              remainingArea,
+                              isoDate: allocDialog.isoDate,
+                              jobSlotsUsed: slotsUsed,
+                            });
+                          }}
+                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 12, border: `1.5px solid ${fits ? S.green100 : S.stone200}`, background: fits ? S.green50 : '#fff', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', transition: 'all 150ms' }}
+                          onMouseEnter={e => (e.currentTarget.style.borderColor = fits ? S.green700 : S.stone400)}
+                          onMouseLeave={e => (e.currentTarget.style.borderColor = fits ? S.green100 : S.stone200)}
+                        >
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: 13, color: S.stone900 }}>
+                              👷 {mk.mukkadam_name || mk.name || mk.mukkadam?.mukkadam_name || `ID: ${mk.mukkadam_id}`}
+                            </div>
+                            <div style={{ fontSize: 11, color: S.stone500, marginTop: 2 }}>
+                              Crew: {mk.crew_size ?? mk.available_crew_size ?? '—'} · {mk.mobile_numbers || mk.mobile || '—'}
+                              {slotsUsed > 0 && <span style={{ marginLeft: 6, color: '#0369a1', fontWeight: 600 }}>{slotsUsed} job{slotsUsed > 1 ? 's' : ''} today</span>}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999, background: canDoAc === 0 ? S.stone100 : fits ? S.green50 : '#fff1f2', color: canDoAc === 0 ? S.stone400 : fits ? S.green700 : S.red700, border: `1px solid ${canDoAc === 0 ? S.stone200 : fits ? S.green100 : S.red100}` }}>
+                              {isOnHoliday ? '🏖️ Holiday' : `${remainingArea.toFixed(2)} needed / ${canDoAc.toFixed(2)} can do`}
+                            </div>
+                            {actRate && <div style={{ fontSize: 10, color: S.stone400, marginTop: 3 }}>₹{actRate.rate_per_acre}/ac</div>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
               )}
             </div>
-          );
-        })}
-      </div>
-    )}
-  </div>
 
-  ) : tab === 'global' ? (
-    <GlobalInsightsPanel />
-  ) : (
-    <></>
-  )}
-</div>
+            <div style={{ padding: '12px 22px', borderTop: `1px solid ${S.stone200}`, display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={() => setAllocDialog(null)}
+                style={{ padding: '8px 18px', borderRadius: 8, border: `1px solid ${S.stone200}`, background: '#fff', color: S.stone600, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
 
-      {/* AddToClusterModal — rendered at root level to avoid z-index issues */}
+      {/* ══════ HALF-DAY CONFIRM DIALOG ══════ */}
+      {allocHalfDay?.open && ReactDOM.createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 999999, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => { setAllocHalfDay(null); setAllocAllowsMore(false); }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 24, width: 360, boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}
+            onClick={e => e.stopPropagation()}>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: S.stone900 }}>Confirm Allocation</div>
+              <div style={{ fontSize: 12, color: S.stone500, marginTop: 3 }}>
+                {allocHalfDay.act.activity_name} → {allocHalfDay.mukkadam.mukkadam_name}
+              </div>
+            </div>
+
+            {/* Summary */}
+            <div style={{ background: '#f9fafb', borderRadius: 10, padding: 12, fontSize: 12, color: '#374151', marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {[
+                ['Area',              `${allocHalfDay.remainingArea.toFixed(2)} ac`],
+                ['Workers available', `${allocHalfDay.availableWorkers} workers`],
+                ['Rate',              `₹${Number(allocHalfDay.rate?.rate_per_acre || 0).toFixed(0)}/ac`],
+                ['Date',              allocHalfDay.isoDate],
+              ].map(([label, value]) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#6b7280' }}>{label}</span>
+                  <span style={{ fontWeight: 700 }}>{value}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* ⅓ day slot banner — same logic as DayDetailModal */}
+            {(() => {
+              const slotsUsed = allocHalfDay.jobSlotsUsed ?? 0;
+              if (slotsUsed >= 2) return (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
+                  <span style={{ fontSize: 16, flexShrink: 0 }}>⅓</span>
+                  <div>
+                    <div style={{ margin: 0, fontWeight: 700, fontSize: 12, color: '#0369a1' }}>3rd job — full day used</div>
+                    <div style={{ margin: '3px 0 0', fontSize: 11, color: '#0284c7', lineHeight: 1.5 }}>
+                      {allocHalfDay.mukkadam.mukkadam_name} already has 2 jobs today. This final ⅓ completes their day.
+                    </div>
+                  </div>
+                </div>
+              );
+              if (slotsUsed === 1) return (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
+                  <span style={{ fontSize: 16, flexShrink: 0 }}>⅓</span>
+                  <div>
+                    <div style={{ margin: 0, fontWeight: 700, fontSize: 12, color: '#0369a1' }}>2nd job — 1 slot remaining</div>
+                    <div style={{ margin: '3px 0 0', fontSize: 11, color: '#0284c7', lineHeight: 1.5 }}>
+                      {allocHalfDay.mukkadam.mukkadam_name} has 1 job today. After this, 1 more ⅓-day slot remains.
+                    </div>
+                  </div>
+                </div>
+              );
+              return (
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, cursor: 'pointer', border: `2px solid ${allocAllowsMore ? '#10b981' : S.stone200}`, background: allocAllowsMore ? '#f0fdf4' : '#fff', marginBottom: 16, transition: 'all 150ms' }}>
+                  <input type="checkbox" checked={allocAllowsMore} onChange={e => setAllocAllowsMore(e.target.checked)}
+                    style={{ marginTop: 2, accentColor: '#10b981', width: 16, height: 16, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ margin: 0, fontWeight: 700, fontSize: 12, color: '#065f46' }}>⅓ Can do more jobs today</div>
+                    <div style={{ margin: '3px 0 0', fontSize: 11, color: '#6b7280', lineHeight: 1.5 }}>
+                      Runs in 1 of 3 slots — workers stay available for up to 2 more ⅓-day jobs. Count will <strong>not</strong> be deducted from daily capacity.
+                    </div>
+                  </div>
+                </label>
+              );
+            })()}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setAllocHalfDay(null); setAllocAllowsMore(false); }}
+                style={{ padding: '8px 18px', borderRadius: 8, border: `1px solid ${S.stone200}`, background: '#fff', color: '#374151', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Cancel
+              </button>
+              <button onClick={handleConfirmAllocate}
+                style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: allocAllowsMore ? '#10b981' : '#2563eb', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', transition: 'background 150ms' }}>
+                {allocAllowsMore ? '⅓ Allocate' : 'Allocate'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* ══════ MOVE DIALOG ══════ */}
+      {moveDialog && ReactDOM.createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setMoveDialog(null)}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 24, width: 360, boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: S.stone900, marginBottom: 4 }}>Move Activity</div>
+            <div style={{ fontSize: 12, color: S.stone500, marginBottom: 16 }}>
+              {moveDialog.act.activity_name} · {moveDialog.job.farmer_name}
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: S.stone600, display: 'block', marginBottom: 5 }}>New Date <span style={{ color: '#ef4444' }}>*</span></label>
+              <input type="date" value={moveDate} onChange={e => setMoveDate(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: `1.5px solid ${S.stone200}`, fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: S.stone600, display: 'block', marginBottom: 5 }}>Reason (optional)</label>
+              <input type="text" value={moveReason} onChange={e => setMoveReason(e.target.value)}
+                placeholder="e.g. Farmer not available"
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: `1.5px solid ${S.stone200}`, fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setMoveDialog(null)}
+                style={{ padding: '8px 18px', borderRadius: 8, border: `1px solid ${S.stone200}`, background: '#fff', color: S.stone600, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Cancel
+              </button>
+              <button onClick={handleMoveJob} disabled={!moveDate || moveSaving}
+                style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: !moveDate || moveSaving ? S.stone300 : '#2563eb', color: '#fff', fontSize: 13, fontWeight: 700, cursor: !moveDate || moveSaving ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+                {moveSaving ? 'Moving...' : '↩ Move'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* ══════ NOTE DIALOG ══════ */}
+      {noteDialog && ReactDOM.createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setNoteDialog(null)}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 24, width: 400, boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: S.stone900, marginBottom: 4 }}>Add Note</div>
+            <div style={{ fontSize: 12, color: S.stone500, marginBottom: 16 }}>{noteDialog.label}</div>
+
+            <textarea
+              value={noteText}
+              onChange={e => setNoteText(e.target.value)}
+              placeholder="Type your note here..."
+              rows={4}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: `1.5px solid ${S.stone200}`, fontSize: 13, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box', outline: 'none' }}
+              onFocus={e => (e.target.style.borderColor = S.brand)}
+              onBlur={e  => (e.target.style.borderColor = S.stone200)}
+            />
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button onClick={() => setNoteDialog(null)}
+                style={{ padding: '8px 18px', borderRadius: 8, border: `1px solid ${S.stone200}`, background: '#fff', color: S.stone600, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Cancel
+              </button>
+              <button onClick={handleSaveNote} disabled={!noteText.trim() || noteSaving}
+                style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: !noteText.trim() || noteSaving ? S.stone300 : S.violet600, color: '#fff', fontSize: 13, fontWeight: 700, cursor: !noteText.trim() || noteSaving ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+                {noteSaving ? 'Saving...' : '✏️ Save Note'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* ══════ JOBS TAB: ⅓-DAY CONFIRM DIALOG ══════ */}
+      {jobsHalfDayDialog?.open && ReactDOM.createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => { setJobsHalfDayDialog(null); setJobsAllowsMoreJobs(false); }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 24, width: 360, boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: '#111827' }}>Confirm Allocation</div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 3 }}>
+                {jobsHalfDayDialog.act.activity_name} → {jobsHalfDayDialog.mukkadam.mukkadam_name}
+              </div>
+            </div>
+            <div style={{ background: '#f9fafb', borderRadius: 10, padding: 12, fontSize: 12, color: '#374151', marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {[
+                ['Area',              `${jobsHalfDayDialog.remainingArea.toFixed(2)} ac`],
+                ['Workers available', `${jobsHalfDayDialog.availableWorkers} workers`],
+                ['Rate',              `₹${Number(jobsHalfDayDialog.rate?.rate_per_acre || 0).toFixed(0)}/ac`],
+                ['Date',              jobsHalfDayDialog.targetDate],
+              ].map(([label, value]) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#6b7280' }}>{label}</span>
+                  <span style={{ fontWeight: 700 }}>{value}</span>
+                </div>
+              ))}
+            </div>
+            {(() => {
+              const slotsUsed = jobsHalfDayDialog.jobSlotsUsed ?? 0;
+              if (slotsUsed >= 2) return (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
+                  <span style={{ fontSize: 16, flexShrink: 0 }}>⅓</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 12, color: '#0369a1' }}>3rd job — full day used</div>
+                    <div style={{ fontSize: 11, color: '#0284c7', lineHeight: 1.5, marginTop: 3 }}>
+                      {jobsHalfDayDialog.mukkadam.mukkadam_name} already has 2 jobs today. This completes their day.
+                    </div>
+                  </div>
+                </div>
+              );
+              if (slotsUsed === 1) return (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
+                  <span style={{ fontSize: 16, flexShrink: 0 }}>⅓</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 12, color: '#0369a1' }}>2nd job — 1 slot remaining</div>
+                    <div style={{ fontSize: 11, color: '#0284c7', lineHeight: 1.5, marginTop: 3 }}>
+                      {jobsHalfDayDialog.mukkadam.mukkadam_name} has 1 job today. 1 more slot after this.
+                    </div>
+                  </div>
+                </div>
+              );
+              return (
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, cursor: 'pointer', border: `2px solid ${jobsAllowsMoreJobs ? '#10b981' : '#e5e7eb'}`, background: jobsAllowsMoreJobs ? '#f0fdf4' : '#fff', marginBottom: 16, transition: 'all 150ms' }}>
+                  <input type="checkbox" checked={jobsAllowsMoreJobs} onChange={e => setJobsAllowsMoreJobs(e.target.checked)}
+                    style={{ marginTop: 2, accentColor: '#10b981', width: 16, height: 16, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 12, color: '#065f46' }}>⅓ Can do more jobs today</div>
+                    <div style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.5, marginTop: 3 }}>
+                      1 of 3 slots — workers stay available for 2 more ⅓-day jobs. Count <strong>not</strong> deducted from capacity.
+                    </div>
+                  </div>
+                </label>
+              );
+            })()}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setJobsHalfDayDialog(null); setJobsAllowsMoreJobs(false); }}
+                style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', color: '#374151', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Cancel
+              </button>
+              <button onClick={handleJobsConfirmAllocation}
+                style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: jobsAllowsMoreJobs ? '#10b981' : '#2563eb', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                {jobsAllowsMoreJobs ? '⅓ Allocate' : 'Allocate'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* ══════ JOBS TAB: NOTE MODAL ══════ */}
+      {jobsNoteJobId && (
+        <JobNoteModal
+          jobId={jobsNoteJobId}
+          jobLabel={jobsNoteJobLabel}
+          noteDate={new Date().toISOString().slice(0, 10)}
+          currentUserId={currentUserId}
+          currentUserName={currentUserName}
+          clusterId={Number(
+            activities.find((a: any) => a.job_id === jobsNoteJobId)
+              ?.farmer_clusters?.[0]?.id ??
+            clusterFilter ??
+            clusterId ??
+            0
+          )}
+          onClose={() => setJobsNoteJobId(null)}
+        />
+      )}
+
+      {/* ══════ JOBS TAB: MOVE JOB DIALOG ══════ */}
+      {moveDialog && ReactDOM.createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setMoveDialog(null)}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 24, width: 340, boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: '#111827', marginBottom: 4 }}>Move Job Activity</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 16 }}>
+              {moveDialog.act.activity_name} · {moveDialog.job?.farmer_name}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 5 }}>New Date</label>
+                <input type="date" value={moveDate} onChange={e => setMoveDate(e.target.value)}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #e5e7eb', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 5 }}>
+                  Area to Move (ac) <span style={{ color: '#a8a29e', fontWeight: 400 }}>max: {moveDialog.act.remaining_area ?? moveDialog.act.total_area} ac</span>
+                </label>
+                <input type="number" step="0.01" min="0.01" max={moveDialog.act.remaining_area ?? moveDialog.act.total_area}
+                  value={moveArea}
+                  onChange={e => setMoveArea(e.target.value)}
+                  placeholder={String(moveDialog.act.remaining_area ?? moveDialog.act.total_area ?? '')}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #e5e7eb', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>
+                  Reason <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                {['Not strict job — can reschedule', 'Easy farmer — farmer agreed to move'].map(r => (
+                  <button key={r} type="button" onClick={() => setMoveReason(r)}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 8, border: `1.5px solid ${moveReason === r ? '#f97316' : '#e5e7eb'}`, background: moveReason === r ? '#fff7ed' : '#f9fafb', color: moveReason === r ? '#c2410c' : '#57534e', fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', marginBottom: 6 }}>
+                    {moveReason === r ? '✓ ' : ''}{r}
+                  </button>
+                ))}
+                <textarea value={moveReason} onChange={e => setMoveReason(e.target.value)}
+                  placeholder="Or type a custom reason..."
+                  rows={2}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1.5px solid #e5e7eb', fontSize: 12, fontFamily: 'inherit', resize: 'none', boxSizing: 'border-box' }} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+              <button onClick={() => setMoveDialog(null)}
+                style={{ flex: 1, padding: '9px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', color: '#57534e', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Cancel
+              </button>
+              <button
+                disabled={!moveDate || !moveReason.trim() || moveSaving}
+                onClick={handleMoveJob}
+                style={{ flex: 1, padding: '9px', borderRadius: 8, border: 'none', background: !moveDate || !moveReason.trim() || moveSaving ? '#d6d3d1' : '#f97316', color: '#fff', fontSize: 13, fontWeight: 700, cursor: !moveDate || !moveReason.trim() || moveSaving ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+                {moveSaving ? 'Moving...' : 'Confirm Move'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+ 
+      {/* AddToClusterModal */}
       {clusterModal && (
-        // Import your AddToClusterModal here and pass props:
-        // <AddToClusterModal
-        //   clusterId={clusterModal.clusterId}
-        //   clusterName={clusterModal.clusterName}
-        //   mode="farmer"
-        //   onClose={() => { setClusterModal(null); fetchData(); }}
-        // />
-        //
-        // Replace the div below with the real modal once imported:
-        <div
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
-            zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}
-          onClick={() => setClusterModal(null)}
-        >
-          <div
-            style={{
-              background: '#fff', borderRadius: '14px', padding: '2rem',
-              boxShadow: '0 24px 60px rgba(0,0,0,0.25)',
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            <p className="font-bold text-lg mb-2">
-              Add to: {clusterModal.clusterName}
-            </p>
-            <p className="text-sm text-gray-500 mb-4">
-              Farmer ID: {clusterModal.farmerId}
-            </p>
-            <p className="text-xs text-gray-400 italic">
-             {clusterModal && (
-  <AddToClusterModal
-    clusterId={clusterModal.clusterId}
-    clusterName={clusterModal.clusterName}
-    mode="farmer"
-    onClose={() => {
-      setClusterModal(null);
-      fetchData(); // refresh so coverage bar updates
-    }}
-  />
-)}
-            </p>
-            <button
-              onClick={() => setClusterModal(null)}
-              className="mt-4 px-4 py-2 bg-gray-100 rounded-lg text-sm"
-            >
-              Close
-            </button>
-
-
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setClusterModal(null)}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: '2rem', boxShadow: '0 24px 60px rgba(0,0,0,.25)' }}
+            onClick={e => e.stopPropagation()}>
+            {clusterModal && (
+              <AddToClusterModal clusterId={clusterModal.clusterId} clusterName={clusterModal.clusterName} mode="farmer"
+                onClose={() => { setClusterModal(null); fetchData(); }} />
+            )}
+            <button onClick={() => setClusterModal(null)}
+              style={{ marginTop: 16, padding: '8px 16px', background: S.stone100, borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: 13 }}>Close</button>
           </div>
         </div>
       )}
     </div>
   );
 }
+ 
+// ─────────────────────────────────────────────────────────────────────────────
+// GROUPED ACTIVITY SECTION  — new helper component used by Jobs tab above
+// Paste this OUTSIDE TenderDashboard, near MukkadamCard / FarmerCard
+// ─────────────────────────────────────────────────────────────────────────────
+function GroupedActivitySection({ actName, acts, totalArea, totalValue, unalloc, ov30, ov7, expandedActJob, setExpandedActJob, isAdmin, handleUpdownComplete, onAllocate, onAllocateWithMukkadam, onNote, maxWorkRows, onSuccess, jobNotes }:{
+   actName: string; acts: any[]; totalArea: number; totalValue: number;
+  unalloc: number; ov30: number; ov7: number;
+  expandedActJob: string | null; setExpandedActJob: (id: string | null) => void;
+  isAdmin: boolean;
+  handleUpdownComplete: (mId: number, aId: number) => void;
+
+  onAllocate: (act: any, isoDate: string) => Promise<void>;
+  onAllocateWithMukkadam: (act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => void;
+  onNote: (jobId: string, label: string) => void;
+  maxWorkRows: any[];
+  onSuccess: () => void;
+  jobNotes: Record<string, any[]>;
+}) {
+  const [open, setOpen] = useState(true);
+
+  // compute worker rows for each activity row (same as DayDetailModal maxWorkRows filter)
+  const getWorkerRows = (activityName: string) =>
+    maxWorkRows.filter((r: any) => r.activityName === activityName);
+
+  return (
+    <div style={{ marginBottom: 16, borderRadius: 18, overflow: 'hidden', boxShadow: S.shadowCard }}>
+ 
+      {/* Group header */}
+      <div onClick={() => setOpen(!open)}
+        style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 20px', background: 'linear-gradient(135deg,#fafaf9 0%,#fff 50%,#fafaf9 100%)', cursor: 'pointer', borderBottom: open ? `1px solid ${S.stone200}` : 'none', position: 'relative', transition: 'background 150ms' }}
+        onMouseEnter={e => (e.currentTarget.style.background = S.stone50)}
+        onMouseLeave={e => (e.currentTarget.style.background = 'linear-gradient(135deg,#fafaf9 0%,#fff 50%,#fafaf9 100%)')}>
+        {/* Left accent */}
+        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: 'linear-gradient(135deg,#059669 0%,#0d9488 100%)', borderRadius: '0 2px 2px 0', opacity: open ? 1 : .35 }} />
+        {/* Chevron */}
+        <div style={{ width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', background: S.stone100, borderRadius: 6, fontSize: 12, color: S.stone400, transition: 'transform 250ms', transform: open ? 'none' : 'rotate(-90deg)', flexShrink: 0 }}>▾</div>
+        {/* Name */}
+        <div style={{ fontWeight: 800, fontSize: 16, letterSpacing: '-.3px' }}>{actName}</div>
+        {/* Stats */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginLeft: 'auto' }}>
+          {[
+            { val: acts.length,              lbl: 'Jobs'        },
+            { val: `${totalArea.toFixed(1)} ac`, lbl: 'Area'   },
+            { val: unalloc,                  lbl: 'Unallocated' },
+            { val: totalValue >= 100000
+                ? `₹${(totalValue / 100000).toFixed(1)}L`
+                : `₹${Math.round(totalValue).toLocaleString('en-IN')}`,
+              lbl: 'Value', color: S.green700 },
+          ].map((s, i) => (
+            <div key={i} style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 14, fontWeight: 800, lineHeight: 1, color: (s as any).color || S.stone900 }}>{s.val}</div>
+              <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px', color: S.stone400, marginTop: 2 }}>{s.lbl}</div>
+            </div>
+          ))}
+          {ov30 > 0 && <span style={{ padding: '4px 14px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: S.red50, color: S.red700, border: `1px solid ${S.red100}`, whiteSpace: 'nowrap' }}>{ov30} Overdue 30d+</span>}
+          {ov7  > 0 && <span style={{ padding: '4px 14px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: S.amber50, color: S.amber700, border: `1px solid ${S.amber100}`, whiteSpace: 'nowrap' }}>{ov7} Overdue 7-30d</span>}
+        </div>
+      </div>
+ 
+      {/* Inner table */}
+      {open && (
+        <table style={{ width: '100%', background: '#fff', borderCollapse: 'separate', borderSpacing: 0 }}>
+          <thead>
+            <tr>
+              {[
+                { h: '', w: 28, pl: 20 },
+                { h: 'Farmer' },
+                { h: 'Plot' },
+                { h: 'Location' },
+                { h: 'Acres', ar: true },
+                { h: 'Scheduled' },
+                { h: 'Rate', ar: true },
+                { h: 'Cost', ar: true },
+                { h: 'Status' },
+                { h: 'Action', ac: true },
+                { h: '' },
+              ].map((col, i) => (
+                <th key={i} style={{ background: 'linear-gradient(180deg,#fafaf9 0%,#f7f6f4 100%)', padding: `8px ${col.pl ?? 14}px`, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, textAlign: col.ac ? 'center' : col.ar ? 'right' : 'left', borderBottom: `2px solid ${S.stone200}`, whiteSpace: 'nowrap', width: col.w }}>
+                  {col.h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {acts.map((a: any) => {
+              const isExp       = expandedActJob === String(a.activity_id);
+              const isPending   = a.allocation_status === 'pending';
+              const isCompleted = a.allocations?.some((al: any) => al.work_status === 'completed');
+              const isUpcoming  = a.days_until !== null && a.days_until >= 0  && a.days_until <= 10;
+              const isOverdue   = a.days_until !== null && a.days_until < 0   && !isCompleted;
+              const overdueDays = a.days_until !== null ? Math.abs(a.days_until) : 0;
+              const workerTeamRows = getWorkerRows(a.activity_name);
+ const rowNotes: any[] = jobNotes[a.job_id] ?? [];
+                  const unresolvedNotes = rowNotes.filter((n: any) => !n.is_resolved);
+                  const resolvedNotes   = rowNotes.filter((n: any) => n.is_resolved);
+              const dotColor = isPending ? S.amber500 : isCompleted ? S.brand : S.sky600;
+              const tdR: React.CSSProperties = { padding: '10px 14px', borderBottom: isExp ? 'none' : `1px solid ${S.stone100}`, verticalAlign: 'middle', fontSize: 12 };
+ 
+              return (
+                <React.Fragment key={a.activity_id}>
+                  <tr style={{ cursor: 'pointer', background: isExp ? S.brandLight : 'transparent', transition: 'background 150ms' }}
+                    onMouseEnter={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = S.stone25; }}
+                    onMouseLeave={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                    onClick={() => setExpandedActJob(isExp ? null : String(a.activity_id))}>
+ 
+                    {/* dot */}
+                    <td style={{ ...tdR, paddingLeft: 20, width: 28 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', display: 'inline-block', background: dotColor, boxShadow: `0 0 0 3px ${dotColor}33` }} />
+                    </td>
+                    {/* farmer */}
+                    <td style={{ ...tdR }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: S.stone900 }}>{a.farmer_name}</div>
+                      <div style={{ fontFamily: S.mono, fontSize: 10, color: S.stone400, marginTop: 2 }}>{a.farmer_phone || '—'}</div>
+                    </td>
+                    {/* plot */}
+                    <td style={{ ...tdR, fontFamily: S.mono, fontWeight: 700, fontSize: 12 }}>{a.plot_code || a.plot_name}</td>
+                    {/* location */}
+                    <td style={{ ...tdR, color: S.stone600 }}>{a.clusters?.[0]?.name || '—'}</td>
+                    {/* acres */}
+                    <td style={{ ...tdR, textAlign: 'right', fontWeight: 700, fontSize: 13 }}>{Number(a.total_area).toFixed(2)}</td>
+                    {/* scheduled */}
+                    <td style={{ ...tdR }}>
+                      <span style={{ fontSize: 12 }}>{a.scheduled_date ? a.scheduled_date.slice(5) : '—'}</span>
+                      {isOverdue && <div style={{ fontSize: 10, fontWeight: 700, color: overdueDays > 30 ? S.red600 : S.amber700, marginTop: 1 }}>{overdueDays}d overdue</div>}
+                      {isUpcoming && <div style={{ fontSize: 10, fontWeight: 700, color: S.amber700, marginTop: 1 }}>In {a.days_until}d</div>}
+                    </td>
+                    {/* rate */}
+                    <td style={{ ...tdR, textAlign: 'right', fontFamily: S.mono, fontSize: 11 }}>₹{Number(a.rate_per_acre).toLocaleString('en-IN')}/ac</td>
+                    {/* cost */}
+                    <td style={{ ...tdR, textAlign: 'right', fontFamily: S.mono, fontWeight: 800, fontSize: 13 }}>₹{Math.round(Number(a.total_price)).toLocaleString('en-IN')}</td>
+                    {/* status */}
+                    <td style={{ ...tdR }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: isPending ? S.amber50 : isCompleted ? S.green50 : S.sky50, color: isPending ? S.amber700 : isCompleted ? S.green700 : S.sky700, border: `1px solid ${isPending ? S.amber100 : isCompleted ? S.green100 : S.sky100}`, letterSpacing: '.2px' }}>
+                        {isPending ? 'Pending' : isCompleted ? 'Completed' : a.allocation_status === 'fully_allocated' ? 'Allocated' : a.allocation_status.replace('_', ' ')}
+                      </span>
+                      {a.is_split && <span style={{ marginLeft: 4, fontSize: 10, padding: '1px 6px', borderRadius: 999, background: '#f5f3ff', color: S.violet700, fontWeight: 700 }}>🔀 Split</span>}
+                    {/* Notes badge */}
+                      {rowNotes.length > 0 && (
+                        <div style={{ marginTop: 4 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700, background: unresolvedNotes.length > 0 ? '#fef2f2' : '#f0fdf4', color: unresolvedNotes.length > 0 ? '#be123c' : '#047857', border: `1px solid ${unresolvedNotes.length > 0 ? '#fecaca' : '#bbf7d0'}` }}>
+                            ✏️ {unresolvedNotes.length > 0 ? `${unresolvedNotes.length} open` : `${rowNotes.length} note${rowNotes.length > 1 ? 's' : ''}`}
+                          </span>
+                        </div>
+                      )}</td>
+
+                    
+
+                    {/* ── Team / Capacity ── */}
+                    <td style={{ ...tdR }} onClick={e => e.stopPropagation()}>
+                      {a.allocations?.length > 0 ? (
+                        // Already allocated — show mukkadam names
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          {(a.allocations || []).map((alloc: any, ai: number) => (
+                            <div key={ai} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                              <span style={{ fontWeight: 600 }}>👷 {alloc.mukkadam_name}</span>
+                              <span style={{ color: S.stone400 }}>{Number(alloc.allocated_area).toFixed(2)} ac</span>
+                              {alloc.allows_second_job && (
+                                <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 999, background: '#ecfdf5', color: '#047857', border: '1px solid #d1fae5', fontWeight: 700 }}>⅓</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (workerTeamRows).length === 0 ? (
+                        <span style={{ fontSize: 11, color: S.stone400, fontStyle: 'italic' }}>No team data</span>
+                      ) : (
+                        // Show available mukkadams as clickable buttons
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {workerTeamRows.map((r: any, ri: number) => {
+                            const canDoAc = Number(r.maxArea || 0);
+                            const fits = Number(a.remaining_area ?? a.total_area ?? 0) > 0 && canDoAc >= Number(a.remaining_area ?? a.total_area ?? 0);
+                            const isoDate = a.scheduled_date?.slice(0, 10) ?? '';
+                            
+                            return (
+                              <button
+                                key={ri}
+                                type="button"
+                                onClick={() => {
+                                  const thirdDayJobsToday = 0; // no alloc context here
+                                  onAllocateWithMukkadam(a, r, isoDate, remainingArea, thirdDayJobsToday);
+                                }}
+                                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, fontSize: 11, border: `1px solid ${fits ? '#a7f3d0' : '#fecaca'}`, background: fits ? '#ecfdf5' : '#fff1f2', color: fits ? '#047857' : '#be123c', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}
+                              >
+                                <span>{r.mukkadamName}</span>
+                                <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 999, background: canDoAc === 0 ? S.stone100 : fits ? '#d1fae5' : '#ffe4e6', color: canDoAc === 0 ? S.stone400 : fits ? '#047857' : '#be123c', fontWeight: 700 }}>
+                                  {canDoAc === 0 ? '🏖️ Holiday' : `${remainingArea.toFixed(2)} / ${canDoAc.toFixed(2)} ac`}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </td>
+                    {/* action */}
+                    {/* action */}
+                    {/* ── Action: Allocate / Move / Note ── */}
+                    <td style={{ ...tdR, textAlign: 'right', paddingRight: 16 }} onClick={e => e.stopPropagation()}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                        {isCompleted ? (
+                          <span style={{ fontSize: 11, color: S.green700, fontWeight: 700 }}>✅ Done</span>
+                        ) : isPending ? (
+                          <button
+                            onClick={async () => {
+                              const isoDate = a.scheduled_date?.slice(0, 10) ?? '';
+                              await onAllocate(a, isoDate);
+                            }}
+                            style={{ padding: '5px 12px', borderRadius: 8, background: S.stone800, color: '#fff', border: 'none', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '.2px' }}
+                          >
+                            Allocate
+                          </button>
+                        ) : (
+                          // Has allocations but not completed — show Complete button
+                          <CompleteAllocationsButton
+                            allocations={a.allocations ?? []}
+                            activityName={a.activity_name}
+                            farmerName={a.farmer_name}
+                            onSuccess={onSuccess}
+                          />
+                        )}
+                        <MoveJobButtonTender
+                          act={a}
+                          onSuccess={onSuccess}
+                        />
+                        <button
+                          onClick={() => {
+                            const label = [
+                              a.activity_name,
+                              a.farmer_name,
+                              a.plot_name ? `📍 ${a.plot_name}` : null,
+                            ].filter(Boolean).join(' – ');
+                            onNote(a.job_id, label);
+                          }}
+                          style={{ padding: '4px 10px', borderRadius: 7, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                        >
+                          ✏️ Note
+                        </button>
+                      </div>
+                    </td>
+                    {/* chevron */}
+                    <td style={{ ...tdR, textAlign: 'center', width: 44 }}>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: `1px solid ${isExp ? S.brand : S.stone200}`, background: isExp ? S.brand : '#fff', color: isExp ? '#fff' : S.stone400, fontSize: 11, transition: 'all 250ms', transform: isExp ? 'rotate(180deg)' : 'none', boxShadow: isExp ? '0 2px 6px rgba(5,150,105,.3)' : 'none' }}>▾</div>
+                    </td>
+                  </tr>
+ 
+                  {/* Expanded detail */}
+                  {isExp && (
+                    <tr>
+                      <td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${S.stone200}`, background: S.stone25 }}>
+                        <div style={{ padding: '16px 20px' }}>
+                          {/* Stat strip */}
+                          <div style={{ display: 'flex', borderRadius: 14, overflow: 'hidden', background: '#fff', marginBottom: 14, boxShadow: S.shadowCard }}>
+                            {[
+                              { val: `Job #${a.job_id}`,       lbl: 'Job ID'       },
+                              { val: `${a.crop_name}${a.variety ? ` (${a.variety})` : ''}`, lbl: 'Crop' },
+                              { val: `${a.total_area} ac`,     lbl: 'Plot Area'    },
+                              { val: <span style={{ color: S.green700 }}>₹{Math.round(a.total_price).toLocaleString('en-IN')}</span>, lbl: 'Farmer Cost' },
+                              { val: a.allocation_status === 'pending' ? <span style={{ color: S.amber600 }}>Pending</span> : isCompleted ? <span style={{ color: S.green600 }}>Completed</span> : <span style={{ color: S.sky600 }}>Allocated</span>, lbl: 'Status' },
+                            ].map((s, i) => (
+                              <div key={i} style={{ flex: 1, padding: '10px 14px', textAlign: 'center', borderRight: i < 4 ? `1px solid ${S.stone100}` : 'none', position: 'relative' }}>
+                                <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 24, height: 2, borderRadius: 1, background: S.green100 }} />
+                                <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: '-.3px', lineHeight: 1.3, marginTop: 4 }}>{s.val}</div>
+                                <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginTop: 3 }}>{s.lbl}</div>
+                              </div>
+                            ))}
+                          </div>
+ 
+                          {/* Split info */}
+                          {a.is_split && a.splits?.length > 1 && (
+                            <div style={{ marginBottom: 12, padding: '10px 14px', background: '#faf5ff', borderRadius: 10, border: '1px solid #e9d5ff' }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: S.violet700, marginBottom: 6 }}>🔀 Split into {a.splits.length} parts</div>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                {a.splits.map((sp: any, si: number) => (
+                                  <div key={si} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 8, background: '#fff', border: '1px solid #e9d5ff', color: S.stone600 }}>
+                                    <span style={{ fontWeight: 700, color: S.violet700 }}>Part {si + 1}</span> · {sp.total_area} ac · <span style={{ color: sp.allocation_status === 'pending' ? S.red600 : S.green600 }}>{sp.allocation_status}</span>
+                                    {sp.scheduled_date && ` · ${sp.scheduled_date}`} · 👷 {sp.allocation_count}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+ 
+                          {/* Allocations */}
+                          {a.allocation_count === 0 ? (
+                            <div style={{ padding: '12px 16px', background: '#fff', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 12, color: S.stone400 }}>
+                              <div style={{ fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${S.stone100}` }}>⚠ No Allocations Yet</div>
+                              <div style={{ background: S.stone50, borderRadius: 8, padding: '8px 12px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0' }}>
+                                  <span style={{ color: S.stone500 }}>Scheduled</span>
+                                  <span style={{ fontWeight: 600 }}>{a.scheduled_date || '—'}</span>
+                                </div>
+                                {isOverdue && (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', borderTop: `1px solid ${S.stone100}` }}>
+                                    <span style={{ color: S.stone500 }}>Overdue</span>
+                                    <span style={{ fontWeight: 600, color: S.red600 }}>{overdueDays} days</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${S.stone100}` }}>📝 Allocation Details</div>
+                              {(a.allocations || []).map((alloc: any, ai: number) => {
+                                const isDone = alloc.work_status === 'completed';
+                                return (
+                                  <div key={ai} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 6, borderRadius: 10, background: isDone ? S.green50 : '#fff', border: `1px solid ${isDone ? S.green100 : S.stone200}`, fontSize: 12 }}>
+                                    <div style={{ minWidth: 140 }}>
+                                      <div style={{ fontWeight: 700, color: S.stone900 }}>👷 {alloc.mukkadam_name}</div>
+                                      {alloc.mukkadam_mobile && <div style={{ fontFamily: S.mono, fontSize: 10, color: S.stone400 }}>📞 {alloc.mukkadam_mobile}</div>}
+                                    </div>
+                                    {alloc.cluster_name && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: S.sky50, color: S.sky700, border: `1px solid ${S.sky100}` }}>🏘 {alloc.cluster_name}</span>}
+                                    <div style={{ color: S.stone600 }}>📅 {alloc.allocated_date || '—'}</div>
+                                    <div style={{ color: S.green700 }}>🌾 {alloc.allocated_area} ac{alloc.actual_area_done != null ? ` · ✓ ${alloc.actual_area_done} actual` : ''}</div>
+                                    <div style={{ color: S.stone600 }}>👥 {alloc.allocated_workers} workers{alloc.actual_crew_size != null ? ` · ✓ ${alloc.actual_crew_size}` : ''}</div>
+                                    <div style={{ color: S.violet600, fontWeight: 600, fontFamily: S.mono, fontSize: 11 }}>₹{alloc.mukkadam_rate}/ac → ₹{Math.round(alloc.mukkadam_est).toLocaleString('en-IN')}</div>
+                                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700, background: isDone ? S.green50 : alloc.work_status === 'in_progress' ? S.sky50 : S.stone100, color: isDone ? S.green700 : alloc.work_status === 'in_progress' ? S.sky700 : S.stone600, border: `1px solid ${isDone ? S.green100 : alloc.work_status === 'in_progress' ? S.sky100 : S.stone200}` }}>{alloc.work_status}</span>
+                                    {alloc.report_submitted && <span style={{ fontSize: 11, color: S.sky600 }}>📋 Report</span>}
+                                    {alloc.farmer_agreed === true  && <span style={{ fontSize: 11, color: S.green700 }}>✅ Agreed</span>}
+                                    {alloc.farmer_agreed === false && <span style={{ fontSize: 11, color: S.red600  }}>❌ Disputed</span>}
+                                    {!isDone && isAdmin && (
+                                      <button onClick={() => { if (confirm(`Mark ${alloc.mukkadam_name}'s allocation as complete?`)) handleUpdownComplete(alloc.mukkadam_id, alloc.allocation_id); }}
+                                        style={{ marginLeft: 'auto', padding: '5px 14px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#059669,#047857)', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 1px 4px rgba(5,150,105,.25)' }}>
+                                        ✅ Mark Complete
+                                      </button>
+                                    )}
+                                    {isDone && <span style={{ marginLeft: 'auto', fontSize: 11, color: S.green700, fontWeight: 700 }}>✅ Done</span>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {/* ── Notes for this job ── */}
+                          {rowNotes.length > 0 && (
+                            <div style={{ marginTop: 12, borderTop: `1px solid ${S.stone100}`, paddingTop: 12 }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginBottom: 8 }}>
+                                ✏️ Notes ({rowNotes.length})
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                {rowNotes.map((n: any) => (
+                                  <div key={n.id} style={{ padding: '10px 12px', borderRadius: 10, background: n.is_resolved ? '#f0fdf4' : '#fff', border: `1px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, opacity: n.is_resolved ? 0.75 : 1 }}>
+                                    {/* Job context banner */}
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        {n.tags?.map((t: string) => (
+                                          <span key={t} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 999, background: '#f3f4f6', color: '#6b7280', fontWeight: 600 }}>{t}</span>
+                                        ))}
+                                        {n.is_resolved && (
+                                          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontWeight: 700 }}>✅ Resolved</span>
+                                        )}
+                                      </div>
+                                      <span style={{ fontSize: 10, color: S.stone400, fontFamily: 'monospace' }}>
+                                        {n.author?.full_name} · {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                      </span>
+                                    </div>
+                                    {/* Note text */}
+                                    <div style={{ fontSize: 12, color: n.is_resolved ? '#6b7280' : '#111827', lineHeight: 1.5, textDecoration: n.is_resolved ? 'line-through' : 'none' }}>
+                                      {n.text}
+                                    </div>
+                                    {/* Resolution note */}
+                                    {n.resolution_note && (
+                                      <div style={{ fontSize: 11, color: '#15803d', fontStyle: 'italic', marginTop: 4 }}>
+                                        ✅ {n.resolution_note}
+                                        {n.resolved_by?.full_name && ` — ${n.resolved_by.full_name}`}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                              {/* Quick add note button */}
+                              <button
+                                onClick={() => {
+                                  const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – ');
+                                  onNote(a.job_id, label);
+                                }}
+                                style={{ marginTop: 8, padding: '5px 12px', borderRadius: 8, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                              >
+                                + Add another note
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 type MukkadamType = 'permanent' | 'updown';
 type UpdownMode = 'range' | 'specific';
 
