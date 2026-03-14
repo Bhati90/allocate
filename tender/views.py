@@ -5508,8 +5508,17 @@ def cluster_payment_dashboard(request, cluster_id):
                     if last_date is None or act.scheduled_date > last_date:
                         last_date = act.scheduled_date
 
-                act_allocations = Allocation.objects.filter(job_activity=act).order_by('allocated_date')
+                # ── Resolve effective total area — Plot.area_acres is source of truth ──
+                effective_total_area = (
+                    act.total_area
+                    if act.total_area and act.total_area > 0
+                    else (act.plot.area_acres if act.plot and act.plot.area_acres else None)
+                )
+                # Skip activities where area cannot be resolved — bad/incomplete data
+                if not effective_total_area or effective_total_area <= 0:
+                    continue
 
+                act_allocations = Allocation.objects.filter(job_activity=act).order_by('allocated_date')
                 alloc_details = []
                 for a in act_allocations:
                     if a.admin_override_area is not None:
@@ -5594,9 +5603,10 @@ def cluster_payment_dashboard(request, cluster_id):
                         act_billable += (eff * Decimal(str(act.rate_per_acre))).quantize(Decimal('0.01'))
 
                 # If no allocations exist yet, use total_area as estimate
+                # If no allocations exist yet, use effective_total_area as estimate
                 if not act_allocations and act.rate_per_acre:
                     act_billable = (
-                        Decimal(str(act.total_area or 0)) * Decimal(str(act.rate_per_acre))
+                        Decimal(str(effective_total_area)) * Decimal(str(act.rate_per_acre))
                     ).quantize(Decimal('0.01'))
 
                 total_billable += act_billable
@@ -5609,11 +5619,11 @@ def cluster_payment_dashboard(request, cluster_id):
                     'scheduled_date':    str(act.scheduled_date) if act.scheduled_date else None,
                     'is_past':           is_past,
                     'allocated_area':    float(act.allocated_area or 0),
-                    'total_area':        float(act.total_area or 0),
+                    'total_area':        float(effective_total_area),
                     'rate_per_acre':     float(act.rate_per_acre or 0),
                     'billable_amount':   float(act_billable),
-                    'estimated_amount':  float(  # ← ADD: always total_area × rate for display
-                        (Decimal(str(act.total_area or 0)) * Decimal(str(act.rate_per_acre or 0))).quantize(Decimal('0.01'))
+                    'estimated_amount':  float(
+                        (Decimal(str(effective_total_area)) * Decimal(str(act.rate_per_acre or 0))).quantize(Decimal('0.01'))
                     ),
                     'allocation_status': act.allocation_status,
                     'actual_area_done':  float(actual_area) if actual_area is not None else None,
@@ -5729,10 +5739,12 @@ def cluster_payment_dashboard(request, cluster_id):
             'mobile_number': getattr(farmer, 'phone_number', '') or getattr(farmer, 'mobile_number', ''),
             
             # ← FIX: use total_area not allocated_area
+            # total_area is now always resolved via effective_total_area (never 0)
             'total_acres':   float(sum(
-                Decimal(str(act['total_area'])) 
-                for j in job_rows 
+                Decimal(str(act['total_area']))
+                for j in job_rows
                 for act in j['activities']
+                if act['total_area'] > 0
             )),
             
             # ← ADD: total job value = sum of booking totals

@@ -126,6 +126,7 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
   });
 
   const map = new Map<string, ActivityGroup>();
+
   flat.forEach(act => {
     if (!map.has(act.activity_name)) {
       map.set(act.activity_name, {
@@ -140,6 +141,8 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
       });
     }
     const group = map.get(act.activity_name)!;
+
+    // Skip duplicate plot+activity
     const alreadyExists = group.plots.some(
       p => p.plotName === act.plot_name && p.plotCode === act.plot_code
     );
@@ -149,48 +152,101 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
     const aArea = Number(act.allocated_area ?? 0);
     const rate  = Number(act.rate_per_acre ?? 0);
 
-    // ── isDone: mirrors PaymentDashboard logic ──────────────────────────
-    // 1. Check allocations[].work_status (most accurate — from Allocation model)
-    const allocs = act.allocations ?? [];
-    const hasCompletedAlloc = allocs.some(
-      (a: Alloc) => a.work_status === 'completed'
-    );
-    const hasAnyAlloc = allocs.length > 0;
+    // Skip activities with no resolvable area — bad/incomplete data
+    // Backend now always resolves via Plot.area_acres so tArea should never be 0
+    if (tArea <= 0) return;
 
-    // 2. Fallback to allocation_status on the JobActivity
-    //    fully_allocated = all area assigned; completed = work done
-    const statusDone =
-      act.allocation_status === 'fully_allocated' ||
+    const allocs = act.allocations ?? [];
+
+    // ── DEBUG: log every plot's allocation state ─────────────────────────────
+    console.group(`🌱 ${act.activity_name} | Plot: ${act.plot_name} (${act.plot_code})`);
+    console.log('total_area (tArea):', tArea);
+    console.log('allocated_area (aArea):', aArea);
+    console.log('allocation_status:', act.allocation_status);
+    console.log('allocs count:', allocs.length);
+    allocs.forEach((a: Alloc, i: number) => {
+      console.log(`  alloc[${i}]`, {
+        allocation_id:      a.allocation_id,
+        work_status:        a.work_status,
+        allocated_area:     a.allocated_area,
+        actual_area_done:   a.actual_area_done,
+        admin_override_area: a.admin_override_area,
+        effArea: a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0,
+      });
+    });
+
+    // ── All allocations completed check ──────────────────────────────────────
+
+    // ── isDone: sum of completed effective area must cover the plot's total_area ──
+    // Only work_status='completed' allocations count
+    // allocated/scheduled area does NOT mean work is done
+    const completedAllocArea = allocs
+      .filter((a: Alloc) => a.work_status === 'completed')
+      .reduce((s: number, a: Alloc) => {
+        // Priority: admin_override > actual_area_done > allocated_area
+        const effArea = a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0;
+        return s + Number(effArea);
+      }, 0);
+
+    // ── All allocations completed check ──────────────────────────────────────
+    // Most reliable for split allocations — if every alloc on this plot
+    // is work_status='completed', the plot is done regardless of area math
+    const allAllocsCompleted =
+      allocs.length > 0 &&
+      allocs.every((a: Alloc) => a.work_status === 'completed');
+
+    // ── Float-safe area comparison ───────────────────────────────────────────
+    // Split allocs like 0.38+0.38+0.37 sum to 1.1299999 due to float precision
+    // which fails strict >= 1.13 — use small tolerance to handle this
+    const AREA_TOLERANCE = 0.05;
+    const completedAreaCoversPlot =
+      tArea > 0 && completedAllocArea >= tArea - AREA_TOLERANCE;
+
+    // Done when ANY of:
+    // 1. ALL allocations are work_status='completed' (handles split allocs)
+    // 2. Completed area covers total area within float tolerance
+    // 3. Backend explicitly marks allocation_status='completed'
+    // REMOVED: fully_allocated — that is scheduling status, not work completion
+    // REMOVED: areaDone using allocated_area — scheduling, not work completion
+    // Done when ANY of:
+    // 1. ALL allocations are work_status='completed' (handles split allocs)
+    // 2. Completed area covers total area within float tolerance
+    // 3. Backend explicitly marks allocation_status='completed'
+    // REMOVED: fully_allocated — that is scheduling status, not work completion
+    // REMOVED: areaDone using allocated_area — scheduling, not work completion
+    const isDone =
+      allAllocsCompleted ||
+      completedAreaCoversPlot ||
       act.allocation_status === 'completed';
 
-    // 3. Area-based fallback: allocated >= total (and total > 0)
-    const areaDone =
-      tArea > 0 && aArea > 0 && aArea >= tArea;
-
-    // Done = any allocation is completed, OR status says done, OR all area covered
-    const isDone = hasCompletedAlloc || statusDone || areaDone;
-
-    // ── billableAmount: use API billable_amount as source of truth ──────
-    // This matches summary.total_billable_so_far logic in PaymentDashboard:
-    //   - billable_amount from API already applies rate × effective_area
-    //   - Only show 0 if truly no work done and no past date
+    // ── DEBUG: log what decided isDone ───────────────────────────────────────
+    console.log('completedAllocArea:', completedAllocArea);
+    console.log('tArea - AREA_TOLERANCE:', tArea - AREA_TOLERANCE);
+    console.log('allAllocsCompleted:', allAllocsCompleted);
+    console.log('completedAreaCoversPlot:', completedAreaCoversPlot);
+    console.log('allocation_status === completed:', act.allocation_status === 'completed');
+    console.log('👉 isDone:', isDone);
+    console.groupEnd();
+    // ── END DEBUG ─────────────────────────────────────────────────────────────
+    // ── billableAmount: API value is most accurate ───────────────────────────
     const apiBillable = Number(act.billable_amount ?? 0);
+    // Fallback: compute from effective area if API gives 0
+    const effectiveArea = aArea > 0 ? aArea : tArea;
+    const displayBillable = apiBillable > 0 ? apiBillable : effectiveArea * rate;
 
-    // For display in Est. Amount column:
-    // if API gives billable use it; else compute from allocated (partial work);
-    // else use total_area × rate as an estimate
-    const displayBillable =
-      apiBillable > 0
-        ? apiBillable
-        : aArea > 0
-          ? aArea * rate
-          : tArea * rate;
-
-    // Best date for "Done on" display
+    // ── doneDate: latest completed allocation date ───────────────────────────
+    const latestAlloc = allocs
+      .filter((a: Alloc) => a.work_status === 'completed')
+      .sort((a: Alloc, b: Alloc) =>
+        (b.allocated_date ?? '').localeCompare(a.allocated_date ?? '')
+      )[0];
     const doneDate =
-      act.allocations?.[0]?.allocated_date ?? act.scheduled_date ?? null;
+      latestAlloc?.allocated_date ??
+      allocs[0]?.allocated_date ??
+      act.scheduled_date ??
+      null;
 
-    // Mukkadam: from first allocation (mirrors PaymentDashboard AllocReportCard)
+    // ── mukkadam: from activity level first, then first allocation ───────────
     const mukkadamName =
       (act as any).mukkadam_name ||
       allocs[0]?.mukkadam_name ||
@@ -214,9 +270,6 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
 
     group.totalPlots++;
     if (isDone) group.donePlots++;
-
-    // totalBillable: use API billable_amount (matches PaymentDashboard's
-    // total_billable_so_far which sums act_billable per activity)
     group.totalBillable += displayBillable;
     group.totalArea     += tArea > 0 ? tArea : aArea;
   });
@@ -225,7 +278,7 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
     g.allDone = g.totalPlots > 0 && g.donePlots === g.totalPlots;
   });
 
-  // Sort: fully done first, then in-progress, then not started
+  // Sort: fully done → in-progress → not started
   return Array.from(map.values()).sort((a, b) => {
     const scoreA = a.allDone ? 2 : a.donePlots > 0 ? 1 : 0;
     const scoreB = b.allDone ? 2 : b.donePlots > 0 ? 1 : 0;
