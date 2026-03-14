@@ -900,9 +900,10 @@ const handleConfirmHalfDay = async () => {
   const { jobId, act, mukkadam, rate, availableWorkers, remainingArea } = halfDayDialog;
 
   const areaToAllocate = remainingArea;
-  const maxArea = availableWorkers * Number(rate?.productivity_per_worker || 0);
-  const isPartial = maxArea < remainingArea && maxArea > 0;
-  const finalArea = isPartial ? maxArea : areaToAllocate;
+  // const maxArea = availableWorkers * Number(rate?.productivity_per_worker || 0);
+  // const isPartial = maxArea < remainingArea && maxArea > 0;
+  // const finalArea = isPartial ? maxArea : areaToAllocate;
+  const finalArea = areaToAllocate;
 const token = localStorage.getItem('auth_token');
   try {
     const res = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {

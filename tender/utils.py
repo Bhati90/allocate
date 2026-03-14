@@ -369,7 +369,7 @@ def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers,
         )
         productivity = Decimal(str(mukkadam_rate.productivity_per_worker))
         max_capacity = workers * productivity
-        max_capacity = max_capacity*2
+        max_capacity = max_capacity*3
 
         if area > max_capacity:
             suggested_area = float(max_capacity)
