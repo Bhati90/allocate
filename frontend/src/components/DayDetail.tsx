@@ -864,8 +864,16 @@ const filteredAllocations = allocations.filter(alloc => {
 
 
 // map of mukkadamId -> has any half-day allocation on this date
-const hasHalfDayByMukkadam = new Map<number, boolean>();
+const slotsByMukkadam = new Map<number, number>();  // mukkadamId → job count today
 
+allocations.forEach((a: any) => {
+  if (a.allocated_date?.slice(0, 10) !== isoDate) return;
+  const current = slotsByMukkadam.get(a.mukkadam) || 0;
+  slotsByMukkadam.set(a.mukkadam, current + 1);
+});
+
+// Keep hasHalfDayByMukkadam for the allocations tab badge (it checks allows_second_job)
+const hasHalfDayByMukkadam = new Map<number, boolean>();
 allocations.forEach((a: any) => {
   if (a.allocated_date?.slice(0, 10) !== isoDate) return;
   if (a.allows_second_job === true) {
@@ -873,9 +881,6 @@ allocations.forEach((a: any) => {
   }
 });
 
-
-
-// ── State ─────────────────────────────────────────────────────────────────────
 const [halfDayDialog, setHalfDayDialog] = useState<{
   open: boolean;
   jobId: string;
@@ -885,65 +890,12 @@ const [halfDayDialog, setHalfDayDialog] = useState<{
   availableWorkers: number;
   neededWorkers: number;
   remainingArea: number;
-  isSecondJob: boolean; 
-  targetDate: string;  // ← ADD THIS
+  isSecondJob: boolean;
+  jobSlotsUsed: number;   // ← 0, 1, or 2 (how many ⅓-jobs already today)
+  targetDate: string;
 } | null>(null);
-
-
 const { isAdmin, userData, logout: authLogout, isLoading } = useAuth();
 
-const [allowsSecondJob, setAllowsSecondJob] = useState(false);
-
-// ── Confirm handler (fires when user clicks "Allocate" in the dialog) ─────────
-const handleConfirmHalfDay = async () => {
-  if (!halfDayDialog) return;
-  const { jobId, act, mukkadam, rate, availableWorkers, remainingArea } = halfDayDialog;
-
-  const areaToAllocate = remainingArea;
-  // const maxArea = availableWorkers * Number(rate?.productivity_per_worker || 0);
-  // const isPartial = maxArea < remainingArea && maxArea > 0;
-  // const finalArea = isPartial ? maxArea : areaToAllocate;
-  const finalArea = areaToAllocate;
-const token = localStorage.getItem('auth_token');
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json',
-        'Authorization': `Token ${token}`, },
-      body: JSON.stringify({
-        job_activity_id: act.id,
-        mukkadam_id: mukkadam.mukkadam_id,
-        allocated_date: isoDate,
-        allocated_area: finalArea,
-        allocated_workers: availableWorkers,
-        farmer_rate: act.rate_per_acre,
-        mukkadam_rate: Number(rate?.rate_per_acre || 0),
-        cluster_id: clusterId,
-        skip_strict_check: false,
-        allows_second_job: halfDayDialog.isSecondJob ? false : allowsSecondJob,  // ← send flag
-      }),
-    });
-
-    const data = await res.json();
-
-    if (res.ok) {
-      toast.success(
-        allowsSecondJob
-          ? `Allocated to ${mukkadam.mukkadam_name} (½ day — available for 1 more job)`
-          : `Allocated to ${mukkadam.mukkadam_name}`
-      );
-      setHalfDayDialog(null);
-      setAllowsSecondJob(false);
-      onLeavesUpdated();
-      
-    } else {
-      toast.error(data.error || 'Allocation failed');
-    }
-  } catch (e) {
-    toast.error('Allocation failed');
-    console.error(e);
-  }
-};
 
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1243,7 +1195,70 @@ mukkadams.forEach((m: any) => {
 
   canDoAcToday += maxAc;
 });
+const [allowsMoreJobs, setAllowsMoreJobs] = useState(false);
+// ── Confirm handler ──────────────────────────────────────────────────────────
+const handleConfirmThirdDay = async () => {
+  if (!halfDayDialog) return;
+  const { act, mukkadam, rate, availableWorkers, remainingArea, jobSlotsUsed } = halfDayDialog;
 
+  const slotsUsed = jobSlotsUsed ?? 0;
+  // If this is the 2nd or 3rd job, no more slots after — force allows_more_jobs=false.
+  // If this is the 1st job, respect the checkbox.
+  const isLastSlot = slotsUsed >= 2;          // 3rd job fills the day
+  const isMidSlot  = slotsUsed === 1;         // 2nd job, 1 left → always allows more
+  
+  // What we send to the backend:
+  //   allows_second_job: true  → worker still has slots (deduct nothing from capacity)
+  //   allows_second_job: false → worker is fully used (deduct from capacity)
+  const allowsMoreJobsToSend = isLastSlot
+    ? false                // 3rd job: day is full
+    : isMidSlot
+      ? true               // 2nd job: 1 slot still left, always keep available
+      : allowsMoreJobs;    // 1st job: user chose
+
+  const token = localStorage.getItem('auth_token');
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/allocations/create_allocation/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Token ${token}`,
+      },
+      body: JSON.stringify({
+        job_activity_id: act.id,
+        mukkadam_id: mukkadam.mukkadam_id,
+        allocated_date: isoDate,
+        allocated_area: remainingArea,
+        allocated_workers: availableWorkers,
+        farmer_rate: act.rate_per_acre,
+        mukkadam_rate: Number(rate?.rate_per_acre || 0),
+        cluster_id: clusterId,
+        skip_strict_check: false,
+        allows_second_job: allowsMoreJobsToSend,  // reuse same field name for backend compat
+        job_slot: slotsUsed + 1,                  // 1, 2, or 3 — useful for backend tracking
+      }),
+    });
+
+    const data = await res.json();
+
+    if (res.ok) {
+      const slotLabel = ['1st', '2nd', '3rd'][slotsUsed] ?? `${slotsUsed + 1}th`;
+      toast.success(
+        allowsMoreJobsToSend
+          ? `Allocated to ${mukkadam.mukkadam_name} (⅓ day — ${slotLabel} job, more slots available)`
+          : `Allocated to ${mukkadam.mukkadam_name} (${slotLabel} job — day complete)`
+      );
+      setHalfDayDialog(null);
+      setAllowsMoreJobs(false);
+      onLeavesUpdated();
+    } else {
+      toast.error(data.error || 'Allocation failed');
+    }
+  } catch (e) {
+    toast.error('Allocation failed');
+    console.error(e);
+  }
+};
 useEffect(() => {
   // ── 1. Notes ──────────────────────────────────────────────────
   
@@ -1618,7 +1633,7 @@ return (
   {/* mukkadam-level ½‑day indicator: show on ALL jobs of this mukkadam today */}
   {mukkadamHasHalfDay && (
     <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200">
-      ½ day
+      1/3 day
     </span>
   )}
 
@@ -1970,7 +1985,7 @@ return (
       background: 'rgba(0,0,0,0.5)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}
-    onClick={() => { setHalfDayDialog(null); setAllowsSecondJob(false); }}
+    onClick={() => { setHalfDayDialog(null); setAllowsMoreJobs(false); }}
   >
     <div
       style={{
@@ -2008,51 +2023,88 @@ return (
         ))}
       </div>
 
-      {halfDayDialog.isSecondJob ? (
-  <div style={{
-    display: 'flex', alignItems: 'flex-start', gap: '10px',
-    padding: '12px', borderRadius: '10px',
-    border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: '16px',
-  }}>
-    <span style={{ fontSize: '1rem', flexShrink: 0 }}>½</span>
-    <div>
-      <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#0369a1' }}>
-        2nd job — full day allocation
-      </p>
-      <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#0284c7', lineHeight: 1.5 }}>
-        {halfDayDialog.mukkadam.mukkadam_name} already has a ½ day job today.
-        This will be allocated as the 2nd job for the remaining half.
-      </p>
-    </div>
-  </div>
-) : (
-  <label style={{
-    display: 'flex', alignItems: 'flex-start', gap: '10px',
-    padding: '12px', borderRadius: '10px', cursor: 'pointer',
-    border: allowsSecondJob ? '2px solid #10b981' : '2px solid #e5e7eb',
-    background: allowsSecondJob ? '#f0fdf4' : '#fff',
-    marginBottom: '16px', transition: 'all 0.15s',
-  }}>
-    <input type="checkbox" checked={allowsSecondJob}
-      onChange={e => setAllowsSecondJob(e.target.checked)}
-      style={{ marginTop: '2px', accentColor: '#10b981', width: '16px', height: '16px', flexShrink: 0 }} />
-    <div>
-      <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#065f46' }}>
-        ½ Can do 1 more job today
-      </p>
-      <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#6b7280', lineHeight: 1.5 }}>
-        Workers stay available for a second job. This job runs in the first half of the day —
-        worker count will <strong>not</strong> be deducted from daily capacity.
-      </p>
-    </div>
-  </label>
-)}
+      {/* ── ⅓-day slot banner ─────────────────────────────────────────── */}
+      {(() => {
+        const slotsUsed = halfDayDialog.jobSlotsUsed ?? 0; // 0, 1, or 2
+        const slotsLeft = 3 - slotsUsed;                   // slots remaining AFTER this job
+
+        // 3rd job — full day now used, no more slots
+        if (slotsUsed >= 2) {
+          return (
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: '10px',
+              padding: '12px', borderRadius: '10px',
+              border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: '16px',
+            }}>
+              <span style={{ fontSize: '1rem', flexShrink: 0 }}>⅓</span>
+              <div>
+                <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#0369a1' }}>
+                  3rd job — full day used
+                </p>
+                <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#0284c7', lineHeight: 1.5 }}>
+                  {halfDayDialog.mukkadam.mukkadam_name} already has 2 jobs today.
+                  This final ⅓ completes their day — no more slots after this.
+                </p>
+              </div>
+            </div>
+          );
+        }
+
+        // 2nd job — 1 slot left after this
+        if (slotsUsed === 1) {
+          return (
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: '10px',
+              padding: '12px', borderRadius: '10px',
+              border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: '16px',
+            }}>
+              <span style={{ fontSize: '1rem', flexShrink: 0 }}>⅓</span>
+              <div>
+                <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#0369a1' }}>
+                  2nd job — 1 slot remaining
+                </p>
+                <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#0284c7', lineHeight: 1.5 }}>
+                  {halfDayDialog.mukkadam.mukkadam_name} already has 1 job today.
+                  After this they can still take 1 more ⅓-day job.
+                </p>
+              </div>
+            </div>
+          );
+        }
+
+        // 1st job — show the "can do more" checkbox
+        return (
+          <label style={{
+            display: 'flex', alignItems: 'flex-start', gap: '10px',
+            padding: '12px', borderRadius: '10px', cursor: 'pointer',
+            border: allowsMoreJobs ? '2px solid #10b981' : '2px solid #e5e7eb',
+            background: allowsMoreJobs ? '#f0fdf4' : '#fff',
+            marginBottom: '16px', transition: 'all 0.15s',
+          }}>
+            <input
+              type="checkbox"
+              checked={allowsMoreJobs}
+              onChange={e => setAllowsMoreJobs(e.target.checked)}
+              style={{ marginTop: '2px', accentColor: '#10b981', width: '16px', height: '16px', flexShrink: 0 }}
+            />
+            <div>
+              <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#065f46' }}>
+                ⅓ Can do more jobs today
+              </p>
+              <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#6b7280', lineHeight: 1.5 }}>
+                This job runs in 1 of 3 slots — workers stay available for up to 2 more ⅓-day jobs.
+                Worker count will <strong>not</strong> be deducted from daily capacity.
+              </p>
+            </div>
+          </label>
+        );
+      })()}
 
       {/* Buttons */}
       <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
         <button
           type="button"
-          onClick={() => { setHalfDayDialog(null); setAllowsSecondJob(false); }}
+          onClick={() => { setHalfDayDialog(null); setAllowsMoreJobs(false); }}
           style={{
             padding: '8px 18px', borderRadius: '8px',
             border: '1px solid #e5e7eb', background: '#fff',
@@ -2063,22 +2115,21 @@ return (
         </button>
         <button
           type="button"
-          onClick={handleConfirmHalfDay}
+          onClick={handleConfirmThirdDay}
           style={{
             padding: '8px 18px', borderRadius: '8px', border: 'none',
-            background: allowsSecondJob ? '#10b981' : '#2563eb',
+            background: allowsMoreJobs ? '#10b981' : '#2563eb',
             color: '#fff', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer',
             transition: 'background 0.15s',
           }}
         >
-          {allowsSecondJob ? '½ Allocate' : 'Allocate'}
+          {allowsMoreJobs ? '⅓ Allocate' : 'Allocate'}
         </button>
       </div>
     </div>
   </div>,
   document.body
 )}
-
 
 {/* ── Move Allocation Modal ── */}
 {moveModal && (
@@ -2392,18 +2443,13 @@ const mukkadamHasHalfDay =
                         {isBothMode && actAllocations.length > 0 ? (
                           <div className="space-y-1">
                             {actAllocations.map((al) => {
-  const alMukkadam = mukkadams.find(
-    (mk) => mk.mukkadam_id === al.mukkadam,
-  );
+  const alMukkadam = mukkadams.find((mk) => mk.mukkadam_id === al.mukkadam);
   const vs = getVerifyStatus(al);
   const vstyle = VERIFY_STYLE[vs];
-  const isHalfDay = (al as any).allows_second_job === true;
+  const isThirdDay = (al as any).allows_second_job === true;  // this specific allocation
 
   return (
-    <div
-      key={al.id}
-      className="flex items-center gap-2 text-xs"
-    >
+    <div key={al.id} className="flex items-center gap-2 text-xs">
       <span className="font-medium text-stone-700">
         {alMukkadam?.mukkadam_name || 'N/A'}
       </span>
@@ -2411,13 +2457,12 @@ const mukkadamHasHalfDay =
         {Number(al.allocated_area).toFixed(2)} ac
       </span>
 
-     {/* activity-level ½ day info */}
-{mukkadamHasHalfDay && (
-  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold mt-1">
-    ½ day job
-  </span>
-)}
-
+      {/* ⅓ day badge — per allocation, not per mukkadam */}
+      {isThirdDay && (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+          ⅓ day job  {/* ← was ½ */}
+        </span>
+      )}
 
       {al.is_carry_forward && (
         <span className="text-violet-500 text-[10px]">🔄</span>
@@ -2447,52 +2492,44 @@ const mukkadamHasHalfDay =
                                 remainingArea >
                                   0 && canDoAc >= remainingArea;
 
-                              const handleTeamClick =
-                                () => {
-                                  // if (!fits) return;
-                                  const mukkadam =
-                                    mukkadams.find(
-                                      (mk) =>
-                                        mk.mukkadam_id ===
-                                        r.mukkadamId,
-                                    );
-                                  if (!mukkadam) return;
-                                  const rate =
-                                    mukkadam
-                                      .activity_rates?.find(
-                                        (rt: any) =>
-                                          rt.activity_id ===
-                                            act.activity_id ||
-                                          rt.activity_name ===
-                                            act.activity_name,
-                                      );
+                              const handleTeamClick = () => {
+  const mukkadam = mukkadams.find((mk) => mk.mukkadam_id === r.mukkadamId);
+  if (!mukkadam) return;
 
-                                  const alreadyHasHalfDay =
-                                    allocations.some(
-                                      (a) =>
-                                        a.mukkadam ===
-                                          r.mukkadamId &&
-                                        (a as any)
-                                          .allows_second_job ===
-                                          true,
-                                    );
+  const rate = mukkadam.activity_rates?.find(
+    (rt: any) =>
+      rt.activity_id === act.activity_id ||
+      rt.activity_name === act.activity_name,
+  );
 
-                                  setHalfDayDialog({
-                                    open: true,
-                                    jobId: job.job_id,
-                                    act,
-                                    mukkadam,
-                                    rate,
-                                    availableWorkers:
-                                      r.availableWorkers,
-                                    neededWorkers: 0,
-                                    remainingArea:
-                                      remainingArea,
-                                    isSecondJob:
-                                      alreadyHasHalfDay,
-                                    targetDate: isoDate,
-                                  });
-                                };
+  // The Allocation type uses `allocated_date` but check what your API actually returns.
+// Add a console.log to verify:
+console.log('sample allocation:', allocations[0]);
+
+// Then use whichever field name appears:
+const thirdDayJobsToday = allocations.filter(
+  (a) =>
+    a.mukkadam === r.mukkadamId &&
+    (
+      (a as any).allocated_date === isoDate ||
+      (a as any).date === isoDate
+    ),
+).length;
+
+  setHalfDayDialog({
+    open: true,
+    jobId: job.job_id,
+    act,
+    mukkadam,
+    rate,
+    availableWorkers: r.availableWorkers,
+    neededWorkers: 0,
+    remainingArea,
+    targetDate: isoDate,
+    isSecondJob: thirdDayJobsToday >= 1,
+    jobSlotsUsed: thirdDayJobsToday,   // 0 → 1st job, 1 → 2nd, 2 → 3rd
+  });
+};
 
                               return (
                                 <button

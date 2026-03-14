@@ -708,18 +708,42 @@ return (
       {/* Jobs count – only in Jobs view */}
 {/* Jobs count – only in Jobs view, exclude manually moved activities */}
 {viewModes.includes('jobs') && dayJobs.length > 0 && (() => {
-  const aiCount = dayJobs.reduce((sum, job) =>
-    sum + (job.activities || []).filter(act =>
-      !(act as any).is_manually_moved
-    ).length, 0
-  );
-  return aiCount > 0 ? (
-    <div className="capacity-badge jobs-badge">
-      {aiCount} ai
-    </div>
-  ) : null;
-})()}
+  let aiActive = 0;   // scheduled normally, not moved away, not moved in
+  let aiMoved  = 0;   // originally AI but moved away to another date
 
+  dayJobs.forEach(job => {
+    (job.activities || []).forEach((act: any) => {
+      if ((act as any).is_manually_moved) return; // H job, skip
+
+      const movedAway =
+        !(act as any).is_manually_moved &&
+        (act as any).moved_to_date != null;
+
+      if (movedAway) {
+        aiMoved++;
+      } else {
+        aiActive++;
+      }
+    });
+  });
+
+  const total = aiActive + aiMoved;
+  if (total === 0) return null;
+
+  return (
+    <div className="capacity-badge jobs-badge flex items-center gap-1">
+      <span>{aiActive} ai</span>
+      {aiMoved > 0 && (
+        <span
+          className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-1"
+          title={`${aiMoved} AI job${aiMoved > 1 ? 's' : ''} moved to another date`}
+        >
+          {aiActive}/{total}
+        </span>
+      )}
+    </div>
+  );
+})()}
 
       {(viewModes.includes('potential')) && hasPotential && (
         <div className="capacity-badge potential-badge">
