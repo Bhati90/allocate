@@ -13,8 +13,8 @@ from .views import (
     MukkadamActivityRateViewSet,add_weekly_payment,UserProfileView,UserListAPIView,
     PlanningViewSet,search_farmers_for_cluster,search_mukkadams_for_cluster,add_farmer_plots_to_cluster,add_mukkadam_to_cluster,
     PlotViewSet,tender_dashboard,list_all_settlements,pay_mukkadam_settlement,add_misc_cost,
-    get_cluster_plots,get_districts,get_states,get_talukas,get_villages,UserSearchView,
-    insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,
+    get_cluster_plots,get_districts,get_states,get_talukas,get_villages,UserSearchView,cluster_insights,
+    insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,payment_overview,
     reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,JobNoteViewSet,activity_dashboard,
     search_villages,farmer_work_verification_detail,tender_activity_count_from_api,mark_allocation_complete,
     suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs
@@ -55,7 +55,7 @@ urlpatterns = [
     path('api/', include(router.urls)),
 
     path('api/tender-activity-count/', tender_activity_count_from_api, name='tender_activity_count_from_api'),
-
+path('api/payment-overview/', payment_overview, name='payment_overview'),
 # path('api/activities/insert_between/', insert_activity_between, name='insert_activity_between'),
 path('locations/search_villages/', search_villages),
     path('locations/states/', get_states, name='get-states'),
@@ -124,6 +124,7 @@ path('api/farmer/work-reports/', farmer_work_verification_detail, name='farmer_w
 
 path('api/cluster/<int:cluster_id>/payment-dashboard/', cluster_payment_dashboard),
 
+path('api/insights/', cluster_insights, name='cluster_insights'),
 
 path('api/farmer-bill/send-webhook/', send_farmer_bill_to_webhook),
 path('api/allocations/<int:allocation_id>/mark_complete/', mark_allocation_complete),

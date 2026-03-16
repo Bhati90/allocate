@@ -318,6 +318,587 @@ def get_cluster_info(request, cluster_id):
     except Cluster.DoesNotExist:
         return Response({'error': 'Cluster not found'}, status=404)
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def cluster_insights(request):
+    from datetime import date, timedelta
+    from decimal import Decimal
+    from collections import defaultdict
+
+    today    = date.today()
+    tomorrow = today + timedelta(days=1)
+    week_days = [today + timedelta(days=i) for i in range(7)]
+
+    def fmt_date(d):
+        return d.strftime('%d %b').lstrip('0')
+
+    clusters = Cluster.objects.all().order_by('name')
+    activity_qs = JobActivity.objects.filter(
+        job__booking_type='tender',
+        total_area__gt=0,
+        plot__isnull=False,
+    )
+    # ── Global KPIs — ALL data not just clustered ─────────────────────────
+    total_farmers    = Farmer.objects.count()
+    total_area       = JobActivity.objects.filter(total_area__gt=0).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
+    allocated_area   = JobActivity.objects.filter(total_area__gt=0).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
+    total_jobs       = Job.objects.count()
+    total_plots      = Plot.objects.count()
+    total_activities    = activity_qs.values('job', 'plot', 'api_activity_id').distinct().count()
+
+    # ── Global daily unallocated + crew ───────────────────────────────────
+    global_daily = []
+    for d in week_days:
+        unalloc = JobActivity.objects.filter(
+            scheduled_date=d,
+            allocation_status='pending',
+            total_area__gt=0,
+        ).count()
+        crew = Allocation.objects.filter(
+            allocated_date=d,
+        ).aggregate(s=models.Sum('allocated_workers'))['s'] or 0
+        global_daily.append({
+            'date':        str(d),
+            'label':       fmt_date(d),
+            'day_name':    d.strftime('%a'),
+            'unallocated': unalloc,
+            'crew':        int(crew),
+        })
+
+    # ── Per-cluster data ──────────────────────────────────────────────────
+    cluster_data = []
+
+    for c in clusters:
+        c_total_area = JobActivity.objects.filter(
+            plot__clusters=c, total_area__gt=0
+        ).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
+
+        c_alloc_area = JobActivity.objects.filter(
+            plot__clusters=c, total_area__gt=0
+        ).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
+
+        c_farmers = Farmer.objects.filter(clusters=c).count()
+        c_jobs    = Job.objects.filter(clusters=c).distinct().count()
+        c_plots   = Plot.objects.filter(clusters=c).count()
+
+        # ── Today status ──────────────────────────────────────────────────
+        today_allocs = Allocation.objects.filter(
+            cluster=c, allocated_date=today
+        ).select_related('mukkadam')
+
+        has_today = today_allocs.exists()
+        has_note  = bool(c.note)
+
+        if has_today and not has_note:
+            today_status = 'green'
+        elif has_today and has_note:
+            today_status = 'yellow'
+        else:
+            today_status = 'red'
+
+        today_teams = ', '.join(set(
+            f"{a.mukkadam.mukkadam_name} ({a.allocated_workers})"
+            for a in today_allocs
+        ))
+        # In the per-cluster loop, replace today_msg:
+
+        # Mukkadams assigned to cluster
+        assigned_mukkadams = ClusterMukkadamAssignment.objects.filter(
+            cluster=c, is_active=True,
+        ).select_related('mukkadam')
+
+        assigned_names = [
+            f"{a.mukkadam.mukkadam_name} ({a.mukkadam.crew_size} crew, {'UP' if a.mukkadam_type == 'updown' else 'P'})"
+            for a in assigned_mukkadams
+        ]
+
+        if has_today:
+            today_msg = c.note if has_note else (today_teams or 'Active today')
+        else:
+            today_msg = c.note if has_note else (
+                f"No allocation — Assigned: {', '.join(assigned_names)}" if assigned_names else 'No team assigned'
+            )
+
+ # ── Tomorrow status ───────────────────────────────────────────────
+        tmrw_allocs = Allocation.objects.filter(
+            cluster=c, allocated_date=tomorrow
+        ).select_related('mukkadam')
+
+        has_tmrw = tmrw_allocs.exists()
+
+        if has_tmrw and not has_note:
+            tmrw_status = 'green'
+        elif has_tmrw and has_note:
+            tmrw_status = 'yellow'
+        else:
+            tmrw_status = 'red'
+
+        tmrw_teams = ', '.join(set(
+            f"{a.mukkadam.mukkadam_name} ({a.allocated_workers})"
+            for a in tmrw_allocs
+        ))
+        # Same for tomorrow:
+        if has_tmrw:
+            tmrw_msg = tmrw_teams or 'Active tomorrow'
+        else:
+            tmrw_msg = f"No allocation — Assigned: {', '.join(assigned_names)}" if assigned_names else 'No team scheduled'
+
+        # ── 7-day week plan ───────────────────────────────────────────────
+        week_plan = []
+        for d in week_days:
+            day_allocs = Allocation.objects.filter(
+                cluster=c, allocated_date=d,
+            ).select_related('mukkadam', 'job_activity__activity').order_by('mukkadam_id')
+
+            mukkadam_ids = list(day_allocs.values_list('mukkadam_id', flat=True).distinct())
+            assignments  = ClusterMukkadamAssignment.objects.filter(
+                cluster=c, mukkadam_id__in=mukkadam_ids, is_active=True,
+            ).values('mukkadam_id', 'mukkadam_type')
+            type_map = {a['mukkadam_id']: a['mukkadam_type'] for a in assignments}
+
+            seen_names = set()
+            teams = []
+            for a in day_allocs:
+                mk_name = a.mukkadam.mukkadam_name
+                if mk_name in seen_names:
+                    continue
+                seen_names.add(mk_name)
+                mk_type = type_map.get(a.mukkadam_id, 'permanent')
+                teams.append({
+                    'mukkadam_id':   a.mukkadam_id,
+                    'name':          mk_name,
+                    'crew':          a.allocated_workers,
+                    'mukkadam_type': mk_type,
+                    'type_tag':      'UP' if mk_type == 'updown' else 'P',
+                    'status':        'confirmed',
+                })
+
+            # ── NEW: if no confirmed allocation, show assigned mukkadams as available ──
+            available_teams = []
+            if not teams:
+                for a in assigned_mukkadams:   # already fetched above in the cluster loop
+                    mk_type = a.mukkadam_type
+                    available_teams.append({
+                        'mukkadam_id':   a.mukkadam_id,
+                        'name':          a.mukkadam.mukkadam_name,
+                        'crew':          a.mukkadam.crew_size,
+                        'mukkadam_type': mk_type,
+                        'type_tag':      'UP' if mk_type == 'updown' else 'P',
+                        'status':        'available',   # <── key difference
+                    })
+
+            unalloc_count = JobActivity.objects.filter(
+                plot__clusters=c,
+                scheduled_date=d,
+                allocation_status='pending',
+                total_area__gt=0,
+            ).count()
+
+            week_plan.append({
+                'date':            str(d),
+                'label':           fmt_date(d),
+                'day_name':        d.strftime('%a'),
+                'is_today':        d == today,
+                'teams':           teams,
+                'available_teams': available_teams,   # ← add this
+                'unallocated':     unalloc_count,
+            })
+        cluster_data.append({
+            'id':             c.id,
+            'name':           c.name,
+            'note':           c.note or '',
+            'districts':      c.districts or [],
+            'farmers':        c_farmers,
+            'plots':          c_plots,
+            'jobs':           c_jobs,
+            'total_area':     float(c_total_area),
+            'allocated_area': float(c_alloc_area),
+            'pending_area':   float(c_total_area - c_alloc_area),
+            'pct':            round(float(c_alloc_area / c_total_area * 100), 1) if c_total_area > 0 else 0,
+            'today': {
+                'status': today_status,
+                'msg':    today_msg,
+            },
+            'tomorrow': {
+                'status': tmrw_status,
+                'msg':    tmrw_msg,
+            },
+            'week_plan': week_plan,
+        })
+
+    # Sort: red first, yellow, green
+    status_order = {'red': 0, 'yellow': 1, 'green': 2}
+    cluster_data.sort(key=lambda c: status_order.get(c['today']['status'], 3))
+
+    # After the cluster loop, add "No Cluster" stats:
+
+    # Farmers with no cluster
+    no_cluster_farmers = Farmer.objects.filter(clusters__isnull=True).count()
+    no_cluster_plots   = Plot.objects.filter(clusters__isnull=True).count()
+    no_cluster_jobs    = Job.objects.filter(clusters__isnull=True).distinct().count()
+    no_cluster_area    = JobActivity.objects.filter(
+        plot__clusters__isnull=True, total_area__gt=0
+    ).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
+    no_cluster_alloc   = JobActivity.objects.filter(
+        plot__clusters__isnull=True, total_area__gt=0
+    ).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
+
+    no_cluster_row = {
+        'id':             0,
+        'name':           '— No Cluster',
+        'note':           '',
+        'districts':      [],
+        'farmers':        no_cluster_farmers,
+        'plots':          no_cluster_plots,
+        'jobs':           no_cluster_jobs,
+        'total_area':     float(no_cluster_area),
+        'allocated_area': float(no_cluster_alloc),
+        'pending_area':   float(no_cluster_area - no_cluster_alloc),
+        'pct':            round(float(no_cluster_alloc / no_cluster_area * 100), 1) if no_cluster_area > 0 else 0,
+        'today':          {'status': 'yellow', 'msg': 'Not assigned to any cluster'},
+        'tomorrow':       {'status': 'yellow', 'msg': 'Not assigned to any cluster'},
+        'week_plan':      [{'date': str(d), 'label': fmt_date(d), 'day_name': d.strftime('%a'), 'is_today': d == today, 'teams': [], 'unallocated': JobActivity.objects.filter(plot__clusters__isnull=True, scheduled_date=d, allocation_status='pending', total_area__gt=0).count()} for d in week_days],
+    }
+
+    return Response({
+        'today':       str(today),
+        'tomorrow':    str(tomorrow),
+        'days':        [{'date': str(d), 'label': fmt_date(d), 'day_name': d.strftime('%a')} for d in week_days],
+        'global_kpis': {
+            'total_farmers':    total_farmers,
+            'total_plots':      total_plots,
+            'total_area':       float(total_area),
+            'allocated_area':   float(allocated_area),
+            'pending_area':     float(total_area - allocated_area),
+            'pct_complete':     round(float(allocated_area / total_area * 100), 1) if total_area > 0 else 0,
+            'total_jobs':       total_jobs,
+            'total_activities': total_activities,
+        },
+        'global_daily':  global_daily,
+       
+        'no_cluster_row': no_cluster_row,
+    'clusters': cluster_data,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def payment_overview(request):
+    from datetime import date, timedelta
+    from decimal import Decimal
+    from collections import defaultdict
+    from django.db.models import Sum
+
+    today        = date.today()
+    week_ago     = today - timedelta(days=7)
+
+    # ── 1. All sent bill logs ─────────────────────────────────────────────
+    sent_logs = FarmerBillWebhookLog.objects.all().order_by('-sent_at')
+
+    # Latest log per farmer+activity
+    latest_map = {}
+    for log in sent_logs:
+        key = (str(log.farmer_id), log.activity_name or '')
+        if key not in latest_map:
+            latest_map[key] = log
+
+    # ── 2. Expected total area per farmer+activity ────────────────────────
+    # This is the "all plots done" check — mirrors frontend allDone logic
+    expected_area_rows = JobActivity.objects.filter(
+        total_area__gt=0,
+    ).select_related(
+        'job__farmer',
+        'activity',
+    ).values(
+        'job__farmer__farmer_id',
+        'activity__name',
+    ).annotate(
+        total_expected=Sum('total_area')
+    )
+
+    expected_area_map = {}
+    for row in expected_area_rows:
+        key = (
+            str(row['job__farmer__farmer_id']),
+            row['activity__name'],
+        )
+        existing = expected_area_map.get(key, 0)
+        expected_area_map[key] = existing + float(row['total_expected'] or 0)
+
+    # ── 3. All completed allocations ──────────────────────────────────────
+    cluster_allocs = Allocation.objects.filter(
+        work_status='completed',
+    ).select_related(
+        'job_activity__activity',
+        'job_activity__job__farmer',
+        'job_activity__job',
+        'job_activity__plot',
+        'cluster',
+        'mukkadam',
+    ).values(
+        'job_activity__job__farmer__farmer_id',
+        'job_activity__job__farmer__farmer_name',
+        'job_activity__job__farmer__phone_number',
+        'job_activity__activity__name',
+        'job_activity__rate_per_acre',
+        'job_activity__plot__name',
+        'job_activity__job__job_id',
+        'cluster__id',
+        'cluster__name',
+        'mukkadam__mukkadam_name',
+        'allocated_area',
+        'allocated_date',
+    )
+
+    # Group by farmer+activity
+    completed_groups = defaultdict(lambda: {
+        'farmer_id':    None,
+        'farmer_name':  None,
+        'phone':        None,
+        'activity':     None,
+        'rate':         0,
+        'cluster_id':   None,
+        'cluster_name': None,
+        'mukkadam':     None,
+        'job_id':       None,
+        'plots':        set(),
+        'total_area':   Decimal('0'),
+        'latest_date':  None,
+    })
+
+    for row in cluster_allocs:
+        farmer_id = str(row['job_activity__job__farmer__farmer_id'])
+        act_name  = row['job_activity__activity__name']
+        key       = (farmer_id, act_name)
+        g         = completed_groups[key]
+
+        g['farmer_id']    = farmer_id
+        g['farmer_name']  = row['job_activity__job__farmer__farmer_name']
+        g['phone']        = row['job_activity__job__farmer__phone_number'] or ''
+        g['activity']     = act_name
+        g['rate']         = float(row['job_activity__rate_per_acre'] or 0)
+        g['cluster_id']   = row['cluster__id']
+        g['cluster_name'] = row['cluster__name'] or '—'
+        g['mukkadam']     = row['mukkadam__mukkadam_name'] or '—'
+        g['job_id']       = row['job_activity__job__job_id']
+
+        if row['job_activity__plot__name']:
+            g['plots'].add(row['job_activity__plot__name'])
+
+        g['total_area'] += Decimal(str(row['allocated_area'] or 0))
+
+        d = row['allocated_date']
+        if d and (not g['latest_date'] or d > g['latest_date']):
+            g['latest_date'] = d
+
+    # ── 4. Build farmer list — only fully done combos ────────────────────
+    AREA_TOLERANCE = 0.05
+    farmer_list = []
+
+    for (farmer_id, act_name), g in completed_groups.items():
+        expected  = expected_area_map.get((farmer_id, act_name), 0)
+        completed = float(g['total_area'])
+
+        # Skip if not all plots done (mirrors frontend allDone logic)
+        if expected > 0 and completed < expected - AREA_TOLERANCE:
+            continue
+
+        amount = (
+            g['total_area'] * Decimal(str(g['rate']))
+        ).quantize(Decimal('0.01'))
+
+        plots   = sorted(g['plots'])
+        n_plots = len(plots)
+        acres   = float(g['total_area'])
+        log     = latest_map.get((farmer_id, act_name))
+
+        if log:
+            balance  = float(log.balance_due or 0)
+            sent_at  = log.sent_at.date() if log.sent_at else today
+            days_ago = (today - sent_at).days
+
+            if balance <= 0.01:
+                status = 'collected'
+            elif days_ago > 7:
+                status = 'overdue'
+            elif sent_at >= week_ago:
+                status = 'this_week'
+            else:
+                status = 'next_week'
+
+            farmer_list.append({
+                'farmer_id':         farmer_id,
+                'farmer_name':       g['farmer_name'],
+                'phone':             g['phone'],
+                'cluster_id':        g['cluster_id'],
+                'cluster_name':      g['cluster_name'],
+                'activity':          act_name,
+                'rate':              g['rate'],
+                'plots':             plots,
+                'n_plots':           n_plots,
+                'acres':             acres,
+                'amount':            float(amount),
+                'mukkadam':          g['mukkadam'],
+                'job_id':            g['job_id'],
+                'completed_date':    str(g['latest_date']) if g['latest_date'] else None,
+                'status':            'billed',
+                'bill_status':       'sent',
+                'expected_payment':  status,
+                'days_since_billed': days_ago,
+                'billed_date':       str(sent_at),
+                'balance_due':       balance,
+                'sent_by':           log.sent_by_name or '—',
+                'webhook_status':    log.webhook_status,
+            })
+        else:
+            farmer_list.append({
+                'farmer_id':         farmer_id,
+                'farmer_name':       g['farmer_name'],
+                'phone':             g['phone'],
+                'cluster_id':        g['cluster_id'],
+                'cluster_name':      g['cluster_name'],
+                'activity':          act_name,
+                'rate':              g['rate'],
+                'plots':             plots,
+                'n_plots':           n_plots,
+                'acres':             acres,
+                'amount':            float(amount),
+                'mukkadam':          g['mukkadam'],
+                'job_id':            g['job_id'],
+                'completed_date':    str(g['latest_date']) if g['latest_date'] else None,
+                'status':            'ready_to_bill',
+                'bill_status':       None,
+                'expected_payment':  'ready_to_bill',
+                'days_since_billed': None,
+                'billed_date':       None,
+                'balance_due':       float(amount),
+                'sent_by':           None,
+                'webhook_status':    None,
+            })
+
+    # ── 5. Pipeline counts ────────────────────────────────────────────────
+    ready_list    = [f for f in farmer_list if f['status'] == 'ready_to_bill']
+    billed_list   = [f for f in farmer_list if f['status'] == 'billed']
+    overdue_list  = [f for f in farmer_list if f['expected_payment'] == 'overdue']
+    thisweek_list = [f for f in farmer_list if f['expected_payment'] == 'this_week']
+    nextweek_list = [f for f in farmer_list if f['expected_payment'] == 'next_week']
+
+    # ── 6. Recent payments (last 15) ──────────────────────────────────────
+    recent_payments_qs = FarmerPayment.objects.filter(
+        paid_status=True,
+        paid_at__date__gte=today - timedelta(days=30),
+    ).select_related(
+        'booking__job__farmer',
+        'booking__job',
+    ).order_by('-paid_at')[:15]
+
+    recent_payments = []
+    for p in recent_payments_qs:
+        try:
+            farmer_name  = p.booking.job.farmer.farmer_name
+            job_id       = p.booking.job.job_id
+            cluster_obj  = p.booking.job.clusters.first()
+            cluster_name = cluster_obj.name if cluster_obj else '—'
+        except Exception:
+            farmer_name  = '—'
+            job_id       = '—'
+            cluster_name = '—'
+
+        recent_payments.append({
+            'farmer':    farmer_name,
+            'job_id':    job_id,
+            'cluster':   cluster_name,
+            'amount':    float(p.amount),
+            'paid_date': str(p.paid_at.date()),
+            'method':    p.mode,
+            'notes':     p.notes or '',
+        })
+
+    collected_7d = FarmerPayment.objects.filter(
+        paid_status=True,
+        paid_at__date__gte=week_ago,
+    ).aggregate(s=Sum('amount'))['s'] or 0
+
+    # ── 7. Forecast ───────────────────────────────────────────────────────
+    forecast = {
+        'overdue':       {'count': len(overdue_list),  'amount': sum(f['balance_due'] for f in overdue_list)},
+        'this_week':     {'count': len(thisweek_list), 'amount': sum(f['balance_due'] for f in thisweek_list)},
+        'next_week':     {'count': len(nextweek_list), 'amount': sum(f['balance_due'] for f in nextweek_list)},
+        'ready_to_bill': {'count': len(ready_list),    'amount': sum(f['amount'] for f in ready_list)},
+    }
+
+    # ── 8. Cluster billing summary ────────────────────────────────────────
+    clusters = Cluster.objects.all().order_by('name')
+    cluster_billing = []
+
+    for c in clusters:
+        job_ids = list(
+            Job.objects.filter(clusters=c).values_list('job_id', flat=True)
+        )
+
+        total_job_value = JobBooking.objects.filter(
+            job_id__in=job_ids,
+        ).aggregate(s=Sum('total_amount'))['s'] or Decimal('0')
+
+        total_billed = sum(
+            f['amount'] for f in farmer_list
+            if f['cluster_id'] == c.id and f['status'] == 'billed'
+        )
+        total_collected = float(
+            FarmerPayment.objects.filter(
+                booking__job_id__in=job_ids,
+                paid_status=True,
+            ).aggregate(s=Sum('amount'))['s'] or 0
+        )
+        total_due = max(0, total_billed - total_collected)
+
+        bills_pending  = sum(1 for f in farmer_list if f['cluster_id'] == c.id and f['status'] == 'ready_to_bill')
+        bills_sent     = sum(1 for f in farmer_list if f['cluster_id'] == c.id and f['status'] == 'billed')
+        bills_awaiting = sum(1 for f in farmer_list if f['cluster_id'] == c.id and f['expected_payment'] == 'overdue')
+
+        cluster_billing.append({
+            'cluster_id':      c.id,
+            'cluster':         c.name,
+            'farmers':         Farmer.objects.filter(clusters=c).count(),
+            'total_job_value': float(total_job_value),
+            'billed':          total_billed,
+            'collected':       total_collected,
+            'due':             total_due,
+            'bills_pending':   bills_pending,
+            'bills_sent':      bills_sent,
+            'bills_awaiting':  bills_awaiting,
+        })
+
+    return Response({
+        'today': str(today),
+        'pipeline': {
+            'ready_to_bill': {
+                'count':  len(ready_list),
+                'amount': sum(f['amount'] for f in ready_list),
+                'plots':  sum(f['n_plots'] for f in ready_list),
+            },
+            'bills_sent': {
+                'count':  len(billed_list),
+                'amount': sum(f['amount'] for f in billed_list),
+            },
+            'overdue': {
+                'count':    len(overdue_list),
+                'amount':   sum(f['balance_due'] for f in overdue_list),
+                'avg_days': round(
+                    sum(f['days_since_billed'] or 0 for f in overdue_list) /
+                    max(len(overdue_list), 1)
+                ),
+            },
+            'collected_7d': {
+                'count':  len(recent_payments),
+                'amount': float(collected_7d),
+            },
+        },
+        'forecast':        forecast,
+        'farmer_list':     farmer_list,
+        'recent_payments': recent_payments,
+        'cluster_billing': cluster_billing,
+    })
 
 @api_view(['DELETE'])
 def reset_cluster_activity_rate(request, cluster_id, activity_id):
@@ -5648,6 +6229,25 @@ def cluster_payment_dashboard(request, cluster_id):
 
         job_rows = []
 
+        bill_logs = FarmerBillWebhookLog.objects.filter(
+            farmer_id=str(farmer.farmer_id),
+        ).order_by('-sent_at')
+
+        farmer_bill_sent_map = {}
+        for log in bill_logs:
+            act_key = log.activity_name or ''
+            if act_key and act_key not in farmer_bill_sent_map:
+                farmer_bill_sent_map[act_key] = {
+                    'sent':           True,
+                    'sent_at':        log.sent_at.isoformat() if log.sent_at else None,
+                    'sent_by':        log.sent_by_name or '—',
+                    'webhook_status': log.webhook_status,
+                    'total_billed':   float(log.total_billed or 0),
+                    'total_paid':     float(log.total_paid or 0),
+                    'balance_due':    float(log.balance_due or 0),
+                    'full_payload':   log.full_payload or {},
+                }
+
         for job in jobs:
             try:
                 booking = job.booking
@@ -5850,25 +6450,7 @@ def cluster_payment_dashboard(request, cluster_id):
             balance_due  = total_billable - total_paid
             booking_total = Decimal(str(booking.total_amount)) if booking else Decimal('0')
             final_gap    = (booking_total - total_paid) if all_past and booking else Decimal('0')
-            bill_logs = FarmerBillWebhookLog.objects.filter(
-                farmer_id=str(farmer.farmer_id),
-                job_id=str(job.job_id),
-            ).order_by('-sent_at')
-
-            bill_sent_map = {}
-            for log in bill_logs:
-                act_key = log.activity_name or ''
-                if act_key and act_key not in bill_sent_map:
-                    bill_sent_map[act_key] = {
-                        'sent':           True,
-                        'sent_at':        log.sent_at.isoformat() if log.sent_at else None,
-                        'sent_by':        log.sent_by_name or '—',
-                        'webhook_status': log.webhook_status,
-                        'total_billed':   float(log.total_billed or 0),
-                        'total_paid':     float(log.total_paid or 0),
-                        'balance_due':    float(log.balance_due or 0),
-                        'full_payload':   log.full_payload or {},
-                    }
+            
             job_rows.append({
                 'job_id':               job.job_id,
                 'crop_name':            job.crop_name,
@@ -5883,7 +6465,7 @@ def cluster_payment_dashboard(request, cluster_id):
                 'booking_id':           booking.booking_id if booking else None,
                 'total_job_amount':     float(booking_total),
 
-                'bill_sent_map': bill_sent_map,
+                'bill_sent_map': farmer_bill_sent_map,
                 'activities':           activity_rows,
                 'summary': {
                     'total_billable_so_far': float(total_billable),

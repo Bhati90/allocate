@@ -178,21 +178,16 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
 
     const allocs = act.allocations ?? [];
 
-    // ── DEBUG: log every plot's allocation state ─────────────────────────────
-    console.group(`🌱 ${act.activity_name} | Plot: ${act.plot_name} (${act.plot_code})`);
-    console.log('total_area (tArea):', tArea);
-    console.log('allocated_area (aArea):', aArea);
-    console.log('allocation_status:', act.allocation_status);
-    console.log('allocs count:', allocs.length);
+
     allocs.forEach((a: Alloc, i: number) => {
-      console.log(`  alloc[${i}]`, {
-        allocation_id:      a.allocation_id,
-        work_status:        a.work_status,
-        allocated_area:     a.allocated_area,
-        actual_area_done:   a.actual_area_done,
-        admin_override_area: a.admin_override_area,
-        effArea: a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0,
-      });
+      // console.log(`  alloc[${i}]`, {
+      //   allocation_id:      a.allocation_id,
+      //   work_status:        a.work_status,
+      //   allocated_area:     a.allocated_area,
+      //   actual_area_done:   a.actual_area_done,
+      //   admin_override_area: a.admin_override_area,
+      //   effArea: a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0,
+      // });
     });
 
     // ── All allocations completed check ──────────────────────────────────────
@@ -239,14 +234,7 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
       completedAreaCoversPlot ||
       act.allocation_status === 'completed';
 
-    // ── DEBUG: log what decided isDone ───────────────────────────────────────
-    console.log('completedAllocArea:', completedAllocArea);
-    console.log('tArea - AREA_TOLERANCE:', tArea - AREA_TOLERANCE);
-    console.log('allAllocsCompleted:', allAllocsCompleted);
-    console.log('completedAreaCoversPlot:', completedAreaCoversPlot);
-    console.log('allocation_status === completed:', act.allocation_status === 'completed');
-    console.log('👉 isDone:', isDone);
-    console.groupEnd();
+
     // ── END DEBUG ─────────────────────────────────────────────────────────────
     // ── billableAmount: API value is most accurate ───────────────────────────
     // REPLACE the billable lines
@@ -700,36 +688,45 @@ function ViewBillModal({
             </div>
           )}
 
-          {/* Balance */}
-          <div style={{ background: '#f8f9fb', borderRadius: 10, padding: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0' }}>
-              <span style={{ color: '#666' }}>Total Billed</span>
-              <span style={{ fontWeight: 600 }}>₹{Number(bill.total_billed ?? 0).toLocaleString('en-IN')}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0' }}>
-              <span style={{ color: '#666' }}>Already Collected</span>
-              <span style={{ fontWeight: 600, color: '#27ae60' }}>−₹{Number(bill.total_already_paid ?? 0).toLocaleString('en-IN')}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0 0', borderTop: '2px solid #ddd', marginTop: 6, fontSize: 15, fontWeight: 700 }}>
-              <span>Balance Due</span>
-              <span style={{ color: Number(bill.balance_due_now) > 0 ? '#e74c3c' : '#27ae60' }}>
-                {Number(bill.balance_due_now) > 0.01
-                  ? `₹${Number(bill.balance_due_now).toLocaleString('en-IN')}`
-                  : '✓ Clear'}
-              </span>
-            </div>
-          </div>
+          {/* Balance — use live log values, not snapshot payload */}
+{(() => {
+  const liveBilled  = Number(log.total_billed  ?? bill.total_billed  ?? 0);
+  const livePaid    = Number(log.total_paid    ?? bill.total_already_paid ?? 0);
+  const liveBalance = Number(log.balance_due   ?? bill.balance_due_now   ?? 0);
+  return (
+    <div style={{ background: '#f8f9fb', borderRadius: 10, padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0' }}>
+        <span style={{ color: '#666' }}>Total Billed</span>
+        <span style={{ fontWeight: 600 }}>₹{Math.round(liveBilled).toLocaleString('en-IN')}</span>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0' }}>
+        <span style={{ color: '#666' }}>Already Collected</span>
+        <span style={{ fontWeight: 600, color: '#27ae60' }}>−₹{Math.round(livePaid).toLocaleString('en-IN')}</span>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0 0', borderTop: '2px solid #ddd', marginTop: 6, fontSize: 15, fontWeight: 700 }}>
+        <span>Balance Due</span>
+        <span style={{ color: liveBalance > 0.01 ? '#e74c3c' : '#27ae60' }}>
+          {liveBalance > 0.01
+            ? `₹${Math.round(liveBalance).toLocaleString('en-IN')}`
+            : liveBalance < -0.01
+            ? `✓ Clear (₹${Math.round(Math.abs(liveBalance)).toLocaleString('en-IN')} overpaid)`
+            : '✓ Clear'}
+        </span>
+      </div>
+    </div>
+  );
+})()}
         </div>
 
         {/* Footer */}
-        <div style={{ padding: '16px 24px', borderTop: '1px solid #eef0f4', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+        {/* <div style={{ padding: '16px 24px', borderTop: '1px solid #eef0f4', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
           <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #ddd', background: '#fff', color: '#555', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
             Close
           </button>
           <button onClick={onResend} style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: '#1a1a2e', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
             🔁 Resend Bill
           </button>
-        </div>
+        </div> */}
       </div>
     </div>
   );
@@ -748,7 +745,13 @@ interface BillLog {
   full_payload: any;
 }
 // ─── Main Page ────────────────────────────────────────────────────────────────
-export default function FarmerBillingPage({ clusterId: propClusterId }: { clusterId?: number }) {
+export default function FarmerBillingPage({ 
+  clusterId: propClusterId,
+  embeddedFarmerId,
+}: { 
+  clusterId?: number;
+  embeddedFarmerId?: string;
+}) {
   const [searchParams] = useSearchParams();
 
   // Use prop if provided, else fall back to URL param
@@ -770,6 +773,15 @@ const [viewBillModal, setViewBillModal] = useState<{
     farmer: Farmer; jobs: Job[]; group: ActivityGroup; allPayments: PayHist[]; totalPaid: number;
   } | null>(null);
 
+
+   useEffect(() => {
+    if (embeddedFarmerId && data?.farmers) {
+      const found = data.farmers.find(
+        (f: any) => String(f.farmer_id) === String(embeddedFarmerId)
+      );
+      if (found) setSelectedFarmerId(found.farmer_id);
+    }
+  }, [embeddedFarmerId, data]);
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -1214,14 +1226,14 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
           {billLog.balance_due > 0.01 ? `₹${Math.round(billLog.balance_due).toLocaleString('en-IN')} due` : '✓ Clear'}
         </b>
       </span>
-      <button
+<button
   onClick={() => setViewBillModal({ 
     group, 
     log: billLog,
-    jobs,           // ← add these
-    allPayments,    // ← add these
-    totalPaid,      // ← add these
-    farmer: selectedFarmer,  // ← add these
+    jobs,
+    allPayments,
+    totalPaid,
+    farmer: selectedFarmer,
   })}
   style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: '1px solid #c5d9f0', cursor: 'pointer', background: '#e8f0fe', color: '#2471a3' }}
 >
@@ -1240,7 +1252,26 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
         <b style={{ color: '#1a1a2e' }}>₹{Math.round(group.totalBillable).toLocaleString('en-IN')}</b>
       </span>
       <button
-        onClick={() => setBillModal({ farmer: selectedFarmer, jobs, group, allPayments, totalPaid })}
+        onClick={() => {
+  // totalPaid = all money collected from farmer
+  // totalBilled = all money already billed in previous activities
+  // creditAvailable = what hasn't been applied yet
+  const totalBilledSoFar = jobs.reduce((s, j) => s + (j.summary?.total_billable_so_far ?? 0), 0);
+
+    // bill_sent_map is the same object on every job (farmer-level)
+// so just read it from the first job to avoid double-counting
+const billSentMap = jobs[0]?.bill_sent_map ?? {};
+const alreadyBilledAmount = Object.values(billSentMap).reduce(
+  (sum: number, log: any) => sum + (Number(log.total_billed) || 0),
+  0
+);
+const creditAvailable = Math.max(0, totalPaid - alreadyBilledAmount);
+  console.log('bill_sent_map entries:', jobs.flatMap(j => Object.entries(j.bill_sent_map ?? {})));
+console.log('totalPaid:', totalPaid);
+console.log('alreadyBilledAmount:', alreadyBilledAmount);
+console.log('creditAvailable:', creditAvailable);
+  setBillModal({ farmer: selectedFarmer, jobs, group, allPayments, totalPaid: creditAvailable });
+}}
         style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: balanceDue > 0.01 ? '#1a1a2e' : '#27ae60', color: '#fff' }}
       >
         ✉️ Generate Bill
@@ -1383,19 +1414,25 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
         />
       )}
 
- {viewBillModal && (
+{viewBillModal && (
   <ViewBillModal
     group={viewBillModal.group}
     log={viewBillModal.log}
     onClose={() => setViewBillModal(null)}
     onResend={() => {
       setViewBillModal(null);
+      const billSentMap = viewBillModal.jobs[0]?.bill_sent_map ?? {};
+      const alreadyBilledAmount = Object.values(billSentMap).reduce(
+        (sum: number, log: any) => sum + (Number(log.total_billed) || 0),
+        0
+      );
+      const creditAvailable = Math.max(0, viewBillModal.totalPaid - alreadyBilledAmount);
       setBillModal({
-        farmer: viewBillModal.farmer,        // ← from state now
-        jobs: viewBillModal.jobs,            // ← from state now
-        group: viewBillModal.group,
-        allPayments: viewBillModal.allPayments,  // ← from state now
-        totalPaid: viewBillModal.totalPaid,      // ← from state now
+        farmer:      viewBillModal.farmer,
+        jobs:        viewBillModal.jobs,
+        group:       viewBillModal.group,
+        allPayments: viewBillModal.allPayments,
+        totalPaid:   creditAvailable,
       });
     }}
   />

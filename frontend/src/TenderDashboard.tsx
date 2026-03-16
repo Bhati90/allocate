@@ -1666,6 +1666,20 @@ export default function TenderDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
 
+
+  const [paymentData, setPaymentData]         = useState<any>(null);
+const [paymentLoading, setPaymentLoading]   = useState(false);
+const [paymentFilter, setPaymentFilter]     = useState<string>('ready_to_bill');
+const [paymentClusterFilter, setPaymentClusterFilter] = useState<string>('all');
+const [paymentActivityFilter, setPaymentActivityFilter] = useState<string>('all');
+const [paymentClusterSort, setPaymentClusterSort] = useState<string>('due');
+const [expandedFarmerKey, setExpandedFarmerKey]   = useState<string | null>(null);
+const [expandedFarmerData, setExpandedFarmerData] = useState<any>(null);
+const [expandedFarmerLoading, setExpandedFarmerLoading] = useState(false);
+
+
+
+
 const [jobNotes, setJobNotes]               = useState<Record<string, any[]>>({}); // jobId → notes[]
 const [notesLoading, setNotesLoading]       = useState(false);
 
@@ -1694,7 +1708,7 @@ useEffect(() => {
 }, []);
   // Change the tab type
 // change tab type
-const [tab, setTab] = useState<'command' | 'calendar' | 'mukkadams' | 'farmers' | 'jobs' | 'payment'>('command');
+const [tab, setTab] = useState<'command' | 'calendar' |'global'| 'mukkadams' | 'farmers' | 'jobs' | 'payment'>('command');
 // Command Center state
 const [cmdClusters, setCmdClusters]         = useState<Cluster[]>([]);
 const [cmdLoading, setCmdLoading]           = useState(false);
@@ -2152,7 +2166,45 @@ const displaySummary = useMemo(() => {
 
 
 
+useEffect(() => {
+  if (tab !== 'payment') return;
+  setPaymentLoading(true);
+  const token = localStorage.getItem('auth_token');
+  fetch(`${API_BASE_URL}/api/payment-overview/`, {
+    headers: { Authorization: `Token ${token}` },
+  })
+    .then(r => r.json())
+    .then(setPaymentData)
+    .catch(console.error)
+    .finally(() => setPaymentLoading(false));
+}, [tab]);
 
+
+const handleExpandFarmer = async (farmer: any) => {
+  const key = `${farmer.farmer_id}__${farmer.activity}`;
+  if (expandedFarmerKey === key) {
+    setExpandedFarmerKey(null);
+    setExpandedFarmerData(null);
+    return;
+  }
+  setExpandedFarmerKey(key);
+  setExpandedFarmerData(null);
+  if (!farmer.cluster_id) return;
+  setExpandedFarmerLoading(true);
+  const token = localStorage.getItem('auth_token');
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/cluster/${farmer.cluster_id}/payment-dashboard/`,
+      { headers: { Authorization: `Token ${token}` } }
+    );
+    const d = await res.json();
+    const farmerDetail = (d.farmers ?? []).find(
+      (f: any) => String(f.farmer_id) === String(farmer.farmer_id)
+    );
+    setExpandedFarmerData(farmerDetail ?? null);
+  } catch (e) { console.error(e); }
+  finally { setExpandedFarmerLoading(false); }
+};
 
 const handleConfirmAllocate = async () => {
   if (!allocHalfDay) return;
@@ -2394,6 +2446,25 @@ const fetchJobsCapacity = async (isoDate: string, act?: any) => {
   }
 };
 
+
+const [insightsData, setInsightsData]     = useState<any>(null);
+const [insightsLoading, setInsightsLoading] = useState(false);
+const [insightSort, setInsightSort]       = useState<'pending' | 'progress' | 'name'>('pending');
+const [insightHover, setInsightHover]     = useState<number | null>(null);
+
+
+useEffect(() => {
+  if (tab !== 'global') return;
+  setInsightsLoading(true);
+  const token = localStorage.getItem('auth_token');
+  fetch(`${API_BASE_URL}/api/insights/`, {
+    headers: { Authorization: `Token ${token}` },
+  })
+    .then(r => r.json())
+    .then(setInsightsData)
+    .catch(console.error)
+    .finally(() => setInsightsLoading(false));
+}, [tab]);
 // ── Confirm ⅓-day allocation from Jobs tab ───────────────────────────────────
 const handleJobsConfirmAllocation = async () => {
   if (!jobsHalfDayDialog) return;
@@ -2442,6 +2513,8 @@ const handleJobsConfirmAllocation = async () => {
     toast.error('Allocation failed');
   }
 };
+
+const [insightShowDay, setInsightShowDay] = useState<string>('both');
   
 // Handler — add this near your other handlers (handleMukkadamPay etc.)
 const handleUpdownComplete = async (mukkadamId: number, allocationId: number) => {
@@ -2488,9 +2561,10 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
           {([
             { key: 'command',   icon: '🏠', label: 'Command',   count: cmdClusters.length },
 { key: 'payment', icon: '💰', label: 'Payment' },
+{ key: 'global', icon: '', label: 'Insight' },
             { key: 'mukkadams', icon: '👥', label: 'Mukkadams', count: data?.mukkadams?.length || 0 },
             { key: 'farmers',   icon: '👨‍🌾', label: 'Farmers',   count: data?.farmers?.length   || 0 },
-            { key: 'jobs',      icon: '📋', label: 'Jobs',       count: tab === 'jobs' && (actSubTab !== 'all' || actSearch || actCluster || actDateFrom || actDateTo) ? activities.length : (data?.summary?.total_activities || 0) },
+{ key: 'jobs', icon: '📋', label: 'Jobs', count: data?.summary?.total_tender_jobs || 0 },
           ] as const).map(t => {
             const isActive = tab === t.key;
             const isJobs   = t.key === 'jobs';
@@ -2806,7 +2880,13 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
                       Today — {new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}
                     </div>
                     {hasWork ? (
-                      (c.today_team ?? []).map((t: any, i: number) => (
+  (() => {
+    const seenIds = new Set<string>();
+    return (c.today_team ?? []).filter((t: any) => {
+      if (seenIds.has(String(t.mukkadam_id))) return false;
+      seenIds.add(String(t.mukkadam_id));
+      return true;
+    }).map((t: any, i: number) => (
                         <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: i > 0 ? 4 : 0 }}>
                           <div>
                             <div style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>
@@ -2822,8 +2902,9 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
                             </span>
                           )}
                         </div>
-                      ))
-                    ) : (
+                     ))
+  })()
+) : (
   // No allocation today — show assigned mukkadams from cluster
   (c.cluster_mukkadams ?? []).length > 0 ? (
     (c.cluster_mukkadams as any[]).map((m: any, i: number) => {
@@ -2981,6 +3062,19 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
       </>
     )}
 
+        {showCalendar && calendarClusterId && (
+      <ClusterActivityCalendar
+        clusterId={calendarClusterId}
+        clusterName={calendarClusterName}
+        onClose={() => {
+          setShowCalendar(false);
+          setCalendarClusterId(null);
+          setCalendarClusterName('');
+        }}
+      />
+    )}
+
+
     {/* ── Modals ── */}
     {showCreateModal && (
       <CreateClusterModal
@@ -3013,129 +3107,877 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
     )}
   </>
 
-  ) : tab === 'payment' ? (
+) : tab === 'payment' ? (
   <>
-    {paymentClusterId ? (
-      // ── Drill-in: FarmerBillingPage embedded ──
-      <div style={{ height: 'calc(100vh - 120px)', overflow: 'hidden', margin: '-20px -24px' }}>
-        <div style={{ padding: '12px 24px', background: '#fff', borderBottom: `1px solid ${S.stone200}`, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button
-            onClick={() => setPaymentClusterId(null)}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 8, border: `1px solid ${S.stone200}`, background: '#fff', fontSize: 12, color: S.stone600, cursor: 'pointer', fontFamily: 'inherit' }}
-          >
-            ← Back to Overview
-          </button>
-          <span style={{ fontSize: 13, fontWeight: 600, color: S.stone700 }}>
-            {cmdClusters.find(c => c.id === paymentClusterId)?.name ?? 'Cluster'}
-          </span>
-        </div>
-        <div style={{ height: 'calc(100% - 49px)', overflow: 'hidden' }}>
-          <FarmerBillingPage clusterId={paymentClusterId} />
-        </div>
+    {paymentLoading || !paymentData ? (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '64px 0' }}>
+        <RefreshCw size={28} style={{ color: S.brand, animation: 'spin 1s linear infinite' }} />
       </div>
-    ) : (
-      // ── Overview: cluster payment cards ──
-      <>
-        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1.2px', color: S.stone400, marginBottom: 16 }}>
-          Payment Overview — All Clusters
-        </div>
+    ) : (() => {
+      const pipe     = paymentData.pipeline ?? {};
+      const forecast = paymentData.forecast ?? {};
+      const allFarmers: any[] = paymentData.farmer_list ?? [];
+      const recentPay: any[]  = paymentData.recent_payments ?? [];
+      const clusterBilling: any[] = paymentData.cluster_billing ?? [];
 
-        {/* Summary strip */}
-        {(() => {
-          const totalDueAll       = cmdClusters.reduce((s, c) => s + Number(c.farmer_due ?? 0), 0);
-          const totalBilledAll    = cmdClusters.reduce((s, c) => s + Number(c.total_billed ?? 0), 0);
-          const totalCollectedAll = cmdClusters.reduce((s, c) => s + Number(c.total_collected ?? 0), 0);
-          const billsPendingAll   = cmdClusters.reduce((s, c) => s + Number(c.bills_pending ?? 0), 0);
-          const billsSentAll      = cmdClusters.reduce((s, c) => s + Number(c.bills_sent ?? 0), 0);
-          return (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 24 }}>
+      const fmt = (n: number) => {
+        if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
+        if (n >= 1000)   return `₹${(n / 1000).toFixed(1)}k`;
+        return `₹${n}`;
+      };
+      const fmtFull = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
+      // Filtered farmer list
+      const filteredFarmers = allFarmers.filter((f: any) => {
+        if (paymentFilter === 'ready_to_bill' && f.status !== 'ready_to_bill') return false;
+        if (paymentFilter === 'overdue'    && f.expected_payment !== 'overdue')    return false;
+        if (paymentFilter === 'this_week'  && f.expected_payment !== 'this_week')  return false;
+        if (paymentFilter === 'next_week'  && f.expected_payment !== 'next_week')  return false;
+        if (paymentFilter === 'all_billed' && f.status !== 'billed') return false;
+        if (paymentClusterFilter  !== 'all' && String(f.cluster_id) !== paymentClusterFilter)  return false;
+        if (paymentActivityFilter !== 'all' && f.activity !== paymentActivityFilter) return false;
+        return true;
+      });
+
+      const uniqueClusters  = [...new Set(allFarmers.map((f: any) => ({id: String(f.cluster_id), name: f.cluster_name})).map(c => JSON.stringify(c)))].map(s => JSON.parse(s));
+      const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
+
+      const sortedClusters = [...clusterBilling].sort((a: any, b: any) => {
+        if (paymentClusterSort === 'due')       return b.due - a.due;
+        if (paymentClusterSort === 'collected') return b.collected - a.collected;
+        return b.total_job_value - a.total_job_value;
+      });
+
+      const totalJobValue  = clusterBilling.reduce((s: number, c: any) => s + (c.total_job_value ?? 0), 0);
+      const totalBilled    = clusterBilling.reduce((s: number, c: any) => s + (c.billed ?? 0), 0);
+      const totalCollected = clusterBilling.reduce((s: number, c: any) => s + (c.collected ?? 0), 0);
+      const totalDue       = clusterBilling.reduce((s: number, c: any) => s + (c.due ?? 0), 0);
+
+      const FILTERS = [
+        { key: 'ready_to_bill', label: '📝 Ready to Bill', color: '#ea580c', bg: '#fff7ed', border: '#fed7aa', count: pipe.ready_to_bill?.count ?? 0, amount: pipe.ready_to_bill?.amount ?? 0 },
+        { key: 'overdue',       label: '⚠️ Overdue',        color: '#dc2626', bg: '#fef2f2', border: '#fecaca', count: pipe.overdue?.count ?? 0,       amount: pipe.overdue?.amount ?? 0 },
+        { key: 'this_week',     label: '📅 This Week',      color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0', count: (paymentData.farmer_list ?? []).filter((f:any) => f.expected_payment === 'this_week').length, amount: forecast.this_week?.amount ?? 0 },
+        { key: 'next_week',     label: '📆 Next Week',      color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe', count: (paymentData.farmer_list ?? []).filter((f:any) => f.expected_payment === 'next_week').length, amount: forecast.next_week?.amount ?? 0 },
+        { key: 'all_billed',    label: '📨 All Billed',     color: '#6b6b63', bg: '#fafaf8', border: '#e8e5de', count: pipe.bills_sent?.count ?? 0,     amount: pipe.bills_sent?.amount ?? 0 },
+      ];
+
+      return (
+        <>
+          {/* ═══ SECTION 1: Pipeline + Forecast ═══ */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
+              BILLING PIPELINE & COLLECTION FORECAST
+            </div>
+
+            {/* Pipeline cards */}
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'stretch', marginBottom: 16 }}>
               {[
-                { label: 'Total Billed',    val: `₹${Math.round(totalBilledAll).toLocaleString('en-IN')}`,    color: '#2471a3', bg: '#e8f0fe' },
-                { label: 'Total Collected', val: `₹${Math.round(totalCollectedAll).toLocaleString('en-IN')}`, color: '#27ae60', bg: '#e8f8f0' },
-                { label: 'Total Due',       val: `₹${Math.round(totalDueAll).toLocaleString('en-IN')}`,       color: '#e74c3c', bg: '#fde8e8' },
-                { label: 'Bills Pending',   val: String(billsPendingAll),  color: '#d68910', bg: '#fef3e2' },
-                { label: 'Bills Sent',      val: String(billsSentAll),     color: '#1e8449', bg: '#e8f8f0' },
-              ].map((s, i) => (
-                <div key={i} style={{ padding: '14px 18px', borderRadius: 12, background: s.bg, textAlign: 'center' }}>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: s.color }}>{s.val}</div>
-                  <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.6px', marginTop: 4 }}>{s.label}</div>
+                { icon: '📝', label: 'Ready to Bill',   val: pipe.ready_to_bill?.count ?? 0,  amount: pipe.ready_to_bill?.amount ?? 0,  color: '#ea580c', border: '#fed7aa', bg: '#fff7ed', sub: `${pipe.ready_to_bill?.plots ?? 0} plots completed`, onClick: () => setPaymentFilter('ready_to_bill') },
+                { icon: '📨', label: 'Bills Sent',       val: pipe.bills_sent?.count ?? 0,     amount: pipe.bills_sent?.amount ?? 0,     color: '#2563eb', border: '#bfdbfe', bg: '#eff6ff', sub: 'Awaiting payment',  onClick: () => setPaymentFilter('all_billed') },
+                { icon: '⏰', label: 'Overdue',          val: pipe.overdue?.count ?? 0,        amount: pipe.overdue?.amount ?? 0,        color: '#dc2626', border: '#fecaca', bg: '#fef2f2', sub: pipe.overdue?.count > 0 ? `Avg ${pipe.overdue?.avg_days ?? 0} days late` : 'None', onClick: () => setPaymentFilter('overdue') },
+                { icon: '✅', label: 'Collected (30d)',  val: recentPay.length,                amount: pipe.collected_7d?.amount ?? 0,   color: '#16a34a', border: '#bbf7d0', bg: '#f0fdf4', sub: 'Last 30 days', onClick: () => {} },
+              ].map((card, i) => (
+                <div key={i} style={{ flex: 1, minWidth: 140 }}>
+                  {i < 3 && i > 0 && <div style={{ display: 'none' }} />}
+                  <div onClick={card.onClick}
+                    style={{ background: card.bg, borderRadius: 12, border: `1.5px solid ${card.border}`, padding: '16px 18px', textAlign: 'center', cursor: 'pointer', transition: 'transform 0.1s', height: '100%', boxSizing: 'border-box' as const }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-1px)'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.transform = 'none'; }}
+                  >
+                    <div style={{ fontSize: 13, color: '#6b6b63', fontWeight: 500, marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                      <span>{card.icon}</span> {card.label}
+                    </div>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: card.color, lineHeight: 1.1 }}>{card.val}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: card.color, marginTop: 4 }}>{fmtFull(card.amount)}</div>
+                    {card.sub && <div style={{ fontSize: 11, color: '#a3a398', marginTop: 4 }}>{card.sub}</div>}
+                  </div>
                 </div>
               ))}
             </div>
-          );
-        })()}
 
-        {/* Cluster cards grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12 }}>
-          {cmdClusters.map(c => {
-            const due       = Number(c.farmer_due ?? 0);
-            const billed    = Number(c.total_billed ?? 0);
-            const collected = Number(c.total_collected ?? 0);
-            const pending   = Number(c.bills_pending ?? 0);
-            const sent      = Number(c.bills_sent ?? 0);
-            const response  = Number(c.response_pending ?? 0);
-
-            return (
-              <div key={c.id}
-                onClick={() => setPaymentClusterId(c.id)}
-                style={{ background: '#fff', borderRadius: 14, border: `1px solid ${pending > 0 ? '#fed7aa' : '#eef0f4'}`, padding: '18px 20px', cursor: 'pointer', transition: 'all 0.15s', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
-                onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
-                onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.04)'; e.currentTarget.style.transform = 'none'; }}
-              >
-                {/* Header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-                  <div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1a2e' }}>{c.name}</div>
-                    <div style={{ fontSize: 12, color: '#8892a4', marginTop: 2 }}>
-                      {c.farmer_count} farmers · {[...(c.districts ?? [])].slice(0, 1).join('')}
+            {/* Week-wise forecast bar */}
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', padding: '16px 20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>📊</span>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>Collection Forecast</span>
+                </div>
+                <span style={{ fontSize: 12, color: '#6b6b63' }}>
+                  Total outstanding: <strong style={{ color: '#dc2626' }}>{fmtFull((pipe.overdue?.amount ?? 0) + (forecast.this_week?.amount ?? 0) + (forecast.next_week?.amount ?? 0))}</strong>
+                </span>
+              </div>
+              {(() => {
+                const total     = (forecast.overdue?.amount ?? 0) + (forecast.this_week?.amount ?? 0) + (forecast.next_week?.amount ?? 0) + (forecast.ready_to_bill?.amount ?? 0);
+                const overdueAmt   = forecast.overdue?.amount ?? 0;
+                const twAmt        = forecast.this_week?.amount ?? 0;
+                const nwAmt        = forecast.next_week?.amount ?? 0;
+                const readyAmt     = forecast.ready_to_bill?.amount ?? 0;
+                if (total === 0) return <div style={{ textAlign: 'center', color: '#a3a398', fontSize: 13, padding: '16px 0' }}>No outstanding bills</div>;
+                return (
+                  <>
+                    <div style={{ display: 'flex', height: 32, borderRadius: 8, overflow: 'hidden', background: '#f0ede7', marginBottom: 10 }}>
+                      {overdueAmt > 0 && <div style={{ width: `${(overdueAmt / total) * 100}%`, background: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 700, minWidth: 50 }}>{fmt(overdueAmt)}</div>}
+                      {twAmt > 0     && <div style={{ width: `${(twAmt / total) * 100}%`,     background: '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 700, minWidth: 50 }}>{fmt(twAmt)}</div>}
+                      {nwAmt > 0     && <div style={{ width: `${(nwAmt / total) * 100}%`,     background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 700, minWidth: 50 }}>{fmt(nwAmt)}</div>}
+                      {readyAmt > 0  && <div style={{ width: `${(readyAmt / total) * 100}%`,  background: '#ea580c', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, fontWeight: 700, minWidth: 50 }}>{fmt(readyAmt)}</div>}
                     </div>
+                    <div style={{ display: 'flex', gap: 20, fontSize: 11, color: '#6b6b63', flexWrap: 'wrap' }}>
+                      {[
+                        { color: '#dc2626', label: 'Overdue',        amt: overdueAmt },
+                        { color: '#16a34a', label: 'This Week',       amt: twAmt },
+                        { color: '#2563eb', label: 'Next Week',       amt: nwAmt },
+                        { color: '#ea580c', label: 'Ready to Bill',   amt: readyAmt },
+                      ].map((item, i) => item.amt > 0 && (
+                        <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ width: 8, height: 8, borderRadius: 2, background: item.color, display: 'inline-block' }} />
+                          {item.label}: <strong style={{ color: item.color }}>{fmtFull(item.amt)}</strong>
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* ═══ SECTION 2: Farmer List ═══ */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
+              FARMER BILLING LIST
+            </div>
+
+            {/* Filter pills */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              {FILTERS.map(f => {
+                const active = paymentFilter === f.key;
+                return (
+                  <button key={f.key} onClick={() => setPaymentFilter(f.key)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 20, border: `1px solid ${active ? f.border : '#e8e5de'}`, background: active ? f.bg : '#fff', color: active ? f.color : '#6b6b63', cursor: 'pointer', fontSize: 13, fontWeight: active ? 700 : 500, fontFamily: 'inherit' }}
+                  >
+                    {f.label}
+                    <span style={{ background: active ? f.color : '#e8e5de', color: active ? '#fff' : '#6b6b63', padding: '1px 7px', borderRadius: 10, fontSize: 11, fontWeight: 700 }}>{f.count}</span>
+                    {f.amount > 0 && <span style={{ fontSize: 11, color: active ? f.color : '#a3a398' }}>{fmt(f.amount)}</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Sub-filters */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+              <select value={paymentClusterFilter} onChange={e => setPaymentClusterFilter(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e8e5de', fontSize: 12, background: '#fff', color: '#1a1a1a', fontFamily: 'inherit' }}>
+                <option value="all">All Clusters</option>
+                {uniqueClusters.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <select value={paymentActivityFilter} onChange={e => setPaymentActivityFilter(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e8e5de', fontSize: 12, background: '#fff', color: '#1a1a1a', fontFamily: 'inherit' }}>
+                <option value="all">All Activities</option>
+                {uniqueActivities.map((a: any) => <option key={a} value={a}>{a}</option>)}
+              </select>
+              {(paymentClusterFilter !== 'all' || paymentActivityFilter !== 'all') && (
+                <button onClick={() => { setPaymentClusterFilter('all'); setPaymentActivityFilter('all'); }}
+                  style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  ✕ Clear
+                </button>
+              )}
+              <span style={{ marginLeft: 'auto', fontSize: 12, color: '#a3a398' }}>{filteredFarmers.length} farmers</span>
+            </div>
+
+            {/* Table */}
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'hidden' }}>
+              {/* Header */}
+              <div style={{ display: 'grid', gridTemplateColumns: paymentFilter === 'ready_to_bill' ? 'minmax(180px,2fr) 60px 80px 110px 130px 130px 110px' : 'minmax(180px,2fr) minmax(150px,1.5fr) 90px 80px 110px 110px 110px', padding: '10px 16px', fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#fafaf8', borderBottom: '1px solid #e8e5de' }}>
+                <div>Farmer</div>
+                {paymentFilter === 'ready_to_bill' ? (
+                  <>
+                    <div style={{ textAlign: 'right' }}>Plots</div>
+                    <div style={{ textAlign: 'right' }}>Acres</div>
+                    <div style={{ textAlign: 'right' }}>Rate</div>
+                    <div style={{ textAlign: 'right' }}>Amount</div>
+                    <div style={{ textAlign: 'center' }}>Mukkadam</div>
+                    <div style={{ textAlign: 'center' }}>Action</div>
+                  </>
+                ) : (
+                  <>
+                    <div>Activity</div>
+                    <div style={{ textAlign: 'right' }}>Amount</div>
+                    <div style={{ textAlign: 'center' }}>Days</div>
+                    <div style={{ textAlign: 'center' }}>Status</div>
+                    <div style={{ textAlign: 'center' }}>Balance</div>
+                    <div style={{ textAlign: 'center' }}>Action</div>
+                  </>
+                )}
+              </div>
+
+              {filteredFarmers.length === 0 ? (
+                <div style={{ padding: '40px 16px', textAlign: 'center', color: '#a3a398', fontSize: 13 }}>No records in this view</div>
+              ) : filteredFarmers.map((bill: any, i: number) => {
+                const key        = `${bill.farmer_id}__${bill.activity}`;
+                const isExpanded = expandedFarmerKey === key;
+                const isOverdue  = bill.expected_payment === 'overdue';
+                const initials   = bill.farmer_name.split(' ').map((w: string) => w[0]).join('').slice(0, 2);
+
+                return (
+                  <div key={key} style={{ borderBottom: i < filteredFarmers.length - 1 ? '1px solid #f0ede7' : 'none' }}>
+                    {/* Row */}
+                    <div
+                      onClick={() => handleExpandFarmer(bill)}
+                      style={{ display: 'grid', gridTemplateColumns: paymentFilter === 'ready_to_bill' ? 'minmax(180px,2fr) 60px 80px 110px 130px 130px 110px' : 'minmax(180px,2fr) minmax(150px,1.5fr) 90px 80px 110px 110px 110px', padding: '12px 16px', alignItems: 'center', cursor: 'pointer', background: isExpanded ? '#fff8f3' : isOverdue ? 'rgba(254,242,242,0.4)' : 'transparent', transition: 'background 0.15s' }}
+                      onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLDivElement).style.background = '#faf9f6'; }}
+                      onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLDivElement).style.background = isOverdue ? 'rgba(254,242,242,0.4)' : 'transparent'; }}
+                    >
+                      {/* Farmer cell */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, background: isOverdue ? '#fef2f2' : paymentFilter === 'ready_to_bill' ? '#fff7ed' : '#eff6ff', border: `1.5px solid ${isOverdue ? '#fecaca' : paymentFilter === 'ready_to_bill' ? '#fed7aa' : '#bfdbfe'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: isOverdue ? '#dc2626' : paymentFilter === 'ready_to_bill' ? '#ea580c' : '#2563eb' }}>
+                          {initials}
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: isExpanded ? '#ea580c' : '#1a1a1a', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            {bill.farmer_name}
+                            <span style={{ fontSize: 10, color: '#ea580c' }}>{isExpanded ? '▲' : '▼'}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: '#a3a398' }}>
+                            {bill.cluster_name}{paymentFilter === 'ready_to_bill' ? ` · ${bill.activity}` : ` · ${bill.n_plots} plots · ${bill.acres.toFixed(2)} ac`}
+                          </div>
+                        </div>
+                      </div>
+
+                      {paymentFilter === 'ready_to_bill' ? (
+                        <>
+                          <div style={{ textAlign: 'right', color: '#6b6b63' }}>{bill.n_plots}</div>
+                          <div style={{ textAlign: 'right', fontWeight: 600 }}>{bill.acres.toFixed(2)}</div>
+                          <div style={{ textAlign: 'right', color: '#6b6b63' }}>₹{bill.rate.toLocaleString('en-IN')}</div>
+                          <div style={{ textAlign: 'right', fontWeight: 700, color: '#ea580c' }}>{fmtFull(bill.amount)}</div>
+                          <div style={{ textAlign: 'center', fontSize: 11, color: '#6b6b63' }}>{bill.mukkadam}</div>
+                          <div style={{ textAlign: 'center' }}>
+                            <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: '#fff7ed', color: '#ea580c', border: '1px solid #fed7aa' }}>
+                              Generate Bill
+                            </span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 500 }}>{bill.activity}</div>
+                            <div style={{ fontSize: 11, color: '#a3a398' }}>{bill.mukkadam} · {bill.completed_date?.slice(5).replace('-', ' ')}</div>
+                          </div>
+                          <div style={{ textAlign: 'right', fontWeight: 700 }}>{fmtFull(bill.amount)}</div>
+                          <div style={{ textAlign: 'center' }}>
+                            {bill.days_since_billed != null ? (
+                              <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, background: isOverdue ? '#fef2f2' : '#f0fdf4', color: isOverdue ? '#dc2626' : '#16a34a' }}>
+                                {bill.days_since_billed}d
+                              </span>
+                            ) : '—'}
+                          </div>
+                          <div style={{ textAlign: 'center' }}>
+                            <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, background: isOverdue ? '#fef2f2' : bill.expected_payment === 'this_week' ? '#f0fdf4' : '#eff6ff', color: isOverdue ? '#dc2626' : bill.expected_payment === 'this_week' ? '#16a34a' : '#2563eb' }}>
+                              {isOverdue ? '⚠️ Overdue' : bill.expected_payment === 'this_week' ? 'This Week' : 'Next Week'}
+                            </span>
+                          </div>
+                          <div style={{ textAlign: 'right', fontWeight: 700, color: bill.balance_due > 0.01 ? '#dc2626' : '#16a34a' }}>
+                            {bill.balance_due > 0.01 ? fmtFull(bill.balance_due) : '✓ Clear'}
+                          </div>
+                          <div style={{ textAlign: 'center', fontSize: 11, color: '#a3a398' }}>
+                            {bill.billed_date?.slice(5).replace('-', ' ')}
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Expanded farmer detail */}
+                    {isExpanded && (
+                      <div style={{ background: '#fffcfa', borderTop: '1px solid #fed7aa' }}>
+                        {expandedFarmerLoading ? (
+                          <div style={{ padding: '24px', textAlign: 'center', color: '#a3a398' }}>Loading farmer detail...</div>
+                        ) : expandedFarmerData ? (
+                          <div style={{ padding: '16px 20px' }}>
+                            {/* Header */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f0ede7', marginBottom: 12 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span>📋</span>
+                                <span style={{ fontSize: 13, fontWeight: 700, color: '#ea580c' }}>Billing Detail — {expandedFarmerData.farmer_name}</span>
+                                <span style={{ fontSize: 11, color: '#6b6b63' }}>{bill.cluster_name} · {expandedFarmerData.total_plots ?? 0} plots</span>
+                              </div>
+                              <button onClick={() => { setExpandedFarmerKey(null); setExpandedFarmerData(null); }}
+                                style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #fed7aa', background: '#fff', cursor: 'pointer', fontSize: 11, color: '#ea580c', fontWeight: 600, fontFamily: 'inherit' }}>
+                                ▲ Collapse
+                              </button>
+                            </div>
+
+                            {/* Summary bar */}
+                            <div style={{ display: 'flex', borderRadius: 10, overflow: 'hidden', border: '1px solid #e8e5de', marginBottom: 16 }}>
+                              {[
+                                { label: 'Total Job Value', val: fmtFull(expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.total_job_amount ?? 0), 0) ?? 0), color: '#1a1a1a' },
+                                { label: 'Total Billed',    val: fmtFull(expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.summary?.total_billable_so_far ?? 0), 0) ?? 0), color: '#2563eb' },
+                                { label: 'Total Collected', val: fmtFull(expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.summary?.total_paid ?? 0), 0) ?? 0), color: '#16a34a' },
+                                { label: 'Balance Due',     val: (() => { const due = expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.summary?.balance_due ?? 0), 0) ?? 0; return due > 0.01 ? fmtFull(due) : '✓ Clear'; })(), color: (() => { const due = expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.summary?.balance_due ?? 0), 0) ?? 0; return due > 0.01 ? '#dc2626' : '#16a34a'; })() },
+                              ].map((item, idx) => (
+                                <div key={idx} style={{ flex: 1, padding: '12px 16px', borderLeft: idx > 0 ? '1px solid #e8e5de' : 'none' }}>
+                                  <div style={{ fontSize: 10, fontWeight: 600, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>{item.label}</div>
+                                  <div style={{ fontSize: 18, fontWeight: 800, color: item.color }}>{item.val}</div>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Activity cards — reuse FarmerBillingPage logic inline */}
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
+                              ACTIVITIES · BILLING STATUS
+                            </div>
+                            {/* Render the same FarmerBillingPage embedded */}
+                            <div style={{ height: 500, overflow: 'hidden', margin: '0 -20px', borderTop: '1px solid #f0ede7' }}>
+                              <FarmerBillingPage clusterId={bill.cluster_id} embeddedFarmerId={String(bill.farmer_id)} />
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ padding: '24px', textAlign: 'center', color: '#a3a398' }}>No detail available</div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  {pending > 0 && (
-                    <span style={{ fontSize: 11, fontWeight: 700, color: '#d68910', background: '#fef3e2', border: '1px solid #fed7aa', padding: '3px 10px', borderRadius: 6 }}>
-                      🔔 {pending} pending
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ═══ SECTION 3: Cluster Billing Summary ═══ */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.06em' }}>CLUSTER BILLING SUMMARY</span>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                {[
+                  { key: 'due',       label: 'Sort: Due'       },
+                  { key: 'collected', label: 'Sort: Collected' },
+                  { key: 'value',     label: 'Sort: Job Value' },
+                ].map(s => (
+                  <button key={s.key} onClick={() => setPaymentClusterSort(s.key)}
+                    style={{ padding: '4px 10px', borderRadius: 6, border: `1px solid ${paymentClusterSort === s.key ? '#e8e5de' : '#e8e5de'}`, background: paymentClusterSort === s.key ? '#1a1a1a' : '#fff', color: paymentClusterSort === s.key ? '#fff' : '#6b6b63', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'auto' }}>
+              {/* Header */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px,2fr) 60px 100px 100px 100px 100px 80px 80px 80px', padding: '10px 16px', fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#fafaf8', borderBottom: '1px solid #e8e5de', minWidth: 860 }}>
+                <div>Cluster</div>
+                <div style={{ textAlign: 'right' }}>Farmers</div>
+                <div style={{ textAlign: 'right' }}>Job Value</div>
+                <div style={{ textAlign: 'right' }}>Billed</div>
+                <div style={{ textAlign: 'right' }}>Collected</div>
+                <div style={{ textAlign: 'right' }}>Due</div>
+                <div style={{ textAlign: 'center' }}>Pending</div>
+                <div style={{ textAlign: 'center' }}>Sent</div>
+                <div style={{ textAlign: 'center' }}>Await</div>
+              </div>
+              {sortedClusters.map((c: any, i: number) => (
+                <div key={c.cluster_id}
+                  onClick={() => setPaymentClusterId(c.cluster_id)}
+                  style={{ display: 'grid', gridTemplateColumns: 'minmax(140px,2fr) 60px 100px 100px 100px 100px 80px 80px 80px', padding: '10px 16px', fontSize: 13, alignItems: 'center', borderBottom: i < sortedClusters.length - 1 ? '1px solid #f0ede7' : 'none', minWidth: 860, cursor: 'pointer', transition: 'background 0.1s' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#fafaf8'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+                >
+                  <div style={{ fontWeight: 600 }}>{c.cluster}</div>
+                  <div style={{ textAlign: 'right', color: '#6b6b63' }}>{c.farmers}</div>
+                  <div style={{ textAlign: 'right', color: '#6b6b63' }}>{fmt(c.total_job_value)}</div>
+                  <div style={{ textAlign: 'right', fontWeight: 600, color: c.billed > 0 ? '#2563eb' : '#a3a398' }}>{fmt(c.billed)}</div>
+                  <div style={{ textAlign: 'right', fontWeight: 600, color: c.collected > 0 ? '#16a34a' : '#a3a398' }}>{fmt(c.collected)}</div>
+                  <div style={{ textAlign: 'right', fontWeight: 700, color: c.due > 0 ? '#dc2626' : '#16a34a' }}>{c.due > 0 ? fmt(c.due) : '✓'}</div>
+                  <div style={{ textAlign: 'center' }}>
+                    {c.bills_pending > 0 ? <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 700, background: '#fff7ed', color: '#ea580c' }}>{c.bills_pending}</span> : <span style={{ color: '#a3a398' }}>0</span>}
+                  </div>
+                  <div style={{ textAlign: 'center' }}>
+                    {c.bills_sent > 0 ? <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 700, background: '#eff6ff', color: '#2563eb' }}>{c.bills_sent}</span> : <span style={{ color: '#a3a398' }}>0</span>}
+                  </div>
+                  <div style={{ textAlign: 'center' }}>
+                    {c.bills_awaiting > 0 ? <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 700, background: '#fef2f2', color: '#dc2626' }}>{c.bills_awaiting}</span> : <span style={{ color: '#a3a398' }}>0</span>}
+                  </div>
+                </div>
+              ))}
+              {/* Totals row */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(140px,2fr) 60px 100px 100px 100px 100px 80px 80px 80px', padding: '10px 16px', fontSize: 13, fontWeight: 700, background: '#f5f4ef', borderTop: '2px solid #e8e5de', minWidth: 860 }}>
+                <div>Total</div>
+                <div style={{ textAlign: 'right' }}>{clusterBilling.reduce((s: number, c: any) => s + (c.farmers ?? 0), 0)}</div>
+                <div style={{ textAlign: 'right' }}>{fmt(totalJobValue)}</div>
+                <div style={{ textAlign: 'right', color: '#2563eb' }}>{fmt(totalBilled)}</div>
+                <div style={{ textAlign: 'right', color: '#16a34a' }}>{fmt(totalCollected)}</div>
+                <div style={{ textAlign: 'right', color: '#dc2626' }}>{fmt(totalDue)}</div>
+                <div style={{ textAlign: 'center', color: '#ea580c' }}>{clusterBilling.reduce((s: number, c: any) => s + (c.bills_pending ?? 0), 0)}</div>
+                <div style={{ textAlign: 'center', color: '#2563eb' }}>{clusterBilling.reduce((s: number, c: any) => s + (c.bills_sent ?? 0), 0)}</div>
+                <div style={{ textAlign: 'center', color: '#dc2626' }}>{clusterBilling.reduce((s: number, c: any) => s + (c.bills_awaiting ?? 0), 0)}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* ═══ SECTION 4: Recent Payments ═══ */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <span>✅</span>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>Recent Payments</span>
+              <span style={{ fontSize: 12, color: '#6b6b63' }}>Last 30 days</span>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {recentPay.map((p: any, i: number) => (
+                <div key={i} style={{ background: '#fff', borderRadius: 10, padding: '12px 16px', border: '1px solid #bbf7d0', minWidth: 200, flex: '1 1 200px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{p.farmer}</div>
+                      <div style={{ fontSize: 11, color: '#a3a398' }}>{p.cluster}</div>
+                    </div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#16a34a' }}>{fmtFull(p.amount)}</div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 11, color: '#6b6b63' }}>
+                    <span>{p.paid_date?.slice(5).replace('-', ' ')}</span>
+                    <span style={{ padding: '1px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, background: p.method === 'UPI' ? '#ede9fe' : p.method === 'CASH' ? '#fefce8' : '#eff6ff', color: p.method === 'UPI' ? '#7c3aed' : p.method === 'CASH' ? '#ca8a04' : '#2563eb' }}>
+                      {p.method}
                     </span>
-                  )}
+                  </div>
+                  {p.notes && <div style={{ fontSize: 10, color: '#a3a398', marginTop: 4 }}>{p.notes}</div>}
                 </div>
+              ))}
+            </div>
+          </div>
+        </>
+      );
+    })()}
+  </>)
 
-                {/* Financial metrics */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 14 }}>
-                  {[
-                    { label: 'Billed',    val: `₹${Math.round(billed).toLocaleString('en-IN')}`,    color: '#2471a3' },
-                    { label: 'Collected', val: `₹${Math.round(collected).toLocaleString('en-IN')}`, color: '#27ae60' },
-                    { label: 'Due',       val: due > 0.01 ? `₹${Math.round(due).toLocaleString('en-IN')}` : '✓ Clear', color: due > 0.01 ? '#e74c3c' : '#27ae60' },
-                  ].map((m, i) => (
-                    <div key={i} style={{ textAlign: 'center', padding: '8px 6px', borderRadius: 8, background: '#f8f9fb' }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: m.color }}>{m.val}</div>
-                      <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px', marginTop: 2 }}>{m.label}</div>
+: tab === 'global' ? (
+  <>
+    {insightsLoading || !insightsData ? (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '64px 0' }}>
+        <RefreshCw size={28} style={{ color: S.brand, animation: 'spin 1s linear infinite' }} />
+      </div>
+    ) : (() => {
+      const kpi    = insightsData.global_kpis;
+      const days   = insightsData.days ?? [];
+      const daily  = insightsData.global_daily ?? [];
+      const raw    = insightsData.clusters ?? [];
+
+      const sorted = [...raw].sort((a: any, b: any) => {
+        if (insightSort === 'pending')  return b.pending_area - a.pending_area;
+        if (insightSort === 'progress') return a.pct - b.pct;
+        if (insightSort === 'name')     return a.name.localeCompare(b.name);
+        return 0;
+      });
+
+      const redCount   = raw.filter((c: any) => c.today?.status === 'red'   || c.tomorrow?.status === 'red').length;
+      const greenCount = raw.filter((c: any) => c.today?.status === 'green' && c.tomorrow?.status === 'green').length;
+
+      const statusDot = (status: string) => {
+        const colors: Record<string,string> = { green: '#16a34a', red: '#dc2626', yellow: '#ca8a04' };
+        const bgs:    Record<string,string> = { green: '#f0fdf4', red: '#fef2f2', yellow: '#fefce8' };
+        return <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: colors[status] || '#aaa', flexShrink: 0, boxShadow: `0 0 0 3px ${bgs[status] || '#f5f5f5'}` }} />;
+      };
+
+      const typeTagStyle = (tag: string) => ({
+        fontSize: 9, fontWeight: 800 as const, padding: '1px 5px', borderRadius: 4,
+        background: tag === 'UP' ? '#fff7ed' : '#f0fdf4',
+        color:      tag === 'UP' ? '#ea580c' : '#16a34a',
+        border:     `1px solid ${tag === 'UP' ? '#fed7aa' : '#bbf7d0'}`,
+        marginLeft: 3, lineHeight: '14px' as const,
+      });
+
+      const pctColor = (pct: number) => pct > 60 ? '#16a34a' : pct > 25 ? '#ea580c' : '#dc2626';
+
+      return (
+        <>
+          {/* ═══ SECTION 1: Global KPIs ═══ */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, marginBottom: 12 }}>🌍 Overall Progress</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+              {[
+                { label: 'Farmers',    val: kpi.total_farmers,                          color: '#16a34a' },
+                { label: 'Plots',      val: kpi.total_plots,                            color: S.stone700 },
+                { label: 'Total Acres', val: `${Number(kpi.total_area).toFixed(1)} ac`, color: S.stone700 },
+                { label: 'Allocated',  val: `${Number(kpi.allocated_area).toFixed(1)} ac`, color: '#2563eb' },
+                { label: 'Pending',    val: `${Number(kpi.pending_area).toFixed(1)} ac`, color: '#dc2626' },
+                { label: '% Done',     val: `${kpi.pct_complete}%`,                     color: '#16a34a' },
+                { label: 'Jobs',       val: kpi.total_jobs,                              color: '#ea580c' },
+                { label: 'Activities', val: kpi.total_activities,                        color: S.stone700 },
+              ].map((k, i) => (
+                <div key={i} style={{ background: '#fff', borderRadius: 12, padding: '14px 18px', border: '1px solid #e8e5de', flex: 1, minWidth: 100, textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: k.color, lineHeight: 1.1 }}>{k.val}</div>
+                  <div style={{ fontSize: 10, color: '#6b6b63', fontWeight: 600, marginTop: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{k.label}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: '#fff', borderRadius: 10, padding: '10px 16px', border: '1px solid #e8e5de' }}>
+              <div style={{ background: '#f0ede7', borderRadius: 5, height: 8, overflow: 'hidden', marginBottom: 6 }}>
+                <div style={{ width: `${Math.min(kpi.pct_complete, 100)}%`, height: '100%', borderRadius: 5, background: pctColor(kpi.pct_complete), transition: 'width 0.4s ease' }} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#6b6b63' }}>
+                <span>{Number(kpi.allocated_area).toFixed(1)} ac allocated</span>
+                <span>{Number(kpi.pending_area).toFixed(1)} ac remaining</span>
+              </div>
+            </div>
+          </div>
+
+          {/* ═══ SECTION 2: Cluster Breakdown Table ═══ */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, marginBottom: 12 }}>
+              📋 Cluster Breakdown
+              <span style={{ marginLeft: 8, padding: '2px 9px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0' }}>{raw.length}</span>
+            </div>
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'hidden' }}>
+              {/* Header */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px', padding: '10px 16px', fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#fafaf8', borderBottom: '1px solid #e8e5de' }}>
+                <div>Cluster</div>
+                <div style={{ textAlign: 'right' }}>Farmers</div>
+                <div style={{ textAlign: 'right' }}>Plots</div>
+                <div style={{ textAlign: 'right', cursor: 'pointer', color: insightSort === 'pending' ? '#16a34a' : '#a3a398' }} onClick={() => setInsightSort('pending')}>Total Ac ↕</div>
+                <div style={{ textAlign: 'right' }}>Jobs</div>
+                <div style={{ textAlign: 'right' }}>Allocated</div>
+                <div style={{ textAlign: 'right', cursor: 'pointer', color: insightSort === 'pending' ? '#16a34a' : '#a3a398' }} onClick={() => setInsightSort('pending')}>Pending ↕</div>
+                <div style={{ textAlign: 'center', cursor: 'pointer', color: insightSort === 'progress' ? '#16a34a' : '#a3a398' }} onClick={() => setInsightSort('progress')}>Progress ↕</div>
+              </div>
+
+              {/* Rows */}
+              {sorted.map((cluster: any, i: number) => {
+                const pct = cluster.pct ?? 0;
+                const pc  = pctColor(pct);
+                return (
+                  <div key={cluster.id}
+                    style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px', padding: '10px 16px', fontSize: 13, borderBottom: i < sorted.length - 1 ? '1px solid #f0ede7' : 'none', alignItems: 'center', background: insightHover === cluster.id ? '#fafaf8' : 'transparent', transition: 'background 0.1s' }}
+                    onMouseEnter={() => setInsightHover(cluster.id)}
+                    onMouseLeave={() => setInsightHover(null)}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                      {statusDot(cluster.today?.status)}
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>{cluster.name}</div>
+                        {cluster.note && <div style={{ fontSize: 10, color: '#ea580c', marginTop: 1 }}>{cluster.note.slice(0, 50)}{cluster.note.length > 50 ? '…' : ''}</div>}
+                      </div>
                     </div>
+                    <div style={{ textAlign: 'right', color: '#6b6b63' }}>{cluster.farmers}</div>
+                    <div style={{ textAlign: 'right', color: '#6b6b63' }}>{cluster.plots}</div>
+                    <div style={{ textAlign: 'right', fontWeight: 600 }}>{Number(cluster.total_area).toFixed(1)}</div>
+                    <div style={{ textAlign: 'right', color: '#6b6b63' }}>{cluster.jobs}</div>
+                    <div style={{ textAlign: 'right', color: '#16a34a', fontWeight: 600 }}>{Number(cluster.allocated_area).toFixed(1)}</div>
+                    <div style={{ textAlign: 'right', color: Number(cluster.pending_area) > 20 ? '#dc2626' : Number(cluster.pending_area) > 0 ? '#ea580c' : '#16a34a', fontWeight: 700 }}>{Number(cluster.pending_area).toFixed(1)}</div>
+                    <div style={{ paddingLeft: 8 }}>
+                      <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: pc, borderRadius: 4 }} />
+                      </div>
+                      <div style={{ fontSize: 10, textAlign: 'center', color: '#a3a398', marginTop: 2 }}>{pct.toFixed(0)}%</div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Totals row */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px', padding: '10px 16px', fontSize: 13, fontWeight: 700, background: '#f5f4ef', borderTop: '2px solid #e8e5de' }}>
+                <div>Total</div>
+                <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + (c.farmers ?? 0), 0)}</div>
+                <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + (c.plots ?? 0), 0)}</div>
+                <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + Number(c.total_area ?? 0), 0).toFixed(1)}</div>
+                <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + (c.jobs ?? 0), 0)}</div>
+                <div style={{ textAlign: 'right', color: '#16a34a' }}>{raw.reduce((s: number, c: any) => s + Number(c.allocated_area ?? 0), 0).toFixed(1)}</div>
+                <div style={{ textAlign: 'right', color: '#dc2626' }}>{raw.reduce((s: number, c: any) => s + Number(c.pending_area ?? 0), 0).toFixed(1)}</div>
+                <div style={{ paddingLeft: 8 }}>
+                  <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.min(kpi.pct_complete, 100)}%`, height: '100%', background: pctColor(kpi.pct_complete), borderRadius: 4 }} />
+                  </div>
+                  <div style={{ fontSize: 10, textAlign: 'center', color: '#a3a398', marginTop: 2 }}>{kpi.pct_complete}%</div>
+                </div>
+              </div>
+
+              {/* No Cluster row */}
+{insightsData.no_cluster_row && (() => {
+  const nc = insightsData.no_cluster_row;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px', padding: '10px 16px', fontSize: 13, background: '#fefce8', borderTop: '1px solid #fde68a', alignItems: 'center' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <span style={{ fontSize: 11 }}>⚠️</span>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#ca8a04' }}>{nc.name}</div>
+      </div>
+      <div style={{ textAlign: 'right', color: '#6b6b63' }}>{nc.farmers}</div>
+      <div style={{ textAlign: 'right', color: '#6b6b63' }}>{nc.plots}</div>
+      <div style={{ textAlign: 'right', fontWeight: 600 }}>{Number(nc.total_area).toFixed(1)}</div>
+      <div style={{ textAlign: 'right', color: '#6b6b63' }}>{nc.jobs}</div>
+      <div style={{ textAlign: 'right', color: '#16a34a', fontWeight: 600 }}>{Number(nc.allocated_area).toFixed(1)}</div>
+      <div style={{ textAlign: 'right', color: '#ca8a04', fontWeight: 700 }}>{Number(nc.pending_area).toFixed(1)}</div>
+      <div style={{ paddingLeft: 8 }}>
+        <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden' }}>
+          <div style={{ width: `${Math.min(nc.pct, 100)}%`, height: '100%', background: '#ca8a04', borderRadius: 4 }} />
+        </div>
+        <div style={{ fontSize: 10, textAlign: 'center', color: '#a3a398', marginTop: 2 }}>{nc.pct}%</div>
+      </div>
+    </div>
+  );
+})()}
+            </div>
+          </div>
+
+          {/* ═══ SECTION 3: Today & Tomorrow Traffic Lights ═══ */}
+          {(() => {
+            const [showDay, setShowDay] = [insightShowDay, setInsightShowDay];
+            return (
+              <div style={{ marginBottom: 24 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, marginBottom: 12 }}>🚦 Today & Tomorrow — What Needs Attention</div>
+                {/* Filter pills */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center' }}>
+                  {[
+                    { key: 'both',     label: 'Both Days'           },
+                    { key: 'today',    label: `Today (${(insightsData.today ?? '').slice(5).replace('-', ' ')})`    },
+                    { key: 'tomorrow', label: `Tomorrow (${(insightsData.tomorrow ?? '').slice(5).replace('-', ' ')})` },
+                  ].map(f => (
+                    <button key={f.key} onClick={() => setInsightShowDay(f.key)}
+                      style={{ padding: '5px 14px', borderRadius: 20, cursor: 'pointer', border: `1px solid ${insightShowDay === f.key ? '#16a34a' : '#e8e5de'}`, background: insightShowDay === f.key ? '#f0fdf4' : '#fff', color: insightShowDay === f.key ? '#16a34a' : '#6b6b63', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
+                    >{f.label}</button>
                   ))}
+                  <div style={{ flex: 1 }} />
+                  <span style={{ fontSize: 12, color: '#6b6b63', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {statusDot('red')} {redCount} need action
+                  </span>
+                  <span style={{ fontSize: 12, color: '#6b6b63', display: 'flex', alignItems: 'center', gap: 4, marginLeft: 10 }}>
+                    {statusDot('green')} {greenCount} all clear
+                  </span>
                 </div>
 
-                {/* Bill status row */}
-                <div style={{ display: 'flex', gap: 8, borderTop: '1px solid #eef0f4', paddingTop: 12 }}>
-                  <div style={{ flex: 1, textAlign: 'center' }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: '#d68910' }}>{pending}</div>
-                    <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Pending</div>
-                  </div>
-                  <div style={{ width: 1, background: '#eef0f4' }} />
-                  <div style={{ flex: 1, textAlign: 'center' }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: '#1e8449' }}>{sent}</div>
-                    <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Sent</div>
-                  </div>
-                  <div style={{ width: 1, background: '#eef0f4' }} />
-                  <div style={{ flex: 1, textAlign: 'center' }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: response > 0 ? '#e74c3c' : '#27ae60' }}>{response}</div>
-                    <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Awaiting</div>
-                  </div>
+                {/* Cards grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
+                  {raw.map((cluster: any) => {
+                    const tod  = cluster.today    ?? { status: 'red', msg: '—' };
+                    const tmrw = cluster.tomorrow ?? { status: 'red', msg: '—' };
+                    const worst = tod.status === 'red' || tmrw.status === 'red' ? 'red'
+                      : tod.status === 'yellow' || tmrw.status === 'yellow' ? 'yellow' : 'green';
+                    const borderColor = worst === 'red' ? '#fecaca' : worst === 'yellow' ? '#fde68a' : '#bbf7d0';
+                    const bgColor     = worst === 'red' ? '#fef2f2' : worst === 'yellow' ? '#fefce8' : '#f0fdf4';
+                    const textColor   = (s: string) => s === 'green' ? '#6b6b63' : s === 'red' ? '#dc2626' : '#ca8a04';
+
+                    return (
+                      <div key={cluster.id} style={{ background: '#fff', borderRadius: 10, border: `1.5px solid ${borderColor}`, overflow: 'hidden', transition: 'transform 0.1s' }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-1px)'; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.transform = 'none'; }}
+                      >
+                        {/* Card header */}
+                        <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, background: bgColor, borderBottom: `1px solid ${borderColor}` }}>
+                          {statusDot(worst)}
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700 }}>{cluster.name}</div>
+                            <div style={{ fontSize: 10, color: '#6b6b63' }}>
+                              {(cluster.districts ?? []).slice(0,1).join('')} · {Number(cluster.pending_area).toFixed(1)} ac pending
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Today row */}
+                        {(insightShowDay === 'both' || insightShowDay === 'today') && (
+                          <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'flex-start', gap: 8, borderBottom: insightShowDay === 'both' ? '1px solid #f0ede7' : 'none' }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', minWidth: 46, textTransform: 'uppercase', paddingTop: 2 }}>Today</div>
+                            {statusDot(tod.status)}
+                            <div style={{ fontSize: 12, color: textColor(tod.status), lineHeight: 1.4 }}>{tod.msg}</div>
+                          </div>
+                        )}
+
+                        {/* Tomorrow row */}
+                        {(insightShowDay === 'both' || insightShowDay === 'tomorrow') && (
+                          <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', minWidth: 46, textTransform: 'uppercase', paddingTop: 2 }}>Tmrw</div>
+                            {statusDot(tmrw.status)}
+                            <div style={{ fontSize: 12, color: textColor(tmrw.status), lineHeight: 1.4 }}>{tmrw.msg}</div>
+                          </div>
+                        )}
+
+                        {/* No cluster card */}
+{insightsData.no_cluster_row && (() => {
+  const nc = insightsData.no_cluster_row;
+  return (
+    <div style={{ background: '#fff', borderRadius: 10, border: '1.5px solid #fde68a', overflow: 'hidden' }}>
+      <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, background: '#fefce8', borderBottom: '1px solid #fde68a' }}>
+        <span style={{ fontSize: 11 }}>⚠️</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#ca8a04' }}>No Cluster Assigned</div>
+          <div style={{ fontSize: 10, color: '#6b6b63' }}>{nc.farmers} farmers · {nc.plots} plots · {Number(nc.pending_area).toFixed(1)} ac pending</div>
+        </div>
+      </div>
+      {(insightShowDay === 'both' || insightShowDay === 'today') && (
+        <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'flex-start', gap: 8, borderBottom: insightShowDay === 'both' ? '1px solid #f0ede7' : 'none' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', minWidth: 46, textTransform: 'uppercase', paddingTop: 2 }}>Today</div>
+          {statusDot('yellow')}
+          <div style={{ fontSize: 12, color: '#ca8a04', lineHeight: 1.4 }}>{nc.today.msg}</div>
+        </div>
+      )}
+      {(insightShowDay === 'both' || insightShowDay === 'tomorrow') && (
+        <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', minWidth: 46, textTransform: 'uppercase', paddingTop: 2 }}>Tmrw</div>
+          {statusDot('yellow')}
+          <div style={{ fontSize: 12, color: '#ca8a04', lineHeight: 1.4 }}>{nc.tomorrow.msg}</div>
+        </div>
+      )}
+    </div>
+  );
+})()}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
-          })}
-        </div>
+          })()}
+
+          {/* ═══ SECTION 4: 7-Day Plan Grid ═══ */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, marginBottom: 12 }}>📅 Next 7 Days — Team Availability</div>
+
+            {/* Legend */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: '#6b6b63', marginRight: 4 }}>Legend:</span>
+              <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, border: '1px solid #e8e5de', background: '#f5f5f0', color: '#1a1a1a' }}>
+                Name <span style={{ background: '#e8e5de', padding: '1px 6px', borderRadius: 4, fontSize: 10, fontWeight: 700, color: '#6b6b63', marginLeft: 2 }}>12</span>
+              </span>
+              <span style={{ padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 800, background: '#fff7ed', color: '#ea580c', border: '1px solid #fed7aa' }}>UP</span>
+              <span style={{ fontSize: 11, color: '#6b6b63' }}>= Up-Down</span>
+              <span style={{ padding: '3px 8px', borderRadius: 4, fontSize: 10, fontWeight: 800, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0' }}>P</span>
+              <span style={{ fontSize: 11, color: '#6b6b63' }}>= Permanent</span>
+              <span style={{ fontSize: 11, color: '#dc2626', background: '#fef2f2', padding: '3px 8px', borderRadius: 4, border: '1px solid #fecaca' }}>N unalloc</span>
+              <span style={{ fontSize: 11, color: '#6b6b63' }}>= unallocated jobs</span>
+            </div>
+
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'auto' }}>
+              {/* Day headers */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 180px) repeat(7, 1fr)', borderBottom: '2px solid #e8e5de' }}>
+                <div style={{ padding: '10px 14px', fontSize: 11, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', background: '#fafaf8', borderRight: '1px solid #e8e5de' }}>Cluster</div>
+                {days.map((d: any, i: number) => (
+                  <div key={i} style={{ padding: '8px 6px', textAlign: 'center', background: i === 0 ? '#f0fdf4' : '#fafaf8', borderRight: i < 6 ? '1px solid #f0ede7' : 'none', borderBottom: i === 0 ? '2px solid #16a34a' : 'none' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: i === 0 ? '#16a34a' : '#1a1a1a' }}>{d.label}</div>
+                    <div style={{ fontSize: 10, color: '#a3a398' }}>{d.day_name}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Cluster rows */}
+              {sorted.map((cluster: any) => (
+                <div key={cluster.id}
+                  style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 180px) repeat(7, 1fr)', borderBottom: '1px solid #f0ede7', background: insightHover === cluster.id ? '#fafaf8' : 'transparent' }}
+                  onMouseEnter={() => setInsightHover(cluster.id)}
+                  onMouseLeave={() => setInsightHover(null)}
+                >
+                  <div style={{ padding: '10px 14px', borderRight: '1px solid #e8e5de', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {statusDot(cluster.today?.status)}
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.2 }}>{cluster.name}</div>
+                      <div style={{ fontSize: 10, color: '#a3a398' }}>{Number(cluster.pending_area).toFixed(1)} ac left</div>
+                    </div>
+                  </div>
+
+                  {(cluster.week_plan ?? []).map((dayPlan: any, dayIdx: number) => (
+  <div key={dayIdx} style={{ padding: '6px 5px', borderRight: dayIdx < 6 ? '1px solid #f0ede7' : 'none', background: dayIdx === 0 ? 'rgba(16,163,74,0.04)' : 'transparent', display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'center', alignItems: 'center', minHeight: 44 }}>
+
+    {/* Confirmed allocations */}
+    {dayPlan.teams.length > 0 && dayPlan.teams.map((team: any, ti: number) => (
+      <div key={ti} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 6px', borderRadius: 5, fontSize: 10, fontWeight: 500, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#1a1a1a', whiteSpace: 'nowrap' }}>
+        <span>{team.name.split(' ')[0]}</span>
+        {team.crew > 0 && <span style={{ fontSize: 10, fontWeight: 700, background: '#e8e5de', padding: '0 4px', borderRadius: 3, color: '#6b6b63' }}>{team.crew}</span>}
+        <span style={typeTagStyle(team.type_tag)}>{team.type_tag}</span>
+      </div>
+    ))}
+
+    {/* Available (assigned but not yet allocated) — shown dimmed */}
+    {dayPlan.teams.length === 0 && (dayPlan.available_teams ?? []).length > 0 && (
+      <>
+        {dayPlan.available_teams.map((team: any, ti: number) => (
+          <div key={ti} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 6px', borderRadius: 5, fontSize: 10, fontWeight: 500,
+            background: '#f8f8f6',           // ← grey tint instead of green
+            border: '1px solid #d6d3cc',     // ← muted border
+            color: '#9b9b92',                // ← dimmed text
+            whiteSpace: 'nowrap',
+            opacity: 0.85,
+          }}>
+            <span>{team.name.split(' ')[0]}</span>
+            {team.crew > 0 && <span style={{ fontSize: 10, fontWeight: 700, background: '#e8e5de', padding: '0 4px', borderRadius: 3, color: '#6b6b63' }}>{team.crew}</span>}
+            <span style={typeTagStyle(team.type_tag)}>{team.type_tag}</span>
+          </div>
+        ))}
       </>
     )}
+
+    {/* Fallback: no teams and no assigned mukkadams */}
+    {dayPlan.teams.length === 0 && (dayPlan.available_teams ?? []).length === 0 && (
+      <span style={{ fontSize: 10, color: cluster.pending_area > 0 ? '#dc2626' : '#16a34a', fontWeight: 500, padding: '2px 6px', borderRadius: 4, background: cluster.pending_area > 0 ? '#fef2f2' : 'transparent' }}>
+        {cluster.pending_area > 0 ? '—' : '✓'}
+      </span>
+    )}
+
+    {/* Unallocated badge */}
+    {dayPlan.unallocated > 0 && (
+      <span style={{ fontSize: 9, fontWeight: 600, color: '#dc2626', background: '#fef2f2', padding: '1px 5px', borderRadius: 4, border: '1px solid #fecaca', lineHeight: '14px', whiteSpace: 'nowrap' }}>
+        {dayPlan.unallocated} unalloc
+      </span>
+    )}
+  </div>
+))}
+                </div>
+              ))}
+
+              {/* No cluster row in 7-day grid */}
+{insightsData.no_cluster_row && (() => {
+  const nc = insightsData.no_cluster_row;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 180px) repeat(7, 1fr)', borderBottom: '1px solid #fde68a', background: '#fefce8' }}>
+      <div style={{ padding: '10px 14px', borderRight: '1px solid #e8e5de', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span>⚠️</span>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#ca8a04' }}>No Cluster</div>
+          <div style={{ fontSize: 10, color: '#a3a398' }}>{Number(nc.pending_area).toFixed(1)} ac left</div>
+        </div>
+      </div>
+      {(nc.week_plan ?? []).map((dayPlan: any, dayIdx: number) => (
+        <div key={dayIdx} style={{ padding: '6px 5px', borderRight: dayIdx < 6 ? '1px solid #f0ede7' : 'none', display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'center', alignItems: 'center', minHeight: 44 }}>
+          {dayPlan.unallocated > 0 ? (
+            <span style={{ fontSize: 9, fontWeight: 600, color: '#dc2626', background: '#fef2f2', padding: '1px 5px', borderRadius: 4, border: '1px solid #fecaca' }}>
+              {dayPlan.unallocated} unalloc
+            </span>
+          ) : (
+            <span style={{ fontSize: 10, color: '#16a34a' }}>✓</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+})()}
+
+              {/* Summary: Unallocated */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 180px) repeat(7, 1fr)', borderTop: '2px solid #e8e5de', background: '#fef2f2' }}>
+                <div style={{ padding: '12px 14px', borderRight: '1px solid #fecaca', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>⚠️</span>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#dc2626' }}>Unallocated</div>
+                    <div style={{ fontSize: 10, color: '#6b6b63' }}>total jobs</div>
+                  </div>
+                </div>
+                {daily.map((d: any, dayIdx: number) => (
+                  <div key={dayIdx} style={{ padding: '10px 6px', borderRight: dayIdx < 6 ? '1px solid rgba(220,38,38,0.15)' : 'none', background: dayIdx === 0 ? 'rgba(220,38,38,0.06)' : 'transparent', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: d.unallocated === 0 ? '#16a34a' : d.unallocated > 40 ? '#dc2626' : '#ea580c' }}>
+                      {d.unallocated === 0 ? '✓' : d.unallocated}
+                    </div>
+                    {d.unallocated > 0 && <div style={{ fontSize: 9, color: '#6b6b63', marginTop: 1 }}>jobs</div>}
+                  </div>
+                ))}
+              </div>
+
+              {/* Summary: Crew Deployed */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(150px, 180px) repeat(7, 1fr)', background: '#f0fdf4', borderTop: '1px solid #bbf7d0' }}>
+                <div style={{ padding: '12px 14px', borderRight: '1px solid #bbf7d0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>👷</span>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>Crew Deployed</div>
+                    <div style={{ fontSize: 10, color: '#6b6b63' }}>total workers</div>
+                  </div>
+                </div>
+                {daily.map((d: any, dayIdx: number) => (
+                  <div key={dayIdx} style={{ padding: '10px 6px', borderRight: dayIdx < 6 ? '1px solid rgba(16,163,74,0.15)' : 'none', background: dayIdx === 0 ? 'rgba(16,163,74,0.06)' : 'transparent', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: d.crew > 50 ? '#16a34a' : d.crew > 0 ? '#ea580c' : '#dc2626' }}>{d.crew}</div>
+                    <div style={{ fontSize: 9, color: '#6b6b63', marginTop: 1 }}>workers</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      );
+    })()}
   </>)
-  
   : tab === 'mukkadams' ? (
 
           <>
