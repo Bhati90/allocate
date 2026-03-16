@@ -3780,38 +3780,15 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
                         )}
 
                         {/* No cluster card */}
-{insightsData.no_cluster_row && (() => {
-  const nc = insightsData.no_cluster_row;
-  return (
-    <div style={{ background: '#fff', borderRadius: 10, border: '1.5px solid #fde68a', overflow: 'hidden' }}>
-      <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, background: '#fefce8', borderBottom: '1px solid #fde68a' }}>
-        <span style={{ fontSize: 11 }}>⚠️</span>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#ca8a04' }}>No Cluster Assigned</div>
-          <div style={{ fontSize: 10, color: '#6b6b63' }}>{nc.farmers} farmers · {nc.plots} plots · {Number(nc.pending_area).toFixed(1)} ac pending</div>
-        </div>
-      </div>
-      {(insightShowDay === 'both' || insightShowDay === 'today') && (
-        <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'flex-start', gap: 8, borderBottom: insightShowDay === 'both' ? '1px solid #f0ede7' : 'none' }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', minWidth: 46, textTransform: 'uppercase', paddingTop: 2 }}>Today</div>
-          {statusDot('yellow')}
-          <div style={{ fontSize: 12, color: '#ca8a04', lineHeight: 1.4 }}>{nc.today.msg}</div>
-        </div>
-      )}
-      {(insightShowDay === 'both' || insightShowDay === 'tomorrow') && (
-        <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', minWidth: 46, textTransform: 'uppercase', paddingTop: 2 }}>Tmrw</div>
-          {statusDot('yellow')}
-          <div style={{ fontSize: 12, color: '#ca8a04', lineHeight: 1.4 }}>{nc.tomorrow.msg}</div>
-        </div>
-      )}
-    </div>
-  );
-})()}
+
                       </div>
+
+                      
                     );
                   })}
                 </div>
+
+                
               </div>
             );
           })()}
