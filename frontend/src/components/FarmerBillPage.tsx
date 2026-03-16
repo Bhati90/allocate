@@ -838,9 +838,9 @@ const sortedFarmers = [...filteredFarmers].sort((a, b) => {
       {/* ══════════════════════════════════════════════
           SIDEBAR
       ══════════════════════════════════════════════ */}
-      <div style={{ width: 260, flexShrink: 0, background: '#fff', borderRight: '1px solid #e8ecf1', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{  flexShrink: 0, background: '#fff', borderRight: '1px solid #e8ecf1', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-        {/* Sidebar tabs */}
+        {/* Sidebar tabs
         <div style={{ padding: '12px 16px', borderBottom: '1px solid #e8ecf1', display: 'flex', gap: 4 }}>
           <button style={{ padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: '#1a1a2e', color: '#fff' }}>
             Farmers
@@ -848,7 +848,7 @@ const sortedFarmers = [...filteredFarmers].sort((a, b) => {
           <button style={{ padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', background: '#e8ecf1', color: '#666' }}>
             Mukkadams
           </button>
-        </div>
+        </div> */}
 {/* Cluster stats — sticky */}
 {data && (() => {
   const allFarmers   = data.farmers ?? [];
@@ -877,7 +877,7 @@ const sortedFarmers = [...filteredFarmers].sort((a, b) => {
   return (
     <div style={{ padding: '10px 12px', borderBottom: '1px solid #e8ecf1', background: '#f8f9fb' }}>
       {/* Row 1 */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+      {/* <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
         <div style={{ flex: 1, background: '#fff', borderRadius: 8, padding: '6px 10px', border: '1px solid #eef0f4' }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: '#1a1a2e' }}>{totalFarmers}</div>
           <div style={{ fontSize: 9, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Farmers</div>
@@ -902,7 +902,7 @@ const sortedFarmers = [...filteredFarmers].sort((a, b) => {
   <div style={{ fontSize: 9, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Bills Sent</div>
 </div>
       </div>
-      {/* Row 2 */}
+
       <div style={{ display: 'flex', gap: 6 }}>
         <div style={{ flex: 1, background: '#fff', borderRadius: 8, padding: '6px 10px', border: '1px solid #eef0f4' }}>
           <div style={{ fontSize: 12, fontWeight: 800, color: '#e74c3c' }}>₹{Math.round(totalDueAll / 1000)}k</div>
@@ -916,12 +916,12 @@ const sortedFarmers = [...filteredFarmers].sort((a, b) => {
           <div style={{ fontSize: 12, fontWeight: 800, color: '#27ae60' }}>₹{Math.round(totalPaidAll / 1000)}k</div>
           <div style={{ fontSize: 9, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Collected</div>
         </div>
-      </div>
+      </div> */}
     </div>
   );
 })()}
         {/* Search */}
-        <div style={{ padding: '8px 16px', borderBottom: '1px solid #e8ecf1' }}>
+        {/* <div style={{ padding: '8px 16px', borderBottom: '1px solid #e8ecf1' }}>
           <input
             value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search farmers..."
@@ -929,7 +929,6 @@ const sortedFarmers = [...filteredFarmers].sort((a, b) => {
           />
         </div>
 
-        {/* Farmer list */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
           {sortedFarmers.map(f => {
   const avc        = avatarColor(f.farmer_id);
@@ -993,7 +992,7 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
 ) : null}
       </div>
 
-      {/* Badges row */}
+
       <div style={{ marginTop: 5, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
         {unsentReady.length > 0 && (
           <div style={{
@@ -1017,7 +1016,7 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
     </div>
   );
 })}
-        </div>
+        </div> */}
       </div>
 
       {/* ══════════════════════════════════════════════
@@ -1068,7 +1067,7 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
                 </div>
 
                 {/* Top bar stats */}
-                <div style={{ display: 'flex', gap: 12 }}>
+                {/* <div style={{ display: 'flex', gap: 12 }}>
                   {[
                     { label: 'Total Job Value', val: `₹${Math.round(jobs.reduce((s,j)=>s+(j.total_job_amount??0),0)).toLocaleString('en-IN')}`, bg: '#f8f9fb', color: '#1a1a2e' },
                     { label: 'Billed',          val: `₹${Math.round(totalBilled).toLocaleString('en-IN')}`,  bg: '#e8f0fe', color: '#2471a3' },
@@ -1085,7 +1084,7 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
                       <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>{s.label}</div>
                     </div>
                   ))}
-                </div>
+                </div> */}
               </div>
 
               {/* ── SCROLLABLE CONTENT ── */}
