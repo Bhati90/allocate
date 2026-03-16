@@ -55,7 +55,7 @@ const App = () => (
 
 
           <Route path="/" element={
-           <ProtectedRoute><TenderFront /></ProtectedRoute>
+           <ProtectedRoute><TenderDashboard /></ProtectedRoute>
           } />
 
           <Route path="/payment" element={
@@ -66,11 +66,11 @@ const App = () => (
            <ProtectedRoute><GlobalInsightsPanel /></ProtectedRoute>
           } />
 
-          <Route path="/data" element={
+          {/* <Route path="/data" element={
            <ProtectedRoute><TenderDashboard /></ProtectedRoute>
 
            
-          } />
+          } /> */}
 
           <Route path="/cluster/:clusterId" element={<ProtectedRoute><ClusterPage/></ProtectedRoute>} />
 {/* 

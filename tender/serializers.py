@@ -709,7 +709,7 @@ class JobSerializer(serializers.ModelSerializer):
 
 # serializers.py
 from rest_framework import serializers
-from .models import Cluster
+from .models import Cluster,ClusterMukkadamAssignment
 
 
 class ClusterSerializer(serializers.ModelSerializer):
@@ -723,6 +723,11 @@ class ClusterSerializer(serializers.ModelSerializer):
     allocation_count = serializers.IntegerField(read_only=True)
     farmer_due       = serializers.SerializerMethodField()
     mukkadam_due     = serializers.SerializerMethodField()
+    # ── ADD THESE ──
+    total_area       = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, default=0)
+    allocated_area   = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, default=0)
+    today_team       = serializers.SerializerMethodField()
+    cluster_mukkadams = serializers.SerializerMethodField()
 
     class Meta:
         model  = Cluster
@@ -741,6 +746,64 @@ class ClusterSerializer(serializers.ModelSerializer):
 
     def get_farmer_due  (self, obj): return 0
     def get_mukkadam_due(self, obj): return 0
+
+    def get_today_team(self, obj):
+        from datetime import date
+        today = date.today()
+        allocs = (
+            Allocation.objects
+            .filter(cluster=obj, allocated_date=today)
+            .select_related(
+                'mukkadam',
+                'job_activity__activity',
+                'job_activity__job__farmer',
+            )
+            .order_by('mukkadam_id')
+            .distinct()
+        )
+        seen = set()
+        result = []
+        for a in allocs:
+            mk_id = a.mukkadam_id
+            if mk_id in seen:
+                continue
+            seen.add(mk_id)
+            result.append({
+                'mukkadam_name':  a.mukkadam.mukkadam_name,
+                'crew_size':      a.mukkadam.crew_size,
+                'activity_name':  a.job_activity.activity.name,
+                'farmer_name':    a.job_activity.job.farmer.farmer_name,
+            })
+        return result
+
+    def get_cluster_mukkadams(self, obj):
+        assignments = (
+            ClusterMukkadamAssignment.objects
+            .filter(cluster=obj, is_active=True)
+            .select_related('mukkadam')
+        )
+        result = []
+        for a in assignments:
+            # which clusters is this mukkadam working in today
+            from datetime import date
+            today_clusters = (
+                Allocation.objects
+                .filter(mukkadam=a.mukkadam, allocated_date=date.today())
+                .select_related('cluster')
+                .values_list('cluster__name', flat=True)
+                .distinct()
+            )
+            result.append({
+                'mukkadam_id':    a.mukkadam.mukkadam_id,
+                'mukkadam_name':  a.mukkadam.mukkadam_name,
+                'crew_size':      a.mukkadam.crew_size,
+                'mukkadam_type':  a.mukkadam_type,
+                'weekly_amount':  float(a.weekly_amount or 0),
+                'today_clusters': list(today_clusters),
+            })
+        return result
+
+
 class PlotSerializer(serializers.ModelSerializer):
     clusters = serializers.PrimaryKeyRelatedField(
         queryset=Cluster.objects.all(), many=True, required=False

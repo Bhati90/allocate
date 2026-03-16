@@ -1,424 +1,129 @@
-Jobs OK      : 36
-Jobs Issues  : 84
+Jobs OK      : 73
+Jobs Issues  : 57
 ============================================================
 
-Job ID: 884 | Vikram Chintaman Kapadnis (2711)
-  [JOB] total_activities_amount
-    LOCAL : 57980.0
-    API   : 285440.0
-  [ACTIVITY id=3338 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 4460.0
-    API   : 52405.0
-  [ACTIVITY id=3338 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 4460.0
-    API   : 52405.0
-  [ACTIVITY id=3333 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 2.23
-  [ACTIVITY id=3333 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 52405.0
-  [ACTIVITY id=3333 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 52405.0
-  [ACTIVITY id=3334 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 5575.0
-    API   : 52405.0
-  [ACTIVITY id=3334 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 5575.0
-    API   : 52405.0
-  [ACTIVITY id=3335 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 8920.0
-    API   : 52405.0
-  [ACTIVITY id=3335 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 8920.0
-    API   : 52405.0
-  [ACTIVITY id=3337 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 6690.0
-    API   : 52405.0
-  [ACTIVITY id=3337 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 6690.0
-    API   : 52405.0
-  [ACTIVITY] activity_id
-    LOCAL : id=2150 name=Pruning (छाटणी)
-    API   : NOT IN API
+Job ID:  | Farmer  ()
+  [JOB] job_id
+    LOCAL : 
+    API   : NOT FOUND IN API
 
 Job ID: 866 | Punam Dinesh Ahire (28637)
+  [PLOT 53099] area_acres
+    LOCAL : 2.7
+    API   : 2.7033
+
+Job ID: 870 | Punam Dinesh Ahire (28637)
+  [PLOT 53099] area_acres
+    LOCAL : 2.7
+    API   : 2.7033
+
+Job ID: 901 | Bablu wagh (91515)
+  [ACTIVITY id=3003 (2nd Subcane (दुसरी सबकेन))] acres
+    LOCAL : 0.0
+    API   : 1.0
+  [ACTIVITY id=3003 (2nd Subcane (दुसरी सबकेन))] total_price
+    LOCAL : 0.0
+    API   : 23500.0
+  [ACTIVITY id=3003 (2nd Subcane (दुसरी सबकेन))] subtotal
+    LOCAL : 0.0
+    API   : 23500.0
+  [ACTIVITY] activity_id
+    LOCAL : id=3328 name=2nd Subcane (दुसरी सबकेन)
+    API   : NOT IN API
+
+Job ID: 1749 | Chindu Gangadhar Bornare (15651)
   [JOB] total_activities_amount
-    LOCAL : 145080.0
-    API   : 345600.0
+    LOCAL : 117900.04
+    API   : 117900.0
+  [ACTIVITY id=4512 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 4000.01
+    API   : 4000.0
+  [ACTIVITY id=4512 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 4000.01
+    API   : 4000.0
+  [ACTIVITY id=4514 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
+    LOCAL : 6400.01
+    API   : 6400.0
+  [ACTIVITY id=4514 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
+    LOCAL : 6400.01
+    API   : 6400.0
+  [ACTIVITY id=4515 (One Time Subcane (सबकेन))] total_price
+    LOCAL : 4000.01
+    API   : 4000.0
+  [ACTIVITY id=4515 (One Time Subcane (सबकेन))] subtotal
+    LOCAL : 4000.01
+    API   : 4000.0
+  [ACTIVITY id=4510 (Pruning (छाटणी))] total_price
+    LOCAL : 6400.01
+    API   : 6400.0
+  [ACTIVITY id=4510 (Pruning (छाटणी))] subtotal
+    LOCAL : 6400.01
+    API   : 6400.0
+
+Job ID: 2205 | Suhas Yashwant Bhalerao (37630)
   [BOOKING] total_amount
-    LOCAL : 189410.0
-    API   : 63450.0
+    LOCAL : 233075.0
+    API   : 23375.0
   [BOOKING] advance_paid
-    LOCAL : 30000.0
-    API   : 5000.0
+    LOCAL : 48075.0
+    API   : 4875.0
   [BOOKING] balance
-    LOCAL : 159410.0
-    API   : 58450.0
+    LOCAL : 185000.0
+    API   : 18500.0
   [PAYMENT] payment_id
-    LOCAL : id=392 amount=25000.00 mode=UPI
-    API   : NOT IN API
-  [ACTIVITY id=3345 (Pruning (छाटणी))] total_price
-    LOCAL : 10800.0
-    API   : 63450.0
-  [ACTIVITY id=3345 (Pruning (छाटणी))] subtotal
-    LOCAL : 10800.0
-    API   : 63450.0
-  [ACTIVITY id=3346 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 6750.0
-    API   : 63450.0
-  [ACTIVITY id=3346 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 6750.0
-    API   : 63450.0
-  [ACTIVITY id=3347 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 10800.0
-    API   : 63450.0
-  [ACTIVITY id=3347 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 10800.0
-    API   : 63450.0
-  [ACTIVITY id=3349 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 8100.0
-    API   : 63450.0
-  [ACTIVITY id=3349 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 8100.0
-    API   : 63450.0
-  [ACTIVITY id=3350 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 5400.0
-    API   : 63450.0
-  [ACTIVITY id=3350 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 5400.0
-    API   : 63450.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4342 name=1st Subcane (पहिली सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4343 name=2nd Subcane (दुसरी सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4344 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY] activity_id
-    LOCAL : id=3351 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=3352 name=1st Lateral Removal (बगल काढणे)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=3355 name=Shoot Selection (विरळणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=3348 name=One Time Subcane (सबकेन)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=3353 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=3354 name=One Time Subcane (सबकेन)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=3356 name=Shenda Stopping (शेंडा स्टॉपिंग)
+    LOCAL : id=106 amount=48795.00 mode=UPI
     API   : NOT IN API
 
-Job ID: 2069 | Prakash Dawange (92627)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 96800.0
-  [BOOKING] balance
-    LOCAL : 464000.0
-    API   : 367200.0
-
-Job ID: 2095 | Sunil Madhavrao Shinde (38187)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 18970.0
-  [BOOKING] balance
-    LOCAL : 91330.0
-    API   : 72360.0
-
-Job ID: 2089 | Shankar Govind Bhor (34950)
-  [ACTIVITY id=3905 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.75
-  [ACTIVITY id=3905 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 7000.0
-  [ACTIVITY id=3905 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 7000.0
-  [ACTIVITY] activity_id
-    LOCAL : id=2303 name=Pruning (छाटणी)
-    API   : NOT IN API
-
-Job ID: 2065 | Lata Manohar Patole (22523)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 12740.0
-  [BOOKING] balance
-    LOCAL : 63700.0
-    API   : 50960.0
-  [PAYMENT] payment_id
-    LOCAL : MISSING
-    API   : id=955 amount=12740.0 mode=CHEQUE
-
-Job ID: 1785 | Subhash Bhagwant Gade (37326)
-  [BOOKING] total_amount
-    LOCAL : 63500.0
-    API   : 64200.0
-  [BOOKING] balance
-    LOCAL : 50660.0
-    API   : 51360.0
-
-Job ID: 1824 | Valuba Namdev Gachale (40574)
-  [BOOKING] total_amount
-    LOCAL : 99000.0
-    API   : 100100.0
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 20900.0
-  [BOOKING] balance
-    LOCAL : 99000.0
-    API   : 79200.0
-
-Job ID: 2025 | Yogesh Suresh Nikam (91814)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 21774.0
-  [BOOKING] balance
-    LOCAL : 104286.0
-    API   : 82512.0
-  [PAYMENT] payment_id
-    LOCAL : MISSING
-    API   : id=986 amount=21774.0 mode=CHEQUE
-
-Job ID: 2027 | Sandeep Shankar Shinde (32716)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 11590.0
-  [BOOKING] balance
-    LOCAL : 55510.0
-    API   : 43920.0
-
-Job ID: 1786 | Sandip Ramchandra Chaure (32970)
-  [BOOKING] total_amount
-    LOCAL : 76500.0
-    API   : 77350.0
-  [BOOKING] balance
-    LOCAL : 60350.0
-    API   : 61200.0
-
-Job ID: 2063 | Balaji Patole (Lodhai Mala) (43499)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 39990.0
-  [BOOKING] balance
-    LOCAL : 199950.0
-    API   : 159960.0
-  [PAYMENT] payment_id
-    LOCAL : MISSING
-    API   : id=954 amount=39990.0 mode=CHEQUE
-
-Job ID: 1978 | Ashok Namdev Patil (12574)
-  [ACTIVITY id=2954 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.5
-  [ACTIVITY id=2954 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 6000.0
-  [ACTIVITY id=2954 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 6000.0
-  [ACTIVITY] activity_id
-    LOCAL : id=2323 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2322 name=Pruning (छाटणी)
-    API   : NOT IN API
-
-Job ID: 1964 | Pratik kailas Nikhade (92473)
-  [ACTIVITY id=2894 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 0.5
-  [ACTIVITY id=2894 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 2000.0
-  [ACTIVITY id=2894 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 2000.0
-  [ACTIVITY id=2906 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.25
-  [ACTIVITY id=2906 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 5000.0
-  [ACTIVITY id=2906 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 5000.0
-  [ACTIVITY] activity_id
-    LOCAL : id=2314 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2313 name=Pruning (छाटणी)
-    API   : NOT IN API
-
-Job ID: 1998 | Anil Sarode (43701)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 9500.0
-  [BOOKING] balance
-    LOCAL : 45500.0
-    API   : 36000.0
-
-Job ID: 2023 | Ravindra Tukaram Borade (31017)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 100000.0
-  [BOOKING] balance
-    LOCAL : 472640.0
-    API   : 372640.0
-
-Job ID: 2087 | Rohan Shrihari Mogal (92578)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 7410.0
-  [BOOKING] balance
-    LOCAL : 35490.0
-    API   : 28080.0
-
-Job ID: 2088 | Tushar Kishor Nikam (43485)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 16872.0
-  [BOOKING] balance
-    LOCAL : 80808.0
-    API   : 63936.0
-
-Job ID: 1830 | Hemant Motilal Rathi (19434)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 41600.0
-  [BOOKING] balance
-    LOCAL : 195600.0
-    API   : 154000.0
-
-Job ID: 2032 | Arun Ashok Shinde (10705)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 107500.0
-  [BOOKING] balance
-    LOCAL : 537480.0
-    API   : 429980.0
-  [PAYMENT] payment_id
-    LOCAL : MISSING
-    API   : id=985 amount=107500.0 mode=CHEQUE
-
-Job ID: 2094 | Ramrao Daulatrao Bhalerao (43684)
-  [ACTIVITY id=4030 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 6.75
-  [ACTIVITY id=4030 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 27000.0
-  [ACTIVITY id=4030 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 27000.0
-  [ACTIVITY] activity_id
-    LOCAL : id=2309 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2310 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2312 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2311 name=Pruning (छाटणी)
-    API   : NOT IN API
-
-Job ID: 2049 | Dnyaneshwar Sampat Shinde (2098)
-  [BOOKING] total_amount
-    LOCAL : 60250.0
-    API   : 60850.0
-  [BOOKING] balance
-    LOCAL : 47600.0
-    API   : 48200.0
-  [ACTIVITY id=3568 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.25
-  [ACTIVITY id=3568 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 5000.0
-  [ACTIVITY id=3568 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 5000.0
-  [ACTIVITY id=3574 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.75
-  [ACTIVITY id=3574 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 7000.0
-  [ACTIVITY id=3574 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 7000.0
-  [ACTIVITY] activity_id
-    LOCAL : id=2302 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2301 name=Pruning (छाटणी)
-    API   : NOT IN API
-
-Job ID: 2039 | Dnyneshwar Aadke (10127)
-  [ACTIVITY id=3538 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.5
-  [ACTIVITY id=3538 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 6000.0
-  [ACTIVITY id=3538 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 6000.0
-  [ACTIVITY] activity_id
-    LOCAL : id=2304 name=Pruning (छाटणी)
-    API   : NOT IN API
-
-Job ID: 2038 | Hirabai Keshav Kale (19509)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 114950.0
-  [BOOKING] balance
-    LOCAL : 114950.0
-    API   : 0.0
-  [ACTIVITY id=3526 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 4.5
-  [ACTIVITY id=3526 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 18000.0
-  [ACTIVITY id=3526 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 18000.0
-  [ACTIVITY id=3532 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 2.0
-  [ACTIVITY id=3532 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 8000.0
-  [ACTIVITY id=3532 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 8000.0
-  [ACTIVITY] activity_id
-    LOCAL : id=2287 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2300 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2288 name=Pruning (छाटणी)
-    API   : NOT IN API
+Job ID: 1497 | Ramnath Pansare (92288)
+  [JOB] total_activities_amount
+    LOCAL : 78000.0
+    API   : 307500.0
+  [ACTIVITY id=1868 (Pruning (छाटणी))] total_price
+    LOCAL : 6000.0
+    API   : 38250.0
+  [ACTIVITY id=1868 (Pruning (छाटणी))] subtotal
+    LOCAL : 6300.0
+    API   : 38550.0
+  [ACTIVITY id=1869 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 4500.0
+    API   : 38250.0
+  [ACTIVITY id=1869 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 4800.0
+    API   : 38550.0
+  [ACTIVITY id=1870 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 3750.0
+    API   : 38250.0
+  [ACTIVITY id=1870 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 4050.0
+    API   : 38550.0
+  [ACTIVITY id=1871 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
+    LOCAL : 3000.0
+    API   : 38250.0
+  [ACTIVITY id=1871 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
+    LOCAL : 3300.0
+    API   : 38550.0
+  [ACTIVITY id=1872 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
+    LOCAL : 6000.0
+    API   : 38250.0
+  [ACTIVITY id=1872 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
+    LOCAL : 6300.0
+    API   : 38550.0
+  [ACTIVITY id=1873 (One Time Subcane (सबकेन))] total_price
+    LOCAL : 3750.0
+    API   : 38250.0
+  [ACTIVITY id=1873 (One Time Subcane (सबकेन))] subtotal
+    LOCAL : 4050.0
+    API   : 38550.0
+  [ACTIVITY id=1874 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] total_price
+    LOCAL : 11250.0
+    API   : 38250.0
+  [ACTIVITY id=1874 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] subtotal
+    LOCAL : 11550.0
+    API   : 38550.0
 
 Job ID: 1513 | Yogeshwar Bajirao Thombare (36)
   [JOB] total_activities_amount
-    LOCAL : 44625.0
+    LOCAL : 70125.0
     API   : 337875.0
   [ACTIVITY id=1757 (Pruning (छाटणी))] total_price
     LOCAL : 7000.0
@@ -462,157 +167,536 @@ Job ID: 1513 | Yogeshwar Bajirao Thombare (36)
   [ACTIVITY id=1763 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] subtotal
     LOCAL : 13475.0
     API   : 44975.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4332 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4333 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4334 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4335 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4336 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4337 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4338 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
 
-Job ID: 1749 | Chindu Gangadhar Bornare (15651)
+Job ID: 1581 | Sahebrao Savitra Hande (460)
   [JOB] total_activities_amount
-    LOCAL : 25500.0
-    API   : 117900.0
-  [BOOKING] total_amount
-    LOCAL : 41820.0
-    API   : 115650.0
-  [BOOKING] balance
-    LOCAL : 30940.0
-    API   : 104770.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4355 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4356 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4357 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4358 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4359 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4360 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4361 name=Cordan Tying (ओलांढे बांधणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4362 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY id=1690 (Pruning (छाटणी))] acres
+    LOCAL : 50375.0
+    API   : 106250.0
+  [ACTIVITY id=1938 (Pruning (छाटणी))] total_price
+    LOCAL : 3000.0
+    API   : 13500.0
+  [ACTIVITY id=1938 (Pruning (छाटणी))] subtotal
+    LOCAL : 3200.0
+    API   : 13700.0
+  [ACTIVITY id=1939 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 2250.0
+    API   : 13500.0
+  [ACTIVITY id=1939 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 2450.0
+    API   : 13700.0
+  [ACTIVITY id=1940 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 1875.0
+    API   : 13500.0
+  [ACTIVITY id=1940 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 2075.0
+    API   : 13700.0
+  [ACTIVITY id=1941 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
+    LOCAL : 1500.0
+    API   : 13500.0
+  [ACTIVITY id=1941 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
+    LOCAL : 1700.0
+    API   : 13700.0
+  [ACTIVITY id=1942 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
+    LOCAL : 3000.0
+    API   : 13500.0
+  [ACTIVITY id=1942 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
+    LOCAL : 3200.0
+    API   : 13700.0
+
+Job ID: 1760 | Shobha Trambakrao Chavan (36272)
+  [JOB] total_activities_amount
+    LOCAL : 198000.0
+    API   : 216000.0
+  [ACTIVITY id=2036 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 9000.0
+    API   : 12000.0
+  [ACTIVITY id=2036 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 9000.0
+    API   : 12000.0
+  [ACTIVITY id=2037 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 7500.0
+    API   : 12000.0
+  [ACTIVITY id=2037 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 7500.0
+    API   : 12000.0
+  [ACTIVITY id=2038 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
+    LOCAL : 6000.0
+    API   : 12000.0
+  [ACTIVITY id=2038 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
+    LOCAL : 6000.0
+    API   : 12000.0
+  [ACTIVITY id=2040 (One Time Subcane (सबकेन))] total_price
+    LOCAL : 7500.0
+    API   : 12000.0
+  [ACTIVITY id=2040 (One Time Subcane (सबकेन))] subtotal
+    LOCAL : 7500.0
+    API   : 12000.0
+
+Job ID: 1512 | Navnath Kumbharkar (30415)
+  [JOB] total_activities_amount
+    LOCAL : 142545.0
+    API   : 355215.0
+  [ACTIVITY id=1743 (Pruning (छाटणी))] total_price
+    LOCAL : 5560.0
+    API   : 35445.0
+  [ACTIVITY id=1743 (Pruning (छाटणी))] subtotal
+    LOCAL : 5838.0
+    API   : 35723.0
+  [ACTIVITY id=1744 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 4170.0
+    API   : 35445.0
+  [ACTIVITY id=1744 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 4448.0
+    API   : 35723.0
+  [ACTIVITY id=1745 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 3475.0
+    API   : 35445.0
+  [ACTIVITY id=1745 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 3753.0
+    API   : 35723.0
+  [ACTIVITY id=1746 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
+    LOCAL : 2780.0
+    API   : 35445.0
+  [ACTIVITY id=1746 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
+    LOCAL : 3058.0
+    API   : 35723.0
+  [ACTIVITY id=1747 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
+    LOCAL : 5560.0
+    API   : 35445.0
+  [ACTIVITY id=1747 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
+    LOCAL : 5838.0
+    API   : 35723.0
+  [ACTIVITY id=1748 (One Time Subcane (सबकेन))] total_price
+    LOCAL : 3475.0
+    API   : 35445.0
+  [ACTIVITY id=1748 (One Time Subcane (सबकेन))] subtotal
+    LOCAL : 3753.0
+    API   : 35723.0
+  [ACTIVITY id=1749 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] total_price
+    LOCAL : 10425.0
+    API   : 35445.0
+  [ACTIVITY id=1749 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] subtotal
+    LOCAL : 10703.0
+    API   : 35723.0
+
+Job ID: 1574 | Rajendra Varpe (43634)
+  [PLOT 76126] area_acres
+    LOCAL : 1.6
+    API   : 1.5
+  [PLOT 76127] area_acres
+    LOCAL : 1.5
+    API   : 1.6
+  [JOB] total_activities_amount
+    LOCAL : 82450.0
+    API   : 222125.0
+  [ACTIVITY id=1921 (Pruning (छाटणी))] total_price
+    LOCAL : 7400.0
+    API   : 33300.0
+  [ACTIVITY id=1921 (Pruning (छाटणी))] subtotal
+    LOCAL : 7800.0
+    API   : 33700.0
+  [ACTIVITY id=1922 (Hand Pasting (पेस्टींग))] total_price
+    LOCAL : 3700.0
+    API   : 33300.0
+  [ACTIVITY id=1922 (Hand Pasting (पेस्टींग))] subtotal
+    LOCAL : 4100.0
+    API   : 33700.0
+  [ACTIVITY id=1923 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 4625.0
+    API   : 33300.0
+  [ACTIVITY id=1923 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 5025.0
+    API   : 33700.0
+  [ACTIVITY id=1924 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
+    LOCAL : 3700.0
+    API   : 33300.0
+  [ACTIVITY id=1924 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
+    LOCAL : 4100.0
+    API   : 33700.0
+  [ACTIVITY id=1925 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
+    LOCAL : 7400.0
+    API   : 33300.0
+  [ACTIVITY id=1925 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
+    LOCAL : 7800.0
+    API   : 33700.0
+
+Job ID: 885 | Vikram Chintaman Kapadnis (2711)
+  [JOB] total_activities_amount
+    LOCAL : 44460.0
+    API   : 294120.0
+  [ACTIVITY id=3054 (Pruning (छाटणी))] total_price
+    LOCAL : 6840.0
+    API   : 40185.0
+  [ACTIVITY id=3054 (Pruning (छाटणी))] subtotal
+    LOCAL : 6840.0
+    API   : 40185.0
+  [ACTIVITY id=3056 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 4275.0
+    API   : 40185.0
+  [ACTIVITY id=3056 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 4275.0
+    API   : 40185.0
+  [ACTIVITY id=3057 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
+    LOCAL : 3420.0
+    API   : 40185.0
+  [ACTIVITY id=3057 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
+    LOCAL : 3420.0
+    API   : 40185.0
+  [ACTIVITY id=3058 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 5130.0
+    API   : 40185.0
+  [ACTIVITY id=3058 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 5130.0
+    API   : 40185.0
+  [ACTIVITY id=3059 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
+    LOCAL : 6840.0
+    API   : 40185.0
+  [ACTIVITY id=3059 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
+    LOCAL : 6840.0
+    API   : 40185.0
+  [ACTIVITY id=3060 (1st Subcane (पहिली सबकेन))] total_price
+    LOCAL : 2565.0
+    API   : 40185.0
+  [ACTIVITY id=3060 (1st Subcane (पहिली सबकेन))] subtotal
+    LOCAL : 2565.0
+    API   : 40185.0
+  [ACTIVITY id=3061 (2nd Subcane (दुसरी सबकेन))] total_price
+    LOCAL : 2565.0
+    API   : 40185.0
+  [ACTIVITY id=3061 (2nd Subcane (दुसरी सबकेन))] subtotal
+    LOCAL : 2565.0
+    API   : 40185.0
+
+Job ID: 1245 | Bansidhar Pandurang Pawar (41817)
+  [JOB] total_activities_amount
+    LOCAL : 322500.0
+    API   : 689500.0
+  [ACTIVITY id=3070 (Pruning (छाटणी))] total_price
+    LOCAL : 8000.0
+    API   : 51000.0
+  [ACTIVITY id=3070 (Pruning (छाटणी))] subtotal
+    LOCAL : 8400.0
+    API   : 51400.0
+  [ACTIVITY id=3071 (Hand Pasting (पेस्टींग))] total_price
+    LOCAL : 4000.0
+    API   : 51000.0
+  [ACTIVITY id=3071 (Hand Pasting (पेस्टींग))] subtotal
+    LOCAL : 4400.0
+    API   : 51400.0
+  [ACTIVITY id=3072 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 5000.0
+    API   : 51000.0
+  [ACTIVITY id=3072 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 5400.0
+    API   : 51400.0
+  [ACTIVITY id=3073 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
+    LOCAL : 4000.0
+    API   : 51000.0
+  [ACTIVITY id=3073 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
+    LOCAL : 4400.0
+    API   : 51400.0
+  [ACTIVITY id=3074 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 6000.0
+    API   : 51000.0
+  [ACTIVITY id=3074 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 6400.0
+    API   : 51400.0
+  [ACTIVITY id=3075 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
+    LOCAL : 8000.0
+    API   : 51000.0
+  [ACTIVITY id=3075 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
+    LOCAL : 8400.0
+    API   : 51400.0
+  [ACTIVITY id=3076 (1st Subcane (पहिली सबकेन))] total_price
+    LOCAL : 3000.0
+    API   : 51000.0
+  [ACTIVITY id=3076 (1st Subcane (पहिली सबकेन))] subtotal
+    LOCAL : 3400.0
+    API   : 51400.0
+  [ACTIVITY id=3077 (2nd Subcane (दुसरी सबकेन))] total_price
+    LOCAL : 3000.0
+    API   : 51000.0
+  [ACTIVITY id=3077 (2nd Subcane (दुसरी सबकेन))] subtotal
+    LOCAL : 3400.0
+    API   : 51400.0
+
+Job ID: 2203 | Suhas Yashwant Bhalerao (37630)
+  [JOB] farmer_id
+    LOCAL : 37630
+    API   : 30158
+  [JOB] total_activities_amount
+    LOCAL : 23125.0
+    API   : 72000.0
+
+Job ID: 1734 | Vijay borade (92327)
+  [JOB] total_activities_amount
+    LOCAL : 38250.0
+    API   : 267750.0
+  [ACTIVITY id=4285 (Pruning (छाटणी))] total_price
+    LOCAL : 6000.0
+    API   : 38250.0
+  [ACTIVITY id=4285 (Pruning (छाटणी))] subtotal
+    LOCAL : 6300.0
+    API   : 38550.0
+  [ACTIVITY id=4286 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 4500.0
+    API   : 38250.0
+  [ACTIVITY id=4286 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 4800.0
+    API   : 38550.0
+  [ACTIVITY id=4287 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 3750.0
+    API   : 38250.0
+  [ACTIVITY id=4287 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 4050.0
+    API   : 38550.0
+  [ACTIVITY id=4288 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
+    LOCAL : 3000.0
+    API   : 38250.0
+  [ACTIVITY id=4288 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
+    LOCAL : 3300.0
+    API   : 38550.0
+  [ACTIVITY id=4289 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
+    LOCAL : 6000.0
+    API   : 38250.0
+  [ACTIVITY id=4289 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
+    LOCAL : 6300.0
+    API   : 38550.0
+  [ACTIVITY id=4290 (One Time Subcane (सबकेन))] total_price
+    LOCAL : 3750.0
+    API   : 38250.0
+  [ACTIVITY id=4290 (One Time Subcane (सबकेन))] subtotal
+    LOCAL : 4050.0
+    API   : 38550.0
+  [ACTIVITY id=4291 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] total_price
+    LOCAL : 11250.0
+    API   : 38250.0
+  [ACTIVITY id=4291 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] subtotal
+    LOCAL : 11550.0
+    API   : 38550.0
+
+Job ID: 2153 | Rajaram Vaman Kirkade (92834)
+  [ACTIVITY id=4670 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 1.0
-  [ACTIVITY id=1690 (Pruning (छाटणी))] total_price
+  [ACTIVITY id=4670 (Pruning (छाटणी))] total_price
     LOCAL : 0.0
     API   : 4000.0
-  [ACTIVITY id=1690 (Pruning (छाटणी))] subtotal
+  [ACTIVITY id=4670 (Pruning (छाटणी))] subtotal
     LOCAL : 0.0
     API   : 4000.0
-  [ACTIVITY id=1691 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 3000.0
+  [ACTIVITY] activity_id
+    LOCAL : id=3327 name=Pruning (छाटणी)
+    API   : NOT IN API
+
+Job ID: 884 | Vikram Chintaman Kapadnis (2711)
+  [JOB] total_activities_amount
+    LOCAL : 57980.0
+    API   : 285440.0
+  [ACTIVITY id=3338 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
+    LOCAL : 4460.0
+    API   : 52405.0
+  [ACTIVITY id=3338 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
+    LOCAL : 4460.0
+    API   : 52405.0
+  [ACTIVITY id=3333 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 2.23
+  [ACTIVITY id=3333 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 52405.0
+  [ACTIVITY id=3333 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 52405.0
+  [ACTIVITY id=3334 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 5575.0
+    API   : 52405.0
+  [ACTIVITY id=3334 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 5575.0
+    API   : 52405.0
+  [ACTIVITY id=3335 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
+    LOCAL : 8920.0
+    API   : 52405.0
+  [ACTIVITY id=3335 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
+    LOCAL : 8920.0
+    API   : 52405.0
+  [ACTIVITY id=3337 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 6690.0
+    API   : 52405.0
+  [ACTIVITY id=3337 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 6690.0
+    API   : 52405.0
+  [ACTIVITY] activity_id
+    LOCAL : id=2150 name=Pruning (छाटणी)
+    API   : NOT IN API
+
+Job ID: 2089 | Shankar Govind Bhor (34950)
+  [ACTIVITY id=3905 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 1.75
+  [ACTIVITY id=3905 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 7000.0
+  [ACTIVITY id=3905 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 7000.0
+  [ACTIVITY] activity_id
+    LOCAL : id=2303 name=Pruning (छाटणी)
+    API   : NOT IN API
+
+Job ID: 1786 | Sandip Ramchandra Chaure (32970)
+  [ACTIVITY id=2093 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 1.0
+  [ACTIVITY id=2093 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
     API   : 4000.0
-  [ACTIVITY id=1691 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 3000.0
-    API   : 4000.0
-  [ACTIVITY id=1692 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 2500.0
-    API   : 4000.0
-  [ACTIVITY id=1692 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 2500.0
-    API   : 4000.0
-  [ACTIVITY id=1693 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 2000.0
-    API   : 4000.0
-  [ACTIVITY id=1693 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 2000.0
-    API   : 4000.0
-  [ACTIVITY id=1695 (One Time Subcane (सबकेन))] total_price
-    LOCAL : 2500.0
-    API   : 4000.0
-  [ACTIVITY id=1695 (One Time Subcane (सबकेन))] subtotal
-    LOCAL : 2500.0
-    API   : 4000.0
-  [ACTIVITY id=1696 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] total_price
-    LOCAL : 7500.0
-    API   : 4000.0
-  [ACTIVITY id=1696 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] subtotal
-    LOCAL : 7500.0
+  [ACTIVITY id=2093 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
     API   : 4000.0
   [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4510 name=Pruning (छाटणी)
+    LOCAL : id=3326 name=Pruning (छाटणी)
+    API   : NOT IN API
+
+Job ID: 1978 | Ashok Namdev Patil (12574)
+  [ACTIVITY id=2954 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 1.5
+  [ACTIVITY id=2954 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 6000.0
+  [ACTIVITY id=2954 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 6000.0
   [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4511 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4512 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4513 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4514 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4515 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4516 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4348 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4349 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4350 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4351 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4352 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4353 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4354 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY] activity_id
-    LOCAL : id=1038 name=Pruning (छाटणी)
+    LOCAL : id=2322 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2136 name=Pruning (छाटणी)
+    LOCAL : id=2323 name=Pruning (छाटणी)
+    API   : NOT IN API
+
+Job ID: 1964 | Pratik kailas Nikhade (92473)
+  [ACTIVITY id=2894 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 0.5
+  [ACTIVITY id=2894 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 2000.0
+  [ACTIVITY id=2894 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 2000.0
+  [ACTIVITY id=2906 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 1.25
+  [ACTIVITY id=2906 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 5000.0
+  [ACTIVITY id=2906 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 5000.0
+  [ACTIVITY] activity_id
+    LOCAL : id=2313 name=Pruning (छाटणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=2314 name=Pruning (छाटणी)
+    API   : NOT IN API
+
+Job ID: 2094 | Ramrao Daulatrao Bhalerao (43684)
+  [ACTIVITY id=4030 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 6.75
+  [ACTIVITY id=4030 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 27000.0
+  [ACTIVITY id=4030 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 27000.0
+  [ACTIVITY] activity_id
+    LOCAL : id=2310 name=Pruning (छाटणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=2309 name=Pruning (छाटणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=2312 name=Pruning (छाटणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=2311 name=Pruning (छाटणी)
+    API   : NOT IN API
+
+Job ID: 2049 | Dnyaneshwar Sampat Shinde (2098)
+  [ACTIVITY id=3568 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 1.25
+  [ACTIVITY id=3568 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 5000.0
+  [ACTIVITY id=3568 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 5000.0
+  [ACTIVITY id=3574 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 1.75
+  [ACTIVITY id=3574 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 7000.0
+  [ACTIVITY id=3574 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 7000.0
+  [ACTIVITY] activity_id
+    LOCAL : id=2302 name=Pruning (छाटणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=2301 name=Pruning (छाटणी)
+    API   : NOT IN API
+
+Job ID: 2039 | Dnyneshwar Aadke (10127)
+  [ACTIVITY id=3538 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 1.5
+  [ACTIVITY id=3538 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 6000.0
+  [ACTIVITY id=3538 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 6000.0
+  [ACTIVITY] activity_id
+    LOCAL : id=2304 name=Pruning (छाटणी)
+    API   : NOT IN API
+
+Job ID: 2038 | Hirabai Keshav Kale (19509)
+  [ACTIVITY id=3526 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 4.5
+  [ACTIVITY id=3526 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 18000.0
+  [ACTIVITY id=3526 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 18000.0
+  [ACTIVITY id=3532 (Pruning (छाटणी))] acres
+    LOCAL : 0.0
+    API   : 2.0
+  [ACTIVITY id=3532 (Pruning (छाटणी))] total_price
+    LOCAL : 0.0
+    API   : 8000.0
+  [ACTIVITY id=3532 (Pruning (छाटणी))] subtotal
+    LOCAL : 0.0
+    API   : 8000.0
+  [ACTIVITY] activity_id
+    LOCAL : id=2287 name=Pruning (छाटणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=2300 name=Pruning (छाटणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=2288 name=Pruning (छाटणी)
     API   : NOT IN API
 
 Job ID: 1556 | Balasaheb Sahane (92297)
   [JOB] total_activities_amount
     LOCAL : 18000.0
     API   : 108000.0
-  [PAYMENT] payment_id
-    LOCAL : MISSING
-    API   : id=945 amount=4000.0 mode=UPI
   [ACTIVITY id=1697 (Pruning (छाटणी))] total_price
     LOCAL : 4000.0
     API   : 18000.0
@@ -691,83 +775,6 @@ Job ID: 1576 | Sachin Satpute (92300)
     LOCAL : 4775.0
     API   : 31900.0
 
-Job ID: 1574 | Rajendra Varpe (43634)
-  [JOB] total_activities_amount
-    LOCAL : 26825.0
-    API   : 222125.0
-  [BOOKING] total_amount
-    LOCAL : 85300.0
-    API   : 85290.0
-  [BOOKING] balance
-    LOCAL : 82800.0
-    API   : 82790.0
-  [ACTIVITY id=1921 (Pruning (छाटणी))] total_price
-    LOCAL : 7400.0
-    API   : 33300.0
-  [ACTIVITY id=1921 (Pruning (छाटणी))] subtotal
-    LOCAL : 7800.0
-    API   : 33700.0
-  [ACTIVITY id=1922 (Hand Pasting (पेस्टींग))] total_price
-    LOCAL : 3700.0
-    API   : 33300.0
-  [ACTIVITY id=1922 (Hand Pasting (पेस्टींग))] subtotal
-    LOCAL : 4100.0
-    API   : 33700.0
-  [ACTIVITY id=1923 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 4625.0
-    API   : 33300.0
-  [ACTIVITY id=1923 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 5025.0
-    API   : 33700.0
-  [ACTIVITY id=1924 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 3700.0
-    API   : 33300.0
-  [ACTIVITY id=1924 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 4100.0
-    API   : 33700.0
-  [ACTIVITY id=1925 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 7400.0
-    API   : 33300.0
-  [ACTIVITY id=1925 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 7800.0
-    API   : 33700.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4782 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4783 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4784 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4785 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4786 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4787 name=Hand Pasting (पेस्टींग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4788 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4789 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4790 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4791 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4792 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4793 name=One Time Subcane (सबकेन)
-
 Job ID: 1559 | Devendra sahane (92298)
   [JOB] total_activities_amount
     LOCAL : 18750.0
@@ -802,44 +809,6 @@ Job ID: 1559 | Devendra sahane (92298)
   [ACTIVITY id=1778 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
     LOCAL : 5250.0
     API   : 19000.0
-
-Job ID: 1596 | Vinod Ugale (92308)
-  [JOB] total_activities_amount
-    LOCAL : 60000.0
-    API   : 300000.0
-  [PAYMENT] payment_id
-    LOCAL : id=693 amount=8000.00 mode=OTHER
-    API   : NOT IN API
-  [ACTIVITY id=2041 (Pruning (छाटणी))] total_price
-    LOCAL : 16000.0
-    API   : 60000.0
-  [ACTIVITY id=2041 (Pruning (छाटणी))] subtotal
-    LOCAL : 16800.0
-    API   : 60800.0
-  [ACTIVITY id=2042 (Hand Pasting (पेस्टींग))] total_price
-    LOCAL : 8000.0
-    API   : 60000.0
-  [ACTIVITY id=2042 (Hand Pasting (पेस्टींग))] subtotal
-    LOCAL : 8800.0
-    API   : 60800.0
-  [ACTIVITY id=2043 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 12000.0
-    API   : 60000.0
-  [ACTIVITY id=2043 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 12800.0
-    API   : 60800.0
-  [ACTIVITY id=2044 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 8000.0
-    API   : 60000.0
-  [ACTIVITY id=2044 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 8800.0
-    API   : 60800.0
-  [ACTIVITY id=2045 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 16000.0
-    API   : 60000.0
-  [ACTIVITY id=2045 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 16800.0
-    API   : 60800.0
 
 Job ID: 1555 | Prakash Ugale (39165)
   [JOB] total_activities_amount
@@ -882,133 +851,16 @@ Job ID: 1555 | Prakash Ugale (39165)
     LOCAL : 2200.0
     API   : 14600.0
 
-Job ID: 1599 | satish varpe (92309)
-  [JOB] total_activities_amount
-    LOCAL : 15000.0
-    API   : 75000.0
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 1000.0
-  [BOOKING] balance
-    LOCAL : 30400.0
-    API   : 29400.0
-  [PAYMENT] payment_id
-    LOCAL : MISSING
-    API   : id=1038 amount=1000.0 mode=UPI
-  [PAYMENT] payment_id
-    LOCAL : id=694 amount=1000.00 mode=OTHER
-    API   : NOT IN API
-  [ACTIVITY id=1991 (Pruning (छाटणी))] total_price
-    LOCAL : 4000.0
-    API   : 15000.0
-  [ACTIVITY id=1991 (Pruning (छाटणी))] subtotal
-    LOCAL : 4200.0
-    API   : 15200.0
-  [ACTIVITY id=1992 (Hand Pasting (पेस्टींग))] total_price
-    LOCAL : 2000.0
-    API   : 15000.0
-  [ACTIVITY id=1992 (Hand Pasting (पेस्टींग))] subtotal
-    LOCAL : 2200.0
-    API   : 15200.0
-  [ACTIVITY id=1993 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 3000.0
-    API   : 15000.0
-  [ACTIVITY id=1993 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 3200.0
-    API   : 15200.0
-  [ACTIVITY id=1994 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 2000.0
-    API   : 15000.0
-  [ACTIVITY id=1994 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 2200.0
-    API   : 15200.0
-  [ACTIVITY id=1995 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 4000.0
-    API   : 15000.0
-  [ACTIVITY id=1995 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 4200.0
-    API   : 15200.0
-
-Job ID: 1563 | Pravin Arjun Varpe (92299)
-  [JOB] total_activities_amount
-    LOCAL : 32250.0
-    API   : 207750.0
-  [ACTIVITY id=1904 (Pruning (छाटणी))] total_price
-    LOCAL : 8600.0
-    API   : 32250.0
-  [ACTIVITY id=1904 (Pruning (छाटणी))] subtotal
-    LOCAL : 9050.0
-    API   : 32700.0
-  [ACTIVITY id=1905 (Hand Pasting (पेस्टींग))] total_price
-    LOCAL : 4300.0
-    API   : 32250.0
-  [ACTIVITY id=1905 (Hand Pasting (पेस्टींग))] subtotal
-    LOCAL : 4750.0
-    API   : 32700.0
-  [ACTIVITY id=1906 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 6450.0
-    API   : 32250.0
-  [ACTIVITY id=1906 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 6900.0
-    API   : 32700.0
-  [ACTIVITY id=1907 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 4300.0
-    API   : 32250.0
-  [ACTIVITY id=1907 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 4750.0
-    API   : 32700.0
-  [ACTIVITY id=1908 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 8600.0
-    API   : 32250.0
-  [ACTIVITY id=1908 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 9050.0
-    API   : 32700.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4794 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4795 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4796 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4797 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4798 name=Hand Pasting (पेस्टींग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4799 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4800 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4801 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4802 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4803 name=Hand Pasting (पेस्टींग)
-
-Job ID: 1940 | Tushar Dighe (31304)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 102500.0
-  [BOOKING] balance
-    LOCAL : 356000.0
-    API   : 253500.0
-
 Job ID: 1577 | Kiran Varpe (92305)
   [JOB] total_activities_amount
     LOCAL : 18000.0
     API   : 108000.0
-  [PAYMENT] payment_id
-    LOCAL : MISSING
-    API   : id=1044 amount=4000.0 mode=UPI
+  [BOOKING] advance_paid
+    LOCAL : 1000.0
+    API   : 3460.0
+  [BOOKING] balance
+    LOCAL : 17200.0
+    API   : 14740.0
   [ACTIVITY id=1830 (Pruning (छाटणी))] total_price
     LOCAL : 4000.0
     API   : 18000.0
@@ -1096,139 +948,12 @@ Job ID: 1589 | Madhukar Bhikaji Kadlag (92307)
     LOCAL : id=2293 name=Pruning (छाटणी)
     API   : NOT IN API
 
-Job ID: 1581 | Sahebrao Savitra Hande (460)
-  [JOB] total_activities_amount
-    LOCAL : 13500.0
-    API   : 106250.0
-  [BOOKING] total_amount
-    LOCAL : 59200.0
-    API   : 51025.0
-  [BOOKING] balance
-    LOCAL : 43600.0
-    API   : 35425.0
-  [ACTIVITY id=1938 (Pruning (छाटणी))] total_price
-    LOCAL : 3000.0
-    API   : 13500.0
-  [ACTIVITY id=1938 (Pruning (छाटणी))] subtotal
-    LOCAL : 3200.0
-    API   : 13700.0
-  [ACTIVITY id=1939 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 2250.0
-    API   : 13500.0
-  [ACTIVITY id=1939 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 2450.0
-    API   : 13700.0
-  [ACTIVITY id=1940 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 1875.0
-    API   : 13500.0
-  [ACTIVITY id=1940 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 2075.0
-    API   : 13700.0
-  [ACTIVITY id=1941 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 1500.0
-    API   : 13500.0
-  [ACTIVITY id=1941 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 1700.0
-    API   : 13700.0
-  [ACTIVITY id=1942 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 3000.0
-    API   : 13500.0
-  [ACTIVITY id=1942 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 3200.0
-    API   : 13700.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4804 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4805 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4806 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4807 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4808 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : id=1943 name=One Time Subcane (सबकेन)
-    API   : NOT IN API
-
-Job ID: 1883 | Chaya Dnyaneshwar Pagar (15466)
-  [BOOKING] total_amount
-    LOCAL : 68820.0
-    API   : 69564.0
-  [BOOKING] balance
-    LOCAL : 54312.0
-    API   : 55056.0
-
-Job ID: 1897 | Vishwanath karbhari pagar (92352)
-  [BOOKING] total_amount
-    LOCAL : 68880.0
-    API   : 69454.0
-  [BOOKING] balance
-    LOCAL : 54530.0
-    API   : 55104.0
-
 Job ID: 1905 | Dattu Bhaguji Paagr (21394)
   [FARMER] farmer_name
     LOCAL : Dattu Bhaguji Paagr
     API   : Dattu Bhaguji Pagar
-  [BOOKING] total_amount
-    LOCAL : 33540.0
-    API   : 33798.0
-  [BOOKING] balance
-    LOCAL : 26574.0
-    API   : 26832.0
-
-Job ID: 1904 | Nivrutti Santu Pagar (26752)
-  [BOOKING] total_amount
-    LOCAL : 79875.0
-    API   : 80525.0
-  [BOOKING] balance
-    LOCAL : 63250.0
-    API   : 63900.0
-
-Job ID: 1888 | Vasant Suresh Pagar (24265)
-  [BOOKING] total_amount
-    LOCAL : 100100.0
-    API   : 101120.0
-  [BOOKING] balance
-    LOCAL : 79880.0
-    API   : 80900.0
-
-Job ID: 1900 | Appaji Ramdas Pagar (11600)
-  [BOOKING] total_amount
-    LOCAL : 23500.0
-    API   : 23700.0
-  [BOOKING] balance
-    LOCAL : 18600.0
-    API   : 18800.0
-
-Job ID: 1892 | Saurabh V. Pagar (23645)
-  [BOOKING] total_amount
-    LOCAL : 27750.0
-    API   : 28050.0
-  [BOOKING] balance
-    LOCAL : 21900.0
-    API   : 22200.0
-
-Job ID: 1875 | Ravindra Ramnath Pagar (1841)
-  [BOOKING] total_amount
-    LOCAL : 88125.0
-    API   : 88875.0
-  [BOOKING] balance
-    LOCAL : 69750.0
-    API   : 70500.0
 
 Job ID: 1886 | Seema Ramkrushna Pagar (34632)
-  [BOOKING] total_amount
-    LOCAL : 18500.0
-    API   : 18700.0
-  [BOOKING] balance
-    LOCAL : 14600.0
-    API   : 14800.0
   [ACTIVITY id=2578 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 1.0
@@ -1242,61 +967,7 @@ Job ID: 1886 | Seema Ramkrushna Pagar (34632)
     LOCAL : id=2306 name=Pruning (छाटणी)
     API   : NOT IN API
 
-Job ID: 1898 | Ramnath Trambak Pagar (973)
-  [BOOKING] total_amount
-    LOCAL : 52400.0
-    API   : 52870.0
-  [BOOKING] balance
-    LOCAL : 41450.0
-    API   : 41920.0
-
-Job ID: 1895 | Bhausaheb Valu Pagar (40546)
-  [BOOKING] total_amount
-    LOCAL : 29600.0
-    API   : 29920.0
-  [BOOKING] balance
-    LOCAL : 23360.0
-    API   : 23680.0
-
-Job ID: 1889 | Kiran Laxman Pagar (22613)
-  [BOOKING] total_amount
-    LOCAL : 42000.0
-    API   : 42350.0
-  [BOOKING] balance
-    LOCAL : 33530.0
-    API   : 33880.0
-
-Job ID: 1885 | Dipak Chindu Shinde (17253)
-  [BOOKING] total_amount
-    LOCAL : 23125.0
-    API   : 23375.0
-  [BOOKING] balance
-    LOCAL : 18250.0
-    API   : 18500.0
-
-Job ID: 1902 | Santu Bala Pagar (34026)
-  [BOOKING] total_amount
-    LOCAL : 54250.0
-    API   : 54750.0
-  [BOOKING] balance
-    LOCAL : 42900.0
-    API   : 43400.0
-
-Job ID: 1896 | Tukaram  Karbhari Pagar (39677)
-  [BOOKING] total_amount
-    LOCAL : 37000.0
-    API   : 37400.0
-  [BOOKING] balance
-    LOCAL : 29200.0
-    API   : 29600.0
-
 Job ID: 1893 | Sanjay Suresh Pagar (39952)
-  [BOOKING] total_amount
-    LOCAL : 46250.0
-    API   : 46750.0
-  [BOOKING] balance
-    LOCAL : 36500.0
-    API   : 37000.0
   [ACTIVITY id=2641 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 2.5
@@ -1311,12 +982,6 @@ Job ID: 1893 | Sanjay Suresh Pagar (39952)
     API   : NOT IN API
 
 Job ID: 1894 | Bapu Laxman Pagar (92378)
-  [BOOKING] total_amount
-    LOCAL : 32500.0
-    API   : 32750.0
-  [BOOKING] balance
-    LOCAL : 25750.0
-    API   : 26000.0
   [ACTIVITY id=2648 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 1.25
@@ -1342,14 +1007,6 @@ Job ID: 1894 | Bapu Laxman Pagar (92378)
     LOCAL : id=2308 name=Cordan Tying (ओलांढे बांधणे)
     API   : NOT IN API
 
-Job ID: 1891 | Yogesh Ramnath Pagar (92377)
-  [BOOKING] total_amount
-    LOCAL : 18500.0
-    API   : 18700.0
-  [BOOKING] balance
-    LOCAL : 14600.0
-    API   : 14800.0
-
 Job ID: 1988 | Shankar Balkrushna Palkhede (34919)
   [ACTIVITY id=3126 (Pruning (छाटणी))] acres
     LOCAL : 0.0
@@ -1370,10 +1027,10 @@ Job ID: 1988 | Shankar Balkrushna Palkhede (34919)
     LOCAL : 0.0
     API   : 8000.0
   [ACTIVITY] activity_id
-    LOCAL : id=2126 name=Pruning (छाटणी)
+    LOCAL : id=2162 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2162 name=Pruning (छाटणी)
+    LOCAL : id=2126 name=Pruning (छाटणी)
     API   : NOT IN API
 
 Job ID: 1997 | Yashwant Sukadev  Thube (42563)
@@ -1396,10 +1053,10 @@ Job ID: 1997 | Yashwant Sukadev  Thube (42563)
     LOCAL : 0.0
     API   : 7000.0
   [ACTIVITY] activity_id
-    LOCAL : id=2290 name=Pruning (छाटणी)
+    LOCAL : id=2289 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2289 name=Pruning (छाटणी)
+    LOCAL : id=2290 name=Pruning (छाटणी)
     API   : NOT IN API
 
 Job ID: 1825 | Bhagwan Thombare (13235)
@@ -1432,12 +1089,6 @@ Job ID: 1825 | Bhagwan Thombare (13235)
     API   : NOT IN API
 
 Job ID: 1833 | Prakash Valu Nigal (981)
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 13650.0
-  [BOOKING] balance
-    LOCAL : 64050.0
-    API   : 50400.0
   [ACTIVITY id=2270 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 2.0
@@ -1457,10 +1108,10 @@ Job ID: 1833 | Prakash Valu Nigal (981)
     LOCAL : 0.0
     API   : 6000.0
   [ACTIVITY] activity_id
-    LOCAL : id=2129 name=Pruning (छाटणी)
+    LOCAL : id=2128 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2128 name=Pruning (छाटणी)
+    LOCAL : id=2129 name=Pruning (छाटणी)
     API   : NOT IN API
 
 Job ID: 1903 | Ratan Shinde (43625)
@@ -1481,15 +1132,6 @@ Job ID: 1508 | Krushna Nandkumar Sonawane (25669)
   [JOB] total_activities_amount
     LOCAL : 96900.0
     API   : 223125.0
-  [BOOKING] total_amount
-    LOCAL : 97660.0
-    API   : 32125.0
-  [BOOKING] balance
-    LOCAL : 91160.0
-    API   : 25625.0
-  [PAYMENT] payment_id
-    LOCAL : id=658 amount=6760.00 mode=UPI
-    API   : NOT IN API
   [ACTIVITY id=1722 (Pruning (छाटणी))] total_price
     LOCAL : 5000.0
     API   : 31875.0
@@ -1533,25 +1175,25 @@ Job ID: 1508 | Krushna Nandkumar Sonawane (25669)
     LOCAL : 9625.0
     API   : 32125.0
   [ACTIVITY] activity_id
-    LOCAL : id=1715 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=1708 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2140 name=Pruning (छाटणी)
+    LOCAL : id=2324 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
     LOCAL : id=2139 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2324 name=Pruning (छाटणी)
+    LOCAL : id=2140 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=1716 name=Shoot Selection (विरळणी)
+    LOCAL : id=1708 name=Pruning (छाटणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=1715 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
     LOCAL : id=1717 name=1st Lateral Removal (बगल काढणे)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=1716 name=Shoot Selection (विरळणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
     LOCAL : id=1709 name=Shoot Selection (विरळणी)
@@ -1560,22 +1202,22 @@ Job ID: 1508 | Krushna Nandkumar Sonawane (25669)
     LOCAL : id=1710 name=1st Lateral Removal (बगल काढणे)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=1719 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
+    LOCAL : id=1713 name=One Time Subcane (सबकेन)
     API   : NOT IN API
   [ACTIVITY] activity_id
     LOCAL : id=1712 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=1713 name=One Time Subcane (सबकेन)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
     LOCAL : id=1720 name=One Time Subcane (सबकेन)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=1721 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
+    LOCAL : id=1719 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
     API   : NOT IN API
   [ACTIVITY] activity_id
     LOCAL : id=1714 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=1721 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
     API   : NOT IN API
   [ACTIVITY] activity_id
     LOCAL : id=1718 name=Shenda Stopping (शेंडा स्टॉपिंग)
@@ -1619,10 +1261,10 @@ Job ID: 1756 | Gokul Deshmukh (92354)
     LOCAL : id=2154 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2161 name=Pruning (छाटणी)
+    LOCAL : id=2160 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2160 name=Pruning (छाटणी)
+    LOCAL : id=2161 name=Pruning (छाटणी)
     API   : NOT IN API
 
 Job ID: 1954 | Bhagirathibai Madhukar Nigal (14041)
@@ -1827,13 +1469,13 @@ Job ID: 1593 | Jaydev Baban Varpe (91)
     LOCAL : 4675.0
     API   : 31800.0
   [ACTIVITY] activity_id
+    LOCAL : id=2296 name=Pruning (छाटणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
     LOCAL : id=2157 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
     LOCAL : id=2158 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2296 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
     LOCAL : id=2294 name=Pruning (छाटणी)
@@ -1886,66 +1528,7 @@ Job ID: 1600 | Satish ugale (92310)
     LOCAL : id=2153 name=Pruning (छाटणी)
     API   : NOT IN API
 
-Job ID: 1516 | Suman Bhausaheb Pansare (87427)
-  [JOB] total_activities_amount
-    LOCAL : 25500.0
-    API   : 178500.0
-  [ACTIVITY id=1841 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.0
-  [ACTIVITY id=1841 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 25500.0
-  [ACTIVITY id=1841 (Pruning (छाटणी))] subtotal
-    LOCAL : 200.0
-    API   : 25700.0
-  [ACTIVITY id=1842 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 3000.0
-    API   : 25500.0
-  [ACTIVITY id=1842 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 3200.0
-    API   : 25700.0
-  [ACTIVITY id=1843 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 2500.0
-    API   : 25500.0
-  [ACTIVITY id=1843 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 2700.0
-    API   : 25700.0
-  [ACTIVITY id=1844 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 2000.0
-    API   : 25500.0
-  [ACTIVITY id=1844 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 2200.0
-    API   : 25700.0
-  [ACTIVITY id=1845 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 4000.0
-    API   : 25500.0
-  [ACTIVITY id=1845 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 4200.0
-    API   : 25700.0
-  [ACTIVITY id=1846 (One Time Subcane (सबकेन))] total_price
-    LOCAL : 2500.0
-    API   : 25500.0
-  [ACTIVITY id=1846 (One Time Subcane (सबकेन))] subtotal
-    LOCAL : 2700.0
-    API   : 25700.0
-  [ACTIVITY id=1847 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] total_price
-    LOCAL : 7500.0
-    API   : 25500.0
-  [ACTIVITY id=1847 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] subtotal
-    LOCAL : 7700.0
-    API   : 25700.0
-  [ACTIVITY] activity_id
-    LOCAL : id=2131 name=Pruning (छाटणी)
-    API   : NOT IN API
-
 Job ID: 1813 | Anita Kailas Chavan (11640)
-  [BOOKING] total_amount
-    LOCAL : 72000.0
-    API   : 73200.0
-  [BOOKING] balance
-    LOCAL : 56400.0
-    API   : 57600.0
   [ACTIVITY id=2149 (Pruning (छाटणी))] acres
     LOCAL : 0.5
     API   : 4.0
@@ -1959,360 +1542,10 @@ Job ID: 1813 | Anita Kailas Chavan (11640)
     LOCAL : id=2072 name=Pruning (छाटणी)
     API   : NOT IN API
 
-Job ID: 885 | Vikram Chintaman Kapadnis (2711)
-  [JOB] total_activities_amount
-    LOCAL : 35055.0
-    API   : 294120.0
-  [BOOKING] total_amount
-    LOCAL : 0.0
-    API   : 40185.0
-  [BOOKING] balance
-    LOCAL : -5000.0
-    API   : 35185.0
-  [ACTIVITY id=3054 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.71
-  [ACTIVITY id=3054 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 40185.0
-  [ACTIVITY id=3054 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 40185.0
-  [ACTIVITY id=3056 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 4275.0
-    API   : 40185.0
-  [ACTIVITY id=3056 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 4275.0
-    API   : 40185.0
-  [ACTIVITY id=3057 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 3420.0
-    API   : 40185.0
-  [ACTIVITY id=3057 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 3420.0
-    API   : 40185.0
-  [ACTIVITY id=3058 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 5130.0
-    API   : 40185.0
-  [ACTIVITY id=3058 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 5130.0
-    API   : 40185.0
-  [ACTIVITY id=3059 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 6840.0
-    API   : 40185.0
-  [ACTIVITY id=3059 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 6840.0
-    API   : 40185.0
-  [ACTIVITY id=3060 (1st Subcane (पहिली सबकेन))] total_price
-    LOCAL : 2565.0
-    API   : 40185.0
-  [ACTIVITY id=3060 (1st Subcane (पहिली सबकेन))] subtotal
-    LOCAL : 2565.0
-    API   : 40185.0
-  [ACTIVITY id=3061 (2nd Subcane (दुसरी सबकेन))] total_price
-    LOCAL : 2565.0
-    API   : 40185.0
-  [ACTIVITY id=3061 (2nd Subcane (दुसरी सबकेन))] subtotal
-    LOCAL : 2565.0
-    API   : 40185.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4619 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY] activity_id
-    LOCAL : id=2299 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=2067 name=Pruning (छाटणी)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=3055 name=Hand Pasting (पेस्टींग)
-    API   : NOT IN API
-
-Job ID: 1760 | Shobha Trambakrao Chavan (36272)
-  [JOB] total_activities_amount
-    LOCAL : 54000.0
-    API   : 216000.0
-  [BOOKING] total_amount
-    LOCAL : 198000.0
-    API   : 201300.0
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 42900.0
-  [BOOKING] balance
-    LOCAL : 198000.0
-    API   : 158400.0
-  [ACTIVITY id=2035 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 3.0
-  [ACTIVITY id=2035 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 12000.0
-  [ACTIVITY id=2035 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 12000.0
-  [ACTIVITY id=2036 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 9000.0
-    API   : 12000.0
-  [ACTIVITY id=2036 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 9000.0
-    API   : 12000.0
-  [ACTIVITY id=2037 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 7500.0
-    API   : 12000.0
-  [ACTIVITY id=2037 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 7500.0
-    API   : 12000.0
-  [ACTIVITY id=2038 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 6000.0
-    API   : 12000.0
-  [ACTIVITY id=2038 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 6000.0
-    API   : 12000.0
-  [ACTIVITY id=2040 (One Time Subcane (सबकेन))] total_price
-    LOCAL : 7500.0
-    API   : 12000.0
-  [ACTIVITY id=2040 (One Time Subcane (सबकेन))] subtotal
-    LOCAL : 7500.0
-    API   : 12000.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4714 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4715 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4716 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4717 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4718 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4719 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4726 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4727 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4728 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4729 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4730 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4731 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4732 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4733 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4734 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4735 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4736 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4737 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : id=2071 name=Pruning (छाटणी)
-    API   : NOT IN API
-
-Job ID: 1497 | Ramnath Pansare (92288)
-  [JOB] total_activities_amount
-    LOCAL : 38250.0
-    API   : 306750.0
-  [BOOKING] total_amount
-    LOCAL : 77100.0
-    API   : 78600.0
-  [BOOKING] balance
-    LOCAL : 61500.0
-    API   : 63000.0
-  [ACTIVITY id=1868 (Pruning (छाटणी))] total_price
-    LOCAL : 6000.0
-    API   : 38250.0
-  [ACTIVITY id=1868 (Pruning (छाटणी))] subtotal
-    LOCAL : 6300.0
-    API   : 38550.0
-  [ACTIVITY id=1869 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 4500.0
-    API   : 38250.0
-  [ACTIVITY id=1869 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 4800.0
-    API   : 38550.0
-  [ACTIVITY id=1870 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 3750.0
-    API   : 38250.0
-  [ACTIVITY id=1870 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 4050.0
-    API   : 38550.0
-  [ACTIVITY id=1871 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 3000.0
-    API   : 38250.0
-  [ACTIVITY id=1871 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 3300.0
-    API   : 38550.0
-  [ACTIVITY id=1872 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 6000.0
-    API   : 38250.0
-  [ACTIVITY id=1872 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 6300.0
-    API   : 38550.0
-  [ACTIVITY id=1873 (One Time Subcane (सबकेन))] total_price
-    LOCAL : 3750.0
-    API   : 38250.0
-  [ACTIVITY id=1873 (One Time Subcane (सबकेन))] subtotal
-    LOCAL : 4050.0
-    API   : 38550.0
-  [ACTIVITY id=1874 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] total_price
-    LOCAL : 11250.0
-    API   : 38250.0
-  [ACTIVITY id=1874 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] subtotal
-    LOCAL : 11550.0
-    API   : 38550.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4823 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4824 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4825 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4826 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4827 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4828 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4829 name=Cordan Tying (सुटलेले ओलांढे बांधणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4830 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-
-Job ID: 1512 | Navnath Kumbharkar (30415)
-  [JOB] total_activities_amount
-    LOCAL : 35445.0
-    API   : 355215.0
-  [ACTIVITY id=1743 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.39
-  [ACTIVITY id=1743 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 35445.0
-  [ACTIVITY id=1743 (Pruning (छाटणी))] subtotal
-    LOCAL : 278.0
-    API   : 35723.0
-  [ACTIVITY id=1744 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 4170.0
-    API   : 35445.0
-  [ACTIVITY id=1744 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 4448.0
-    API   : 35723.0
-  [ACTIVITY id=1745 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 3475.0
-    API   : 35445.0
-  [ACTIVITY id=1745 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 3753.0
-    API   : 35723.0
-  [ACTIVITY id=1746 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 2780.0
-    API   : 35445.0
-  [ACTIVITY id=1746 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 3058.0
-    API   : 35723.0
-  [ACTIVITY id=1747 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 5560.0
-    API   : 35445.0
-  [ACTIVITY id=1747 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 5838.0
-    API   : 35723.0
-  [ACTIVITY id=1748 (One Time Subcane (सबकेन))] total_price
-    LOCAL : 3475.0
-    API   : 35445.0
-  [ACTIVITY id=1748 (One Time Subcane (सबकेन))] subtotal
-    LOCAL : 3753.0
-    API   : 35723.0
-  [ACTIVITY id=1749 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] total_price
-    LOCAL : 10425.0
-    API   : 35445.0
-  [ACTIVITY id=1749 (Cane Tying with Clips (काडी बांधणे - क्लिप्स))] subtotal
-    LOCAL : 10703.0
-    API   : 35723.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4809 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4810 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4811 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4812 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4813 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4814 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4815 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4816 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4817 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4818 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4819 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4820 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4821 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4822 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY] activity_id
-    LOCAL : id=2130 name=Pruning (छाटणी)
-    API   : NOT IN API
-
 Job ID: 878 | Nilesh Keda Chavan (Patil) (2342)
   [JOB] total_activities_amount
     LOCAL : 23165.0
     API   : 212440.0
-  [BOOKING] total_amount
-    LOCAL : 0.0
-    API   : 26555.0
-  [BOOKING] balance
-    LOCAL : -5000.0
-    API   : 21555.0
   [ACTIVITY id=3038 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 1.13
@@ -2384,12 +1617,6 @@ Job ID: 877 | Nilesh Keda Chavan (Patil) (2342)
   [JOB] total_activities_amount
     LOCAL : 20500.0
     API   : 188000.0
-  [BOOKING] total_amount
-    LOCAL : 0.0
-    API   : 23500.0
-  [BOOKING] balance
-    LOCAL : -5000.0
-    API   : 18500.0
   [ACTIVITY id=3030 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 1.0
@@ -2461,12 +1688,6 @@ Job ID: 1201 | Nilesh Keda Chavan (Patil) (2342)
   [JOB] total_activities_amount
     LOCAL : 12250.0
     API   : 98700.0
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 3500.0
-  [BOOKING] balance
-    LOCAL : 16450.0
-    API   : 12950.0
   [ACTIVITY id=2990 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 0.7
@@ -2514,12 +1735,6 @@ Job ID: 872 | Nilesh Keda Chavan (Patil) (2342)
   [JOB] total_activities_amount
     LOCAL : 11025.0
     API   : 88830.0
-  [BOOKING] total_amount
-    LOCAL : 0.0
-    API   : 14805.0
-  [BOOKING] balance
-    LOCAL : -5000.0
-    API   : 9805.0
   [ACTIVITY id=2984 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 0.63
@@ -2567,12 +1782,6 @@ Job ID: 875 | Nilesh Keda Chavan (Patil) (2342)
   [JOB] total_activities_amount
     LOCAL : 28495.0
     API   : 261320.0
-  [BOOKING] total_amount
-    LOCAL : 0.0
-    API   : 32665.0
-  [BOOKING] balance
-    LOCAL : -5000.0
-    API   : 27665.0
   [ACTIVITY id=3004 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 1.39
@@ -2632,12 +1841,6 @@ Job ID: 871 | Nilesh Keda Chavan (Patil) (2342)
   [JOB] total_activities_amount
     LOCAL : 51100.0
     API   : 411720.0
-  [BOOKING] total_amount
-    LOCAL : 0.0
-    API   : 68620.0
-  [BOOKING] balance
-    LOCAL : -10000.0
-    API   : 58620.0
   [ACTIVITY id=2978 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 2.92
@@ -2686,249 +1889,11 @@ Job ID: 871 | Nilesh Keda Chavan (Patil) (2342)
   [ACTIVITY] activity_id
     LOCAL : id=1046 name=Hand Pasting (पेस्टींग)
     API   : NOT IN API
-
-Job ID: 901 | Bablu wagh (91515)
-  [JOB] total_activities_amount
-    LOCAL : 20500.0
-    API   : 188000.0
-  [BOOKING] total_amount
-    LOCAL : 0.0
-    API   : 23500.0
-  [BOOKING] advance_paid
-    LOCAL : 0.0
-    API   : 5000.0
-  [BOOKING] balance
-    LOCAL : 0.0
-    API   : 18500.0
-  [PAYMENT] payment_id
-    LOCAL : MISSING
-    API   : id=475 amount=5000.0 mode=UPI
-  [ACTIVITY id=2996 (Pruning (छाटणी))] acres
-    LOCAL : 0.0
-    API   : 1.0
-  [ACTIVITY id=2996 (Pruning (छाटणी))] total_price
-    LOCAL : 0.0
-    API   : 23500.0
-  [ACTIVITY id=2996 (Pruning (छाटणी))] subtotal
-    LOCAL : 0.0
-    API   : 23500.0
-  [ACTIVITY id=2997 (Hand Pasting (पेस्टींग))] acres
-    LOCAL : 0.0
-    API   : 1.0
-  [ACTIVITY id=2997 (Hand Pasting (पेस्टींग))] total_price
-    LOCAL : 0.0
-    API   : 23500.0
-  [ACTIVITY id=2997 (Hand Pasting (पेस्टींग))] subtotal
-    LOCAL : 0.0
-    API   : 23500.0
-  [ACTIVITY id=2998 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 2500.0
-    API   : 23500.0
-  [ACTIVITY id=2998 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 2500.0
-    API   : 23500.0
-  [ACTIVITY id=2999 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 2000.0
-    API   : 23500.0
-  [ACTIVITY id=2999 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 2000.0
-    API   : 23500.0
-  [ACTIVITY id=3000 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 3000.0
-    API   : 23500.0
-  [ACTIVITY id=3000 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 3000.0
-    API   : 23500.0
-  [ACTIVITY id=3001 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 4000.0
-    API   : 23500.0
-  [ACTIVITY id=3001 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 4000.0
-    API   : 23500.0
-  [ACTIVITY id=3002 (1st Subcane (पहिली सबकेन))] total_price
-    LOCAL : 1500.0
-    API   : 23500.0
-  [ACTIVITY id=3002 (1st Subcane (पहिली सबकेन))] subtotal
-    LOCAL : 1500.0
-    API   : 23500.0
-  [ACTIVITY id=3003 (2nd Subcane (दुसरी सबकेन))] total_price
-    LOCAL : 1500.0
-    API   : 23500.0
-  [ACTIVITY id=3003 (2nd Subcane (दुसरी सबकेन))] subtotal
-    LOCAL : 1500.0
-    API   : 23500.0
   [ACTIVITY] activity_id
-    LOCAL : id=1048 name=Pruning (छाटणी)
+    LOCAL : id=3329 name=Hand Pasting (पेस्टींग)
     API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=1889 name=Hand Pasting (पेस्टींग)
-    API   : NOT IN API
-  [ACTIVITY] activity_id
-    LOCAL : id=1888 name=Hand Pasting (पेस्टींग)
-    API   : NOT IN API
-
-Job ID: 1245 | Bansidhar Pandurang Pawar (41817)
-  [JOB] total_activities_amount
-    LOCAL : 41000.0
-    API   : 689500.0
-  [BOOKING] total_amount
-    LOCAL : 0.0
-    API   : 340000.0
-  [BOOKING] balance
-    LOCAL : -22500.0
-    API   : 317500.0
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4293 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4294 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4295 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4296 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4297 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4298 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4299 name=Cordan Tying (ओलांढे बांधणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4300 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4301 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4302 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4303 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4304 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4305 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4306 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4307 name=Cordan Tying (ओलांढे बांधणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4308 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4309 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4310 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4311 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4312 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4313 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4314 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4315 name=Cordan Tying (ओलांढे बांधणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4316 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4317 name=Pruning (छाटणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4318 name=Shoot Selection (विरळणी)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4319 name=1st Lateral Removal (बगल काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4320 name=Shenda Stopping (शेंडा स्टॉपिंग)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4321 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4322 name=One Time Subcane (सबकेन)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4323 name=Cordan Tying (ओलांढे बांधणे)
-  [ACTIVITY] activity_id
-    LOCAL : MISSING
-    API   : id=4324 name=Cane Tying with Clips (काडी बांधणे - क्लिप्स)
-  [ACTIVITY id=3070 (Pruning (छाटणी))] total_price
-    LOCAL : 8000.0
-    API   : 51000.0
-  [ACTIVITY id=3070 (Pruning (छाटणी))] subtotal
-    LOCAL : 8400.0
-    API   : 51400.0
-  [ACTIVITY id=3071 (Hand Pasting (पेस्टींग))] total_price
-    LOCAL : 4000.0
-    API   : 51000.0
-  [ACTIVITY id=3071 (Hand Pasting (पेस्टींग))] subtotal
-    LOCAL : 4400.0
-    API   : 51400.0
-  [ACTIVITY id=3072 (1st Lateral Removal (बगल काढणे))] total_price
-    LOCAL : 5000.0
-    API   : 51000.0
-  [ACTIVITY id=3072 (1st Lateral Removal (बगल काढणे))] subtotal
-    LOCAL : 5400.0
-    API   : 51400.0
-  [ACTIVITY id=3073 (Shenda Stopping (शेंडा स्टॉपिंग))] total_price
-    LOCAL : 4000.0
-    API   : 51000.0
-  [ACTIVITY id=3073 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
-    LOCAL : 4400.0
-    API   : 51400.0
-  [ACTIVITY id=3074 (Shoot Selection (विरळणी))] total_price
-    LOCAL : 6000.0
-    API   : 51000.0
-  [ACTIVITY id=3074 (Shoot Selection (विरळणी))] subtotal
-    LOCAL : 6400.0
-    API   : 51400.0
-  [ACTIVITY id=3075 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 8000.0
-    API   : 51000.0
-  [ACTIVITY id=3075 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 8400.0
-    API   : 51400.0
-  [ACTIVITY id=3076 (1st Subcane (पहिली सबकेन))] total_price
-    LOCAL : 3000.0
-    API   : 51000.0
-  [ACTIVITY id=3076 (1st Subcane (पहिली सबकेन))] subtotal
-    LOCAL : 3400.0
-    API   : 51400.0
-  [ACTIVITY id=3077 (2nd Subcane (दुसरी सबकेन))] total_price
-    LOCAL : 3000.0
-    API   : 51000.0
-  [ACTIVITY id=3077 (2nd Subcane (दुसरी सबकेन))] subtotal
-    LOCAL : 3400.0
-    API   : 51400.0
 
 Job ID: 1774 | Nilesh Dnyaneshwar Chavan (87606)
-  [BOOKING] total_amount
-    LOCAL : 157250.0
-    API   : 159800.0
-  [BOOKING] balance
-    LOCAL : 123250.0
-    API   : 125800.0
   [ACTIVITY id=1607 (Pruning (छाटणी))] acres
     LOCAL : 0.0
     API   : 7.0
@@ -2948,19 +1913,19 @@ Job ID: 1774 | Nilesh Dnyaneshwar Chavan (87606)
     LOCAL : 0.0
     API   : 6000.0
   [ACTIVITY] activity_id
-    LOCAL : id=2068 name=Pruning (छाटणी)
+    LOCAL : id=2151 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2151 name=Pruning (छाटणी)
+    LOCAL : id=2070 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
     LOCAL : id=2069 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2137 name=Pruning (छाटणी)
+    LOCAL : id=2068 name=Pruning (छाटणी)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2070 name=Pruning (छाटणी)
+    LOCAL : id=2137 name=Pruning (छाटणी)
     API   : NOT IN API
 
-Problem Job IDs: ['884', '866', '2069', '2095', '2089', '2065', '1785', '1824', '2025', '2027', '1786', '2063', '1978', '1964', '1998', '2023', '2087', '2088', '1830', '2032', '2094', '2049', '2039', '2038', '1513', '1749', '1556', '1576', '1574', '1559', '1596', '1555', '1599', '1563', '1940', '1577', '1589', '1581', '1883', '1897', '1905', '1904', '1888', '1900', '1892', '1875', '1886', '1898', '1895', '1889', '1885', '1902', '1896', '1893', '1894', '1891', '1988', '1997', '1825', '1833', '1903', '1508', '1756', '1954', '1752', '1602', '1591', '1593', '1600', '1516', '1813', '885', '1760', '1497', '1512', '878', '877', '1201', '872', '875', '871', '901', '1245', '1774']
+Problem Job IDs: ['', '866', '870', '901', '1749', '2205', '1497', '1513', '1581', '1760', '1512', '1574', '885', '1245', '2203', '1734', '2153', '884', '2089', '1786', '1978', '1964', '2094', '2049', '2039', '2038', '1556', '1576', '1559', '1555', '1577', '1589', '1905', '1886', '1893', '1894', '1988', '1997', '1825', '1833', '1903', '1508', '1756', '1954', '1752', '1602', '1591', '1593', '1600', '1813', '878', '877', '1201', '872', '875', '871', '1774']

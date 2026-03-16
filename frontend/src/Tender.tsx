@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import {X, Save,Edit2 ,Calendar,User,Users} from 'lucide-react'
 // import './Farm.css';
 import toast from 'react-hot-toast';
-interface Cluster {
+export interface Cluster {
   date_range?: {
     start_date: string | null;
     end_date: string | null;
@@ -35,7 +35,7 @@ interface Cluster {
   mukkadam_due: number;
 }
 
-interface StateOption {
+export interface StateOption {
   state_code: string;
   state_name_english: string;
   state_name_local: string;
@@ -441,7 +441,7 @@ interface EditClusterModalProps {
   onSaved: (updated: Cluster) => void;
 }
 
-const EditClusterModal: React.FC<EditClusterModalProps> = ({ cluster, onClose, onSaved }) => {
+export const EditClusterModal: React.FC<EditClusterModalProps> = ({ cluster, onClose, onSaved }) => {
   const [name, setName] = useState(cluster.name);
   const [selectedState, setSelectedState] = useState<string>('MH');
   
@@ -1116,7 +1116,7 @@ interface CreateClusterModalProps {
   onCreate: (cluster: Cluster) => void;
 }
 
-const CreateClusterModal: React.FC<CreateClusterModalProps> = ({
+export const CreateClusterModal: React.FC<CreateClusterModalProps> = ({
   states, onClose, onCreate,
 }) => {
   const [newName, setNewName]                     = useState('');

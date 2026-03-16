@@ -42,6 +42,7 @@ interface Activity {
 interface Job {
   job_id: string;
   crop_name: string;
+  bill_sent_map: Record<string, BillLog>;
   variety: string;
   plot_name: string;
   mukkadam_name: string;
@@ -91,6 +92,8 @@ interface ActivityGroup {
   }>;
   totalPlots: number;
   donePlots: number;
+  totalConfirmed: number;  // sum of billable (completed allocations only)
+  totalEstimate: number;  
   allDone: boolean;
   totalBillable: number;
   totalArea: number;
@@ -125,6 +128,21 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
     });
   });
 
+  // Sort so completed activities come before pending duplicates
+  flat.sort((a, b) => {
+    const scoreA = a.allocations?.some(x => x.work_status === 'completed') ? 3
+      : (a.allocation_count ?? 0) > 0 ? 2
+      : a.allocation_status === 'fully_allocated' ? 1
+      : 0;
+    const scoreB = b.allocations?.some(x => x.work_status === 'completed') ? 3
+      : (b.allocation_count ?? 0) > 0 ? 2
+      : b.allocation_status === 'fully_allocated' ? 1
+      : 0;
+    return scoreB - scoreA;
+  });
+
+
+
   const map = new Map<string, ActivityGroup>();
 
   flat.forEach(act => {
@@ -137,6 +155,8 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
         allDone: false,
         totalBillable: 0,
         totalArea: 0,
+        totalConfirmed: 0,
+  totalEstimate: 0,
         rate: act.rate_per_acre,
       });
     }
@@ -229,10 +249,14 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
     console.groupEnd();
     // ── END DEBUG ─────────────────────────────────────────────────────────────
     // ── billableAmount: API value is most accurate ───────────────────────────
-    const apiBillable = Number(act.billable_amount ?? 0);
+    // REPLACE the billable lines
+const apiBillable = Number(act.billable_amount ?? 0);
+const apiEstimate  = Number(act.estimated_amount ?? 0);  // pending portion
+
+const displayBillable = apiBillable; // always use API value, no fallback compute
     // Fallback: compute from effective area if API gives 0
     const effectiveArea = aArea > 0 ? aArea : tArea;
-    const displayBillable = apiBillable > 0 ? apiBillable : effectiveArea * rate;
+
 
     // ── doneDate: latest completed allocation date ───────────────────────────
     const latestAlloc = allocs
@@ -251,7 +275,7 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
       (act as any).mukkadam_name ||
       allocs[0]?.mukkadam_name ||
       '—';
-
+    const hasAnyCompleted = allocs.some((a: Alloc) => a.work_status === 'completed');
     group.plots.push({
       plotName:       act.plot_name,
       plotCode:       act.plot_code,
@@ -263,7 +287,7 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
       rate,
       isDone,
       billableAmount: displayBillable,
-      isEstimate:     apiBillable === 0,
+      isEstimate: apiEstimate > 0,
       doneDate:       isDone ? doneDate : null,
       mukkadam:       mukkadamName,
     });
@@ -271,6 +295,8 @@ function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
     group.totalPlots++;
     if (isDone) group.donePlots++;
     group.totalBillable += displayBillable;
+    group.totalConfirmed += apiBillable;
+group.totalEstimate  += apiEstimate;
     group.totalArea     += tArea > 0 ? tArea : aArea;
   });
 
@@ -352,6 +378,7 @@ function ActivityBillModal({
           name:   mukkadamFromPlot || ownerJob?.mukkadam_name || '',
           mobile: ownerJob?.mukkadam_mobile || '',
         },
+        activity_name: group.activityName,
 
         // work_done — backend maps: activity/date/acres_done/rate_per_acre/amount
         work_done: workDone,
@@ -573,11 +600,168 @@ function ActivityBillModal({
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
-export default function FarmerBillingPage() {
-  const [searchParams] = useSearchParams();
-  const clusterId = searchParams.get('cluster');
 
+function ViewBillModal({
+  log, group, onClose, onResend,
+}: {
+  log: BillLog;
+  group: ActivityGroup;
+  onClose: () => void;
+  onResend: () => void;
+}) {
+  const payload    = log.full_payload ?? {};
+  const workDone   = payload.work_done ?? [];
+  const payments   = payload.payment_history ?? [];
+  const bill       = payload.bill_summary ?? {};
+  const sentAt     = log.sent_at ? new Date(log.sent_at) : null;
+  const waSuccess  = log.webhook_status === 200;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+      onClick={onClose}>
+      <div style={{ background: '#fff', borderRadius: 16, width: 600, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,.2)' }}
+        onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #eef0f4', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 3 }}>
+              📋 Bill Review — {group.activityName}
+            </div>
+            <div style={{ fontSize: 13, color: '#8892a4' }}>
+              Sent by {log.sent_by}
+              {sentAt ? ` · ${sentAt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} at ${sentAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : ''}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: 'none', background: '#f5f6f8', fontSize: 16, cursor: 'pointer' }}>✕</button>
+        </div>
+
+        {/* WhatsApp status banner */}
+        <div style={{ margin: '16px 24px 0', padding: '12px 16px', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 10, background: waSuccess ? '#e8f8f0' : '#fde8e8', border: `1px solid ${waSuccess ? '#c3e6cb' : '#f5c6cb'}` }}>
+          <span style={{ fontSize: 20 }}>{waSuccess ? '✅' : '⚠️'}</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: waSuccess ? '#1e8449' : '#c0392b' }}>
+              {waSuccess ? 'WhatsApp Delivered' : 'WhatsApp Delivery Failed'}
+            </div>
+            <div style={{ fontSize: 11, color: '#8892a4' }}>
+              Status code: {log.webhook_status ?? '—'}
+              {sentAt ? ` · Sent ${sentAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: '16px 24px' }}>
+
+          {/* Work done line items */}
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: '#8892a4', marginBottom: 10 }}>
+            Work Done
+          </div>
+          <div style={{ border: '1px solid #eef0f4', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+            <div style={{ display: 'flex', padding: '0 0 8px', borderBottom: '2px solid #eef0f4', fontSize: 12, fontWeight: 700, color: '#8892a4' }}>
+              <div style={{ width: 110 }}>PLOT</div>
+              <div style={{ flex: 1 }}>DATE</div>
+              <div style={{ width: 70, textAlign: 'right' }}>ACRES</div>
+              <div style={{ width: 90, textAlign: 'right' }}>AMOUNT</div>
+            </div>
+            {workDone.map((w: any, i: number) => (
+              <div key={i} style={{ display: 'flex', padding: '10px 0', borderBottom: i < workDone.length - 1 ? '1px solid #f5f6f8' : 'none' }}>
+                <div style={{ width: 110, fontSize: 13, fontWeight: 600, color: '#2471a3' }}>{w.plot_name || w.activity}</div>
+                <div style={{ flex: 1, fontSize: 12, color: '#666' }}>{w.date ? w.date.slice(5) : '—'}</div>
+                <div style={{ width: 70, textAlign: 'right', fontSize: 13, fontWeight: 600 }}>{Number(w.acres_done).toFixed(2)} ac</div>
+                <div style={{ width: 90, textAlign: 'right', fontSize: 14, fontWeight: 700 }}>₹{Number(w.amount).toLocaleString('en-IN')}</div>
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 0 0', borderTop: '2px solid #1a1a2e', marginTop: 8, fontSize: 15, fontWeight: 800 }}>
+              <span>Total Billed</span>
+              <span>₹{Number(bill.total_billed ?? 0).toLocaleString('en-IN')}</span>
+            </div>
+          </div>
+
+          {/* Payment history */}
+          {payments.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: '#8892a4', marginBottom: 10 }}>
+                Payment History
+              </div>
+              {payments.map((p: any, i: number) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '8px 0', borderBottom: i < payments.length - 1 ? '1px solid #f8f9fb' : 'none', gap: 12 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: '#e8f8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>
+                    {p.mode === 'UPI' ? '💳' : '💵'}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{p.mode}</div>
+                    <div style={{ fontSize: 11, color: '#8892a4' }}>{p.date}{p.notes ? ` · ${p.notes}` : ''}</div>
+                  </div>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#27ae60' }}>
+                    +₹{Number(p.amount).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Balance */}
+          <div style={{ background: '#f8f9fb', borderRadius: 10, padding: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0' }}>
+              <span style={{ color: '#666' }}>Total Billed</span>
+              <span style={{ fontWeight: 600 }}>₹{Number(bill.total_billed ?? 0).toLocaleString('en-IN')}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0' }}>
+              <span style={{ color: '#666' }}>Already Collected</span>
+              <span style={{ fontWeight: 600, color: '#27ae60' }}>−₹{Number(bill.total_already_paid ?? 0).toLocaleString('en-IN')}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0 0', borderTop: '2px solid #ddd', marginTop: 6, fontSize: 15, fontWeight: 700 }}>
+              <span>Balance Due</span>
+              <span style={{ color: Number(bill.balance_due_now) > 0 ? '#e74c3c' : '#27ae60' }}>
+                {Number(bill.balance_due_now) > 0.01
+                  ? `₹${Number(bill.balance_due_now).toLocaleString('en-IN')}`
+                  : '✓ Clear'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: '16px 24px', borderTop: '1px solid #eef0f4', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #ddd', background: '#fff', color: '#555', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            Close
+          </button>
+          <button onClick={onResend} style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: '#1a1a2e', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            🔁 Resend Bill
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+interface BillLog {
+  sent: boolean;
+  sent_at: string;
+  sent_by: string;
+  webhook_status: number | null;
+  total_billed: number;
+  total_paid: number;
+  balance_due: number;
+  full_payload: any;
+}
+// ─── Main Page ────────────────────────────────────────────────────────────────
+export default function FarmerBillingPage({ clusterId: propClusterId }: { clusterId?: number }) {
+  const [searchParams] = useSearchParams();
+
+  // Use prop if provided, else fall back to URL param
+  const clusterId = propClusterId ?? searchParams.get('cluster');
+
+const [viewBillModal, setViewBillModal] = useState<{
+  group: ActivityGroup;
+  log: BillLog;
+  jobs: Job[];
+  allPayments: PayHist[];
+  totalPaid: number;
+  farmer: Farmer;
+} | null>(null);
   const [data, setData]                 = useState<{ farmers: Farmer[] } | null>(null);
   const [loading, setLoading]           = useState(true);
   const [selectedFarmerId, setSelectedFarmerId] = useState<string | null>(null);
@@ -616,7 +800,26 @@ export default function FarmerBillingPage() {
     ? farmers.filter(f => f.farmer_name.toLowerCase().includes(search.toLowerCase()))
     : farmers;
   const selectedFarmer = farmers.find(f => f.farmer_id === selectedFarmerId) ?? farmers[0] ?? null;
-
+// Sort farmers: ready-to-bill unsent → ready-to-bill sent → others
+const sortedFarmers = [...filteredFarmers].sort((a, b) => {
+  const getScore = (f: Farmer) => {
+    const groups = groupActivitiesByName(f.jobs ?? []);
+    const readyGroups = groups.filter(g => g.allDone);
+    if (readyGroups.length === 0) return 0;
+    
+    // Check if any ready group has bill NOT sent
+    const allJobs = f.jobs ?? [];
+    const hasUnsentBill = readyGroups.some(g => {
+      const billLog = allJobs
+        .flatMap(j => Object.entries(j.bill_sent_map ?? {}))
+        .find(([actName]) => actName === g.activityName)?.[1];
+      return !billLog;
+    });
+    
+    return hasUnsentBill ? 2 : 1; // 2 = unsent ready, 1 = sent ready, 0 = others
+  };
+  return getScore(b) - getScore(a);
+});
   return (
     <div style={{ display: 'flex', height: '100%', background: '#f0f2f5', fontFamily: "'Inter', -apple-system, sans-serif", fontSize: 14, color: '#1a1a2e', overflow: 'hidden' }}>
 
@@ -634,7 +837,77 @@ export default function FarmerBillingPage() {
             Mukkadams
           </button>
         </div>
+{/* Cluster stats — sticky */}
+{data && (() => {
+  const allFarmers   = data.farmers ?? [];
+  const totalFarmers = allFarmers.length;
+  const totalDueAll  = allFarmers.reduce((s, f) =>
+    s + (f.jobs ?? []).reduce((js, j) => js + (j.summary?.balance_due ?? 0), 0), 0);
+  const totalBilledAll = allFarmers.reduce((s, f) =>
+    s + (f.jobs ?? []).reduce((js, j) => js + (j.summary?.total_billable_so_far ?? 0), 0), 0);
+  const totalPaidAll = allFarmers.reduce((s, f) =>
+    s + (f.jobs ?? []).reduce((js, j) => js + (j.summary?.total_paid ?? 0), 0), 0);
+  const readyTobillAll = allFarmers.reduce((s, f) => {
+    const groups = groupActivitiesByName(f.jobs ?? []);
+    return s + groups.filter(g => g.allDone).length;
+  }, 0);
+  const unsentAll = allFarmers.reduce((s, f) => {
+    const groups  = groupActivitiesByName(f.jobs ?? []);
+    const allJobs = f.jobs ?? [];
+    return s + groups.filter(g => g.allDone).filter(g => {
+      const billLog = allJobs
+        .flatMap(j => Object.entries(j.bill_sent_map ?? {}))
+        .find(([actName]) => actName === g.activityName)?.[1];
+      return !billLog;
+    }).length;
+  }, 0);
 
+  return (
+    <div style={{ padding: '10px 12px', borderBottom: '1px solid #e8ecf1', background: '#f8f9fb' }}>
+      {/* Row 1 */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+        <div style={{ flex: 1, background: '#fff', borderRadius: 8, padding: '6px 10px', border: '1px solid #eef0f4' }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: '#1a1a2e' }}>{totalFarmers}</div>
+          <div style={{ fontSize: 9, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Farmers</div>
+        </div>
+        <div style={{ flex: 1, background: unsentAll > 0 ? '#e8f8f0' : '#fff', borderRadius: 8, padding: '6px 10px', border: `1px solid ${unsentAll > 0 ? '#c3e6cb' : '#eef0f4'}` }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: unsentAll > 0 ? '#1e8449' : '#1a1a2e' }}>{unsentAll}</div>
+          <div style={{ fontSize: 9, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Bills Pending</div>
+        </div>
+        <div style={{ flex: 1, background: '#fff', borderRadius: 8, padding: '6px 10px', border: '1px solid #eef0f4' }}>
+  <div style={{ fontSize: 15, fontWeight: 800, color: '#2471a3' }}>
+    {allFarmers.reduce((s, f) => {
+      const groups  = groupActivitiesByName(f.jobs ?? []);
+      const allJobs = f.jobs ?? [];
+      return s + groups.filter(g => g.allDone).filter(g => {
+        const billLog = allJobs
+          .flatMap(j => Object.entries(j.bill_sent_map ?? {}))
+          .find(([actName]) => actName === g.activityName)?.[1];
+        return !!billLog;
+      }).length;
+    }, 0)}
+  </div>
+  <div style={{ fontSize: 9, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Bills Sent</div>
+</div>
+      </div>
+      {/* Row 2 */}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ flex: 1, background: '#fff', borderRadius: 8, padding: '6px 10px', border: '1px solid #eef0f4' }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: '#e74c3c' }}>₹{Math.round(totalDueAll / 1000)}k</div>
+          <div style={{ fontSize: 9, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Due</div>
+        </div>
+        <div style={{ flex: 1, background: '#fff', borderRadius: 8, padding: '6px 10px', border: '1px solid #eef0f4' }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: '#3498db' }}>₹{Math.round(totalBilledAll / 1000)}k</div>
+          <div style={{ fontSize: 9, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Billed</div>
+        </div>
+        <div style={{ flex: 1, background: '#fff', borderRadius: 8, padding: '6px 10px', border: '1px solid #eef0f4' }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: '#27ae60' }}>₹{Math.round(totalPaidAll / 1000)}k</div>
+          <div style={{ fontSize: 9, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Collected</div>
+        </div>
+      </div>
+    </div>
+  );
+})()}
         {/* Search */}
         <div style={{ padding: '8px 16px', borderBottom: '1px solid #e8ecf1' }}>
           <input
@@ -646,42 +919,92 @@ export default function FarmerBillingPage() {
 
         {/* Farmer list */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
-          {filteredFarmers.map(f => {
-            const avc       = avatarColor(f.farmer_id);
-            const totalDue  = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.balance_due ?? 0), 0);
-            const groups    = groupActivitiesByName(f.jobs ?? []);
-            const readyCount = groups.filter(g => g.allDone).length;
-            const totalAc   = (f.jobs ?? []).reduce((s, j) =>
-              s + (j.activities ?? []).reduce((a, act) => a + Number(act.total_area ?? 0), 0), 0);
-            const isActive  = f.farmer_id === selectedFarmerId;
+          {sortedFarmers.map(f => {
+  const avc        = avatarColor(f.farmer_id);
+  
+  const groups     = groupActivitiesByName(f.jobs ?? []);
+  const readyGroups = groups.filter(g => g.allDone);
+  const allJobs    = f.jobs ?? [];
 
-            return (
-              <div key={f.farmer_id} onClick={() => setSelectedFarmerId(f.farmer_id)}
-                style={{ padding: '10px 12px', borderRadius: 10, cursor: 'pointer', marginBottom: 2, transition: 'background .15s', background: isActive ? '#e8f0fe' : 'transparent', border: isActive ? '1px solid #c5d9f0' : '1px solid transparent' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13, flexShrink: 0, background: avc.bg, color: avc.color }}>
-                    {initials(f.farmer_name)}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.farmer_name}</div>
-                    <div style={{ fontSize: 11, color: '#8892a4', marginTop: 1 }}>
-                      {(f.jobs ?? []).length} job{(f.jobs ?? []).length !== 1 ? 's' : ''} · {totalAc.toFixed(1)} ac
-                    </div>
-                  </div>
-                  {totalDue > 0.01 && (
-                    <span style={{ fontSize: 11, fontWeight: 700, color: '#e74c3c', background: '#fde8e8', padding: '2px 6px', borderRadius: 5, flexShrink: 0 }}>
-                      ₹{Math.round(totalDue).toLocaleString('en-IN')}
-                    </span>
-                  )}
-                </div>
-                {readyCount > 0 && (
-                  <div style={{ marginTop: 4, fontSize: 10, fontWeight: 700, color: '#1e8449', background: '#e8f8f0', border: '1px solid #c3e6cb', padding: '2px 7px', borderRadius: 5, display: 'inline-block' }}>
-                    {readyCount} activit{readyCount > 1 ? 'ies' : 'y'} ready to bill
-                  </div>
-                )}
-              </div>
-            );
-          })}
+  // Split ready groups into unsent vs sent
+  const unsentReady = readyGroups.filter(g => {
+    const billLog = allJobs
+      .flatMap(j => Object.entries(j.bill_sent_map ?? {}))
+      .find(([actName]) => actName === g.activityName)?.[1];
+    return !billLog;
+  });
+  const sentReady = readyGroups.filter(g => {
+    const billLog = allJobs
+      .flatMap(j => Object.entries(j.bill_sent_map ?? {}))
+      .find(([actName]) => actName === g.activityName)?.[1];
+    return !!billLog;
+  });
+
+  const totalAc  = allJobs.reduce((s, j) =>
+    s + (j.activities ?? []).reduce((a, act) => a + Number(act.total_area ?? 0), 0), 0);
+  const isActive = f.farmer_id === selectedFarmerId;
+const totalDue          = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.balance_due ?? 0), 0);
+const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_billable_so_far ?? 0), 0); // ← ADD
+  return (
+    <div key={f.farmer_id} onClick={() => setSelectedFarmerId(f.farmer_id)}
+      style={{
+        padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
+        marginBottom: 2, transition: 'background .15s',
+        background: isActive ? '#e8f0fe' : 'transparent',
+        border: isActive ? '1px solid #c5d9f0' : '1px solid transparent',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{
+          width: 32, height: 32, borderRadius: 8, display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+          fontWeight: 700, fontSize: 13, flexShrink: 0,
+          background: avc.bg, color: avc.color,
+        }}>
+          {initials(f.farmer_name)}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {f.farmer_name}
+          </div>
+          <div style={{ fontSize: 11, color: '#8892a4', marginTop: 1 }}>
+            {allJobs.length} job{allJobs.length !== 1 ? 's' : ''} · {totalAc.toFixed(1)} ac
+          </div>
+        </div>
+       {totalDue > 0.01 ? (
+  <span style={{ fontSize: 11, fontWeight: 700, color: '#e74c3c', background: '#fde8e8', padding: '2px 6px', borderRadius: 5, flexShrink: 0 }}>
+    ₹{Math.round(totalDue).toLocaleString('en-IN')}
+  </span>
+) : totalBilledFarmer > 0 ? (
+  <span style={{ fontSize: 11, fontWeight: 700, color: '#2471a3', background: '#e8f0fe', padding: '2px 6px', borderRadius: 5, flexShrink: 0 }}>
+    ₹{Math.round(totalBilledFarmer).toLocaleString('en-IN')}
+  </span>
+) : null}
+      </div>
+
+      {/* Badges row */}
+      <div style={{ marginTop: 5, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {unsentReady.length > 0 && (
+          <div style={{
+            fontSize: 10, fontWeight: 700, color: '#1e8449',
+            background: '#e8f8f0', border: '1px solid #c3e6cb',
+            padding: '2px 7px', borderRadius: 5,
+          }}>
+            🔔 {unsentReady.length} bill{unsentReady.length > 1 ? 's' : ''} pending
+          </div>
+        )}
+        {sentReady.length > 0 && (
+          <div style={{
+            fontSize: 10, fontWeight: 700, color: '#2471a3',
+            background: '#e8f0fe', border: '1px solid #c5d9f0',
+            padding: '2px 7px', borderRadius: 5,
+          }}>
+            ✅ {sentReady.length} bill{sentReady.length > 1 ? 's' : ''} sent
+          </div>
+        )}
+      </div>
+    </div>
+  );
+})}
         </div>
       </div>
 
@@ -806,13 +1129,41 @@ export default function FarmerBillingPage() {
                             <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.4px' }}>Plots Done</div>
                           </div>
                           <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: 15, fontWeight: 700, color: group.allDone ? '#2471a3' : '#1a1a2e' }}>
-                              ₹{Math.round(group.totalBillable).toLocaleString('en-IN')}
-                            </div>
-                            <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.4px' }}>
-                              {group.allDone ? 'Bill Amount' : 'Est. Amount'}
-                            </div>
-                          </div>
+  {group.totalConfirmed > 0 && group.totalEstimate > 0 ? (
+    // Mixed: some done, some pending
+    <>
+      <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1a2e' }}>
+        ₹{Math.round(group.totalConfirmed).toLocaleString('en-IN')}
+        <span style={{ fontSize: 11, fontWeight: 500, color: '#d68910', marginLeft: 4 }}>
+          +₹{Math.round(group.totalEstimate).toLocaleString('en-IN')} est.
+        </span>
+      </div>
+      <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.4px' }}>
+        Confirmed + Estimate
+      </div>
+    </>
+  ) : group.allDone ? (
+    // All confirmed
+    <>
+      <div style={{ fontSize: 15, fontWeight: 700, color: '#2471a3' }}>
+        ₹{Math.round(group.totalConfirmed).toLocaleString('en-IN')}
+      </div>
+      <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.4px' }}>
+        Bill Amount
+      </div>
+    </>
+  ) : (
+    // Nothing done yet — full estimate
+    <>
+      <div style={{ fontSize: 15, fontWeight: 700, color: '#d68910' }}>
+        ₹{Math.round(group.totalEstimate).toLocaleString('en-IN')}
+      </div>
+      <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.4px' }}>
+        Est. Amount
+      </div>
+    </>
+  )}
+</div>
                         </div>
                       </div>
 
@@ -843,39 +1194,83 @@ export default function FarmerBillingPage() {
 
                       {/* Bill status bar */}
                       <div style={{ padding: '14px 22px', borderTop: '1px solid #eef0f4', display: 'flex', alignItems: 'center', gap: 14 }}>
-                        {group.allDone ? (
-                          <>
-                            <span style={{ padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: 700, background: '#e8f8f0', color: '#1e8449' }}>
-                              ✓ Ready to Bill
-                            </span>
-                            <span style={{ fontSize: 12, color: '#8892a4', flex: 1 }}>
-                              All {group.totalPlots} plot{group.totalPlots !== 1 ? 's' : ''} complete
-                              {' · '}
-                              <b style={{ color: '#1a1a2e' }}>₹{Math.round(group.totalBillable).toLocaleString('en-IN')}</b>
-                            </span>
-                            <button
-                              onClick={() => setBillModal({ farmer: selectedFarmer, jobs, group, allPayments, totalPaid })}
-                              style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: balanceDue > 0.01 ? '#1a1a2e' : '#27ae60', color: '#fff' }}
-                            >
-                              ✉️ Generate Bill
-                            </button>
-                          </>
-                        ) : group.donePlots > 0 ? (
+                        {group.allDone ? (() => {
+  // Check if bill already sent for this activity
+  const billLog = jobs
+    .flatMap(j => Object.entries(j.bill_sent_map ?? {}))
+    .find(([actName]) => actName === group.activityName)?.[1];
+
+  return billLog ? (
+    // ── Already sent ──
+    <>
+      <span style={{ padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: 700, background: '#e8f8f0', color: '#1e8449' }}>
+        ✅ Bill Sent
+      </span>
+      <span style={{ fontSize: 12, color: '#8892a4', flex: 1 }}>
+        Sent by <b style={{ color: '#1a1a2e' }}>{billLog.sent_by}</b>
+        {billLog.sent_at ? ` · ${new Date(billLog.sent_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}` : ''}
+        {' · '}
+        <b style={{ color: billLog.balance_due > 0.01 ? '#e74c3c' : '#27ae60' }}>
+          {billLog.balance_due > 0.01 ? `₹${Math.round(billLog.balance_due).toLocaleString('en-IN')} due` : '✓ Clear'}
+        </b>
+      </span>
+      <button
+  onClick={() => setViewBillModal({ 
+    group, 
+    log: billLog,
+    jobs,           // ← add these
+    allPayments,    // ← add these
+    totalPaid,      // ← add these
+    farmer: selectedFarmer,  // ← add these
+  })}
+  style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: '1px solid #c5d9f0', cursor: 'pointer', background: '#e8f0fe', color: '#2471a3' }}
+>
+  📋 View Bill
+</button>
+    </>
+  ) : (
+    // ── Ready to send ──
+    <>
+      <span style={{ padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: 700, background: '#e8f8f0', color: '#1e8449' }}>
+        ✓ Ready to Bill
+      </span>
+      <span style={{ fontSize: 12, color: '#8892a4', flex: 1 }}>
+        All {group.totalPlots} plot{group.totalPlots !== 1 ? 's' : ''} complete
+        {' · '}
+        <b style={{ color: '#1a1a2e' }}>₹{Math.round(group.totalBillable).toLocaleString('en-IN')}</b>
+      </span>
+      <button
+        onClick={() => setBillModal({ farmer: selectedFarmer, jobs, group, allPayments, totalPaid })}
+        style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: balanceDue > 0.01 ? '#1a1a2e' : '#27ae60', color: '#fff' }}
+      >
+        ✉️ Generate Bill
+      </button>
+    </>
+  );
+})() : group.donePlots > 0 ? (
                           <>
                             <span style={{ padding: '5px 12px', borderRadius: 7, fontSize: 12, fontWeight: 700, background: '#fef3e2', color: '#d68910' }}>
                               ◷ In Progress
                             </span>
                             <span style={{ fontSize: 12, color: '#8892a4', flex: 1 }}>
-                              {group.donePlots}/{group.totalPlots} plots done
-                              {' · '}
-                              {group.totalPlots - group.donePlots} remaining:
-                              {' '}
-                              <b style={{ color: '#1a1a2e' }}>
-                                {group.plots.filter(p => !p.isDone).map(p => p.plotName || p.plotCode).join(', ')}
-                              </b>
-                              {' · Est. '}
-                              <b style={{ color: '#1a1a2e' }}>₹{Math.round(group.totalBillable).toLocaleString('en-IN')}</b>
-                            </span>
+  {group.donePlots}/{group.totalPlots} plots done
+  {' · '}
+  {group.totalPlots - group.donePlots} remaining:
+  {' '}
+  <b style={{ color: '#1a1a2e' }}>
+    {group.plots.filter(p => !p.isDone).map(p => p.plotName || p.plotCode).join(', ')}
+  </b>
+  {' · '}
+  {group.totalConfirmed > 0 && (
+    <>
+      <b style={{ color: '#1a1a2e' }}>₹{Math.round(group.totalConfirmed).toLocaleString('en-IN')}</b>
+      <span> confirmed</span>
+      {' + '}
+    </>
+  )}
+  <b style={{ color: '#d68910' }}>₹{Math.round(group.totalEstimate).toLocaleString('en-IN')}</b>
+  <span style={{ color: '#d68910' }}> est.</span>
+</span>
                             <button disabled style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'not-allowed', background: '#eef0f4', color: '#aaa' }}>
                               Generate Bill
                             </button>
@@ -987,6 +1382,24 @@ export default function FarmerBillingPage() {
           onSent={() => { setBillModal(null); fetchData(); }}
         />
       )}
+
+ {viewBillModal && (
+  <ViewBillModal
+    group={viewBillModal.group}
+    log={viewBillModal.log}
+    onClose={() => setViewBillModal(null)}
+    onResend={() => {
+      setViewBillModal(null);
+      setBillModal({
+        farmer: viewBillModal.farmer,        // ← from state now
+        jobs: viewBillModal.jobs,            // ← from state now
+        group: viewBillModal.group,
+        allPayments: viewBillModal.allPayments,  // ← from state now
+        totalPaid: viewBillModal.totalPaid,      // ← from state now
+      });
+    }}
+  />
+)}
     </div>
   );
 }

@@ -11,7 +11,7 @@ import {Pencil,Pen,Check,X,
 } from "lucide-react";
 import { useNavigate } from 'react-router-dom';
 import { JobNoteModal } from "./components/JobNoteModel";
-import { AddToClusterModal } from "./Tender";
+import { AddToClusterModal, Cluster, CreateClusterModal, EditClusterModal, StateOption } from "./Tender";
 import { API_BASE_URL } from "./types/config";
 // const API_BASE = "http://localhost:8002/tender";
 // const API_BASE_URL = "http://localhost:8002/tender";
@@ -858,6 +858,8 @@ interface PlotClusterControlProps {
 import ReactDOM from "react-dom";
 import { GlobalInsightsPanel } from "./Global";
 import { useCurrentUser } from "./hooks/currentUser";
+import ClusterActivityCalendar from "./ClusterCalender";
+import FarmerBillingPage from "./components/FarmerBillPage";
 
 // ─── Plot Cluster Control ─────────────────────────────────
 function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess }: {
@@ -1692,8 +1694,17 @@ useEffect(() => {
 }, []);
   // Change the tab type
 // change tab type
-const [tab, setTab] = useState<'mukkadams' | 'farmers' | 'jobs' | 'global'>('mukkadams');
-
+const [tab, setTab] = useState<'command' | 'calendar' | 'mukkadams' | 'farmers' | 'jobs' | 'payment'>('command');
+// Command Center state
+const [cmdClusters, setCmdClusters]         = useState<Cluster[]>([]);
+const [cmdLoading, setCmdLoading]           = useState(false);
+const [cmdSearch, setCmdSearch]             = useState('');
+const [showCreateModal, setShowCreateModal] = useState(false);
+const [editModal, setEditModal]             = useState<Cluster | null>(null);
+const [cmdAddModal, setCmdAddModal]         = useState<{ clusterId: number; clusterName: string; mode: 'farmer' | 'mukkadam' } | null>(null);
+const [calendarClusterId, setCalendarClusterId]   = useState<number | null>(null);
+const [calendarClusterName, setCalendarClusterName] = useState('');
+const [states, setStates]                   = useState<StateOption[]>([]);
   const [search, setSearch] = useState('');
   const [clusterFilter, setClusterFilter] = useState('');
   const [clusters, setClusters] = useState<ClusterOption[]>([]);
@@ -1705,7 +1716,8 @@ const [dialpadOpen, setDialpadOpen] = useState(false);
 const [dialpadNumber, setDialpadNumber] = useState('');
 const [actTotalCount, setActTotalCount] = useState<number>(0);
 
-
+const [cmdFilter, setCmdFilter] = useState<string>('all');
+const [cmdRegion, setCmdRegion] = useState<string>('all');
 
 const [pruningFrom, setPruningFrom] = useState('');
 const [pruningTo, setPruningTo] = useState('');
@@ -1716,6 +1728,32 @@ const [pruningTo, setPruningTo] = useState('');
     farmerId: string; // pre-selected farmer (future: pass to modal)
   } | null>(null);
 
+
+  // Add this useEffect alongside your existing ones:
+useEffect(() => {
+  if (tab !== 'command') return;
+  const load = async () => {
+    setCmdLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (cmdSearch.trim()) params.append('q', cmdSearch.trim());
+      const res = await fetch(`${API_BASE_URL}/api/clusters/?${params.toString()}`);
+      const data = await res.json();
+      setCmdClusters(data);
+    } finally {
+      setCmdLoading(false);
+    }
+  };
+  const id = setTimeout(load, 300);
+  return () => clearTimeout(id);
+}, [tab, cmdSearch]);
+
+useEffect(() => {
+  fetch(`${API_BASE_URL}/locations/states/`)
+    .then(r => r.json())
+    .then(setStates)
+    .catch(() => {});
+}, []);
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -1990,7 +2028,8 @@ const [jobsHalfDayDialog, setJobsHalfDayDialog] = useState<{
 const [jobsAllowsMoreJobs, setJobsAllowsMoreJobs] = useState(false);
 const [jobsNoteJobId, setJobsNoteJobId]     = useState<string | null>(null);
 const [jobsNoteJobLabel, setJobsNoteJobLabel] = useState('');
-
+// Add state if not already there:
+const [showCalendar, setShowCalendar] = useState(false);
 // per-activity availability — fetched once per activity click
 const [jobsAvailableMukkadams, setJobsAvailableMukkadams] = useState<Map<string, any[]>>(new Map());
 const [jobsMaxWorkRows, setJobsMaxWorkRows] = useState<any[]>([]);
@@ -2114,40 +2153,6 @@ const displaySummary = useMemo(() => {
 
 
 
-// ── Open allocate dialog: fetch mukkadams for this cluster+date ───────────────
-const handleOpenAllocate = async (act: any, job: any) => {
-  const isoDate = act.scheduled_date?.slice(0, 10) ?? '';
-  // optimistically open with loading state
-  setAllocDialog({ open: true, act, job, isoDate, mukkadams: [], loadingMukkadams: true });
-
-  try {
-    const token = localStorage.getItem('auth_token');
-    // fetch cluster mukkadams with their capacity for this date
-    const res = await fetch(
-      `${API_BASE_URL}/api/cluster/${clusterFilter || clusterId}/mukkadams-capacity/?date=${isoDate}&activity_id=${act.activity_id ?? ''}`,
-      { headers: { Authorization: `Token ${token}` } },
-    );
-    if (res.ok) {
-      const d = await res.json();
-      setAllocDialog(prev =>
-        prev ? { ...prev, mukkadams: d.mukkadams ?? d ?? [], loadingMukkadams: false } : prev,
-      );
-    } else {
-      // fallback: use already-loaded mukkadams from dashboard data
-      const fallback = (data?.mukkadams ?? []).filter((m: any) =>
-        m.clusters?.some((c: any) => String(c.id) === String(clusterFilter || clusterId)),
-      );
-      setAllocDialog(prev =>
-        prev ? { ...prev, mukkadams: fallback, loadingMukkadams: false } : prev,
-      );
-    }
-  } catch {
-    const fallback = data?.mukkadams ?? [];
-    setAllocDialog(prev =>
-      prev ? { ...prev, mukkadams: fallback, loadingMukkadams: false } : prev,
-    );
-  }
-};
 
 const handleConfirmAllocate = async () => {
   if (!allocHalfDay) return;
@@ -2456,6 +2461,8 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
   }
 };
 
+const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
+
 
   return (
     <div style={{ minHeight: '100vh', background: '#f0eeeb', fontFamily: S.sans, fontSize: 13, color: S.stone900 }}>
@@ -2472,13 +2479,15 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
         </div>
         
   */}
-  <button onClick={() => navigate('/')}
+  {/* <button onClick={() => navigate('/')}
           style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 10, border: `1px solid ${S.stone200}`, background: '#fff', fontSize: 12, color: S.stone600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
           ← Back
-        </button>
+        </button> */}
         {/* Tab group */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: S.stone100, borderRadius: 14, padding: 3, border: `1px solid ${S.stone200}` }}>
           {([
+            { key: 'command',   icon: '🏠', label: 'Command',   count: cmdClusters.length },
+{ key: 'payment', icon: '💰', label: 'Payment' },
             { key: 'mukkadams', icon: '👥', label: 'Mukkadams', count: data?.mukkadams?.length || 0 },
             { key: 'farmers',   icon: '👨‍🌾', label: 'Farmers',   count: data?.farmers?.length   || 0 },
             { key: 'jobs',      icon: '📋', label: 'Jobs',       count: tab === 'jobs' && (actSubTab !== 'all' || actSearch || actCluster || actDateFrom || actDateTo) ? activities.length : (data?.summary?.total_activities || 0) },
@@ -2572,6 +2581,9 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
             </button>
           );
         })}
+
+
+        
  
         {/* Mukkadams: no-cluster filter */}
         {tab === 'mukkadams' && (
@@ -2637,13 +2649,495 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
       </div>
  
       {/* ══════════════════════ CONTENT ══════════════════════ */}
-      <div style={{ padding: '20px 24px' }}>
-        {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '80px 0' }}>
-            <RefreshCw size={32} style={{ color: S.brand, animation: 'spin 1s linear infinite' }} />
+<div style={{ padding: '20px 24px' }}>
+  {loading && tab !== 'command' ? (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '80px 0' }}>
+      <RefreshCw size={32} style={{ color: S.brand, animation: 'spin 1s linear infinite' }} />
+    </div>
+) : tab === 'command' ? (
+  <>
+    {/* ── Search + New Cluster ── */}
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+      <input
+        type="text"
+        value={cmdSearch}
+        onChange={e => setCmdSearch(e.target.value)}
+        placeholder="Search clusters..."
+        style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #e8e5de', fontSize: 13, background: '#fff', width: 300, fontFamily: 'inherit', outline: 'none' }}
+      />
+      <button
+        onClick={() => setShowCreateModal(true)}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 18px', borderRadius: 12, background: '#16a34a', color: '#fff', fontWeight: 700, fontSize: 13, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}
+      >
+        <span style={{ fontSize: 16 }}>+</span> New Cluster
+      </button>
+    </div>
+
+    {/* ── Alert banner ── */}
+    {(() => {
+      const critical = cmdClusters.filter(c => c.note);
+      if (!critical.length) return null;
+      return (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span>🔔</span>
+            <span style={{ fontWeight: 700, fontSize: 13, color: '#dc2626' }}>
+              Action Required — {critical.length} cluster{critical.length > 1 ? 's' : ''} with notes
+            </span>
           </div>
- 
-        ) : tab === 'mukkadams' ? (
+          {critical.map(c => (
+            <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: '1px solid #fee2e2' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', minWidth: 160 }}>{c.name}</span>
+              <span style={{ fontSize: 12, color: '#6b7280', flex: 1, padding: '0 16px' }}>{c.note}</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#dc2626' }}>
+                {c.total_area ? `${(Number(c.total_area) - Number(c.allocated_area || 0)).toFixed(1)} ac left` : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      );
+    })()}
+
+    {/* ── Filter pills ── */}
+    {(() => {
+      const today = new Date().toISOString().split('T')[0];
+      const counts = {
+        all:     cmdClusters.length,
+        active:  cmdClusters.filter(c => (c.today_team ?? []).length > 0).length,
+        blocked: cmdClusters.filter(c => c.note && c.allocated_area === 0).length,
+        at_risk: cmdClusters.filter(c => c.note && Number(c.allocated_area) > 0).length,
+      };
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          {[
+            { key: 'all',     label: '🗂 All',          count: counts.all     },
+            { key: 'active',  label: '✅ Active Today',  count: counts.active  },
+            { key: 'blocked', label: '⛔ Blocked',       count: counts.blocked },
+            { key: 'at_risk', label: '⚠️ At Risk',       count: counts.at_risk },
+          ].map(f => {
+            const active = (cmdFilter ?? 'all') === f.key;
+            return (
+              <button key={f.key} onClick={() => setCmdFilter(f.key)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 20, border: `1px solid ${active ? '#16a34a' : '#e8e5de'}`, background: active ? '#f0fdf4' : '#fff', color: active ? '#16a34a' : '#7a7a72', cursor: 'pointer', fontSize: 13, fontWeight: 500, fontFamily: 'inherit' }}>
+                {f.label}
+                <span style={{ background: active ? '#16a34a' : '#e8e5de', color: active ? '#fff' : '#7a7a72', padding: '1px 7px', borderRadius: 10, fontSize: 11, fontWeight: 600 }}>{f.count}</span>
+              </button>
+            );
+          })}
+          <div style={{ flex: 1 }} />
+          {/* Region filter */}
+          <select
+            value={cmdRegion ?? 'all'}
+            onChange={e => setCmdRegion(e.target.value)}
+            style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #e8e5de', background: '#fff', color: '#1a1a1a', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            <option value="all">All Regions</option>
+            {[...new Set(cmdClusters.flatMap(c => c.districts ?? []))].map(d => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
+        </div>
+      );
+    })()}
+
+    {/* ── Cluster cards grid ── */}
+    {cmdLoading ? (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '64px 0' }}>
+        <RefreshCw size={28} style={{ color: '#16a34a', animation: 'spin 1s linear infinite' }} />
+      </div>
+    ) : (
+      <>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12, marginBottom: 24 }}>
+          {cmdClusters
+            .filter(c => {
+              const f = cmdFilter ?? 'all';
+              if (f === 'active')  return (c.today_team ?? []).length > 0;
+              if (f === 'blocked') return c.note && Number(c.allocated_area) === 0;
+              if (f === 'at_risk') return c.note && Number(c.allocated_area) > 0;
+              return true;
+            })
+            .filter(c => {
+              if (!cmdRegion || cmdRegion === 'all') return true;
+              return (c.districts ?? []).includes(cmdRegion);
+            })
+            .map(c => {
+              const totalAc = Number(c.total_area ?? 0);
+              const doneAc  = Number(c.allocated_area ?? 0);
+              const pct     = totalAc > 0 ? Math.round((doneAc / totalAc) * 100) : 0;
+              const remaining = totalAc - doneAc;
+              const hasWork = (c.today_team ?? []).length > 0;
+              const hasCritical = c.note && Number(c.allocated_area) === 0;
+              const hasWarning  = c.note && Number(c.allocated_area) > 0;
+              const borderColor = hasCritical ? '#fecaca' : hasWarning ? '#fed7aa' : '#e8e5de';
+              const pctColor    = pct > 60 ? '#16a34a' : pct > 25 ? '#f97316' : '#9ca3af';
+
+              return (
+                <div key={c.id}
+                  style={{ background: '#fff', borderRadius: 12, border: `1px solid ${borderColor}`, overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', cursor: 'pointer', transition: 'all 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.04)'; e.currentTarget.style.transform = 'none'; }}
+                >
+                  {/* Card header — clickable to open cluster */}
+                  <div onClick={() => navigate(`/cluster/${c.id}`)} style={{ padding: '14px 16px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1a1a' }}>{c.name}</div>
+                      <div style={{ fontSize: 11, color: '#7a7a72', marginTop: 2 }}>
+                        {[...(c.districts ?? []), ...(c.talukas ?? [])].slice(0, 2).join(' · ')}
+                        {c.date_range?.start_date ? ` · Started ${c.date_range.start_date.slice(5).replace('-', ' ')}` : ''}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: pctColor }}>{pct}%</div>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div style={{ padding: '0 16px 10px' }} onClick={() => navigate(`/cluster/${c.id}`)}>
+                    <div style={{ background: '#f0ede7', borderRadius: 5, height: 5, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: pctColor, borderRadius: 5, transition: 'width 0.5s ease' }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, fontSize: 11, color: '#7a7a72' }}>
+                      <span>{doneAc.toFixed(2)} / {totalAc.toFixed(2)} ac</span>
+                      <span style={{ fontWeight: 600, color: remaining > 20 ? '#f97316' : '#7a7a72' }}>{remaining.toFixed(1)} ac left</span>
+                    </div>
+                  </div>
+
+                  {/* Today's assignment */}
+                  <div style={{ padding: '10px 16px', margin: '0 10px', background: hasWork ? '#f0fdf4' : '#fafaf8', borderRadius: 8, marginBottom: 10 }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                      Today — {new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}
+                    </div>
+                    {hasWork ? (
+                      (c.today_team ?? []).map((t: any, i: number) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: i > 0 ? 4 : 0 }}>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>
+                              🧑‍🌾 {t.mukkadam_name} ({t.crew_size})
+                            </div>
+                            {t.farmer_name && (
+                              <div style={{ fontSize: 11, color: '#7a7a72', marginTop: 1 }}>Farmer: {t.farmer_name}</div>
+                            )}
+                          </div>
+                          {t.activity_name && (
+                            <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600, background: '#dcfce7', color: '#16a34a' }}>
+                              {t.activity_name}
+                            </span>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+  // No allocation today — show assigned mukkadams from cluster
+  (c.cluster_mukkadams ?? []).length > 0 ? (
+    (c.cluster_mukkadams as any[]).map((m: any, i: number) => {
+      const tc = m.mukkadam_type === 'updown'
+        ? { color: '#ea580c', label: 'Up-Down' }
+        : { color: '#16a34a', label: 'Permanent' };
+      return (
+        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: i > 0 ? 4 : 0 }}>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>
+            🧑‍🌾 <span style={{ fontWeight: 600, color: '#374151' }}>{m.mukkadam_name}</span>
+            {' '}
+            <span style={{ color: '#9ca3af' }}>({m.crew_size} crew)</span>
+          </div>
+          <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 7px', borderRadius: 4, background: m.mukkadam_type === 'updown' ? '#fff7ed' : '#f0fdf4', color: tc.color, border: `1px solid ${m.mukkadam_type === 'updown' ? '#fed7aa' : '#bbf7d0'}` }}>
+            {tc.label}
+          </span>
+        </div>
+      );
+    })
+  ) : (
+    <div style={{ fontSize: 12, color: '#a3a398' }}>🧑‍🌾 No team assigned</div>
+  )
+)}
+                  </div>
+
+                  {/* Alert strip */}
+                  {c.note && (
+                    <div style={{ padding: '8px 16px', fontSize: 11, lineHeight: 1.4, borderTop: '1px solid #f0ede7', color: hasCritical ? '#ef4444' : '#f97316', background: hasCritical ? '#fef2f2' : '#fff7ed' }}>
+                      {hasCritical ? '⛔' : '⚠️'} {c.note}
+                    </div>
+                  )}
+
+                  {/* Footer: stats + action buttons */}
+                  <div style={{ borderTop: '1px solid #f0ede7' }}>
+                    {/* Stats row */}
+                    <div style={{ display: 'flex', padding: '8px 16px', fontSize: 11, color: '#7a7a72' }}>
+                      <span style={{ flex: 1 }}>👥 {c.farmer_count} farmers</span>
+                      <span style={{ flex: 1 }}>📋 {c.activity_count} activities</span>
+                      <span>{c.mukkadam_count} teams</span>
+                    </div>
+
+                    {/* Action buttons */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, padding: '0 10px 10px' }}>
+                      <button
+                        onClick={e => { e.stopPropagation(); setCmdAddModal({ clusterId: c.id, clusterName: c.name, mode: 'farmer' }); }}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '7px 4px', borderRadius: 10, border: '1px solid #f0ede7', background: '#fafaf8', fontSize: 11, fontWeight: 600, color: '#374151', cursor: 'pointer', fontFamily: 'inherit', gap: 3 }}
+                      >
+                        <span style={{ width: 28, height: 28, borderRadius: '50%', background: '#ecfdf5', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>👤</span>
+                        Farmer
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); setEditModal(c); }}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '7px 4px', borderRadius: 10, border: '1px solid #f0ede7', background: '#fafaf8', fontSize: 11, fontWeight: 600, color: '#374151', cursor: 'pointer', fontFamily: 'inherit', gap: 3 }}
+                      >
+                        <span style={{ width: 28, height: 28, borderRadius: '50%', background: '#eef2ff', color: '#4f46e5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>✏️</span>
+                        Edit
+                      </button>
+                      <button
+                        onClick={e => { e.stopPropagation(); setCalendarClusterId(c.id); setCalendarClusterName(c.name); setShowCalendar(true); }}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '7px 4px', borderRadius: 10, border: '1px solid #f0ede7', background: '#fafaf8', fontSize: 11, fontWeight: 600, color: '#374151', cursor: 'pointer', fontFamily: 'inherit', gap: 3 }}
+                      >
+                        <span style={{ width: 28, height: 28, borderRadius: '50%', background: '#f0f9ff', color: '#0284c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>📅</span>
+                        Calendar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+
+        {/* ── Team Deployment Strip ── */}
+        {(() => {
+          // Collect all unique mukkadams across all clusters
+          const allMukkadams = new Map<number, any>();
+          cmdClusters.forEach(c => {
+            (c.cluster_mukkadams ?? []).forEach((m: any) => {
+              if (!allMukkadams.has(m.mukkadam_id)) {
+                allMukkadams.set(m.mukkadam_id, m);
+              }
+            });
+          });
+          const mukkadams = Array.from(allMukkadams.values());
+          if (!mukkadams.length) return null;
+
+          const typeColors: Record<string, any> = {
+            permanent: { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0', label: 'Permanent' },
+            updown:    { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa', label: 'Up-Down'   },
+          };
+
+          return (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', marginBottom: 10 }}>
+                🧑‍🤝‍🧑 Team Deployment — Today
+              </div>
+              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'hidden' }}>
+                {mukkadams.map((m, i) => {
+                  const tc = typeColors[m.mukkadam_type] ?? typeColors.permanent;
+                  const initials = m.mukkadam_name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+                  return (
+                    <div key={m.mukkadam_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: i < mukkadams.length - 1 ? '1px solid #f0ede7' : 'none', fontSize: 13 }}>
+                      {/* Avatar */}
+                      <div style={{ width: 36, height: 36, borderRadius: '50%', background: tc.bg, border: `1.5px solid ${tc.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: tc.color, flexShrink: 0 }}>
+                        {initials}
+                      </div>
+                      {/* Name + type */}
+                      <div style={{ minWidth: 160 }}>
+                        <div style={{ fontWeight: 600, color: '#1a1a1a' }}>{m.mukkadam_name}</div>
+                        <div style={{ fontSize: 11, color: '#7a7a72' }}>
+                          {m.crew_size} crew ·{' '}
+                          <span style={{ color: tc.color }}>{tc.label}</span>
+                        </div>
+                      </div>
+                      {/* Arrow */}
+                      <div style={{ color: '#7a7a72', fontSize: 18, flexShrink: 0 }}>→</div>
+                      {/* Today's clusters */}
+                      <div style={{ flex: 1, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {(m.today_clusters ?? []).length > 0 ? (
+  (m.today_clusters as string[]).map((clName, j) => (
+    <span key={j} style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0' }}>
+      🌿 {clName}
+    </span>
+  ))
+) : (
+  // No allocation today — show which clusters this mukkadam is assigned to
+  (() => {
+    const assignedClusters = cmdClusters.filter(c =>
+      (c.cluster_mukkadams ?? []).some((cm: any) => cm.mukkadam_id === m.mukkadam_id)
+    );
+    return assignedClusters.length > 0 ? (
+      assignedClusters.map((c, j) => (
+        <span key={j} style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: '#f5f5f4', color: '#78716c', border: '1px solid #e7e5e4' }}>
+          📍 {c.name}
+        </span>
+      ))
+    ) : (
+      <span style={{ fontSize: 12, color: '#a3a398' }}>No cluster assigned</span>
+    );
+  })()
+)}
+                      </div>
+                      {/* Weekly amount */}
+                      {/* {m.weekly_amount > 0 && (
+                        <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', flexShrink: 0 }}>
+                          ₹{Number(m.weekly_amount).toLocaleString('en-IN')}
+                        </div>
+                      )} */}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+      </>
+    )}
+
+    {/* ── Modals ── */}
+    {showCreateModal && (
+      <CreateClusterModal
+        states={states}
+        onClose={() => setShowCreateModal(false)}
+        onCreate={cluster => {
+          setCmdClusters(prev => [...prev, cluster]);
+          setShowCreateModal(false);
+          navigate(`/cluster/${cluster.id}`);
+        }}
+      />
+    )}
+    {editModal && (
+      <EditClusterModal
+        cluster={editModal}
+        onClose={() => setEditModal(null)}
+        onSaved={updated => {
+          setCmdClusters(prev => prev.map(c => c.id === updated.id ? updated : c));
+          setEditModal(null);
+        }}
+      />
+    )}
+    {cmdAddModal && (
+      <AddToClusterModal
+        clusterId={cmdAddModal.clusterId}
+        clusterName={cmdAddModal.clusterName}
+        mode={cmdAddModal.mode}
+        onClose={() => setCmdAddModal(null)}
+      />
+    )}
+  </>
+
+  ) : tab === 'payment' ? (
+  <>
+    {paymentClusterId ? (
+      // ── Drill-in: FarmerBillingPage embedded ──
+      <div style={{ height: 'calc(100vh - 120px)', overflow: 'hidden', margin: '-20px -24px' }}>
+        <div style={{ padding: '12px 24px', background: '#fff', borderBottom: `1px solid ${S.stone200}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button
+            onClick={() => setPaymentClusterId(null)}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 8, border: `1px solid ${S.stone200}`, background: '#fff', fontSize: 12, color: S.stone600, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            ← Back to Overview
+          </button>
+          <span style={{ fontSize: 13, fontWeight: 600, color: S.stone700 }}>
+            {cmdClusters.find(c => c.id === paymentClusterId)?.name ?? 'Cluster'}
+          </span>
+        </div>
+        <div style={{ height: 'calc(100% - 49px)', overflow: 'hidden' }}>
+          <FarmerBillingPage clusterId={paymentClusterId} />
+        </div>
+      </div>
+    ) : (
+      // ── Overview: cluster payment cards ──
+      <>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1.2px', color: S.stone400, marginBottom: 16 }}>
+          Payment Overview — All Clusters
+        </div>
+
+        {/* Summary strip */}
+        {(() => {
+          const totalDueAll       = cmdClusters.reduce((s, c) => s + Number(c.farmer_due ?? 0), 0);
+          const totalBilledAll    = cmdClusters.reduce((s, c) => s + Number(c.total_billed ?? 0), 0);
+          const totalCollectedAll = cmdClusters.reduce((s, c) => s + Number(c.total_collected ?? 0), 0);
+          const billsPendingAll   = cmdClusters.reduce((s, c) => s + Number(c.bills_pending ?? 0), 0);
+          const billsSentAll      = cmdClusters.reduce((s, c) => s + Number(c.bills_sent ?? 0), 0);
+          return (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 24 }}>
+              {[
+                { label: 'Total Billed',    val: `₹${Math.round(totalBilledAll).toLocaleString('en-IN')}`,    color: '#2471a3', bg: '#e8f0fe' },
+                { label: 'Total Collected', val: `₹${Math.round(totalCollectedAll).toLocaleString('en-IN')}`, color: '#27ae60', bg: '#e8f8f0' },
+                { label: 'Total Due',       val: `₹${Math.round(totalDueAll).toLocaleString('en-IN')}`,       color: '#e74c3c', bg: '#fde8e8' },
+                { label: 'Bills Pending',   val: String(billsPendingAll),  color: '#d68910', bg: '#fef3e2' },
+                { label: 'Bills Sent',      val: String(billsSentAll),     color: '#1e8449', bg: '#e8f8f0' },
+              ].map((s, i) => (
+                <div key={i} style={{ padding: '14px 18px', borderRadius: 12, background: s.bg, textAlign: 'center' }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: s.color }}>{s.val}</div>
+                  <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.6px', marginTop: 4 }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* Cluster cards grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 12 }}>
+          {cmdClusters.map(c => {
+            const due       = Number(c.farmer_due ?? 0);
+            const billed    = Number(c.total_billed ?? 0);
+            const collected = Number(c.total_collected ?? 0);
+            const pending   = Number(c.bills_pending ?? 0);
+            const sent      = Number(c.bills_sent ?? 0);
+            const response  = Number(c.response_pending ?? 0);
+
+            return (
+              <div key={c.id}
+                onClick={() => setPaymentClusterId(c.id)}
+                style={{ background: '#fff', borderRadius: 14, border: `1px solid ${pending > 0 ? '#fed7aa' : '#eef0f4'}`, padding: '18px 20px', cursor: 'pointer', transition: 'all 0.15s', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}
+                onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.04)'; e.currentTarget.style.transform = 'none'; }}
+              >
+                {/* Header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1a2e' }}>{c.name}</div>
+                    <div style={{ fontSize: 12, color: '#8892a4', marginTop: 2 }}>
+                      {c.farmer_count} farmers · {[...(c.districts ?? [])].slice(0, 1).join('')}
+                    </div>
+                  </div>
+                  {pending > 0 && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#d68910', background: '#fef3e2', border: '1px solid #fed7aa', padding: '3px 10px', borderRadius: 6 }}>
+                      🔔 {pending} pending
+                    </span>
+                  )}
+                </div>
+
+                {/* Financial metrics */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 14 }}>
+                  {[
+                    { label: 'Billed',    val: `₹${Math.round(billed).toLocaleString('en-IN')}`,    color: '#2471a3' },
+                    { label: 'Collected', val: `₹${Math.round(collected).toLocaleString('en-IN')}`, color: '#27ae60' },
+                    { label: 'Due',       val: due > 0.01 ? `₹${Math.round(due).toLocaleString('en-IN')}` : '✓ Clear', color: due > 0.01 ? '#e74c3c' : '#27ae60' },
+                  ].map((m, i) => (
+                    <div key={i} style={{ textAlign: 'center', padding: '8px 6px', borderRadius: 8, background: '#f8f9fb' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: m.color }}>{m.val}</div>
+                      <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px', marginTop: 2 }}>{m.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Bill status row */}
+                <div style={{ display: 'flex', gap: 8, borderTop: '1px solid #eef0f4', paddingTop: 12 }}>
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#d68910' }}>{pending}</div>
+                    <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Pending</div>
+                  </div>
+                  <div style={{ width: 1, background: '#eef0f4' }} />
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#1e8449' }}>{sent}</div>
+                    <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Sent</div>
+                  </div>
+                  <div style={{ width: 1, background: '#eef0f4' }} />
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: response > 0 ? '#e74c3c' : '#27ae60' }}>{response}</div>
+                    <div style={{ fontSize: 10, color: '#8892a4', textTransform: 'uppercase', letterSpacing: '.5px' }}>Awaiting</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>
+    )}
+  </>)
+  
+  : tab === 'mukkadams' ? (
+
           <>
             <table style={{ width: '100%', background: '#fff', borderRadius: 18, boxShadow: S.shadowCard, overflow: 'hidden', borderCollapse: 'separate', borderSpacing: 0 }}>
               <thead>

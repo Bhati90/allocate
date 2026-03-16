@@ -2709,8 +2709,15 @@ from django.db.models import Q
 from django.db.models import (
     Count, Min, Max, Q, OuterRef, Subquery, IntegerField
 )
+from django.db.models import (
+    OuterRef, Subquery, Count, IntegerField, Q,
+    DecimalField  # ← ADD
+)
 from django.db.models.functions import Coalesce
 from rest_framework import viewsets, filters
+
+from django.db.models import Value
+from decimal import Decimal
 class ClusterViewSet(viewsets.ModelViewSet):
     serializer_class = ClusterSerializer
 
@@ -2726,6 +2733,13 @@ class ClusterViewSet(viewsets.ModelViewSet):
         # Allocation has cluster FK directly — use that, much simpler & correct
         allocation_sq = Allocation.objects.filter(
             cluster_id=OuterRef('pk')
+        ).order_by().values('cluster_id').annotate(
+            c=models.Count('id')
+        ).values('c')
+
+        # ── bills sent count per cluster ─────────────────────────────────────────
+        bills_sent_sq = FarmerBillWebhookLog.objects.filter(
+            cluster_id=OuterRef('pk'),
         ).order_by().values('cluster_id').annotate(
             c=models.Count('id')
         ).values('c')
@@ -2746,6 +2760,22 @@ class ClusterViewSet(viewsets.ModelViewSet):
             c=models.Count('id')
         ).values('c')
 
+        # ── total area (sum of all JobActivity.total_area in cluster) ─────────────
+        total_area_sq = JobActivity.objects.filter(
+            plot__clusters__id=OuterRef('pk'),
+            total_area__gt=0,
+        ).order_by().values('plot__clusters__id').annotate(
+            s=models.Sum('total_area')
+        ).values('s')
+
+        # ── allocated area (sum of JobActivity.allocated_area in cluster) ─────────
+        allocated_area_sq = JobActivity.objects.filter(
+            plot__clusters__id=OuterRef('pk'),
+            total_area__gt=0,
+        ).order_by().values('plot__clusters__id').annotate(
+            s=models.Sum('allocated_area')
+        ).values('s')
+
         # ── date range ────────────────────────────────────────────────────────
         date_start_sq = JobActivity.objects.filter(
             job__clusters__id=OuterRef('pk'),
@@ -2758,12 +2788,25 @@ class ClusterViewSet(viewsets.ModelViewSet):
         ).order_by('-scheduled_date').values('scheduled_date')[:1]
 
         qs = Cluster.objects.annotate(
-            farmer_count     = Coalesce(Subquery(farmer_sq,     output_field=IntegerField()), 0),
-            mukkadam_count   = Coalesce(Subquery(mukkadam_sq,   output_field=IntegerField()), 0),
-            activity_count   = Coalesce(Subquery(activity_sq,   output_field=IntegerField()), 0),
-            allocation_count = Coalesce(Subquery(allocation_sq, output_field=IntegerField()), 0),
+            farmer_count     = Coalesce(Subquery(farmer_sq,        output_field=IntegerField()), 0),
+            mukkadam_count   = Coalesce(Subquery(mukkadam_sq,      output_field=IntegerField()), 0),
+            activity_count   = Coalesce(Subquery(activity_sq,      output_field=IntegerField()), 0),
+            allocation_count = Coalesce(Subquery(allocation_sq,    output_field=IntegerField()), 0),
             activity_start   = Subquery(date_start_sq),
             activity_end     = Subquery(date_end_sq),
+
+            bills_sent_count = Coalesce(
+                Subquery(bills_sent_sq, output_field=IntegerField()), 0
+            ),
+            # ── ADD THESE TWO ──
+            total_area     = Coalesce(
+                Subquery(total_area_sq,     output_field=DecimalField(max_digits=10, decimal_places=2)),
+                Value(Decimal('0'),         output_field=DecimalField(max_digits=10, decimal_places=2)),
+            ),
+            allocated_area = Coalesce(
+                Subquery(allocated_area_sq, output_field=DecimalField(max_digits=10, decimal_places=2)),
+                Value(Decimal('0'),         output_field=DecimalField(max_digits=10, decimal_places=2)),
+            ),
         ).order_by('name')
 
         # ── optional ?q= filter ───────────────────────────────────────────────
@@ -2905,6 +2948,7 @@ class ClusterViewSet(viewsets.ModelViewSet):
             'removed_by': request.user.username,
             'removed_at': now.isoformat(),
         })
+    
     @action(detail=True, methods=['get'], url_path='members')
     def members(self, request, pk=None):
         """
@@ -3045,20 +3089,139 @@ class ClusterViewSet(viewsets.ModelViewSet):
     #     return Response(result)
     
     def list(self, request, *args, **kwargs):
+        from datetime import date
+        from django.db.models import Sum
+        from decimal import Decimal
+
         qs = self.get_queryset()
         result = []
 
         for c in qs:
             serialized = self.get_serializer(c).data
-            serialized['farmer_due']     = '0'
-            serialized['mukkadam_due']   = '0'
-            serialized['farmer_count']   = c.farmer_count
-            serialized['mukkadam_count'] = c.mukkadam_count
+
+            # ── Financial summary ─────────────────────────────────────────
+            # Get all jobs in this cluster
+            job_ids = list(
+                Job.objects.filter(clusters=c).values_list('job_id', flat=True)
+            )
+
+            # ── Financial summary — mirrors cluster_payment_dashboard logic ──────────
+            from decimal import Decimal
+
+            cluster_jobs = Job.objects.filter(clusters=c).prefetch_related('booking')
+
+            total_billed    = Decimal('0')
+            total_collected = Decimal('0')
+
+            for job in cluster_jobs:
+                # Billed = sum of completed allocation area × rate for this job
+                job_allocs = Allocation.objects.filter(
+                    cluster=c,
+                    job_activity__job=job,
+                    work_status='completed',
+                ).select_related('job_activity')
+
+                for a in job_allocs:
+                    total_billed += (
+                        Decimal(str(a.allocated_area or 0)) *
+                        Decimal(str(a.job_activity.rate_per_acre or 0))
+                    ).quantize(Decimal('0.01'))
+
+                # Collected = confirmed FarmerPayments for this job's booking
+                try:
+                    booking = job.booking
+                    fps = FarmerPayment.objects.filter(
+                        booking=booking,
+                        paid_status=True,
+                    )
+                    total_collected += sum(Decimal(str(p.amount)) for p in fps)
+                except Exception:
+                    pass
+
+            total_due = total_billed - total_collected
+
+            serialized['total_billed']    = float(total_billed)
+            serialized['total_collected'] = float(total_collected)
+            serialized['farmer_due']      = float(max(Decimal('0'), total_due))
+            # ── Bill counts — derived from farmer billing data ────────────────────
+
+            # Get all farmers in this cluster
+            cluster_farmers = Farmer.objects.filter(clusters=c)
+            cluster_farmer_ids = [str(f.farmer_id) for f in cluster_farmers]
+
+            # SENT = distinct farmer+activity combos with a webhook log for this cluster
+            sent_combos = set(
+                FarmerBillWebhookLog.objects.filter(
+                    cluster=c,
+                ).values_list('farmer_id', 'activity_name').distinct()
+            )
+            bills_sent = len(sent_combos)
+
+            # AWAITING = sent bills where latest log still has balance_due > 0
+            response_pending = 0
+            for farmer_id, act_name in sent_combos:
+                latest_log = FarmerBillWebhookLog.objects.filter(
+                    cluster=c,
+                    farmer_id=farmer_id,
+                    activity_name=act_name,
+                ).order_by('-sent_at').first()
+                if latest_log and latest_log.balance_due and float(latest_log.balance_due) > 0.01:
+                    response_pending += 1
+
+            # PENDING = farmer+activity where ALL allocations are work_status='completed'
+            # but no bill has been sent yet
+            #
+            # Step 1: find all farmer+activity combos in this cluster
+            # that have at least one allocation with work_status='completed'
+            from collections import defaultdict
+
+            cluster_allocs = Allocation.objects.filter(
+                cluster=c,
+            ).select_related(
+                'job_activity__activity',
+                'job_activity__job__farmer',
+            ).values(
+                'job_activity__job__farmer__farmer_id',
+                'job_activity__activity__name',
+                'work_status',
+            )
+
+            # Group by farmer_id + activity_name → collect all statuses
+            grouped = defaultdict(list)
+            for row in cluster_allocs:
+                key = (
+                    str(row['job_activity__job__farmer__farmer_id']),
+                    row['job_activity__activity__name'],
+                )
+                grouped[key].append(row['work_status'])
+
+            # PENDING = all statuses are 'completed' AND combo not in sent_combos
+            bills_pending = sum(
+                1
+                for (farmer_id, act_name), statuses in grouped.items()
+                if len(statuses) > 0
+                and all(s == 'completed' for s in statuses)
+                and (farmer_id, act_name) not in sent_combos
+            )
+
+            # response_pending = bills sent but balance still due
+            response_pending = FarmerBillWebhookLog.objects.filter(
+                cluster=c,
+                balance_due__gt=0,
+            ).values('farmer_id', 'activity_name').distinct().count()
+
+            
+            serialized['mukkadam_due']     = '0'
+            
+            serialized['bills_sent']       = bills_sent
+            serialized['bills_pending']    = bills_pending
+            serialized['response_pending'] = response_pending
+            serialized['farmer_count']     = c.farmer_count
+            serialized['mukkadam_count']   = c.mukkadam_count
+
             result.append(serialized)
 
         return Response(result)
-    
-    
     @action(detail=True, methods=['post'])
     def add_activity(self, request, pk=None):
         """
@@ -5580,38 +5743,28 @@ def cluster_payment_dashboard(request, cluster_id):
                 report_submitted = any(a.report_submitted for a in act_allocations)
 
                 
+                # REPLACE the act_billable block
                 act_billable = Decimal('0')
-                # Always calculate billable based on allocated area × rate
-                # regardless of whether it's past or not
-                for a in act_allocations:
-                    bl = (
-                        getattr(a, 'payment_status', None) == 'dispute'
-                        and not getattr(a, 'use_actual_for_settlement', False)
-                        and getattr(a, 'admin_override_area', None) is None
-                        or (a.farmer_agreed is False 
-                            and getattr(a, 'admin_override_area', None) is None 
-                            and not getattr(a, 'use_actual_for_settlement', False))
-                    )
-                    if bl:
-                        continue
-                    if getattr(a, 'admin_override_area', None) is not None:
-                        eff = Decimal(str(a.admin_override_area))
-                    elif getattr(a, 'use_actual_for_settlement', False) and a.actual_area_done is not None:
-                        eff = Decimal(str(a.actual_area_done))
-                    elif a.farmer_agreed is True and a.actual_area_done is not None:
-                        eff = Decimal(str(a.actual_area_done))
-                    else:
-                        eff = Decimal(str(a.allocated_area or 0))
-                    if act.rate_per_acre:
-                        act_billable += (eff * Decimal(str(act.rate_per_acre))).quantize(Decimal('0.01'))
+                act_estimate = Decimal('0')
 
-                # If no allocations exist yet, use total_area as estimate
-                # If no allocations exist yet, use effective_total_area as estimate
+                for a in act_allocations:
+                    if a.work_status == 'completed':
+                        act_billable += (
+                            Decimal(str(a.allocated_area or 0)) * Decimal(str(act.rate_per_acre or 0))
+                        ).quantize(Decimal('0.01'))
+                    else:
+                        # pending/in_progress allocations → estimate
+                        act_estimate += (
+                            Decimal(str(a.allocated_area or 0)) * Decimal(str(act.rate_per_acre or 0))
+                        ).quantize(Decimal('0.01'))
+
+                # No allocations at all → full area is estimate
                 if not act_allocations and act.rate_per_acre:
-                    act_billable = (
+                    act_estimate = (
                         Decimal(str(effective_total_area)) * Decimal(str(act.rate_per_acre))
                     ).quantize(Decimal('0.01'))
-
+                # If no allocations exist yet, use effective_total_area as estimate
+                
                 total_billable += act_billable
                 # REPLACE the activity_rows.append() with these additional fields:
                 activity_rows.append({
@@ -5624,10 +5777,11 @@ def cluster_payment_dashboard(request, cluster_id):
                     'allocated_area':    float(act.allocated_area or 0),
                     'total_area':        float(effective_total_area),
                     'rate_per_acre':     float(act.rate_per_acre or 0),
-                    'billable_amount':   float(act_billable),
-                    'estimated_amount':  float(
-                        (Decimal(str(effective_total_area)) * Decimal(str(act.rate_per_acre or 0))).quantize(Decimal('0.01'))
-                    ),
+                    'billable_amount': float(act_billable),   # only completed
+'estimated_amount': float(act_estimate),  # pending/not started
+                    # 'estimated_amount':  float(
+                    #     (Decimal(str(effective_total_area)) * Decimal(str(act.rate_per_acre or 0))).quantize(Decimal('0.01'))
+                    # ),
                     'allocation_status': act.allocation_status,
                     'actual_area_done':  float(actual_area) if actual_area is not None else None,
                     'actual_crew_size':  actual_crew,
@@ -5696,7 +5850,25 @@ def cluster_payment_dashboard(request, cluster_id):
             balance_due  = total_billable - total_paid
             booking_total = Decimal(str(booking.total_amount)) if booking else Decimal('0')
             final_gap    = (booking_total - total_paid) if all_past and booking else Decimal('0')
+            bill_logs = FarmerBillWebhookLog.objects.filter(
+                farmer_id=str(farmer.farmer_id),
+                job_id=str(job.job_id),
+            ).order_by('-sent_at')
 
+            bill_sent_map = {}
+            for log in bill_logs:
+                act_key = log.activity_name or ''
+                if act_key and act_key not in bill_sent_map:
+                    bill_sent_map[act_key] = {
+                        'sent':           True,
+                        'sent_at':        log.sent_at.isoformat() if log.sent_at else None,
+                        'sent_by':        log.sent_by_name or '—',
+                        'webhook_status': log.webhook_status,
+                        'total_billed':   float(log.total_billed or 0),
+                        'total_paid':     float(log.total_paid or 0),
+                        'balance_due':    float(log.balance_due or 0),
+                        'full_payload':   log.full_payload or {},
+                    }
             job_rows.append({
                 'job_id':               job.job_id,
                 'crop_name':            job.crop_name,
@@ -5711,10 +5883,7 @@ def cluster_payment_dashboard(request, cluster_id):
                 'booking_id':           booking.booking_id if booking else None,
                 'total_job_amount':     float(booking_total),
 
-                'bill_sent':            FarmerBillWebhookLog.objects.filter(   # ← ADD THIS
-                        farmer_id=str(farmer.farmer_id),
-                        job_id=str(job.job_id),
-                    ).exists(),
+                'bill_sent_map': bill_sent_map,
                 'activities':           activity_rows,
                 'summary': {
                     'total_billable_so_far': float(total_billable),
@@ -6237,6 +6406,8 @@ def cluster_payment_dashboard(request, cluster_id):
         'farmers':            farmer_data,
         'mukkadams':          mukkadam_data,
     })
+
+
 
 @api_view(['POST'])
 @permission_classes([AllowAny])

@@ -1161,7 +1161,9 @@ class FarmerBillWebhookLog(models.Model):
     sent_by_name      = models.CharField(max_length=255, blank=True, null=True)
     sent_by_email     = models.CharField(max_length=255, blank=True, null=True)
     sent_by_id        = models.CharField(max_length=100, blank=True, null=True)
-
+    # In FarmerBillWebhookLog model
+    activity_name = models.CharField(max_length=255, blank=True, null=True)
+    sent_at       = models.DateTimeField(auto_now_add=True, blank=True,null = True)  # if not already there
     # ── Farmer ───────────────────────────────────────────────
     farmer_id         = models.CharField(max_length=100, blank=True, null=True)
     farmer_name       = models.CharField(max_length=255, blank=True, null=True)
@@ -1172,6 +1174,14 @@ class FarmerBillWebhookLog(models.Model):
     crop_name         = models.CharField(max_length=255, blank=True, null=True)
     plot_name         = models.CharField(max_length=255, blank=True, null=True)
 
+
+    # In FarmerBillWebhookLog model, add this field:
+    cluster = models.ForeignKey(
+        'Cluster',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='bill_webhook_logs',
+    )
     # ── Mukkadam ─────────────────────────────────────────────
     mukkadam_name     = models.CharField(max_length=255, blank=True, null=True)
     mukkadam_mobile   = models.CharField(max_length=50,  blank=True, null=True)
@@ -1326,6 +1336,8 @@ class AllocationAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.action} — alloc#{self.allocation_id} by {self.changed_by} at {self.changed_at}"
+
+
 class Allocation(models.Model):
     """
     Core allocation model - assigns job activities to mukkadams
