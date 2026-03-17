@@ -5401,10 +5401,10 @@ const varietyOptions = [
 
   
   currentMode === 'payments' ? (
-  <Navigate to={`/payment?cluster=${clusterId}`} replace />
+  // <Navigate to={`/payment?cluster=${clusterId}`} replace />
 
   // currentMode === 'payments' ? (
-  //   <PaymentDashboard clusterId={clusterId} />
+    <PaymentDashboard clusterId={clusterId} />
   ) : currentMode === 'insights' ? (
 // ✅ use this instead
 <ClusterInsightsContainer clusterId={clusterId} />

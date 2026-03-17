@@ -533,7 +533,21 @@ class Job(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.job_id} - {self.farmer.farmer_name}"
+        farmer_name = None
+        try:
+            if self.farmer_id:
+                farmer_name = getattr(self.farmer, "farmer_name", None)
+        except Exception:
+            farmer_name = None
+
+        if farmer_name:
+            return f"{self.job_id} - {farmer_name}"
+
+        if self.crop_name:
+            return f"{self.job_id} - {self.crop_name}"
+
+        return str(self.job_id)
+
 
 # models.py
 class JobActivity(models.Model):
@@ -1951,14 +1965,21 @@ class MukkadamMiscCost(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     reason = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
-    proof_s3_key = models.CharField(max_length=500, blank=True, null=True)  # NEW
+    proof_s3_key = models.CharField(max_length=500, blank=True, null=True)
+
+    # ── NEW ──────────────────────────────────────────────────────
+    verified    = models.BooleanField(default=False)
+    verified_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='verified_misc_costs'
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
+    # ─────────────────────────────────────────────────────────────
 
     class Meta:
         db_table = 'mukkadam_misc_costs'
         ordering = ['-created_at']
-
-    def __str__(self):
-        return f"{self.mukkadam.mukkadam_name} - ₹{self.amount} - {self.reason}"
 
 
 

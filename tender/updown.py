@@ -207,6 +207,8 @@ def create_updown_settlement(mukkadam, allocation, assignment):
     job  = ja.job
     plot = ja.plot
 
+    cluster = assignment.cluster
+
     # Gross for THIS allocation only
     area  = Decimal(str(allocation.actual_area_done or allocation.allocated_area or 0))
     rate  = Decimal(str(allocation.mukkadam_rate or 0))
@@ -235,9 +237,10 @@ def create_updown_settlement(mukkadam, allocation, assignment):
             settlement.net_payable        = net
             settlement.calculated_at      = timezone.now()
             settlement.status             = status
+            settlement.cluster = cluster
             settlement.save(update_fields=[
                 'gross_amount', 'transport_deducted', 'payable_amount',
-                'net_payable', 'calculated_at', 'status',
+                'net_payable', 'calculated_at', 'status', 'cluster',
             ])
         return settlement
 
@@ -246,6 +249,7 @@ def create_updown_settlement(mukkadam, allocation, assignment):
             mukkadam              = mukkadam,
             job                   = job,
             plot                  = plot,
+            cluster = cluster, 
             allocation            = allocation,   # ← unique per allocation
             gross_amount          = gross,
             transport_deducted    = transport,

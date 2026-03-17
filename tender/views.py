@@ -376,6 +376,28 @@ def cluster_insights(request):
         c_alloc_area = JobActivity.objects.filter(
             plot__clusters=c, total_area__gt=0
         ).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
+        # ── Activity-wise pending breakdown ──────────────────────────────────
+        from django.db.models import Sum
+
+        activity_pending = (
+            JobActivity.objects
+            .filter(
+                plot__clusters=c,
+                total_area__gt=0,
+                allocation_status='pending',
+            )
+            .values('activity__name')          # group by activity name
+            .annotate(pending_area=Sum('total_area'))
+            .order_by('-pending_area')
+        )
+
+        activity_breakdown = [
+            {
+                'activity': row['activity__name'] or 'Unknown',
+                'pending_area': float(row['pending_area']),
+            }
+            for row in activity_pending
+        ]
 
         c_farmers = Farmer.objects.filter(clusters=c).count()
         c_jobs    = Job.objects.filter(clusters=c).distinct().count()
@@ -494,14 +516,33 @@ def cluster_insights(request):
                 total_area__gt=0,
             ).count()
 
+            unalloc_area = JobActivity.objects.filter(
+                plot__clusters=c,
+                scheduled_date=d,
+                allocation_status='pending',
+                total_area__gt=0,
+            ).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
+
+            alloc_area = JobActivity.objects.filter(
+                plot__clusters=c,
+                scheduled_date=d,
+                allocation_status='allocated',
+                total_area__gt=0,
+            ).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
+
+            total_day_area = unalloc_area + alloc_area
+
             week_plan.append({
                 'date':            str(d),
                 'label':           fmt_date(d),
                 'day_name':        d.strftime('%a'),
                 'is_today':        d == today,
                 'teams':           teams,
-                'available_teams': available_teams,   # ← add this
-                'unallocated':     unalloc_count,
+                'available_teams': available_teams,
+                'unallocated':     int(unalloc_area),        # keep old field intact
+                'total_area':      float(total_day_area),
+                'allocated_area':  float(alloc_area),
+                'pending_area':    float(unalloc_area),
             })
         cluster_data.append({
             'id':             c.id,
@@ -513,6 +554,7 @@ def cluster_insights(request):
             'jobs':           c_jobs,
             'total_area':     float(c_total_area),
             'allocated_area': float(c_alloc_area),
+            'activity_breakdown': activity_breakdown,   # ← add this line
             'pending_area':   float(c_total_area - c_alloc_area),
             'pct':            round(float(c_alloc_area / c_total_area * 100), 1) if c_total_area > 0 else 0,
             'today': {
@@ -525,6 +567,9 @@ def cluster_insights(request):
             },
             'week_plan': week_plan,
         })
+
+
+
 
     # Sort: red first, yellow, green
     status_order = {'red': 0, 'yellow': 1, 'green': 2}
@@ -6990,26 +7035,212 @@ def cluster_payment_dashboard(request, cluster_id):
     })
 
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def mukkadam_payment_overview(request):
+    from datetime import date, timedelta
+    from decimal import Decimal
+    from django.db.models import Sum
+
+    today    = date.today()
+    week_ago = today - timedelta(days=7)
+
+    # ── 1. All active assignments ──────────────────────────────────────────
+    active_assignments = ClusterMukkadamAssignment.objects.filter(
+        is_active=True
+    ).select_related('mukkadam', 'cluster')
+
+    active_count = active_assignments.values('mukkadam_id').distinct().count()
+
+    # ── 2. Weekly due ──────────────────────────────────────────────────────
+    # Mukkadams whose weekly_payment_day matches today's weekday
+    # and haven't been paid today
+    weekly_due_list = []
+    for asgn in active_assignments:
+        if asgn.weekly_payment_day is None:
+            continue
+        already_paid = MukkadamWeeklyPayment.objects.filter(
+            assignment=asgn,
+            payment_date=today,
+        ).exists()
+        if not already_paid:
+            # Check if today is their payment day OR overdue
+            days_since_last = None
+            last_payment = MukkadamWeeklyPayment.objects.filter(
+                assignment=asgn,
+            ).order_by('-payment_date').first()
+
+            if last_payment:
+                days_since_last = (today - last_payment.payment_date).days
+            
+            is_due_today   = today.weekday() == asgn.weekly_payment_day
+            is_overdue     = last_payment and days_since_last and days_since_last > 7
+
+            if is_due_today or is_overdue:
+                weekly_due_list.append({
+                    'mukkadam_id':   asgn.mukkadam.mukkadam_id,
+                    'mukkadam_name': asgn.mukkadam.mukkadam_name,
+                    'cluster_id':    asgn.cluster.id,
+                    'cluster_name':  asgn.cluster.name,
+                    'assignment_id': asgn.id,
+                    'weekly_amount': float(asgn.weekly_amount),
+                    'days_overdue':  days_since_last - 7 if is_overdue else 0,
+                    'mukkadam_type': asgn.mukkadam_type,
+                })
+
+    weekly_due_amount = sum(x['weekly_amount'] for x in weekly_due_list)
+
+    pending_settlements = MukkadamJobSettlement.objects.filter(
+        status='calculated',
+        net_payable__gt=0,
+    ).select_related('mukkadam', 'job', 'cluster').prefetch_related('job__clusters')
+
+    settlement_list = []
+    for s in pending_settlements:
+        cluster_obj = s.cluster or (s.job.clusters.first() if s.job else None)
+        settlement_list.append({
+            'mukkadam_id':   s.mukkadam.mukkadam_id,
+            'mukkadam_name': s.mukkadam.mukkadam_name,
+            'cluster_id':    cluster_obj.id if cluster_obj else None,
+            'cluster_name':  cluster_obj.name if cluster_obj else '—',
+            'job_id':        s.job.job_id,
+            'net_payable':   float(s.net_payable),
+            'gross_amount':  float(s.gross_amount),
+            'calculated_at': str(s.calculated_at.date()) if s.calculated_at else None,
+            'mukkadam_type': s.mukkadam_type if hasattr(s, 'mukkadam_type') else 'permanent',
+        })
+
+    settlement_pending_amount = sum(x['net_payable'] for x in settlement_list)
+
+    # ── 4. Total paid out ──────────────────────────────────────────────────
+    total_mukkadam_payments = MukkadamPayment.objects.aggregate(
+        s=Sum('amount')
+    )['s'] or Decimal('0')
+
+    total_weekly_payments = MukkadamWeeklyPayment.objects.aggregate(
+        s=Sum('amount')
+    )['s'] or Decimal('0')
+
+    total_paid_out = float(total_mukkadam_payments + total_weekly_payments)
+
+    # ── 5. Unverified misc costs (verification queue) ─────────────────────
+    unverified_misc = MukkadamMiscCost.objects.filter(
+        verified=False,
+    ).select_related('mukkadam', 'job')
+
+    verification_queue = []
+    for cost in unverified_misc:
+        cluster_obj = cost.job.clusters.first() if cost.job else None
+        verification_queue.append({
+            'cost_id':       cost.id,
+            'mukkadam_id':   cost.mukkadam.mukkadam_id,
+            'mukkadam_name': cost.mukkadam.mukkadam_name,
+            'cluster_name':  cluster_obj.name if cluster_obj else '—',
+            'cluster_id':    cluster_obj.id if cluster_obj else None,
+            'job_id':        cost.job.job_id if cost.job else None,
+            'amount':        float(cost.amount),
+            'reason':        cost.reason,
+            'created_at':    str(cost.created_at.date()),
+        })
+
+    # ── 6. Per-cluster billing summary ────────────────────────────────────
+    clusters = Cluster.objects.filter(
+        mukkadam_assignments__is_active=True
+    ).distinct()
+
+    cluster_billing = []
+    for c in clusters:
+        c_assignments = ClusterMukkadamAssignment.objects.filter(
+            cluster=c, is_active=True
+        ).select_related('mukkadam')
+
+        c_mukkadam_ids = list(
+            c_assignments.values_list('mukkadam__mukkadam_id', flat=True).distinct()
+        )
+
+        # Weekly paid for this cluster
+        c_weekly_paid = MukkadamWeeklyPayment.objects.filter(
+            assignment__cluster=c,
+        ).aggregate(s=Sum('amount'))['s'] or 0
+
+        # Settlement paid
+        c_settled = MukkadamJobSettlement.objects.filter(
+            cluster=c, status='paid'
+        ).aggregate(s=Sum('net_payable'))['s'] or 0
+
+        # Settlement pending
+        c_pending = MukkadamJobSettlement.objects.filter(
+            cluster=c, status='calculated', net_payable__gt=0
+        ).aggregate(s=Sum('net_payable'))['s'] or 0
+
+        # Weekly due today
+        c_weekly_due = sum(
+            x['weekly_amount'] for x in weekly_due_list
+            if x['cluster_id'] == c.id
+        )
+
+        cluster_billing.append({
+            'cluster_id':        c.id,
+            'cluster_name':      c.name,
+            'mukkadams':         len(c_mukkadam_ids),
+            'weekly_paid':       float(c_weekly_paid),
+            'settlement_paid':   float(c_settled),
+            'settlement_pending': float(c_pending or 0),
+            'weekly_due':        c_weekly_due,
+            'total_outflow':     float(c_weekly_paid) + float(c_settled),
+        })
+
+    # ── 7. Recent weekly payments (last 15) ───────────────────────────────
+    recent_weekly = MukkadamWeeklyPayment.objects.select_related(
+        'assignment__mukkadam', 'assignment__cluster'
+    ).order_by('-payment_date')[:15]
+
+    recent_payments = []
+    for w in recent_weekly:
+        recent_payments.append({
+            'mukkadam_name': w.assignment.mukkadam.mukkadam_name,
+            'cluster_name':  w.assignment.cluster.name,
+            'amount':        float(w.amount),
+            'payment_date':  str(w.payment_date),
+            'mode':          w.mode,
+            'crew_size':     w.crew_size_on_date,
+        })
+
+    return Response({
+        'today': str(today),
+        'pipeline': {
+            'weekly_due':           {'count': len(weekly_due_list),    'amount': weekly_due_amount},
+            'settlement_pending':   {'count': len(settlement_list),    'amount': settlement_pending_amount},
+            'total_paid_out':       {'count': active_count,            'amount': total_paid_out},
+            'mukkadams_active':     {'count': active_count,            'amount': 0},
+        },
+        'weekly_due_list':      weekly_due_list,
+        'settlement_list':      settlement_list,
+        'verification_queue':   verification_queue,
+        'cluster_billing':      cluster_billing,
+        'recent_payments':      recent_payments,
+    })
+
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def add_weekly_payment(request):
+    from decimal import Decimal
+
     assignment_id = request.data.get('assignment_id')
     amount        = request.data.get('amount')
     payment_date  = request.data.get('payment_date')
     mode          = request.data.get('mode', 'CASH')
     notes         = request.data.get('notes', '')
-    proof_s3_key  = request.data.get('proof_s3_key')
 
-    if not proof_s3_key:
-        return Response({'error': 'Payment proof is required'}, status=400)
+    if not assignment_id or not amount or not payment_date:
+        return Response({'error': 'assignment_id, amount and payment_date are required'}, status=400)
 
     try:
         assignment = ClusterMukkadamAssignment.objects.get(id=assignment_id)
     except ClusterMukkadamAssignment.DoesNotExist:
         return Response({'error': 'Assignment not found'}, status=404)
 
-    from decimal import Decimal
     weekly_payment, created = MukkadamWeeklyPayment.objects.get_or_create(
         assignment   = assignment,
         payment_date = payment_date,
@@ -7019,7 +7250,6 @@ def add_weekly_payment(request):
             'is_auto_generated': False,
             'notes':             notes,
             'mode':              mode,
-            'proof_s3_key':      proof_s3_key,
         }
     )
 
@@ -7027,11 +7257,41 @@ def add_weekly_payment(request):
         return Response({'error': 'Weekly payment already recorded for this date'}, status=400)
 
     return Response({
-        'message':        'Weekly payment recorded',
-        'payment_date':   str(weekly_payment.payment_date),
-        'amount':         float(weekly_payment.amount),
+        'success':      True,
+        'message':      'Weekly payment recorded',
+        'payment_date': str(weekly_payment.payment_date),
+        'amount':       float(weekly_payment.amount),
     })
 
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_misc_cost(request, cost_id):
+    from django.utils import timezone
+
+    # Check admin role
+    user = request.user
+    if not user.is_authenticated:
+        return Response({'error': 'Authentication required'}, status=401)
+
+    try:
+        profile = user.profile
+        if profile.role != 'admin':
+            return Response({'error': 'Only admins can verify misc costs'}, status=403)
+    except Exception:
+        return Response({'error': 'User profile not found'}, status=403)
+
+    try:
+        cost = MukkadamMiscCost.objects.get(id=cost_id)
+    except MukkadamMiscCost.DoesNotExist:
+        return Response({'error': 'Misc cost not found'}, status=404)
+
+    cost.verified    = True
+    cost.verified_by = user
+    cost.verified_at = timezone.now()
+    cost.save(update_fields=['verified', 'verified_by', 'verified_at'])
+
+    return Response({'success': True, 'message': 'Misc cost verified'})
 
 import uuid
 import boto3
@@ -7214,15 +7474,56 @@ def verify_start_otp(request):
 @permission_classes([AllowAny])
 def mark_allocation_complete(request, allocation_id):
     try:
-        allocation = Allocation.objects.get(id=allocation_id)
+        allocation = Allocation.objects.select_related(
+            'job_activity__activity',
+            'job_activity__plot',
+            'job_activity__job',
+            'job_activity__job__farmer',
+            'cluster',
+            'mukkadam',
+        ).get(id=allocation_id)
     except Allocation.DoesNotExist:
         return Response({'error': 'Allocation not found'}, status=404)
 
-    allocation.work_status = 'completed'
-    allocation.status      = 'completed'
-    allocation.save(update_fields=['work_status', 'status', 'updated_at'])
+    # ── Idempotent — already completed ───────────────────────────────
+    if allocation.work_status == 'completed':
+        return Response({'already_completed': True, 'allocation_id': allocation.id})
 
+    mukkadam   = allocation.mukkadam
+    actual_area = request.data.get('actual_area_done')
+    actual_crew = request.data.get('actual_crew_size')
+
+    from .updown import create_updown_settlement, _get_updown_assignment
+
+    with transaction.atomic():
+        update_fields = ['work_status', 'status']
+        allocation.work_status = 'completed'
+        allocation.status      = 'completed'
+
+        if actual_area is not None:
+            allocation.actual_area_done = Decimal(str(actual_area))
+            update_fields.append('actual_area_done')
+        if actual_crew is not None:
+            allocation.actual_crew_size = int(actual_crew)
+            update_fields.append('actual_crew_size')
+
+        allocation.save(update_fields=update_fields)
+
+        # ── Updown check via assignment (mukkadam_type is on assignment, not mukkadam model) ──
+        updown_assignment = (
+            _get_updown_assignment(mukkadam, cluster_id=allocation.cluster_id)
+            if mukkadam else None
+        )
+
+        if updown_assignment:
+            # Updown — create settlement directly, bypass signal
+            settlement = create_updown_settlement(mukkadam, allocation, updown_assignment)
+        elif mukkadam:
+            # Permanent — set farmer_agreed to fire signal chain
+            allocation.farmer_agreed = True
+            allocation.save(update_fields=['farmer_agreed'])
     return Response({'success': True, 'allocation_id': allocation.id})
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def submit_day_end_report(request):

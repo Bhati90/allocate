@@ -10,7 +10,7 @@ from .views import (
     LeaveViewSet,ExtraWorkerViewSet,send_start_otp,verify_start_otp,submit_day_end_report,verify_end_otp,resolve_dispute,
     MukkadamViewSet,cluster_payment_dashboard,get_payment_proof_presign,save_payment_proof,
     AllocationViewSet,FarmerViewSet,mukkadam_all_settlements,mukkadam_misc_cost_delete,mukkadam_misc_costs,
-    MukkadamActivityRateViewSet,add_weekly_payment,UserProfileView,UserListAPIView,
+    MukkadamActivityRateViewSet,add_weekly_payment,UserProfileView,UserListAPIView,mukkadam_payment_overview,verify_misc_cost,
     PlanningViewSet,search_farmers_for_cluster,search_mukkadams_for_cluster,add_farmer_plots_to_cluster,add_mukkadam_to_cluster,
     PlotViewSet,tender_dashboard,list_all_settlements,pay_mukkadam_settlement,add_misc_cost,
     get_cluster_plots,get_districts,get_states,get_talukas,get_villages,UserSearchView,cluster_insights,
@@ -136,6 +136,11 @@ path('api/activity-dashboard/', activity_dashboard, name='activity-dashboard'),
 
 # ── Weekly payment (UPDATE — needs mode/notes/proof_s3_key) ─────────────────
 path('api/weekly-payment/add/',                  add_weekly_payment),           # already exists, update view
+
+path('api/mukkadam-payment-overview/', mukkadam_payment_overview, name='mukkadam_payment_overview'),
+path('api/mukkadam-weekly-payment/',  add_weekly_payment,          name='add_weekly_payment'),
+path('api/mukkadam-misc-cost/<int:cost_id>/verify/',verify_misc_cost, name='verify_misc_cost'),
+
 
 # ── Misc costs (UPDATE — needs proof_s3_key) ────────────────────────────────
 path('api/mukkadam/<int:mukkadam_id>/job/<str:job_id>/misc/',     add_misc_cost),
