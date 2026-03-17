@@ -438,7 +438,7 @@ def cluster_insights(request):
             today_msg = c.note if has_note else (today_teams or 'Active today')
         else:
             today_msg = c.note if has_note else (
-                f"No allocation — Assigned: {', '.join(assigned_names)}" if assigned_names else 'No team assigned'
+                f"No allocation — Assigned: " if assigned_names else 'No team assigned'
             )
 
  # ── Tomorrow status ───────────────────────────────────────────────
@@ -2410,16 +2410,42 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             'new_date': new_date,
             'new_area': float(area),
         }, status=200)
+# views.py
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def mukkadam_misc_no_job(request, mukkadam_id):
+    try:
+        mukkadam = Mukkadam.objects.get(pk=mukkadam_id)
+    except Mukkadam.DoesNotExist:
+        return Response({'error': 'Mukkadam not found'}, status=404)
 
+    amount  = request.data.get('amount')
+    reason  = request.data.get('reason', '').strip()
+
+    if not amount or float(amount) <= 0:
+        return Response({'error': 'Invalid amount'}, status=400)
+    if not reason:
+        return Response({'error': 'Reason is required'}, status=400)
+
+    cost = MukkadamMiscCost.objects.create(
+        mukkadam=mukkadam,
+        job=None,           # no job required
+        amount=amount,
+        reason=reason,
+    )
+
+    return Response({
+        'id':         cost.id,
+        'amount':     float(cost.amount),
+        'reason':     cost.reason,
+        'created_at': str(cost.created_at.date()),
+        'verified':   cost.verified,
+    }, status=201)
 # views.py - Update MukkadamViewSet
 # views.py - Add new viewset
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def mukkadam_misc_costs(request, mukkadam_id, job_id):
-    """
-    GET  /api/mukkadam/<id>/job/<job_id>/misc/
-    POST /api/mukkadam/<id>/job/<job_id>/misc/
-    """
     try:
         mukkadam = Mukkadam.objects.get(pk=mukkadam_id)
         job = Job.objects.get(job_id=job_id)
@@ -2429,15 +2455,17 @@ def mukkadam_misc_costs(request, mukkadam_id, job_id):
     if request.method == 'GET':
         costs = MukkadamMiscCost.objects.filter(mukkadam=mukkadam, job=job)
         return Response([{
-            'id': c.id,
-            'amount': float(c.amount),
-            'reason': c.reason,
+            'id':         c.id,
+            'amount':     float(c.amount),
+            'reason':     c.reason,
             'created_at': str(c.created_at.date()),
+            'verified':   c.verified,             # ← add this
         } for c in costs])
 
-    # POST — add new misc cost
-    amount = request.data.get('amount')
-    reason = request.data.get('reason', '').strip()
+    # POST
+    amount       = request.data.get('amount')
+    reason       = request.data.get('reason', '').strip()
+    proof_s3_key = request.data.get('proof_s3_key', None)   # ← optional
 
     if not amount or float(amount) <= 0:
         return Response({'error': 'Invalid amount'}, status=400)
@@ -2447,19 +2475,18 @@ def mukkadam_misc_costs(request, mukkadam_id, job_id):
     cost = MukkadamMiscCost.objects.create(
         mukkadam=mukkadam, job=job,
         amount=amount, reason=reason,
+        proof_s3_key=proof_s3_key,   # ← None if not provided, that's fine
     )
 
-    # Recalculate settlement net_payable
     _recalculate_settlement_misc(mukkadam, job)
 
     return Response({
-        'id': cost.id,
-        'amount': float(cost.amount),
-        'reason': cost.reason,
+        'id':         cost.id,
+        'amount':     float(cost.amount),
+        'reason':     cost.reason,
         'created_at': str(cost.created_at.date()),
+        'verified':   cost.verified,              # ← add this
     }, status=201)
-
-
 @api_view(['DELETE'])
 @permission_classes([AllowAny])
 def mukkadam_misc_cost_delete(request, mukkadam_id, job_id, cost_id):
@@ -8235,35 +8262,36 @@ class MakeCallViews(APIView):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def pay_mukkadam_settlement(request, mukkadam_id, job_id):
-    mode         = request.data.get('mode', 'CASH')
-    notes        = request.data.get('notes', '')
-    proof_s3_key = request.data.get('proof_s3_key')
+    mode  = request.data.get('mode', 'CASH')
+    notes = request.data.get('notes', '')
 
-    if not proof_s3_key:
-        return Response({'error': 'Payment proof is required'}, status=400)
-
+    # Support updown mukkadams: multiple settlements per job — pay first unpaid one
     try:
-        settlement = MukkadamJobSettlement.objects.get(
-            mukkadam_id=mukkadam_id, job__job_id=job_id
-        )
-    except MukkadamJobSettlement.DoesNotExist:
+        settlement = MukkadamJobSettlement.objects.filter(
+            mukkadam_id=mukkadam_id, job__job_id=job_id, status='calculated'
+        ).first()
+        if not settlement:
+            # Check if already paid
+            already = MukkadamJobSettlement.objects.filter(
+                mukkadam_id=mukkadam_id, job__job_id=job_id, status='paid'
+            ).exists()
+            if already:
+                return Response({'error': 'Already paid'}, status=400)
+            return Response({'error': 'Settlement not found'}, status=404)
+    except Exception:
         return Response({'error': 'Settlement not found'}, status=404)
-
-    if settlement.status == 'paid':
-        return Response({'error': 'Already paid'}, status=400)
 
     import time
     from django.utils import timezone
 
     payment = MukkadamPayment.objects.create(
-        mukkadam     = settlement.mukkadam,
-        settlement   = settlement,
-        payment_id   = str(int(time.time() * 1000)),
-        mode         = mode,
-        amount       = settlement.net_payable,
-        notes        = notes,
-        proof_s3_key = proof_s3_key,
-        paid_at      = timezone.now(),
+        mukkadam   = settlement.mukkadam,
+        settlement = settlement,
+        payment_id = str(int(time.time() * 1000)),
+        mode       = mode,
+        amount     = settlement.net_payable,
+        notes      = notes,
+        paid_at    = timezone.now(),
     )
 
     settlement.status  = 'paid'
@@ -8286,9 +8314,6 @@ def add_misc_cost(request, mukkadam_id, job_id):
         return Response({'error': 'Valid amount required'}, status=400)
     if not reason:
         return Response({'error': 'Reason is required'}, status=400)
-    if not proof_s3_key:
-        return Response({'error': 'Proof is required'}, status=400)
-
     try:
         mukkadam = Mukkadam.objects.get(id=mukkadam_id)
         job      = Job.objects.get(job_id=job_id)
@@ -8301,15 +8326,16 @@ def add_misc_cost(request, mukkadam_id, job_id):
         job          = job,
         amount       = Decimal(str(amount)),
         reason       = reason,
-        proof_s3_key = proof_s3_key,
+        proof_s3_key = proof_s3_key or None,
     )
+
+    _recalculate_settlement_misc(mukkadam, job)
 
     return Response({
         'id':         cost.id,
         'amount':     float(cost.amount),
         'reason':     cost.reason,
         'created_at': str(cost.created_at),
-        'proof_url':  get_presigned_url(proof_s3_key),
     })
 
 

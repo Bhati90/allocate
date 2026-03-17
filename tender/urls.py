@@ -12,7 +12,7 @@ from .views import (
     AllocationViewSet,FarmerViewSet,mukkadam_all_settlements,mukkadam_misc_cost_delete,mukkadam_misc_costs,
     MukkadamActivityRateViewSet,add_weekly_payment,UserProfileView,UserListAPIView,mukkadam_payment_overview,verify_misc_cost,
     PlanningViewSet,search_farmers_for_cluster,search_mukkadams_for_cluster,add_farmer_plots_to_cluster,add_mukkadam_to_cluster,
-    PlotViewSet,tender_dashboard,list_all_settlements,pay_mukkadam_settlement,add_misc_cost,
+    PlotViewSet,tender_dashboard,list_all_settlements,pay_mukkadam_settlement,add_misc_cost,mukkadam_misc_no_job,
     get_cluster_plots,get_districts,get_states,get_talukas,get_villages,UserSearchView,cluster_insights,
     insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,payment_overview,
     reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,JobNoteViewSet,activity_dashboard,
@@ -111,7 +111,8 @@ path('api/mukkadams/<int:mukkadam_id>/settlement-history/',mukkadam_settlement_h
 path('api/mukkadam/workbook/', mukkadam_workbook, name='mukkadam_workbook'),
 
 path ('api/mukkadam/day-end-report/',mukkadam_day_end_report ),
-
+# urls.py
+path('api/mukkadam/<int:mukkadam_id>/misc/', mukkadam_misc_no_job, name='mukkadam_misc_no_job'),
 path('api/mukkadam/farmer-verify-work/',farmer_verify_work,name = 'farmer_response'),
 path('api/mukkadam/<int:mukkadam_id>/job/<str:job_id>/misc/', mukkadam_misc_costs),
 path('api/mukkadam/<int:mukkadam_id>/job/<str:job_id>/misc/<int:cost_id>/', mukkadam_misc_cost_delete),

@@ -1961,27 +1961,19 @@ class MukkadamWeeklyPayment(models.Model):
 # models.py
 class MukkadamMiscCost(models.Model):
     mukkadam = models.ForeignKey(Mukkadam, on_delete=models.CASCADE, related_name='misc_costs')
-    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='mukkadam_misc_costs')
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='mukkadam_misc_costs',
+                            null=True, blank=True)   # ← add null=True, blank=True
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     reason = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     proof_s3_key = models.CharField(max_length=500, blank=True, null=True)
-
-    # ── NEW ──────────────────────────────────────────────────────
     verified    = models.BooleanField(default=False)
-    verified_by = models.ForeignKey(
-        User, on_delete=models.SET_NULL,
-        null=True, blank=True,
-        related_name='verified_misc_costs'
-    )
+    verified_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='verified_misc_costs')
     verified_at = models.DateTimeField(null=True, blank=True)
-    # ─────────────────────────────────────────────────────────────
 
     class Meta:
         db_table = 'mukkadam_misc_costs'
         ordering = ['-created_at']
-
-
 
 class MukkadamJobSettlement(models.Model):
     """
