@@ -17,10 +17,10 @@ from .views import (
     insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,payment_overview,
     reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,JobNoteViewSet,activity_dashboard,
     search_villages,farmer_work_verification_detail,tender_activity_count_from_api,mark_allocation_complete,
-    suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs
+    suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs,
 )
 
-from .webhook import booking_webhook,run_mukkadam_sync,send_farmer_bill_to_webhook,farmer_payment_webhook
+from .webhook import booking_webhook,run_mukkadam_sync,send_farmer_bill_to_webhook,farmer_payment_webhook,sync_webhook
 from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history,mukkadam_earnings
 # Create router
 from django.views.decorators.csrf import csrf_exempt

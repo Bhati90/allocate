@@ -80,6 +80,7 @@ CSRF_COOKIE_HTTPONLY = False
 # Application definition
 INSTALLED_APPS = [
     "corsheaders",
+    'tender.apps.TenderConfig',  
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -87,7 +88,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    'tender',
+
     'storages',
     'rest_framework',
     'rest_framework.authtoken',
@@ -235,10 +236,10 @@ DATABASES = {
         },
     }
 }
+SALES_WEBHOOK_URL        = "https://a801-157-20-14-50.ngrok-free.app/ops/activity-status-webhook/"
+SALES_CANCEL_WEBHOOK_URL = "https://a801-157-20-14-50.ngrok-free.app/ops/activity-status-webhook/"  # 👈
 
-# Static files
-
-
+SALES_WEBHOOK_TOKEN      = "89b9fd0698faed6c12c1a8e714fca12c86ee2000"
 # DATABASES = {
 #     'default': dj_database_url.config(
 #         default=os.environ.get("DATABASE_URL")

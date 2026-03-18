@@ -618,55 +618,226 @@ def sync_tender_mukkadams():
 # ============================================================
 
 
+def _compute_scheduled_date(activity_catalog, job_clusters, plot, act_data, today):
+    """
+    Priority:
+    1. pruning_date + cluster gap override  (if cluster + plot.pruning_date exist)
+    2. pruning_date + global gap            (if plot.pruning_date exists)
+    3. date from webhook act_data           (fallback)
+    4. today                               (last resort)
+
+    Never returns a date before today.
+    """
+    from datetime import timedelta
+    from django.utils.dateparse import parse_datetime, parse_date
+    from .models import ClusterActivityScheduleRule, ActivityScheduleRule
+
+    pruning_date = plot.pruning_date if plot else None
+
+    if pruning_date:
+        # Try cluster-level gap first
+        gap_days = None
+
+        for cluster in job_clusters:
+            rule = ClusterActivityScheduleRule.objects.filter(
+                cluster=cluster,
+                activity=activity_catalog,
+            ).first()
+            if rule:
+                gap_days = rule.gap_days
+                break
+
+        # Fall back to global gap
+        if gap_days is None:
+            global_rule = ActivityScheduleRule.objects.filter(
+                activity=activity_catalog
+            ).first()
+            gap_days = global_rule.gap_days if global_rule else activity_catalog.default_gap_days
+
+        computed = pruning_date + timedelta(days=gap_days)
+        return max(computed, today)  # never in the past
+
+    # No pruning date — use webhook date
+    raw = act_data.get('date_time') or act_data.get('scheduled_date')
+    if raw:
+        try:
+            parsed = (
+                parse_datetime(str(raw)).date()
+                if 'T' in str(raw)
+                else parse_date(str(raw))
+            )
+            if parsed:
+                return max(parsed, today)
+        except Exception:
+            pass
+
+    return today  # last resort
+
 @api_view(['POST'])
 def run_mukkadam_sync(request):
     sync_tender_mukkadams()
     return JsonResponse({"success": True})
+def _sync_existing_job_activities(job, activities_data):
+    from datetime import date
+    from decimal import Decimal
+    from .models import ActivityCatalog, JobActivity
 
+    today = date.today()
+
+    incoming_api_ids = set(
+        str(act.get('id') or '')
+        for act in activities_data
+        if act.get('id')
+    )
+
+    existing_api_id_map = {
+        a.api_activity_id: a
+        for a in job.activities.all()
+        if a.api_activity_id
+    }
+
+    job_clusters = list(job.clusters.all())
+    plot = job.plot
+
+    # ── 1. Handle cancelled activities from webhook ────────────────
+    for act_data in activities_data:
+        api_act_id = str(act_data.get('id') or '')
+        status     = (act_data.get('status') or act_data.get('activity_status') or '').upper()
+
+        if status == 'CANCELLED' and api_act_id in existing_api_id_map:
+            act = existing_api_id_map[api_act_id]
+            if act.allocation_status == 'completed':
+                logger.info(f"[ACTIVITY SYNC] Activity {act.id} (api_id={api_act_id}) cancelled in webhook but completed — skipped")
+            else:
+                for alloc in act.allocations.exclude(status='completed'):
+                    alloc.status = 'cancelled'
+                    alloc.save(update_fields=['status'])
+                act.delete()
+                del existing_api_id_map[api_act_id]
+                logger.info(f"[ACTIVITY SYNC] Deleted activity {act.id} (api_id={api_act_id}) — cancelled in webhook")
+
+    # ── 2. Hard delete activities no longer in webhook ─────────────
+    for api_id, act in list(existing_api_id_map.items()):  # 👈 list() snapshot
+        if api_id not in incoming_api_ids:
+            if act.allocation_status == 'completed':
+                logger.info(f"[ACTIVITY SYNC] Activity {act.id} (api_id={api_id}) removed but completed — skipped")
+            else:
+                for alloc in act.allocations.exclude(status='completed'):
+                    alloc.status = 'cancelled'
+                    alloc.save(update_fields=['status'])
+                act.delete()
+                logger.info(f"[ACTIVITY SYNC] Deleted activity {act.id} (api_id={api_id}) — removed from webhook")
+
+    # ── 3. Add new activities not yet on this job ──────────────────
+    for act_data in activities_data:
+        api_act_id = str(act_data.get('id') or '')
+        status     = (act_data.get('status') or act_data.get('activity_status') or '').upper()
+
+        if status == 'CANCELLED':
+            continue
+
+        if not api_act_id:
+            continue
+
+        # 👇 skip only if exists AND is active (not cancelled)
+        existing = existing_api_id_map.get(api_act_id)
+        if existing and not existing.is_lost:
+            continue
+
+        # If existing but is_lost=True — delete old row first, then re-create
+        if existing and existing.is_lost:
+            existing.delete()
+            logger.info(f"[ACTIVITY SYNC] Deleted is_lost activity {existing.id} (api_id={api_act_id}) — re-creating")
+
+        activity_name = act_data.get('activity_name', '').strip()
+        if not activity_name:
+            continue
+
+        activity_catalog = ActivityCatalog.objects.filter(
+            name__iexact=activity_name
+        ).first()
+        if not activity_catalog:
+            activity_catalog, _ = ActivityCatalog.objects.get_or_create(
+                name=activity_name,
+                defaults={'source': 'api'}
+            )
+
+        scheduled_date = _compute_scheduled_date(
+            activity_catalog, job_clusters, plot, act_data, today
+        )
+
+        total_area    = Decimal(str(act_data.get('acres') or 0))
+        total_price   = Decimal(str(act_data.get('total_price') or 0))
+        rate_per_acre = (total_price / total_area).quantize(Decimal('0.01')) if total_area else Decimal('0')
+
+        try:
+            JobActivity.objects.create(
+                job             = job,
+                activity        = activity_catalog,
+                plot            = plot,
+                api_activity_id = api_act_id,
+                total_area      = total_area,
+                allocated_area  = Decimal('0'),
+                remaining_area  = total_area,
+                scheduled_date  = scheduled_date,
+                rate_per_acre   = rate_per_acre,
+                source          = 'api',
+                original_source = 'api',
+            )
+            logger.info(f"[ACTIVITY SYNC] Created activity {api_act_id} — {activity_name} on job {job.job_id}")
+        except Exception as e:
+            logger.error(f"[ACTIVITY SYNC] Failed to create activity {api_act_id}: {e}")
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def booking_webhook(request):
-    webhook_data = request.data
-    
-    # ✅ Add this debug line temporarily
-    print("RAW DATA:", webhook_data)
-    print("JOB ID:", webhook_data.get('id'))
-    
 
-    webhook_data = request.data
-    job_id       = str(webhook_data.get('id', ''))
-    booking_data = webhook_data.get('booking', {})
+    webhook_data    = request.data
+
+    job_id          = str(webhook_data.get('id', ''))
+    print(job_id)
+    print(webhook_data)
+    booking_data    = webhook_data.get('booking') or {}
+    activities_data = webhook_data.get('activities') or []
 
     try:
-        # ── Job exists → only check booking ─────────────────
-        job = Job.objects.get(job_id=job_id)
-        sync_booking(job, booking_data)
+        # ── Job exists → sync booking + activities ───────────
+        job = Job.objects.select_related('booking').prefetch_related(
+            'clusters', 'activities__activity'
+        ).get(job_id=job_id)
+
+        with transaction.atomic():
+            # 1. Sync booking — update if changed, never change booking_id
+            sync_booking(job, booking_data)
+
+            # 2. Sync activities — add new, delete removed (except completed)
+            if activities_data:
+                _sync_existing_job_activities(job, activities_data)
+
         return JsonResponse({
             'status': 'success',
-            'action': 'booking_checked',
+            'action': 'updated',
             'job_id': job_id,
         }, status=200)
 
     except Job.DoesNotExist:
         # ── New job → full create ────────────────────────────
         log_data = {
-            'webhook_data': webhook_data,
-            'status': 'failed',
-            'error_type': None,
-            'error_message': None,
-            'farmer_id': None,
-            'job_id': None,
-            'cluster_matched': False,
-            'cluster_id': None,
+            'webhook_data':         webhook_data,
+            'status':               'failed',
+            'error_type':           None,
+            'error_message':        None,
+            'farmer_id':            None,
+            'job_id':               None,
+            'cluster_matched':      False,
+            'cluster_id':           None,
             'activities_processed': 0,
-            'activities_failed': 0,
-            'plots_created': 0,
+            'activities_failed':    0,
+            'plots_created':        0,
         }
 
-        farmer_id       = str(webhook_data.get('farmer_id', ''))
-        activities_data = webhook_data.get('activities', [])
-        plot_code       = str(webhook_data.get('plot_id') or '')
+        farmer_id = str(webhook_data.get('farmer_id', ''))
+        plot_code = str(webhook_data.get('plot_id') or '')
 
         if not plot_code and activities_data:
             for act in activities_data:
@@ -700,7 +871,11 @@ def booking_webhook(request):
                     raw = act.get('date_time') or act.get('scheduled_date')
                     if raw:
                         try:
-                            pruning_date = parse_datetime(str(raw)).date() if 'T' in str(raw) else parse_date(str(raw))
+                            pruning_date = (
+                                parse_datetime(str(raw)).date()
+                                if 'T' in str(raw)
+                                else parse_date(str(raw))
+                            )
                         except Exception:
                             pass
                     break
@@ -738,20 +913,20 @@ def booking_webhook(request):
             sync_booking(job, booking_data)
             sync_activities(job, farmer, activities_data, log_data)
 
-            
         log_data['status'] = 'success' if log_data['activities_failed'] == 0 else 'partial'
         WebhookLog.objects.create(**log_data)
 
         return JsonResponse({
-            'status': 'success',
-            'action': 'created',
-            'job_id': job_id,
+            'status':               'success',
+            'action':               'created',
+            'job_id':               job_id,
             'activities_processed': log_data['activities_processed'],
         }, status=200)
 
     except Exception as e:
         logger.error(f"Webhook failed: {e}", exc_info=True)
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
 def sync_webhook(request):
     webhook_data = request.data
     job_id = str(webhook_data.get('id', ''))
@@ -875,6 +1050,8 @@ def sync_webhook(request):
     except Exception as e:
         logger.error(f"Webhook failed: {e}", exc_info=True)
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
 def fetch_plot_crop_details(farmer_id: str, plot_code: str):
     """Fetch crop/variety for a specific plot from farmer API"""
     try:
@@ -1093,6 +1270,9 @@ def send_farmer_bill_to_webhook(request):
             {'error': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+
 # ── Paste your confirmation webhook URL here ─────────────────
 FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = 'YOUR_CONFIRMATION_WEBHOOK_URL_HERE'
 from .models import FarmerPaymentWebhookLog

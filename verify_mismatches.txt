@@ -1,5 +1,5 @@
-Jobs OK      : 73
-Jobs Issues  : 57
+Jobs OK      : 82
+Jobs Issues  : 59
 ============================================================
 
 Job ID:  | Farmer  ()
@@ -59,6 +59,32 @@ Job ID: 1749 | Chindu Gangadhar Bornare (15651)
   [ACTIVITY id=4510 (Pruning (छाटणी))] subtotal
     LOCAL : 6400.01
     API   : 6400.0
+
+Job ID: 2097 | Sunil Bhausaheb Palkhede (371)
+  [ACTIVITY id=4101 (Shoot Selection (विरळणी))] acres
+    LOCAL : 0.0
+    API   : 1.25
+  [ACTIVITY id=4101 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 0.0
+    API   : 3750.0
+  [ACTIVITY id=4101 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 0.0
+    API   : 3750.0
+  [ACTIVITY id=4113 (1st Lateral Removal (बगल काढणे))] acres
+    LOCAL : 0.0
+    API   : 1.25
+  [ACTIVITY id=4113 (1st Lateral Removal (बगल काढणे))] total_price
+    LOCAL : 0.0
+    API   : 3125.0
+  [ACTIVITY id=4113 (1st Lateral Removal (बगल काढणे))] subtotal
+    LOCAL : 0.0
+    API   : 3125.0
+  [ACTIVITY] activity_id
+    LOCAL : id=3332 name=Shoot Selection (विरळणी)
+    API   : NOT IN API
+  [ACTIVITY] activity_id
+    LOCAL : id=3331 name=1st Lateral Removal (बगल काढणे)
+    API   : NOT IN API
 
 Job ID: 2205 | Suhas Yashwant Bhalerao (37630)
   [BOOKING] total_amount
@@ -693,6 +719,20 @@ Job ID: 2038 | Hirabai Keshav Kale (19509)
     LOCAL : id=2288 name=Pruning (छाटणी)
     API   : NOT IN API
 
+Job ID: 1822 | Arun Bhagwant Dargode (12147)
+  [ACTIVITY id=2218 (Shoot Selection (विरळणी))] acres
+    LOCAL : 0.0
+    API   : 0.5
+  [ACTIVITY id=2218 (Shoot Selection (विरळणी))] total_price
+    LOCAL : 0.0
+    API   : 1500.0
+  [ACTIVITY id=2218 (Shoot Selection (विरळणी))] subtotal
+    LOCAL : 0.0
+    API   : 1500.0
+  [ACTIVITY] activity_id
+    LOCAL : id=3330 name=Shoot Selection (विरळणी)
+    API   : NOT IN API
+
 Job ID: 1556 | Balasaheb Sahane (92297)
   [JOB] total_activities_amount
     LOCAL : 18000.0
@@ -1082,10 +1122,10 @@ Job ID: 1825 | Bhagwan Thombare (13235)
     LOCAL : id=1037 name=Cane Tying with Clips (काढी बांधणे)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2134 name=Pruning (छाटणी)
+    LOCAL : id=2135 name=Cane Tying with Clips (काढी बांधणे)
     API   : NOT IN API
   [ACTIVITY] activity_id
-    LOCAL : id=2135 name=Cane Tying with Clips (काढी बांधणे)
+    LOCAL : id=2134 name=Pruning (छाटणी)
     API   : NOT IN API
 
 Job ID: 1833 | Prakash Valu Nigal (981)
@@ -1371,12 +1411,18 @@ Job ID: 1602 | madhav varpe (92311)
   [ACTIVITY id=1839 (Shenda Stopping (शेंडा स्टॉपिंग))] subtotal
     LOCAL : 5500.0
     API   : 38000.0
+  [ACTIVITY id=1840 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] acres
+    LOCAL : 0.0
+    API   : 2.5
   [ACTIVITY id=1840 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] total_price
-    LOCAL : 10000.0
+    LOCAL : 0.0
     API   : 37500.0
   [ACTIVITY id=1840 (2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे))] subtotal
-    LOCAL : 10500.0
+    LOCAL : 500.0
     API   : 38000.0
+  [ACTIVITY] activity_id
+    LOCAL : id=3723 name=2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)
+    API   : NOT IN API
 
 Job ID: 1591 | Dyandev ugale (92296)
   [JOB] total_activities_amount
@@ -1928,4 +1974,4 @@ Job ID: 1774 | Nilesh Dnyaneshwar Chavan (87606)
     LOCAL : id=2137 name=Pruning (छाटणी)
     API   : NOT IN API
 
-Problem Job IDs: ['', '866', '870', '901', '1749', '2205', '1497', '1513', '1581', '1760', '1512', '1574', '885', '1245', '2203', '1734', '2153', '884', '2089', '1786', '1978', '1964', '2094', '2049', '2039', '2038', '1556', '1576', '1559', '1555', '1577', '1589', '1905', '1886', '1893', '1894', '1988', '1997', '1825', '1833', '1903', '1508', '1756', '1954', '1752', '1602', '1591', '1593', '1600', '1813', '878', '877', '1201', '872', '875', '871', '1774']
+Problem Job IDs: ['', '866', '870', '901', '1749', '2097', '2205', '1497', '1513', '1581', '1760', '1512', '1574', '885', '1245', '2203', '1734', '2153', '884', '2089', '1786', '1978', '1964', '2094', '2049', '2039', '2038', '1822', '1556', '1576', '1559', '1555', '1577', '1589', '1905', '1886', '1893', '1894', '1988', '1997', '1825', '1833', '1903', '1508', '1756', '1954', '1752', '1602', '1591', '1593', '1600', '1813', '878', '877', '1201', '872', '875', '871', '1774']

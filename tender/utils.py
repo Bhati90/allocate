@@ -559,7 +559,61 @@ def auto_schedule_activity(job_activity_id, start_date, end_date, preferred_mukk
     return {'success': True, 'allocations': allocations}
 
 
-# ============================================================================
+# tender/utils.py
+from datetime import timedelta
+from .models import JobActivity
+
+from datetime import timedelta, date
+from .models import JobActivity
+
+from datetime import timedelta, date
+from .models import JobActivity
+
+def cascade_gap_change_for_cluster(cluster, activity_catalog, new_gap_days: int):
+    today = date.today()
+
+    activities = JobActivity.objects.filter(
+        activity=activity_catalog,
+        is_lost=False,
+        is_manually_moved=False,
+        allocation_status='pending',
+        job__clusters=cluster,
+        scheduled_date__gte=today,   # only future activities
+    ).select_related('plot').distinct()
+
+    updated = []
+    skipped = []
+
+    for act in activities:
+        plot = act.plot
+        if not plot or not plot.pruning_date:
+            skipped.append({
+                'activity_id': act.id,
+                'reason':      'No pruning date on plot',
+            })
+            continue
+
+        new_date = plot.pruning_date + timedelta(days=new_gap_days)
+
+        # Floor to today if computed date is in the past
+        if new_date < today:
+            new_date = today
+
+        if act.scheduled_date == new_date:
+            continue
+
+        old_date           = act.scheduled_date
+        act.scheduled_date = new_date
+        act.save(update_fields=['scheduled_date'])
+
+        updated.append({
+            'activity_id': act.id,
+            'plot_code':   plot.plot_code,
+            'old_date':    str(old_date) if old_date else None,
+            'new_date':    str(new_date),
+        })
+
+    return updated, skipped# ============================================================================
 # FINANCIAL UTILITIES
 # ============================================================================
 

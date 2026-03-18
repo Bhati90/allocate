@@ -860,6 +860,7 @@ import { GlobalInsightsPanel } from "./Global";
 import { useCurrentUser } from "./hooks/currentUser";
 import ClusterActivityCalendar from "./ClusterCalender";
 import FarmerBillingPage from "./components/FarmerBillPage";
+import DayDetailModal from "./components/DayDetail";
 
 // ─── Plot Cluster Control ─────────────────────────────────
 function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess }: {
@@ -1460,10 +1461,13 @@ function FarmerCard({ farmer, clusters, onSuccess, isAdmin = false }: FarmerCard
                                 <p style={{ fontSize: 11, color: S.stone400, fontStyle: 'italic' }}>No tender jobs for this plot</p>
                               ) : plot.jobs.map(job => (
                                 <div key={job.job_id} style={{ marginBottom: 8 }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: 'linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%)', borderRadius: 8, marginBottom: 6, border: `1px solid ${S.sky100}` }}>
-                                    <span style={{ fontSize: 11, fontWeight: 700, color: S.sky700 }}>#{job.job_id}</span>
-                                    <span style={{ fontSize: 11, color: S.sky600 }}>{job.activities.length} activities</span>
-                                  </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: 'linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%)', borderRadius: 8, marginBottom: 6, border: `1px solid ${S.sky100}` }}>
+    <span style={{ fontSize: 11, fontWeight: 700, color: S.sky700 }}>#{job.job_id}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>  {/* 👈 wrap in div */}
+      <span style={{ fontSize: 11, color: S.sky600 }}>{job.activities.length} activities</span>
+      <CancelJobButton job={job} onSuccess={onSuccess} />  {/* 👈 add this */}
+    </div>
+  </div>
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                                     {job.activities.map(a => (
                                       <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderRadius: 6, fontSize: 12, transition: 'background 150ms' }}
@@ -1491,6 +1495,141 @@ function FarmerCard({ farmer, clusters, onSuccess, isAdmin = false }: FarmerCard
             </div>
           </td>
         </tr>
+      )}
+    </>
+  );
+}
+
+
+function CancelJobButton({ job, onSuccess }: { job: any; onSuccess: () => void }) {
+  const [open, setOpen]       = useState(false);
+  const [reason, setReason]   = useState('');
+  const [cancelAllocs, setCancelAllocs] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+
+  const hasActiveAllocs = (job.activities ?? []).some((a: any) =>
+    a.allocation_status !== 'pending' && a.allocation_status !== 'completed'
+  );
+
+  async function handleConfirm() {
+    if (!reason.trim()) { setError('Reason is required'); return; }
+    setLoading(true);
+    setError('');
+    try {
+      const token = localStorage.getItem('auth_token')
+      const res = await fetch(`${API_BASE_URL}/api/jobs/${job.job_id}/cancel/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json','Authorization':`Token ${token}` },
+        body: JSON.stringify({ reason: reason.trim(), cancel_allocations: cancelAllocs }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to cancel job');
+      setOpen(false);
+      setReason('');
+      setCancelAllocs(false);
+      onSuccess();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        style={{ padding: '3px 10px', borderRadius: 6, background: '#fff1f2', color: '#be123c', border: '1px solid #fecaca', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+      >
+        🚫 Cancel Job
+      </button>
+
+      {open && (
+        <div
+          onClick={() => !loading && setOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 16, padding: 24, width: 440, boxShadow: '0 20px 60px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', gap: 16 }}
+          >
+            {/* Header */}
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: '#be123c' }}>🚫 Cancel Job</div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                Job #{job.job_id} · {job.activities.length} activit{job.activities.length === 1 ? 'y' : 'ies'}
+              </div>
+            </div>
+
+            {/* Activities preview */}
+            <div style={{ background: '#f9fafb', borderRadius: 8, padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 140, overflowY: 'auto' }}>
+              {job.activities.map((a: any) => (
+                <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#374151' }}>
+                  <span style={{ fontWeight: 500 }}>{a.name}</span>
+                  <span style={{ color: '#9ca3af', fontFamily: 'monospace' }}>{a.total_area} ac · {a.allocation_status}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Reason */}
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 6 }}>
+                Reason <span style={{ color: '#be123c' }}>*</span>
+              </label>
+              <textarea
+                value={reason}
+                onChange={e => { setReason(e.target.value); setError(''); }}
+                placeholder="Why is this job being cancelled?"
+                rows={3}
+                style={{ width: '100%', borderRadius: 8, border: '1px solid #e5e7eb', padding: '8px 10px', fontSize: 12, fontFamily: 'inherit', resize: 'vertical', outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            {/* Cancel allocations checkbox */}
+            {hasActiveAllocs && (
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', padding: '10px 12px', borderRadius: 10, background: cancelAllocs ? '#fff1f2' : '#f9fafb', border: `1px solid ${cancelAllocs ? '#fecaca' : '#e5e7eb'}`, transition: 'all 150ms' }}>
+                <input
+                  type="checkbox"
+                  checked={cancelAllocs}
+                  onChange={e => setCancelAllocs(e.target.checked)}
+                  style={{ marginTop: 2, accentColor: '#be123c', width: 14, height: 14, flexShrink: 0 }}
+                />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#374151' }}>Also cancel linked allocations</div>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                    Active allocations across all activities will be cancelled. Completed ones will be kept.
+                  </div>
+                </div>
+              </label>
+            )}
+
+            {/* Error */}
+            {error && (
+              <div style={{ fontSize: 11, color: '#be123c', padding: '8px 12px', background: '#fff1f2', borderRadius: 8, border: '1px solid #fecaca' }}>
+                ⚠ {error}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setOpen(false); setReason(''); setError(''); setCancelAllocs(false); }}
+                disabled={loading}
+                style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', color: '#374151' }}
+              >
+                Keep
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={loading || !reason.trim()}
+                style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: loading || !reason.trim() ? '#fca5a5' : '#be123c', color: '#fff', fontSize: 12, fontWeight: 700, cursor: loading || !reason.trim() ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}
+              >
+                {loading ? 'Cancelling…' : 'Confirm Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
@@ -1667,6 +1806,12 @@ export default function TenderDashboard() {
   const [loading, setLoading] = useState(true);
    const [expandedCluster, setExpandedCluster] = useState<number | null>(null);
 
+
+   const [showInsightDayDetail, setShowInsightDayDetail] = useState(false);
+const [insightDetailDate, setInsightDetailDate] = useState<Date | null>(null);
+const [insightDetailCluster, setInsightDetailCluster] = useState<any | null>(null);
+
+
 const [focusMukkadamId, setFocusMukkadamId] = useState<number | null>(null);
   const [paymentData, setPaymentData]         = useState<any>(null);
 const [paymentLoading, setPaymentLoading]   = useState(false);
@@ -1707,6 +1852,33 @@ useEffect(() => {
     .then(d => { if (d?.is_admin) setIsAdmin(true); })
     .catch(() => {});
 }, []);
+
+
+const [insightDayAllocations, setInsightDayAllocations] = useState<any[]>([]);
+const [insightDayMukkadams, setInsightDayMukkadams] = useState<any[]>([]);
+const fetchInsightDayData = async (date: Date, clusterId: number) => {
+  const dateStr = formatDateInsight(date);
+  const token = localStorage.getItem('auth_token');
+
+  try {
+    const [allocRes, mukkRes] = await Promise.all([
+      fetch(`${API_BASE_URL}/api/allocations/?allocated_date=${dateStr}&cluster_id=${clusterId}`, {
+        headers: { Authorization: `Token ${token}` },
+      }),
+      fetch(`${API_BASE_URL}/api/mukkadams/daily_capacity_all/?date=${dateStr}&cluster_id=${clusterId}`, {
+        headers: { Authorization: `Token ${token}` },
+      }),
+    ]);
+
+    const allocData = await allocRes.json();
+    const mukkData  = await mukkRes.json();
+
+    setInsightDayAllocations(Array.isArray(allocData) ? allocData : allocData.results ?? []);
+    setInsightDayMukkadams(Array.isArray(mukkData) ? mukkData : []);
+  } catch (e) {
+    console.error('Failed to fetch insight day data', e);
+  }
+};
   // Change the tab type
 // change tab type
 const [tab, setTab] = useState<'command' | 'calendar' |'global'| 'mukkadams' | 'farmers' | 'jobs' | 'payment'>('command');
@@ -1787,7 +1959,12 @@ useEffect(() => {
       setLoading(false);
     }
   };
-
+const formatDateInsight = (date: Date): string => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
   // ── ADD THIS ─────────────────────────────────────────────────────
   // Silent refresh — no spinner, no scroll-to-top.
   // Used by MukkadamCard/FarmerCard onSuccess after add-to-cluster.
@@ -2474,6 +2651,9 @@ useEffect(() => {
 useEffect(() => {
   if (tab !== 'global') return;
   setInsightsLoading(true);
+  if (allActivities.length === 0) {
+    fetchActivities(); // 👈 fetch activities when global tab opens
+  }
   const token = localStorage.getItem('auth_token');
   fetch(`${API_BASE_URL}/api/insights/`, {
     headers: { Authorization: `Token ${token}` },
@@ -3572,245 +3752,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
       );
     })()}
   </> ) : (
-      // ── MUKKADAM CONTENT ──
- <>
-        {/* {mukkadamPayLoading || !mukkadamPayData ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '64px 0' }}>
-            <RefreshCw size={28} style={{ color: '#7c3aed', animation: 'spin 1s linear infinite' }} />
-          </div>
- 
-        ) : mukkadamClusterId ? (
-          // ── Drill-in ──
-          <div style={{ height: 'calc(100vh - 200px)', overflow: 'hidden', margin: '-20px -24px' }}>
-            <div style={{ padding: '12px 24px', background: '#fff', borderBottom: '1px solid #e8e5de', display: 'flex', alignItems: 'center', gap: 12 }}>
-              <button
-                onClick={() => { setMukkadamClusterId(null); setFocusMukkadamId(null); }}
-                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 8, border: '1px solid #e8e5de', background: '#fff', fontSize: 12, fontWeight: 600, color: '#6b6b63', cursor: 'pointer', fontFamily: 'inherit' }}>
-                ← Back to Overview
-              </button>
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a' }}>
-                {mukkadamPayData.cluster_billing?.find((c: any) => c.cluster_id === mukkadamClusterId)?.cluster_name ?? 'Cluster'} — Mukkadams
-              </span>
-            </div>
-            <div style={{ height: 'calc(100% - 49px)', overflow: 'auto', padding: '20px 24px' }}>
-              <MukkadamClusterDetail clusterId={mukkadamClusterId} focusMukkadamId={focusMukkadamId} />
-            </div>
-          </div>
- 
-        ) : (() => {
-          const pipe     = mukkadamPayData.pipeline ?? {};
-          const clBill   = mukkadamPayData.cluster_billing ?? [];
-          const weekDue  = mukkadamPayData.weekly_due_list ?? [];
-          const settPend = mukkadamPayData.settlement_list ?? [];
-          const vQueue   = mukkadamPayData.verification_queue ?? [];
-          const recent   = mukkadamPayData.recent_payments ?? [];
- 
-          const fmtK    = (n: number) => n >= 100000 ? `₹${(n/100000).toFixed(1)}L` : n >= 1000 ? `₹${(n/1000).toFixed(1)}k` : `₹${n}`;
-          const fmtFull = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
- 
-          return (
-            <>
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
-                  MUKKADAM PAYOUT PIPELINE
-                </div>
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-                  {[
-                    { icon: '📅', label: 'Weekly Due',        val: pipe.weekly_due?.count ?? 0,            amount: pipe.weekly_due?.amount ?? 0,        color: '#ca8a04', bg: '#fefce8', border: '#fde68a', sub: 'Mukkadams to pay today' },
-                    { icon: '💰', label: 'Settlement Pending', val: pipe.settlement_pending?.count ?? 0,    amount: pipe.settlement_pending?.amount ?? 0, color: '#dc2626', bg: '#fef2f2', border: '#fecaca', sub: 'Acre settlements due' },
-                    { icon: '✅', label: 'Total Paid Out',     val: fmtK(pipe.total_paid_out?.amount ?? 0), amount: 0, noCount: true,                     color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0', sub: 'All time' },
-                    { icon: '👷', label: 'Mukkadams Active',  val: pipe.mukkadams_active?.count ?? 0,      amount: 0,                                     color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe', sub: 'Across all clusters' },
-                  ].map((card, i) => (
-                    <div key={i} style={{ flex: 1, minWidth: 140, background: card.bg, borderRadius: 12, border: `1.5px solid ${card.border}`, padding: '16px 18px', textAlign: 'center' }}>
-                      <div style={{ fontSize: 11, color: card.color, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>
-                        {card.icon} {card.label}
-                      </div>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: card.color, lineHeight: 1.1 }}>{card.val}</div>
-                      {!(card as any).noCount && card.amount > 0 && (
-                        <div style={{ fontSize: 15, fontWeight: 700, color: card.color, marginTop: 4 }}>{fmtFull(card.amount)}</div>
-                      )}
-                      <div style={{ fontSize: 11, color: '#a3a398', marginTop: 4 }}>{card.sub}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
- 
-              {vQueue.length > 0 && (
-                <div style={{ marginBottom: 24 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                    <span style={{ fontSize: 15 }}>🔐</span>
-                    <span style={{ fontSize: 15, fontWeight: 700 }}>Payment Admin — Verification Queue</span>
-                    <span style={{ padding: '2px 10px', borderRadius: 10, fontSize: 12, fontWeight: 700, background: '#fff7ed', color: '#ea580c', border: '1px solid #fed7aa' }}>
-                      {vQueue.length} pending
-                    </span>
-                    <span style={{ fontSize: 12, color: '#6b6b63' }}>— Weekly payments don't need verification. All others do.</span>
-                  </div>
-                  <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #fed7aa', overflow: 'hidden' }}>
-                    {vQueue.map((q: any, i: number) => (
-                      <div key={i} style={{
-                        display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px',
-                        borderBottom: i < vQueue.length - 1 ? '1px solid #f0ede7' : 'none',
-                        background: q.urgency === 'high' ? 'rgba(254,243,199,0.2)' : 'transparent',
-                      }}>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: q.urgency === 'high' ? '#dc2626' : q.urgency === 'medium' ? '#ea580c' : '#ca8a04' }} />
-                        <div style={{ fontWeight: 600, minWidth: 160, fontSize: 13 }}>{q.mukkadam_name}</div>
-                        <span style={{ padding: '2px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe' }}>
-                          {q.reason ?? q.label}
-                        </span>
-                        {q.created_by && (
-                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#eff6ff', color: '#2563eb', fontWeight: 600, border: '1px solid #bfdbfe' }}>
-                            ✏️ {q.created_by}
-                          </span>
-                        )}
-                        <div style={{ flex: 1 }} />
-                        <div style={{ fontSize: 15, fontWeight: 700 }}>{fmtFull(q.amount)}</div>
-                        <button
-                          onClick={async () => {
-                            const token = localStorage.getItem('auth_token');
-                            await fetch(`${API_BASE_URL}/api/mukkadam-misc-cost/${q.cost_id}/verify/`, {
-                              method: 'POST', headers: { Authorization: `Token ${token}` },
-                            });
-                            const res = await fetch(`${API_BASE_URL}/api/mukkadam-payment-overview/`, { headers: { Authorization: `Token ${token}` } });
-                            setMukkadamPayData(await res.json());
-                          }}
-                          style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#16a34a', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-                          ✓ Verify & Pay
-                        </button>
-                        <button style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>✗</button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {weekDue.length > 0 && (
-                <div style={{ marginBottom: 24 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>📅 Weekly Payments Due Today</div>
-                  <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #fde68a', overflow: 'hidden' }}>
-                    {weekDue.map((w: any, i: number) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: i < weekDue.length - 1 ? '1px solid #f0ede7' : 'none' }}>
-                        <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#fefce8', border: '1.5px solid #fde68a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#ca8a04', flexShrink: 0 }}>
-                          {w.mukkadam_name.split(' ').map((x: string) => x[0]).join('').slice(0, 2).toUpperCase()}
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13 }}>{w.mukkadam_name}</div>
-                          <div style={{ fontSize: 11, color: '#a3a398' }}>
-                            {w.cluster_name} · {w.mukkadam_type === 'updown' ? 'Up-Down' : 'Permanent'}
-                            {w.days_overdue > 0 && <span style={{ color: '#dc2626', fontWeight: 600 }}> · {w.days_overdue}d overdue</span>}
-                          </div>
-                        </div>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: '#ca8a04' }}>{fmtFull(w.weekly_amount)}</div>
-                        <button
-                          onClick={() => setMukkadamClusterId(w.cluster_id)}
-                          style={{ padding: '6px 16px', borderRadius: 8, border: '1px solid #fde68a', background: '#fefce8', color: '#ca8a04', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                          Pay →
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
- 
-              {settPend.length > 0 && (
-                <div style={{ marginBottom: 24 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>💰 Settlement Pending</div>
-                  <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #fecaca', overflow: 'hidden' }}>
-                    {settPend.map((s: any, i: number) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: i < settPend.length - 1 ? '1px solid #f0ede7' : 'none' }}>
-                        <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#fef2f2', border: '1.5px solid #fecaca', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#dc2626', flexShrink: 0 }}>
-                          {s.mukkadam_name.split(' ').map((x: string) => x[0]).join('').slice(0, 2).toUpperCase()}
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13 }}>{s.mukkadam_name}</div>
-                          <div style={{ fontSize: 11, color: '#a3a398' }}>
-                            {s.cluster_name} · Job #{s.job_id}
-                            {s.mukkadam_type === 'updown' ? ' · Up-Down settlement' : ' · Permanent settlement'}
-                            {s.calculated_at && ` · Calculated ${s.calculated_at}`}
-                          </div>
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 700, fontSize: 14, color: '#dc2626' }}>{fmtFull(s.net_payable)}</div>
-                          <div style={{ fontSize: 10, color: '#a3a398', textAlign: 'right' }}>Net payable</div>
-                        </div>
-                        <button
-                          onClick={() => {
-                            setFocusMukkadamId(s.mukkadam_id);
-                            setMukkadamClusterId(s.cluster_id);
-                          }}
-                          style={{ padding: '6px 16px', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                          Settle →
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>📊 Cluster-wise Mukkadam Outflows</div>
-                <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'hidden' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px,2fr) 70px 100px 100px 100px 100px', padding: '10px 16px', fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#fafaf8', borderBottom: '1px solid #e8e5de' }}>
-                    <div>Cluster</div>
-                    <div style={{ textAlign: 'right' }}>Teams</div>
-                    <div style={{ textAlign: 'right' }}>Weekly Paid</div>
-                    <div style={{ textAlign: 'right' }}>Settled</div>
-                    <div style={{ textAlign: 'right' }}>Pending</div>
-                    <div style={{ textAlign: 'right' }}>Weekly Due</div>
-                  </div>
-                  {clBill.map((c: any, i: number) => (
-                    <div key={c.cluster_id}
-                      onClick={() => setMukkadamClusterId(c.cluster_id)}
-                      style={{ display: 'grid', gridTemplateColumns: 'minmax(160px,2fr) 70px 100px 100px 100px 100px', padding: '10px 16px', fontSize: 13, alignItems: 'center', borderBottom: i < clBill.length - 1 ? '1px solid #f0ede7' : 'none', cursor: 'pointer', transition: 'background 0.1s' }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#fafaf8'; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
-                    >
-                      <div style={{ fontWeight: 600 }}>{c.cluster_name}</div>
-                      <div style={{ textAlign: 'right', color: '#6b6b63' }}>{c.mukkadams}</div>
-                      <div style={{ textAlign: 'right', color: '#16a34a', fontWeight: 600 }}>{fmtK(c.weekly_paid)}</div>
-                      <div style={{ textAlign: 'right', color: '#2563eb', fontWeight: 600 }}>{fmtK(c.settlement_paid)}</div>
-                      <div style={{ textAlign: 'right', fontWeight: 700, color: c.settlement_pending > 0 ? '#dc2626' : '#16a34a' }}>{c.settlement_pending > 0 ? fmtK(c.settlement_pending) : '✓'}</div>
-                      <div style={{ textAlign: 'right', fontWeight: 700, color: c.weekly_due > 0 ? '#ca8a04' : '#16a34a' }}>{c.weekly_due > 0 ? fmtK(c.weekly_due) : '✓'}</div>
-                    </div>
-                  ))}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px,2fr) 70px 100px 100px 100px 100px', padding: '10px 16px', fontSize: 13, fontWeight: 700, background: '#f5f4ef', borderTop: '2px solid #e8e5de' }}>
-                    <div>Total</div>
-                    <div style={{ textAlign: 'right' }}>{clBill.reduce((s: number, c: any) => s + c.mukkadams, 0)}</div>
-                    <div style={{ textAlign: 'right', color: '#16a34a' }}>{fmtK(clBill.reduce((s: number, c: any) => s + c.weekly_paid, 0))}</div>
-                    <div style={{ textAlign: 'right', color: '#2563eb' }}>{fmtK(clBill.reduce((s: number, c: any) => s + c.settlement_paid, 0))}</div>
-                    <div style={{ textAlign: 'right', color: '#dc2626' }}>{fmtK(clBill.reduce((s: number, c: any) => s + c.settlement_pending, 0))}</div>
-                    <div style={{ textAlign: 'right', color: '#ca8a04' }}>{fmtK(clBill.reduce((s: number, c: any) => s + c.weekly_due, 0))}</div>
-                  </div>
-                </div>
-              </div>
- 
-              <div style={{ marginBottom: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                  <span style={{ fontSize: 14 }}>✅</span>
-                  <span style={{ fontSize: 13, fontWeight: 700 }}>Recent Weekly Payments</span>
-                </div>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  {recent.map((p: any, i: number) => (
-                    <div key={i} style={{ background: '#fff', borderRadius: 12, padding: '12px 16px', border: '1px solid #bbf7d0', minWidth: 200, flex: '1 1 200px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 600 }}>{p.mukkadam_name}</div>
-                          <div style={{ fontSize: 11, color: '#a3a398' }}>{p.cluster_name} · {p.crew_size} crew</div>
-                        </div>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: '#16a34a' }}>{fmtFull(p.amount)}</div>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 11, color: '#6b6b63' }}>
-                        <span>{p.payment_date?.slice(5).replace('-', ' ')}</span>
-                        <span style={{ padding: '1px 8px', borderRadius: 5, fontSize: 10, fontWeight: 600, background: p.mode === 'UPI' ? '#ede9fe' : p.mode === 'CASH' ? '#fefce8' : '#eff6ff', color: p.mode === 'UPI' ? '#7c3aed' : p.mode === 'CASH' ? '#ca8a04' : '#2563eb' }}>
-                          {p.mode}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </>
-          );
-        })()} */}
+<>
 
         <MukkadamPayout/>
       </>
@@ -4184,8 +4126,31 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
                   </div>
 
                   {(cluster.week_plan ?? []).map((dayPlan: any, dayIdx: number) => (
-  <div key={dayIdx} style={{ padding: '6px 5px', borderRight: dayIdx < 6 ? '1px solid #f0ede7' : 'none', background: dayIdx === 0 ? 'rgba(16,163,74,0.04)' : 'transparent', display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'center', alignItems: 'center', minHeight: 44 }}>
+  <div
+    key={dayIdx}
+                                        // 👈 add this
 
+  onClick={() => {
+  const dayObj = days[dayIdx];
+  const clickedDate = new Date(dayObj.date + 'T00:00:00');
+  setInsightDetailDate(clickedDate);
+  setInsightDetailCluster(cluster);
+  setShowInsightDayDetail(true);
+  fetchInsightDayData(clickedDate, cluster.id);  // 👈 add this
+
+    }}
+    style={{
+      padding: '6px 5px',
+      borderRight: dayIdx < 6 ? '1px solid #f0ede7' : 'none',
+      background: dayIdx === 0 ? 'rgba(16,163,74,0.04)' : 'transparent',
+      display: 'flex', flexDirection: 'column', gap: 3,
+      justifyContent: 'center', alignItems: 'center',
+      minHeight: 44,
+      cursor: 'pointer',                                      // 👈 show pointer
+    }}
+    onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f0')}
+    onMouseLeave={e => (e.currentTarget.style.background = dayIdx === 0 ? 'rgba(16,163,74,0.04)' : 'transparent')}
+  >
     {/* Confirmed allocations */}
     {dayPlan.teams.length > 0 && dayPlan.teams.map((team: any, ti: number) => (
       <div key={ti} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 6px', borderRadius: 5, fontSize: 10, fontWeight: 500, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#1a1a1a', whiteSpace: 'nowrap' }}>
@@ -4296,6 +4261,102 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
               </div>
             </div>
           </div>
+{showInsightDayDetail && insightDetailDate && (() => {
+  const dateStr = formatDateInsight(insightDetailDate);
+  console.log('=== INSIGHT DAY DEBUG ===');
+  console.log('dateStr:', dateStr);
+  console.log('allActivities length:', allActivities.length);
+  console.log('matching activities:', allActivities.filter((a: any) => 
+    a.scheduled_date?.slice(0, 10) === dateStr
+  ).length);
+  console.log('sample activity scheduled_date:', allActivities[0]?.scheduled_date);
+  return null;
+})()}
+
+{showInsightDayDetail && insightDetailDate && (
+  <DayDetailModal
+    date={insightDetailDate}
+    jobs={(() => {
+      const dateStr = formatDateInsight(insightDetailDate);
+      const jobMap = new Map<string, any>();
+      allActivities
+        .filter((a: any) => {
+          const dateMatch = a.scheduled_date?.slice(0, 10) === dateStr;
+          const clusterMatch = insightDetailCluster
+            ? (a.clusters ?? []).some((c: any) => c.id === insightDetailCluster.id) ||
+              (a.farmer_clusters ?? []).some((c: any) => c.id === insightDetailCluster.id)
+            : true;
+          return dateMatch && clusterMatch;
+        })
+        .forEach((a: any) => {
+          if (!jobMap.has(a.job_id)) {
+            jobMap.set(a.job_id, {
+              job_id:      a.job_id,
+              farmer_name: a.farmer_name,
+              crop_name:   a.crop_name,
+              variety:     a.variety,
+              plot_name:   a.plot_name,
+              plot_code:   a.plot_code,
+              status:      a.job_status,
+              activities:  [],
+              booking:     null,
+            });
+          }
+          jobMap.get(a.job_id).activities.push({
+            id:                a.activity_id,
+            activity_id:       a.activity_id,
+            activity_name:     a.activity_name,
+            name:              a.activity_name,
+            scheduled_date:    a.scheduled_date,
+            total_area:        a.total_area,
+            allocated_area:    a.allocated_area,
+            remaining_area:    a.remaining_area,
+            allocation_status: a.allocation_status,
+            is_manually_moved: a.is_manually_moved,
+            plot_name:         a.plot_name,
+            plot_code:         a.plot_code,
+            rate_per_acre:     a.rate_per_acre,
+          });
+        });
+      return Array.from(jobMap.values());
+    })()}
+    allocations={insightDayAllocations}
+    mukkadams={data?.mukkadams ?? []}  // 👈 pass ALL mukkadams, don't filter — modal uses clusterId to fetch availability itself
+    capacitySummary={{
+  used:             insightDayAllocations.reduce((s: number, a: any) => s + (a.allocated_workers || 0), 0),
+  total:            insightDayMukkadams.reduce((s: number, m: any) => s + (m.available_crew_size || 0), 0),
+  percentage:       0,
+  conflicts:        [],
+  mukkadamsOnLeave: 0,
+}}
+    leaves={[]}
+    overloads={[]}
+    onLeavesUpdated={() => {
+      if (insightDetailDate && insightDetailCluster?.id) {
+        fetchInsightDayData(insightDetailDate, insightDetailCluster.id);
+      }
+    }}
+    onClose={() => {
+      setShowInsightDayDetail(false);
+      setInsightDetailDate(null);
+      setInsightDetailCluster(null);
+      setInsightDayAllocations([]);
+    }}
+    onAllocationDateChange={() => {}}
+    onAllocationDelete={() => {}}
+    onStartAllocation={() => {}}
+    potentialJobs={[]}
+    filters={{
+      farmerId: null, mukkadamId: null,
+      dateFrom: null, dateTo: null,
+      plotId: null, activityId: null,
+      cropName: null, variety: null,
+    }}
+    allJobs={[]}
+    viewMode={['jobs']}
+    clusterId={insightDetailCluster?.id ?? 0}
+  />
+)}
         </>
       );
     })()}
@@ -4969,6 +5030,7 @@ function GroupedActivitySection({ actName, acts, totalArea, totalValue, unalloc,
           </thead>
           <tbody>
             {acts.map((a: any) => {
+              console.log(acts[0])
               const isExp       = expandedActJob === String(a.activity_id);
               const isPending   = a.allocation_status === 'pending';
               const isCompleted = a.allocations?.some((al: any) => al.work_status === 'completed');
@@ -5077,50 +5139,46 @@ function GroupedActivitySection({ actName, acts, totalArea, totalValue, unalloc,
                       )}
                     </td>
                     {/* action */}
-                    {/* action */}
-                    {/* ── Action: Allocate / Move / Note ── */}
-                    <td style={{ ...tdR, textAlign: 'right', paddingRight: 16 }} onClick={e => e.stopPropagation()}>
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                        {isCompleted ? (
-                          <span style={{ fontSize: 11, color: S.green700, fontWeight: 700 }}>✅ Done</span>
-                        ) : isPending ? (
-                          <button
-                            onClick={async () => {
-                              const isoDate = a.scheduled_date?.slice(0, 10) ?? '';
-                              await onAllocate(a, isoDate);
-                            }}
-                            style={{ padding: '5px 12px', borderRadius: 8, background: S.stone800, color: '#fff', border: 'none', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '.2px' }}
-                          >
-                            Allocate
-                          </button>
-                        ) : (
-                          // Has allocations but not completed — show Complete button
-                          <CompleteAllocationsButton
-                            allocations={a.allocations ?? []}
-                            activityName={a.activity_name}
-                            farmerName={a.farmer_name}
-                            onSuccess={onSuccess}
-                          />
-                        )}
-                        <MoveJobButtonTender
-                          act={a}
-                          onSuccess={onSuccess}
-                        />
-                        <button
-                          onClick={() => {
-                            const label = [
-                              a.activity_name,
-                              a.farmer_name,
-                              a.plot_name ? `📍 ${a.plot_name}` : null,
-                            ].filter(Boolean).join(' – ');
-                            onNote(a.job_id, label);
-                          }}
-                          style={{ padding: '4px 10px', borderRadius: 7, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
-                        >
-                          ✏️ Note
-                        </button>
-                      </div>
-                    </td>
+                    {/* ── Action: Allocate / Move / Note / Cancel ── */}
+<td style={{ ...tdR, textAlign: 'right', paddingRight: 16 }} onClick={e => e.stopPropagation()}>
+  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+    {isCompleted ? (
+      <span style={{ fontSize: 11, color: S.green700, fontWeight: 700 }}>✅ Done</span>
+    ) : isPending ? (
+      <button
+        onClick={async () => {
+          const isoDate = a.scheduled_date?.slice(0, 10) ?? '';
+          await onAllocate(a, isoDate);
+        }}
+        style={{ padding: '5px 12px', borderRadius: 8, background: S.stone800, color: '#fff', border: 'none', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '.2px' }}
+      >
+        Allocate
+      </button>
+    ) : (
+      <CompleteAllocationsButton
+        allocations={a.allocations ?? []}
+        activityName={a.activity_name}
+        farmerName={a.farmer_name}
+        onSuccess={onSuccess}
+      />
+    )}
+    <MoveJobButtonTender act={a} onSuccess={onSuccess} />
+    <button
+      onClick={() => {
+        const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – ');
+        onNote(a.job_id, label);
+      }}
+      style={{ padding: '4px 10px', borderRadius: 7, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+    >
+      ✏️ Note
+    </button>
+
+    {/* 👇 Cancel button — hide if already completed */}
+    {!isCompleted && (
+      <CancelActivityButton act={a} onSuccess={onSuccess} />
+    )}
+  </div>
+</td>
                     {/* chevron */}
                     <td style={{ ...tdR, textAlign: 'center', width: 44 }}>
                       <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: `1px solid ${isExp ? S.brand : S.stone200}`, background: isExp ? S.brand : '#fff', color: isExp ? '#fff' : S.stone400, fontSize: 11, transition: 'all 250ms', transform: isExp ? 'rotate(180deg)' : 'none', boxShadow: isExp ? '0 2px 6px rgba(5,150,105,.3)' : 'none' }}>▾</div>
@@ -5134,8 +5192,7 @@ function GroupedActivitySection({ actName, acts, totalArea, totalValue, unalloc,
                         <div style={{ padding: '16px 20px' }}>
                           {/* Stat strip */}
                           <div style={{ display: 'flex', borderRadius: 14, overflow: 'hidden', background: '#fff', marginBottom: 14, boxShadow: S.shadowCard }}>
-                            {[
-                              { val: `Job #${a.job_id}`,       lbl: 'Job ID'       },
+                            {[{ val: `Job #${a.booking_id ?? '—'} · Act #${a.api_activity_id || '—'}`, lbl: 'Job ID' },
                               { val: `${a.crop_name}${a.variety ? ` (${a.variety})` : ''}`, lbl: 'Crop' },
                               { val: `${a.total_area} ac`,     lbl: 'Plot Area'    },
                               { val: <span style={{ color: S.green700 }}>₹{Math.round(a.total_price).toLocaleString('en-IN')}</span>, lbl: 'Farmer Cost' },
@@ -5274,6 +5331,136 @@ function GroupedActivitySection({ actName, acts, totalArea, totalValue, unalloc,
         </table>
       )}
     </div>
+  );
+}
+
+
+
+function CancelActivityButton({ act, onSuccess }: { act: any; onSuccess: () => void }) {
+  const [open, setOpen]       = useState(false);
+  const [reason, setReason]   = useState('');
+  const [cancelAllocs, setCancelAllocs] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+
+  const hasActiveAllocs = (act.allocations ?? []).some(
+    (al: any) => al.work_status !== 'completed'
+  );
+
+  async function handleConfirm() {
+    if (!reason.trim()) { setError('Reason is required'); return; }
+
+    setLoading(true);
+    setError('');
+    try {
+      const token = localStorage.getItem('auth_token')
+      const res = await fetch(`${API_BASE_URL}/api/job-activities/${act.activity_id}/cancel/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' ,'Authorization':`Token ${token}`},
+        body: JSON.stringify({ reason: reason.trim(), cancel_allocations: cancelAllocs }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to cancel');
+      setOpen(false);
+      setReason('');
+      setCancelAllocs(false);
+      onSuccess();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      {/* Trigger button */}
+      <button
+        onClick={() => setOpen(true)}
+        style={{ padding: '4px 10px', borderRadius: 7, background: '#fff1f2', color: '#be123c', border: '1px solid #fecaca', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+      >
+        🚫 Cancel
+      </button>
+
+      {/* Modal */}
+      {open && (
+        <div
+          onClick={() => !loading && setOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 16, padding: 24, width: 420, boxShadow: '0 20px 60px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', gap: 16 }}
+          >
+            {/* Header */}
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 16, color: '#be123c' }}>🚫 Cancel Activity</div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                {act.activity_name} · {act.farmer_name} · {act.plot_code}
+              </div>
+            </div>
+
+            {/* Reason */}
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 6 }}>
+                Reason <span style={{ color: '#be123c' }}>*</span>
+              </label>
+              <textarea
+                value={reason}
+                onChange={e => { setReason(e.target.value); setError(''); }}
+                placeholder="Why is this activity being cancelled?"
+                rows={3}
+                style={{ width: '100%', borderRadius: 8, border: '1px solid #e5e7eb', padding: '8px 10px', fontSize: 12, fontFamily: 'inherit', resize: 'vertical', outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            {/* Cancel allocations checkbox — only show if there are active allocs */}
+            {hasActiveAllocs && (
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', padding: '10px 12px', borderRadius: 10, background: cancelAllocs ? '#fff1f2' : '#f9fafb', border: `1px solid ${cancelAllocs ? '#fecaca' : '#e5e7eb'}`, transition: 'all 150ms' }}>
+                <input
+                  type="checkbox"
+                  checked={cancelAllocs}
+                  onChange={e => setCancelAllocs(e.target.checked)}
+                  style={{ marginTop: 2, accentColor: '#be123c', width: 14, height: 14, flexShrink: 0 }}
+                />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#374151' }}>Also cancel linked allocations</div>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                    {(act.allocations ?? []).filter((al: any) => al.work_status !== 'completed').length} active allocation(s) will be cancelled.
+                    Completed ones will be kept.
+                  </div>
+                </div>
+              </label>
+            )}
+
+            {/* Error */}
+            {error && (
+              <div style={{ fontSize: 11, color: '#be123c', padding: '8px 12px', background: '#fff1f2', borderRadius: 8, border: '1px solid #fecaca' }}>
+                ⚠ {error}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setOpen(false); setReason(''); setError(''); setCancelAllocs(false); }}
+                disabled={loading}
+                style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', color: '#374151' }}
+              >
+                Keep
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={loading || !reason.trim()}
+                style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: loading || !reason.trim() ? '#fca5a5' : '#be123c', color: '#fff', fontSize: 12, fontWeight: 700, cursor: loading || !reason.trim() ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}
+              >
+                {loading ? 'Cancelling…' : 'Confirm Cancel'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -5987,725 +6174,6 @@ const handleConfirm = async (
         />
       )}
     </>
-  );
-}
-
-function MukkadamClusterDetail({ clusterId, focusMukkadamId }: { clusterId: number; focusMukkadamId?: number | null }) {
-
-
-
-  const [data, setData]               = useState<any>(null);
-  const [loading, setLoading]         = useState(true);
-  const [expanded, setExpanded]       = useState<number | null>(null);
-  const [activeTab, setActiveTab]     = useState<Record<number, string>>({});
-  const [showAddEntry, setShowAddEntry] = useState<number | null>(null);
-  const [payModal, setPayModal]       = useState<any>(null);
-
-  const getTab = (id: number) => activeTab[id] || 'timeline';
-  const setTab = (id: number, t: string) => setActiveTab(p => ({ ...p, [id]: t }));
-
-  const fmt  = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
-  const fmtK = (n: number) => n >= 100000 ? `₹${(n/100000).toFixed(1)}L` : n >= 1000 ? `₹${(n/1000).toFixed(1)}k` : `₹${n}`;
-
-  // ── shared mini components ──────────────────────────────────────────────────
-// Add this useEffect inside MukkadamClusterDetail, after the fetch useEffect
-// AFTER
-useEffect(() => {
-  if (!focusMukkadamId || !data) return;
-  const match = data.mukkadams?.find((m: any) => m.mukkadam_id === focusMukkadamId);
-  if (!match) return;
-  setExpanded(focusMukkadamId);
-  setTab(focusMukkadamId, 'timeline');
-  // scroll to it after render
-  setTimeout(() => {
-    document.getElementById(`mukkadam-card-${focusMukkadamId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, 100);
-}, [focusMukkadamId, data]);
-  const Chip = ({ status }: { status: string }) => {
-    const cfg: Record<string, any> = {
-      paid:                 { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0', label: '✓ Paid'    },
-      due:                  { bg: '#fefce8', color: '#ca8a04', border: '#fde68a', label: '⏳ Due'     },
-      pending_verification: { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa', label: '⏳ Pending' },
-      na:                   { bg: '#f5f5f4', color: '#a3a398', border: '#e8e5de', label: 'N/A'       },
-    };
-    const s = cfg[status] ?? cfg.na;
-    return (
-      <span style={{ display: 'inline-flex', padding: '2px 8px', borderRadius: 5, fontSize: 10, fontWeight: 700, background: s.bg, color: s.color, border: `1px solid ${s.border}` }}>
-        {s.label}
-      </span>
-    );
-  };
-
-  const ModeBadge = ({ type }: { type: string }) => {
-    const cfg: Record<string, any> = {
-      permanent: { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0', label: '📋 Settlement Schedule' },
-      updown:    { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa', label: '🔄 Up-Down' },
-      mixed:     { bg: '#f5f3ff', color: '#7c3aed', border: '#ddd6fe', label: '📋 Settlement Schedule (Mixed history)' },
-    };
-    const s = cfg[type] ?? { bg: '#f5f4ef', color: '#a3a398', border: '#e8e5de', label: type };
-    return (
-      <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 10, fontWeight: 700, background: s.bg, color: s.color, border: `1px solid ${s.border}` }}>
-        {s.label}
-      </span>
-    );
-  };
-
-  const CreatedByTag = ({ name }: { name: string }) => (
-    <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#eff6ff', color: '#2563eb', fontWeight: 600, border: '1px solid #bfdbfe' }}>
-      ✏️ {name}
-    </span>
-  );
-
-  const VerifiedByTag = ({ name }: { name: string | null }) => name ? (
-    <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#f0fdf4', color: '#16a34a', fontWeight: 600, border: '1px solid #bbf7d0' }}>
-      ✓ {name}
-    </span>
-  ) : (
-    <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: '#fff7ed', color: '#ea580c', fontWeight: 600, border: '1px solid #fed7aa' }}>
-      ⏳ Awaiting admin
-    </span>
-  );
-
-  const Bar = ({ pct }: { pct: number }) => {
-    const color = pct > 60 ? '#16a34a' : pct > 25 ? '#ea580c' : '#dc2626';
-    return (
-      <div style={{ background: '#f0ede7', borderRadius: 4, height: 4, width: '100%', overflow: 'hidden' }}>
-        <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 4, background: color, transition: 'width 0.4s' }} />
-      </div>
-    );
-  };
-
-  useEffect(() => {
-    const token = localStorage.getItem('auth_token');
-    fetch(`${API_BASE_URL}/api/cluster/${clusterId}/payment-dashboard/`, {
-      headers: { Authorization: `Token ${token}` },
-    })
-      .then(r => r.json())
-      .then(setData)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [clusterId]);
-
-  if (loading) return (
-    <div style={{ padding: 40, textAlign: 'center', color: '#a3a398', fontSize: 13 }}>
-      Loading mukkadam data...
-    </div>
-  );
-  if (!data) return null;
-
-  const mukkadams: any[] = data.mukkadams ?? [];
-
-  return (
-    <div>
-      {mukkadams.map((m: any) => {
-        const isExp      = expanded === m.mukkadam_id;
-        const currentTab = getTab(m.mukkadam_id);
-        const isUpdown   = m.mukkadam_type === 'updown';
-        const isPermanent = m.mukkadam_type === 'permanent';
-
-        // totals from transaction_history
-        const txns: any[]  = m.transaction_history ?? [];
-        const advancePaid  = Math.abs(txns.filter((t: any) => t.type === 'advance').reduce((s: number, t: any) => s + t.amount, 0));
-        const weeklyPaid   = m.total_weekly_paid ?? 0;
-        const settlePaid   = (m.settlements ?? []).filter((s: any) => s.status === 'paid').reduce((sum: number, s: any) => sum + s.net_payable, 0);
-        const structuredPaid = advancePaid + weeklyPaid + settlePaid + (m.transport_price ?? 0);
-        const miscCosts    = (m.settlements ?? []).flatMap((s: any) => s.misc_costs ?? []);
-        const adhocTot     = miscCosts.reduce((sum: number, c: any) => sum + c.amount, 0);
-        const totalOut     = structuredPaid + adhocTot;
-
-        const settlesPending = (m.settlements ?? []).filter((s: any) => s.status === 'calculated' && s.net_payable > 0);
-        const missedCount    = m.missed_weekly_dates?.length ?? 0;
-        const hasAction      = settlesPending.length > 0 || missedCount > 0;
-
-        const allAllocs: any[]  = (m.settlements ?? []).flatMap((s: any) => s.activities ?? []);
-        const totalAcres        = allAllocs.reduce((sum: number, a: any) => sum + (a.allocated_area || 0), 0);
-        const completedAcres    = allAllocs.filter((a: any) => a.work_status === 'completed').reduce((sum: number, a: any) => sum + (a.allocated_area || 0), 0);
-        const acrePct           = totalAcres > 0 ? (completedAcres / totalAcres) * 100 : 0;
-
-        const initials  = m.mukkadam_name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
-        const paidCount = txns.filter((t: any) => t.amount !== 0).length;
-
-        return (
-          <div key={m.mukkadam_id} id={`mukkadam-card-${m.mukkadam_id}`} style={{
-  background: '#fff', borderRadius: 12,
-  border: `1px solid ${hasAction ? '#fed7aa' : '#e8e5de'}`,
-  marginBottom: 10, overflow: 'hidden',
-}}>
-
-            {/* ── CARD HEADER ── */}
-            <div
-              onClick={() => setExpanded(isExp ? null : m.mukkadam_id)}
-              style={{
-                padding: '12px 16px', cursor: 'pointer',
-                display: 'grid', gridTemplateColumns: '2.5fr 120px 90px 90px 90px 90px 30px',
-                alignItems: 'center', gap: 8,
-              }}
-              onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#fafaf8'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
-            >
-              {/* Name + badges */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{
-                  width: 38, height: 38, borderRadius: '50%', flexShrink: 0,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 12, fontWeight: 700,
-                  background: isUpdown ? '#fff7ed' : '#f0fdf4',
-                  border: `2px solid ${isUpdown ? '#fed7aa' : '#bbf7d0'}`,
-                  color: isUpdown ? '#ea580c' : '#16a34a',
-                }}>
-                  {initials}
-                </div>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 14, fontWeight: 700 }}>{m.mukkadam_name}</span>
-                    <ModeBadge type={m.mukkadam_type} />
-                    {settlesPending.length > 0 && (
-                      <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 4, background: '#fff7ed', color: '#ea580c', fontWeight: 700 }}>⏳ Verify</span>
-                    )}
-                    {miscCosts.length > 0 && (
-                      <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 4, background: '#f5f3ff', color: '#7c3aed', fontWeight: 700 }}>📝 {miscCosts.length}</span>
-                    )}
-                    <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 4, background: '#eff6ff', color: '#2563eb', fontWeight: 700, border: '1px solid #bfdbfe' }}>
-                      📒 {paidCount} payments
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 11, color: '#a3a398', marginTop: 1 }}>
-                    {m.crew_size} crew · {isUpdown ? 'Up-Down' : 'Permanent'}
-                    {!isUpdown && missedCount > 0 && <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠️ {missedCount} missed weekly</span>}
-                  </div>
-                </div>
-              </div>
-
-              {/* Work progress */}
-              <div>
-                <div style={{ fontSize: 10, color: '#a3a398', marginBottom: 3 }}>Work</div>
-                <Bar pct={acrePct} />
-                <div style={{ fontSize: 10, color: '#6b6b63', marginTop: 2 }}>{completedAcres.toFixed(1)}/{totalAcres.toFixed(1)} ac</div>
-              </div>
-
-              {/* Scheduled */}
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 10, color: '#a3a398' }}>Scheduled</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#16a34a' }}>{fmtK(structuredPaid)}</div>
-              </div>
-
-              {/* Daily */}
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 10, color: '#a3a398' }}>Daily</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#a3a398' }}>—</div>
-              </div>
-
-              {/* Ad-hoc */}
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 10, color: '#a3a398' }}>Ad-hoc</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: adhocTot > 0 ? '#7c3aed' : '#a3a398' }}>
-                  {adhocTot > 0 ? fmtK(adhocTot) : '—'}
-                </div>
-              </div>
-
-              {/* Total Out */}
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 10, color: '#a3a398' }}>Total Out</div>
-                <div style={{ fontSize: 14, fontWeight: 800 }}>{fmtK(totalOut)}</div>
-              </div>
-
-              <div style={{ textAlign: 'center', color: '#a3a398', fontSize: 13 }}>{isExp ? '▲' : '▼'}</div>
-            </div>
-
-            {/* ── EXPANDED ── */}
-            {isExp && (
-              <div style={{ borderTop: '1px solid #f0ede7' }}>
-
-                {/* Mode note */}
-                <div style={{ padding: '8px 16px', background: '#fafaf8', borderBottom: '1px solid #f0ede7', fontSize: 12, color: '#6b6b63', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <ModeBadge type={m.mukkadam_type} />
-                  <span>{isPermanent ? 'Settlement schedule throughout.' : 'Up-Down — transport costs apply per allocation.'}</span>
-                </div>
-
-                {/* Inner tabs */}
-                <div style={{ display: 'flex', borderBottom: '1px solid #e8e5de' }}>
-                  {[
-                    { key: 'timeline', label: '📋 Payments' },
-                    { key: 'adhoc',    label: `📝 Manual Entries (${miscCosts.length})` },
-                    { key: 'recon',    label: '🔍 Reconciliation' },
-                  ].map(t => (
-                    <button key={t.key} onClick={() => setTab(m.mukkadam_id, t.key)} style={{
-                      padding: '10px 16px', border: 'none', cursor: 'pointer', background: 'transparent',
-                      fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
-                      color: currentTab === t.key ? '#2563eb' : '#a3a398',
-                      borderBottom: currentTab === t.key ? '2px solid #2563eb' : '2px solid transparent',
-                    }}>
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* ── TAB: PAYMENTS ── */}
-                {currentTab === 'timeline' && (
-                  <div style={{ padding: '14px 16px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-
-                      {/* LEFT: One-time + Settlements */}
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', marginBottom: 8 }}>One-Time Payments</div>
-                        <div style={{ background: '#fafaf8', borderRadius: 10, border: '1px solid #f0ede7', overflow: 'hidden' }}>
-
-                          {/* Advance */}
-                          {m.advance_amount > 0 && (
-                            <div style={{ padding: '10px 12px', borderBottom: '1px solid #f0ede7' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                <div>
-                                  <div style={{ fontSize: 13, fontWeight: 600 }}>Advance Payment</div>
-                                  <div style={{ display: 'flex', gap: 6, marginTop: 3, alignItems: 'center' }}>
-                                    <VerifiedByTag name="Paid" />
-                                  </div>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <span style={{ fontSize: 14, fontWeight: 700 }}>{fmt(m.advance_amount)}</span>
-                                  <Chip status="paid" />
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* updown: transport is inside per-settlement breakdown, not a separate one-time card */}
-                        </div>
-
-                        {/* Acre Settlements */}
-                        {(m.settlements ?? []).length > 0 && (
-                          <div style={{ marginTop: 14 }}>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', marginBottom: 8 }}>Acre Settlements</div>
-                            {(m.settlements ?? []).map((s: any, i: number) => {
-                              const sc: Record<string, any> = {
-                                paid:              { bg: '#f0fdf4', border: '#bbf7d0', color: '#16a34a' },
-                                calculated:        { bg: '#fff7ed', border: '#fed7aa', color: '#ea580c' },
-                                pending:           { bg: '#fefce8', border: '#fde68a', color: '#ca8a04' },
-                                no_payment_needed: { bg: '#f0fdf4', border: '#bbf7d0', color: '#16a34a' },
-                              };
-                              const c = sc[s.status] ?? sc.pending;
-                              return (
-                                <div key={i} style={{ background: c.bg, borderRadius: 10, padding: 14, border: `1px solid ${c.border}`, marginBottom: 8, fontSize: 12 }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                                    <div style={{ fontWeight: 700, fontSize: 13 }}>{s.farmer_name}</div>
-                                    <Chip status={s.status} />
-                                  </div>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                                    <span style={{ color: '#6b6b63' }}>Gross</span>
-                                    <span style={{ fontWeight: 600 }}>{fmt(s.gross_amount)}</span>
-                                  </div>
-                                  {/* updown: transport ADDED, no holdback */}
-                                  {isUpdown && Number(s.transport_deducted || 0) > 0 && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                                      <span style={{ color: '#6b6b63' }}>🚛 + Transport</span>
-                                      <span style={{ color: '#0369a1', fontWeight: 600 }}>+{fmt(s.transport_deducted)}</span>
-                                    </div>
-                                  )}
-                                  {/* permanent only: 10% deposit */}
-                                  {!isUpdown && (() => {
-                                    const acts = s.activities || [];
-                                    const allDone = acts.length > 0 && acts.every((a: any) => a.work_status === 'completed');
-                                    return (
-                                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                                        <span style={{ color: '#6b6b63' }}>{allDone ? '+ 10% Released ✓' : '− 10% Deposit held'}</span>
-                                        <span style={{ color: allDone ? '#16a34a' : '#b45309', fontWeight: 600 }}>{allDone ? '+' : '−'}{fmt(s.deposit_held)}</span>
-                                      </div>
-                                    );
-                                  })()}
-                                  {s.advance_deducted > 0 && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                                      <span style={{ color: '#6b6b63' }}>Advance adjusted</span>
-                                      <span style={{ color: '#dc2626' }}>−{fmt(s.advance_deducted)}</span>
-                                    </div>
-                                  )}
-                                  {s.weekly_payments_deducted > 0 && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                                      <span style={{ color: '#6b6b63' }}>Weekly deducted</span>
-                                      <span style={{ color: '#dc2626' }}>−{fmt(s.weekly_payments_deducted)}</span>
-                                    </div>
-                                  )}
-                                  {s.deposit_carried_forward > 0 && (
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                                      <span style={{ color: '#6b6b63' }}>Deposit released</span>
-                                      <span style={{ color: '#16a34a' }}>+{fmt(s.deposit_carried_forward)}</span>
-                                    </div>
-                                  )}
-                                  <div style={{ borderTop: `1px solid ${c.border}`, paddingTop: 6, marginTop: 4, display: 'flex', justifyContent: 'space-between' }}>
-                                    <span style={{ fontWeight: 700 }}>Net Payable</span>
-                                    <span style={{ fontWeight: 800, fontSize: 16, color: '#ea580c' }}>{fmt(s.net_payable)}</span>
-                                  </div>
-                                  {s.status === 'calculated' && s.net_payable > 0 && (
-                                    <button style={{ marginTop: 10, width: '100%', padding: '10px', borderRadius: 10, border: 'none', background: '#16a34a', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                                      ✓ Verify & Approve — {fmt(s.net_payable)}
-                                    </button>
-                                  )}
-                                  {s.status === 'pending' && (
-                                    <div style={{ marginTop: 8, fontSize: 11, color: '#a3a398', textAlign: 'center' }}>
-                                      Settlement triggers after all activities complete
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* RIGHT: Weekly (permanent only) OR Allocations (updown) */}
-                      <div>
-                        {isUpdown ? (
-                          /* ── UPDOWN: per-allocation transport breakdown ── */
-                          <div>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', marginBottom: 8 }}>🚜 Allocations</div>
-                            {(m.updown_allocations || []).length === 0 ? (
-                              <div style={{ padding: 20, textAlign: 'center', color: '#a3a398', fontSize: 12, background: '#fafaf8', borderRadius: 10, border: '1px solid #f0ede7' }}>
-                                No allocations assigned yet
-                              </div>
-                            ) : (m.updown_allocations || []).map((alloc: any) => {
-                              const isCompleted = alloc.work_status === 'completed';
-                              const isFuture    = alloc.allocated_date && alloc.allocated_date > new Date().toISOString().slice(0, 10);
-                              const statusStyle = isCompleted
-                                ? { bg: '#f0fdf4', border: '#bbf7d0', color: '#16a34a', label: '✓ Done' }
-                                : isFuture
-                                ? { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8', label: '📅 Upcoming' }
-                                : { bg: '#fef9c3', border: '#fde68a', color: '#b45309', label: '⏳ Pending' };
-                              const gross     = isCompleted && alloc.actual_gross     != null ? alloc.actual_gross     : alloc.gross_estimate;
-                              const transport = isCompleted && alloc.actual_transport != null ? alloc.actual_transport : alloc.transport_estimate;
-                              const net       = isCompleted && alloc.actual_net       != null ? alloc.actual_net       : alloc.net_estimate;
-                              const isEst     = !isCompleted;
-                              return (
-                                <div key={alloc.allocation_id} style={{ background: statusStyle.bg, border: `1px solid ${statusStyle.border}`, borderRadius: 10, padding: '10px 12px', marginBottom: 8 }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                                    <div>
-                                      <div style={{ fontWeight: 700, fontSize: 12, color: '#111827' }}>{alloc.activity_name}</div>
-                                      <div style={{ fontSize: 10, color: '#6b7280', marginTop: 1 }}>👨‍🌾 {alloc.farmer_name} · #{alloc.job_id}{alloc.allocated_date ? ` · ${alloc.allocated_date}` : ''}</div>
-                                    </div>
-                                    <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 999, fontWeight: 700, background: statusStyle.bg, color: statusStyle.color, border: `1px solid ${statusStyle.border}`, whiteSpace: 'nowrap', marginLeft: 6 }}>{statusStyle.label}</span>
-                                  </div>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 5 }}>
-                                    {[
-                                      { label: isEst ? 'Gross (est.)' : 'Gross', val: `₹${Number(gross).toLocaleString('en-IN',{maximumFractionDigits:0})}`, sub: `${alloc.actual_area_done??alloc.allocated_area}ac×₹${alloc.mukkadam_rate}`, color: '#0f766e', bg: '#f0fdf4' },
-                                      { label: isEst ? 'Transport (est.)' : 'Transport', val: Number(transport)>0 ? `+₹${Number(transport).toLocaleString('en-IN',{maximumFractionDigits:0})}` : '—', sub: Number(transport)>0 ? 'per assignment' : 'N/A', color: '#0369a1', bg: '#eff6ff' },
-                                      { label: isEst ? 'Net (est.)' : 'Net Payable', val: `₹${Number(net).toLocaleString('en-IN',{maximumFractionDigits:0})}`, sub: isEst ? 'estimate' : 'final', color: isCompleted ? '#16a34a' : '#ea580c', bg: isCompleted ? '#f0fdf4' : '#fff7ed' },
-                                    ].map((cell, ci) => (
-                                      <div key={ci} style={{ background: cell.bg, borderRadius: 6, padding: '5px 6px', textAlign: 'center' }}>
-                                        <div style={{ fontSize: 9, color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', marginBottom: 1 }}>{cell.label}</div>
-                                        <div style={{ fontSize: 12, fontWeight: 800, color: cell.color }}>{cell.val}</div>
-                                        <div style={{ fontSize: 9, color: '#9ca3af', marginTop: 1 }}>{cell.sub}</div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          /* ── PERMANENT: weekly section ── */
-                          <div>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', marginBottom: 8 }}>
-                              Weekly ({m.weekly_payment_day_label ?? 'Saturday'})
-                            </div>
-                            <div style={{ background: '#fafaf8', borderRadius: 10, border: '1px solid #f0ede7', overflow: 'hidden' }}>
-                              {txns.filter((t: any) => t.type === 'weekly').length === 0 && (
-                                <div style={{ padding: 20, textAlign: 'center', color: '#a3a398', fontSize: 12 }}>No weekly payments yet</div>
-                              )}
-                              {txns.filter((t: any) => t.type === 'weekly').map((w: any, j: number) => (
-                                <div key={j} style={{ padding: '10px 12px', borderBottom: '1px solid #f0ede7' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                    <div>
-                                      <div style={{ fontSize: 13, fontWeight: 600 }}>Weekly — {w.date?.slice(5).replace('-', ' ')}</div>
-                                      {w.notes && <div style={{ fontSize: 10, color: '#a3a398', marginTop: 2 }}>{w.notes}</div>}
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                      <span style={{ fontSize: 14, fontWeight: 700 }}>{fmt(Math.abs(w.amount))}</span>
-                                      <Chip status="paid" />
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                              {(m.missed_weekly_dates ?? []).map((d: string, j: number) => (
-                                <div key={`missed-${j}`} style={{ padding: '10px 12px', borderBottom: '1px solid #f0ede7', background: '#fefce8' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                    <div>
-                                      <div style={{ fontSize: 13, fontWeight: 600 }}>Weekly — {d.slice(5).replace('-', ' ')}</div>
-                                      <div style={{ fontSize: 10, color: '#dc2626', marginTop: 2 }}>⚠️ Missed</div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                      <span style={{ fontSize: 14, fontWeight: 700 }}>{fmt(m.weekly_payment_amount ?? 0)}</span>
-                                      <Chip status="due" />
-                                      <button
-                                        onClick={e => { e.stopPropagation(); setPayModal({ mukkadam: m, assignmentId: m.assignmentId_m, defaultDate: d }); }}
-                                        style={{ padding: '6px 16px', borderRadius: 8, border: 'none', background: '#16a34a', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                                        💰 Pay
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                              {!m.already_paid_today && (m.missed_weekly_dates ?? []).length === 0 && (
-                                <div style={{ padding: '10px 12px', background: '#fefce8', borderTop: txns.filter((t: any) => t.type === 'weekly').length > 0 ? '1px solid #f0ede7' : 'none' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                    <div>
-                                      <div style={{ fontSize: 13, fontWeight: 600 }}>Next Weekly Payment</div>
-                                      <div style={{ fontSize: 10, color: '#a3a398' }}>{m.weekly_payment_day_label ?? 'Saturday'}</div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                      <span style={{ fontSize: 14, fontWeight: 700 }}>{fmt(m.weekly_payment_amount ?? 0)}</span>
-                                      <Chip status="due" />
-                                      <button
-                                        onClick={e => { e.stopPropagation(); setPayModal({ mukkadam: m, assignmentId: m.assignmentId_m }); }}
-                                        style={{ padding: '6px 16px', borderRadius: 8, border: 'none', background: '#16a34a', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                                        💰 Pay
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                            <div style={{ marginTop: 4, padding: '6px 12px', fontSize: 11, color: '#0d9488', background: '#f0fdfa', borderRadius: 6, border: '1px solid #99f6e4' }}>
-                              ℹ️ Weekly payments don't need admin verification — direct pay.
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Payment Summary */}
-                        {(() => {
-                          const totalTransportSettl = (m.settlements ?? []).reduce((acc: number, st: any) => acc + Number(st.transport_deducted || 0), 0);
-                          const totalGrossSettl     = (m.settlements ?? []).reduce((acc: number, st: any) => acc + Number(st.gross_amount || 0), 0);
-                          const depositHeldNow      = (m.settlements ?? []).filter((st: any) => { const a = st.activities||[]; return !(a.length>0 && a.every((x:any)=>x.work_status==='completed')); }).reduce((acc:number,st:any)=>acc+Number(st.deposit_held||0),0);
-                          const totalPaidOut        = (m.settlements ?? []).reduce((acc:number,st:any)=>acc+(st.payments_made||[]).reduce((s:number,p:any)=>s+Number(p.amount),0),0);
-                          const remaining           = (m.settlements ?? []).reduce((acc:number,st:any)=>acc+Number(st.net_payable||0),0) - totalPaidOut;
-                          return (
-                            <div style={{ marginTop: 14, background: '#f5f3ff', borderRadius: 10, padding: 14, border: '1px solid #ddd6fe' }}>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', marginBottom: 8 }}>💰 Payment Summary</div>
-                              {m.isUpdown ? (
-                                /* updown: Gross + Transport = Net, then paid/remaining */
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '4px 12px', fontSize: 12 }}>
-                                  <span style={{ color: '#6b6b63' }}>Gross Earned</span>
-                                  <span style={{ fontWeight: 700, color: '#0f766e', textAlign: 'right' }}>{fmt(totalGrossSettl)}</span>
-                                  {totalTransportSettl > 0 && <>
-                                    <span style={{ color: '#6b6b63' }}>+ Transport</span>
-                                    <span style={{ fontWeight: 700, color: '#0369a1', textAlign: 'right' }}>+{fmt(totalTransportSettl)}</span>
-                                  </>}
-                                  <span style={{ color: '#6b6b63' }}>Net Payable</span>
-                                  <span style={{ fontWeight: 700, color: '#dc2626', textAlign: 'right' }}>{fmt(totalGrossSettl + totalTransportSettl)}</span>
-                                  {totalPaidOut > 0 && <>
-                                    <span style={{ color: '#6b6b63' }}>Paid Out</span>
-                                    <span style={{ fontWeight: 700, color: '#16a34a', textAlign: 'right' }}>−{fmt(totalPaidOut)}</span>
-                                  </>}
-                                  <span style={{ color: '#6b6b63', fontWeight: 700, borderTop: '1px solid #ddd6fe', paddingTop: 4 }}>Remaining</span>
-                                  <span style={{ fontWeight: 800, textAlign: 'right', borderTop: '1px solid #ddd6fe', paddingTop: 4, color: remaining > 0.01 ? '#dc2626' : '#16a34a' }}>{remaining > 0.01 ? fmt(remaining) : '✓ Clear'}</span>
-                                </div>
-                              ) : (
-                                /* permanent: Gross / 10% deposit / advance / weekly / settlements */
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '4px 12px', fontSize: 12 }}>
-                                  <span style={{ color: '#6b6b63' }}>Gross Earned</span>
-                                  <span style={{ fontWeight: 700, color: '#0f766e', textAlign: 'right' }}>{fmt(totalGrossSettl)}</span>
-                                  {depositHeldNow > 0 && <>
-                                    <span style={{ color: '#6b6b63' }}>10% Deposit held</span>
-                                    <span style={{ fontWeight: 700, color: '#b45309', textAlign: 'right' }}>{fmt(depositHeldNow)} held</span>
-                                  </>}
-                                  <span style={{ color: '#6b6b63' }}>Advance</span>
-                                  <span style={{ fontWeight: 700, color: '#16a34a', textAlign: 'right' }}>{fmt(m.advance_amount ?? 0)}</span>
-                                  <span style={{ color: '#6b6b63' }}>Weekly Paid</span>
-                                  <span style={{ fontWeight: 700, color: '#16a34a', textAlign: 'right' }}>{fmt(weeklyPaid)}</span>
-                                  <span style={{ color: '#6b6b63' }}>Settlements Paid</span>
-                                  <span style={{ fontWeight: 700, color: '#2563eb', textAlign: 'right' }}>{fmt(settlePaid)}</span>
-                                  {adhocTot > 0 && <>
-                                    <span style={{ color: '#6b6b63' }}>Ad-hoc / Manual</span>
-                                    <span style={{ fontWeight: 700, color: '#7c3aed', textAlign: 'right' }}>{fmt(adhocTot)}</span>
-                                  </>}
-                                  <span style={{ color: '#6b6b63', fontWeight: 700, borderTop: '1px solid #ddd6fe', paddingTop: 4 }}>Total Outflows</span>
-                                  <span style={{ fontWeight: 800, textAlign: 'right', borderTop: '1px solid #ddd6fe', paddingTop: 4 }}>{fmt(totalOut)}</span>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── TAB: MANUAL ENTRIES ── */}
-                {currentTab === 'adhoc' && (
-                  <div style={{ padding: '14px 16px' }}>
-                    {/* Add Entry Button */}
-                    <div
-                      onClick={() => setShowAddEntry(showAddEntry === m.mukkadam_id ? null : m.mukkadam_id)}
-                      style={{
-                        padding: '16px 20px', borderRadius: 12, cursor: 'pointer',
-                        border: '2px dashed #ddd6fe',
-                        background: showAddEntry === m.mukkadam_id ? '#f5f3ff' : 'transparent',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                        marginBottom: 14, transition: 'all 0.15s',
-                      }}
-                      onMouseEnter={e => { if (showAddEntry !== m.mukkadam_id) (e.currentTarget as HTMLDivElement).style.background = '#f5f3ff'; }}
-                      onMouseLeave={e => { if (showAddEntry !== m.mukkadam_id) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
-                    >
-                      <span style={{ fontSize: 24, color: '#7c3aed' }}>+</span>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: '#7c3aed' }}>Add Manual Entry</div>
-                        <div style={{ fontSize: 11, color: '#6b6b63' }}>Wedding advance, bonus, adjustment, deduction, or any off-schedule payment</div>
-                      </div>
-                    </div>
-
-                    {/* Add Entry Form */}
-                    {showAddEntry === m.mukkadam_id && (
-                      <div style={{ background: '#f5f3ff', borderRadius: 12, padding: 18, border: '1px solid #ddd6fe', marginBottom: 14 }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: '#7c3aed', marginBottom: 12 }}>New Manual Entry</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                          <div>
-                            <div style={{ fontSize: 11, color: '#6b6b63', marginBottom: 4, fontWeight: 600 }}>Type</div>
-                            <select style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #e8e5de', fontSize: 13, background: '#fff', fontFamily: 'inherit' }}>
-                              <option>💒 Wedding Advance</option>
-                              <option>➕ Extra Payment</option>
-                              <option>🎉 Festival Bonus</option>
-                              <option>➖ Deduction</option>
-                              <option>🔄 Adjustment</option>
-                              <option>📝 Other</option>
-                            </select>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 11, color: '#6b6b63', marginBottom: 4, fontWeight: 600 }}>Amount (₹)</div>
-                            <input placeholder="Enter amount" style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #e8e5de', fontSize: 13, boxSizing: 'border-box' as const, fontFamily: 'inherit' }} />
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 11, color: '#6b6b63', marginBottom: 4, fontWeight: 600 }}>Date</div>
-                            <input type="date" style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #e8e5de', fontSize: 13, boxSizing: 'border-box' as const, fontFamily: 'inherit' }} />
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 11, color: '#6b6b63', marginBottom: 4, fontWeight: 600 }}>Adjust in Settlement?</div>
-                            <select style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #e8e5de', fontSize: 13, background: '#fff', fontFamily: 'inherit' }}>
-                              <option>Yes — deduct from acre/final settlement</option>
-                              <option>No — separate payment, don't deduct</option>
-                            </select>
-                          </div>
-                        </div>
-                        <div style={{ marginTop: 12 }}>
-                          <div style={{ fontSize: 11, color: '#6b6b63', marginBottom: 4, fontWeight: 600 }}>Note / Reason</div>
-                          <input placeholder="Why is this payment being made..." style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #e8e5de', fontSize: 13, boxSizing: 'border-box' as const, fontFamily: 'inherit' }} />
-                        </div>
-                        <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 8, background: '#fff7ed', border: '1px solid #fed7aa', fontSize: 11, color: '#ea580c' }}>
-                          🔐 This entry will be submitted for <strong>Payment Admin verification</strong> before payment is released.
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
-                          <button onClick={() => setShowAddEntry(null)} style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #e8e5de', background: '#fff', color: '#6b6b63', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-                          <button style={{ padding: '8px 24px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Submit for Verification</button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Existing misc costs */}
-                    {miscCosts.length === 0 && showAddEntry !== m.mukkadam_id ? (
-                      <div style={{ padding: 32, textAlign: 'center', color: '#a3a398' }}>No manual entries yet. Use the button above to add one.</div>
-                    ) : miscCosts.length > 0 && (
-                      <div style={{ background: '#fafaf8', borderRadius: 10, border: '1px solid #f0ede7', overflow: 'hidden' }}>
-                        {miscCosts.map((e: any, j: number) => (
-                          <div key={j} style={{ padding: '12px 14px', borderBottom: j < miscCosts.length - 1 ? '1px solid #f0ede7' : 'none' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <div>
-                                <div style={{ fontSize: 13, fontWeight: 600 }}>{e.reason}</div>
-                                <div style={{ display: 'flex', gap: 6, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                                  <span style={{ fontSize: 10, color: '#a3a398' }}>{e.created_at}</span>
-                                </div>
-                              </div>
-                              <span style={{ fontSize: 15, fontWeight: 700 }}>{fmt(e.amount)}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* ── TAB: RECONCILIATION ── */}
-                {currentTab === 'recon' && (
-                  <div style={{ padding: '14px 16px' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                      {/* Earned */}
-                      <div style={{ background: '#f0fdf4', borderRadius: 10, padding: 14, border: '1px solid #bbf7d0' }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: '#16a34a', marginBottom: 10 }}>📊 SYSTEM-CALCULATED (Earned)</div>
-                        <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          {(m.settlements ?? []).map((s: any, i: number) => (
-                            <div key={i} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span>{s.farmer_name} ({s.job_id})</span>
-                              <span style={{ fontWeight: 700 }}>{fmt(s.gross_amount)}</span>
-                            </div>
-                          ))}
-                          <div style={{ borderTop: '1px solid #bbf7d0', paddingTop: 4, marginTop: 2, display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
-                            <span>Total Earned</span>
-                            <span style={{ fontSize: 16, color: '#16a34a' }}>{fmt((m.settlements ?? []).reduce((s: number, x: any) => s + x.gross_amount, 0))}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Outflows */}
-                      <div style={{ background: '#fff7ed', borderRadius: 10, padding: 14, border: '1px solid #fed7aa' }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: '#ea580c', marginBottom: 10 }}>💸 ACTUAL OUTFLOWS</div>
-                        <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Structured payments</span><span style={{ fontWeight: 600 }}>{fmt(structuredPaid)}</span></div>
-                          {adhocTot > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Ad-hoc / Manual</span><span style={{ fontWeight: 600, color: '#7c3aed' }}>{fmt(adhocTot)}</span></div>}
-                          <div style={{ borderTop: '1px solid #fed7aa', paddingTop: 4, marginTop: 2, display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
-                            <span>Total Outflows</span>
-                            <span style={{ fontSize: 16, color: '#ea580c' }}>{fmt(totalOut)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Diff */}
-                    {(() => {
-                      const earned = (m.settlements ?? []).reduce((s: number, x: any) => s + x.gross_amount, 0);
-                      const diff   = totalOut - earned;
-                      const isOver  = diff > 5000;
-                      const isUnder = diff < -5000;
-                      return (
-                        <div style={{
-                          marginTop: 14, padding: 14, borderRadius: 10,
-                          background: isOver ? '#fef2f2' : isUnder ? '#fefce8' : '#f0fdf4',
-                          border: `1.5px solid ${isOver ? '#fecaca' : isUnder ? '#fde68a' : '#bbf7d0'}`,
-                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        }}>
-                          <div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: isOver ? '#dc2626' : isUnder ? '#ca8a04' : '#16a34a' }}>
-                              {isOver ? '⚠️ OVERPAID' : isUnder ? '📉 UNDERPAID' : '✅ WITHIN RANGE'}
-                            </div>
-                            <div style={{ fontSize: 11, color: '#6b6b63', marginTop: 2 }}>
-                              {!isOver && !isUnder ? 'Difference within expected range.' : isOver ? 'More paid than earned.' : 'Significant earnings gap — settlements pending.'}
-                            </div>
-                          </div>
-                          <div style={{ fontSize: 22, fontWeight: 800, color: isOver ? '#dc2626' : isUnder ? '#ca8a04' : '#16a34a' }}>
-                            {diff > 0 ? '+' : ''}{fmt(Math.abs(diff))}
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      {/* Weekly Payment Modal */}
-      {payModal && (
-        <WeeklyPayModal
-          mukkadam={payModal.mukkadam}
-          assignmentId={payModal.assignmentId}
-          defaultDate={payModal.defaultDate}
-          onClose={() => setPayModal(null)}
-          onSaved={() => {
-            setPayModal(null);
-            const token = localStorage.getItem('auth_token');
-            fetch(`${API_BASE_URL}/api/cluster/${clusterId}/payment-dashboard/`, {
-              headers: { Authorization: `Token ${token}` },
-            }).then(r => r.json()).then(setData);
-          }}
-        />
-      )}
-    </div>
   );
 }
 
@@ -7615,17 +7083,13 @@ export function MukkadamPayout() {
                           <input placeholder="Why is this payment being made..." value={af.reason || ''} onChange={e => setAf({ reason: e.target.value })}
                             style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #e8e5de', fontSize: 13, boxSizing: 'border-box' as const, fontFamily: 'inherit' }} />
                         </div>
-                        {settls.length === 0 && (
-                          <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', fontSize: 11, color: '#dc2626' }}>
-                            ⚠️ No active settlements found. A settlement must exist to attach a misc cost.
-                          </div>
-                        )}
+                        
                         <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 8, background: '#fff7ed', border: '1px solid #fed7aa', fontSize: 11, color: '#ea580c' }}>
                           🔐 This entry will be submitted for <strong>Payment Admin verification</strong> before payment is released.
                         </div>
                         <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
                           <button onClick={() => { setShowAddEntry(null); setAf({}); }} style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #e8e5de', background: '#fff', color: '#6b6b63', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-                          <button onClick={submitMiscCost} disabled={isSaving || settls.length === 0}
+                          <button onClick={submitMiscCost} disabled={isSaving }
                             style={{ padding: '8px 24px', borderRadius: 8, border: 'none', background: isSaving ? '#a78bfa' : '#7c3aed', color: '#fff', fontSize: 13, fontWeight: 700, cursor: isSaving ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
                             {isSaving ? 'Saving...' : 'Submit for Verification'}
                           </button>

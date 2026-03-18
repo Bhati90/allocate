@@ -83,28 +83,19 @@ class UserProfileView(APIView):
 
 
 
+# tender/views.py  — full cluster_activity_calendar
+
 @api_view(['GET', 'POST'])
 def cluster_activity_calendar(request, cluster_id):
-    """
-    GET: Retrieve cluster activity calendar with farmer & mukkadam rates.
-
-    Productivity priority (highest wins):
-      1. ClusterMukkadamActivityRate.productivity_per_worker  (cluster override)
-      2. ActivityCatalog.default_productivity_per_worker      (global default)  ← NEW
-      (was hardcoded 0.150 before — now reads from ActivityCatalog)
-
-    POST: Update cluster-specific overrides for farmer rates, gaps, mukkadam rates,
-          AND global default productivity on ActivityCatalog.
-    """
     try:
         cluster = Cluster.objects.get(pk=cluster_id)
     except Cluster.DoesNotExist:
         return Response({'error': 'Cluster not found'}, status=404)
 
+    # ── GET ──────────────────────────────────────────────────────────────
     if request.method == 'GET':
         all_activities = ActivityCatalog.objects.all()
 
-        # Bulk fetch all cluster overrides for this cluster to avoid N+1
         cluster_rates = {
             r.activity_id: r
             for r in ClusterActivityRate.objects.filter(cluster=cluster)
@@ -124,65 +115,53 @@ def cluster_activity_calendar(request, cluster_id):
 
         calendar = []
         for activity in all_activities:
-            cluster_rate      = cluster_rates.get(activity.id)
-            cluster_gap       = cluster_gaps.get(activity.id)
-            global_rule       = global_rules.get(activity.id)
-            mukkadam_cr       = cluster_mukkadam_rates.get(activity.id)
+            cluster_rate = cluster_rates.get(activity.id)
+            cluster_gap  = cluster_gaps.get(activity.id)
+            global_rule  = global_rules.get(activity.id)
+            mukkadam_cr  = cluster_mukkadam_rates.get(activity.id)
 
-            # ── Farmer rate ──────────────────────────────────────────
-            farmer_rate      = float(cluster_rate.rate_per_acre) if cluster_rate else float(activity.default_rate_per_acre)
-            rate_overridden  = bool(cluster_rate)
+            # Farmer rate
+            farmer_rate     = float(cluster_rate.rate_per_acre) if cluster_rate else float(activity.default_rate_per_acre)
+            rate_overridden = bool(cluster_rate)
 
-            # ── Gap days ─────────────────────────────────────────────
-            gap_days         = (
+            # Gap days
+            gap_days       = (
                 cluster_gap.gap_days if cluster_gap
                 else global_rule.gap_days if global_rule
                 else activity.default_gap_days
             )
-            gap_overridden   = bool(cluster_gap)
+            gap_overridden = bool(cluster_gap)
 
-            # ── Mukkadam rate ────────────────────────────────────────
-            mukkadam_rate    = float(mukkadam_cr.rate_per_acre) if mukkadam_cr else farmer_rate * 0.8
-            mukkadam_rate_overridden = bool(mukkadam_cr)
+            # Mukkadam rate
+            mukkadam_rate             = float(mukkadam_cr.rate_per_acre) if mukkadam_cr else farmer_rate * 0.8
+            mukkadam_rate_overridden  = bool(mukkadam_cr)
 
-            # ── Productivity (efficiency) priority ───────────────────
-            # 1st: cluster-level override
-            # 2nd: global default on ActivityCatalog  ← replaces hardcoded 0.150
+            # Productivity
             global_productivity = float(
                 getattr(activity, 'default_productivity_per_worker', 0.150) or 0.150
             )
             if mukkadam_cr and mukkadam_cr.productivity_per_worker:
-                mukkadam_productivity          = float(mukkadam_cr.productivity_per_worker)
-                productivity_overridden        = True
+                mukkadam_productivity   = float(mukkadam_cr.productivity_per_worker)
+                productivity_overridden = True
             else:
-                mukkadam_productivity          = global_productivity
-                productivity_overridden        = False
+                mukkadam_productivity   = global_productivity
+                productivity_overridden = False
 
             calendar.append({
-                'activity_id':               activity.id,
-                'activity_name':             activity.name,
-                'activity_type':             activity.activity_type,
-
-                # Farmer fields
-                'rate_per_acre':             farmer_rate,
-                'rate_overridden':           rate_overridden,
-
-                # Gap
-                'gap_days':                  gap_days,
-                'gap_overridden':            gap_overridden,
-
-                # Mukkadam fields
-                'mukkadam_rate_per_acre':    mukkadam_rate,
-                'mukkadam_rate_overridden':  mukkadam_rate_overridden,
-
-                # Productivity — global shown first, cluster override on top
-                'global_productivity':       global_productivity,        # ← always shown
-                'mukkadam_productivity':     mukkadam_productivity,       # ← effective value
-                'productivity_overridden':   productivity_overridden,     # ← True if cluster override active
-
-                # Other
-                'is_strict':                 activity.is_strict,
-                'phase_order':               global_rule.phase_order if global_rule else 0,
+                'activity_id':              activity.id,
+                'activity_name':            activity.name,
+                'activity_type':            activity.activity_type,
+                'rate_per_acre':            farmer_rate,
+                'rate_overridden':          rate_overridden,
+                'gap_days':                 gap_days,
+                'gap_overridden':           gap_overridden,
+                'mukkadam_rate_per_acre':   mukkadam_rate,
+                'mukkadam_rate_overridden': mukkadam_rate_overridden,
+                'global_productivity':      global_productivity,
+                'mukkadam_productivity':    mukkadam_productivity,
+                'productivity_overridden':  productivity_overridden,
+                'is_strict':                activity.is_strict,
+                'phase_order':              global_rule.phase_order if global_rule else 0,
             })
 
         calendar.sort(key=lambda x: x['phase_order'])
@@ -193,13 +172,19 @@ def cluster_activity_calendar(request, cluster_id):
             'activities':   calendar,
         })
 
+    # ── POST ─────────────────────────────────────────────────────────────
     elif request.method == 'POST':
-        rate_overrides          = request.data.get('rate_overrides', [])
-        gap_overrides           = request.data.get('gap_overrides', [])
-        mukkadam_rate_overrides = request.data.get('mukkadam_rate_overrides', [])
-        global_productivity_updates = request.data.get('global_productivity_updates', [])  # ← NEW
+        from .utils import cascade_gap_change_for_cluster
 
-        # ── Farmer rates ─────────────────────────────────────────────
+        rate_overrides              = request.data.get('rate_overrides', [])
+        gap_overrides               = request.data.get('gap_overrides', [])
+        mukkadam_rate_overrides     = request.data.get('mukkadam_rate_overrides', [])
+        global_productivity_updates = request.data.get('global_productivity_updates', [])
+
+        all_updated = []
+        all_skipped = []
+
+        # ── Farmer rates ──────────────────────────────────────────────
         for override in rate_overrides:
             activity_id = override.get('activity_id')
             rate        = override.get('rate_per_acre')
@@ -214,7 +199,7 @@ def cluster_activity_calendar(request, cluster_id):
             except ActivityCatalog.DoesNotExist:
                 continue
 
-        # ── Gap days ─────────────────────────────────────────────────
+        # ── Gap days + cascade ────────────────────────────────────────
         for override in gap_overrides:
             activity_id = override.get('activity_id')
             gap_days    = override.get('gap_days')
@@ -222,14 +207,24 @@ def cluster_activity_calendar(request, cluster_id):
                 continue
             try:
                 activity = ActivityCatalog.objects.get(pk=activity_id)
+
+                # 1. Save new gap override
                 ClusterActivityScheduleRule.objects.update_or_create(
                     cluster=cluster, activity=activity,
                     defaults={'gap_days': gap_days}
                 )
+
+                # 2. Cascade to pending JobActivities
+                updated, skipped = cascade_gap_change_for_cluster(
+                    cluster, activity, int(gap_days)
+                )
+                all_updated.extend(updated)
+                all_skipped.extend(skipped)
+
             except ActivityCatalog.DoesNotExist:
                 continue
 
-        # ── Mukkadam rates + cluster productivity override ────────────
+        # ── Mukkadam rates + productivity override ────────────────────
         for override in mukkadam_rate_overrides:
             activity_id  = override.get('activity_id')
             rate         = override.get('rate_per_acre')
@@ -241,16 +236,14 @@ def cluster_activity_calendar(request, cluster_id):
                 ClusterMukkadamActivityRate.objects.update_or_create(
                     cluster=cluster, activity=activity,
                     defaults={
-                        'rate_per_acre':            rate,
-                        'productivity_per_worker':  productivity,
+                        'rate_per_acre':           rate,
+                        'productivity_per_worker': productivity,
                     }
                 )
             except ActivityCatalog.DoesNotExist:
                 continue
 
-        # ── Global productivity update (writes to ActivityCatalog) ────
-        # Use this when you want to change the global default for an activity
-        # across ALL clusters (not just this one).
+        # ── Global productivity ───────────────────────────────────────
         for upd in global_productivity_updates:
             activity_id  = upd.get('activity_id')
             productivity = upd.get('default_productivity_per_worker')
@@ -263,8 +256,14 @@ def cluster_activity_calendar(request, cluster_id):
             except Exception:
                 continue
 
-        return Response({'success': True, 'message': 'Calendar updated'})
-    
+        return Response({
+            'success':         True,
+            'message':         'Calendar updated',
+            'dates_updated':   len(all_updated),
+            'dates_skipped':   len(all_skipped),
+            'updated_details': all_updated,
+            'skipped_details': all_skipped,
+        }) 
 @api_view(['GET', 'POST'])
 def global_activity_catalog(request):
     if request.method == 'GET':
@@ -438,7 +437,7 @@ def cluster_insights(request):
             today_msg = c.note if has_note else (today_teams or 'Active today')
         else:
             today_msg = c.note if has_note else (
-                f"No allocation — Assigned: " if assigned_names else 'No team assigned'
+                f"No allocation — Assigned: " 
             )
 
  # ── Tomorrow status ───────────────────────────────────────────────
@@ -463,7 +462,7 @@ def cluster_insights(request):
         if has_tmrw:
             tmrw_msg = tmrw_teams or 'Active tomorrow'
         else:
-            tmrw_msg = f"No allocation — Assigned: {', '.join(assigned_names)}" if assigned_names else 'No team scheduled'
+            tmrw_msg = f"No allocation — Assigned: " if assigned_names else 'No team scheduled'
 
         # ── 7-day week plan ───────────────────────────────────────────────
         week_plan = []
@@ -1850,6 +1849,29 @@ class LeaveViewSet(viewsets.ModelViewSet):
             'message': 'Available for allocation',
         })
 
+def _build_alloc_cancel_payload(alloc, activity, job, reason, user):
+    return {
+        "allocation_id":         alloc.id,
+        "booking_id":            job.booking.booking_id if job.booking else None,
+        "api_activity_id":       activity.api_activity_id or None,
+        "activity_name":         activity.activity.name,
+        "activity_status":       "cancelled",
+        "allocated_area":        float(alloc.allocated_area),
+        "allocated_date":        str(alloc.allocated_date),
+        "mukkadam_id":           alloc.mukkadam.mukkadam_id,
+        "mukkadam_name":         alloc.mukkadam.mukkadam_name,
+        "farmer_rate":           float(alloc.farmer_rate),
+        "mukkadam_rate":         float(alloc.mukkadam_rate),
+        "job_id":                job.job_id,
+        "farmer_id":             job.farmer.farmer_id,
+        "farmer_name":           job.farmer.farmer_name,
+        "plot_id":               activity.plot.id if activity.plot else None,
+        "plot_code":             activity.plot.plot_code if activity.plot else None,
+        "cancelled_at":          str(timezone.now()),
+        "cancel_reason":         reason,
+        "last_modified_by_id":   user.id if user.is_authenticated else None,
+        "last_modified_by_name": user.get_full_name() or user.username if user.is_authenticated else None,
+    }
 from django.db.models import Prefetch
 from decimal import Decimal
 class JobViewSet(viewsets.ModelViewSet):
@@ -1997,7 +2019,86 @@ class JobViewSet(viewsets.ModelViewSet):
             )
         
         return Response(financials)
-    
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        job           = self.get_object()
+        reason        = request.data.get('reason', '').strip()
+        cancel_allocs = bool(request.data.get('cancel_allocations', False))  # 👈 frontend decides
+
+        if not reason:
+            return Response({'error': 'reason is required'}, status=400)
+        if job.status == 'cancelled':
+            return Response({'error': 'Job is already cancelled'}, status=400)
+
+        cancelled_activities  = []
+        cancelled_allocations = []
+        skipped_allocations   = []
+
+        with transaction.atomic():
+            activities = JobActivity.objects.filter(job=job, is_lost=False).select_related(
+                'activity', 'plot'
+            ).prefetch_related(
+                Prefetch('allocations', queryset=Allocation.objects.select_related('mukkadam'))
+            )
+
+            for act in activities:
+                if cancel_allocs:
+                    for alloc in act.allocations.all():
+                        if alloc.status == 'completed':
+                            skipped_allocations.append({
+                                'allocation_id': alloc.id,
+                                'activity_name': act.activity.name,
+                                'mukkadam_name': alloc.mukkadam.mukkadam_name,
+                                'message':       'Skipped — already completed',
+                            })
+                            continue
+                        cancelled_allocations.append(_build_alloc_cancel_payload(alloc, act, job=job, reason=reason, user=request.user))
+                        alloc.status = 'cancelled'
+                        alloc.save(update_fields=['status'])
+
+                act.is_lost     = True
+                act.lost_reason = reason
+                if request.user.is_authenticated:
+                    act.last_moved_by = request.user
+                    act.last_moved_at = timezone.now()
+                act.save(update_fields=['is_lost', 'lost_reason', 'last_moved_by', 'last_moved_at'])
+                cancelled_activities.append({
+                    'activity_id':    act.id,
+                    'activity_name':  act.activity.name,
+                    'scheduled_date': str(act.scheduled_date),
+                })
+
+            job.status = 'cancelled'
+            job.save(update_fields=['status'])
+
+        from .signals import allocation_cancelled, job_cancelled
+        for payload in cancelled_allocations:
+            allocation_cancelled.send(sender=None, payload=payload)
+
+        job_cancelled.send(sender=None, payload={
+            "job_id":            job.job_id,
+            "booking_id":        job.booking.booking_id if job.booking else None,
+            "farmer_id":         job.farmer.farmer_id,
+            "farmer_name":       job.farmer.farmer_name,
+            "cancel_reason":     reason,
+            "cancelled_at":      str(timezone.now()),
+            "cancelled_by_id":   request.user.id if request.user.is_authenticated else None,
+            "cancelled_by_name": request.user.get_full_name() or request.user.username if request.user.is_authenticated else None,
+            "allocations_cancelled":     cancel_allocs,
+            "cancelled_activities":      cancelled_activities,
+            "cancelled_allocations_count": len(cancelled_allocations),
+            "skipped_allocations_count": len(skipped_allocations),
+        })
+
+        return Response({
+            'success':               True,
+            'message':               f'Job {job.job_id} cancelled',
+            'cancel_reason':         reason,
+            'allocations_cancelled': cancel_allocs,
+            'cancelled_activities':  cancelled_activities,
+            'cancelled_allocations': cancelled_allocations,
+            'skipped_allocations':   skipped_allocations,
+        }, status=200)
     @action(detail=False, methods=['get'])
     def pending_jobs(self, request):
         """
@@ -2038,6 +2139,7 @@ def activity_dashboard(request):
         is_lost=False,
     ).select_related(
         'job__farmer',
+        'job__booking', 
         'activity',
         'plot',
     ).prefetch_related(
@@ -2190,6 +2292,7 @@ def activity_dashboard(request):
                 # Job
                 'job_id':             job.job_id,
                 'job_status':         job.status,
+                'booking_id':         job.booking.booking_id if job.booking else None, 
                 'crop_name':          job.crop_name,
                 'variety':            getattr(job, 'variety', ''),
                 # Farmer
@@ -2290,7 +2393,8 @@ def suggest_activity_date(request):
         return Response({'suggested_date': suggested.isoformat()})
     except Exception as e:
         return Response({'error': str(e)}, status=400)
-
+import logging
+logger = logging.getLogger(__name__)
 from .utils import get_effective_crew_size 
 from rest_framework.decorators import api_view
 # =============================================================================
@@ -2342,8 +2446,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
         activity = self.get_object()
 
         new_date = request.data.get('new_date')
-        area = request.data.get('area')
-        reason = request.data.get('reason', '').strip()
+        area     = request.data.get('area')
+        reason   = request.data.get('reason', '').strip()
 
         if not new_date:
             return Response({'error': 'new_date is required'}, status=400)
@@ -2363,54 +2467,238 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 status=400
             )
 
-        # shrink original
-        activity.total_area = activity.total_area - area
-        activity.move_reason = reason
-        
-        # 👇 track who moved it
-        if request.user and request.user.is_authenticated:
-            activity.last_moved_by = request.user
-            activity.last_moved_at = timezone.now()
-        activity.save()
+        from datetime import date
+        original_date = activity.scheduled_date  # capture before save
+        try:
+            new_date_obj = date.fromisoformat(new_date)
+        except ValueError:
+            return Response({'error': 'Invalid new_date format, use YYYY-MM-DD'}, status=400)
 
-        # create new split activity
-        new_activity = JobActivity.objects.create(
-            job=activity.job,
-            activity=activity.activity,
-            plot=activity.plot,
-            is_strict=activity.is_strict,
-            total_area=area,
-            allocated_area=Decimal('0'),
-            remaining_area=area,
-            scheduled_date=new_date,
-            original_scheduled_date=activity.original_scheduled_date or activity.scheduled_date,
-            rate_per_acre=activity.rate_per_acre,
-            transport_cost=activity.transport_cost,
-            other_cost=activity.other_cost,
-            estimated_workers=activity.estimated_workers,
-            location=activity.location,
-            is_manually_moved=True,
-            moved_from_activity=activity,
-            source='manual',
-            original_source=activity.original_source,
-            move_reason=reason,
-            api_activity_id='',
-            # 👇 who created this moved chunk
-            created_by=request.user if request.user.is_authenticated else None,
-            last_moved_by=request.user if request.user.is_authenticated else None,
-            last_moved_at=timezone.now() if request.user.is_authenticated else None,
+        day_delta = (new_date_obj - original_date).days if original_date else 0
+
+        with transaction.atomic():
+            # ── 1. Shrink original activity ──
+            activity.total_area  = activity.total_area - area
+            activity.move_reason = reason
+            if request.user and request.user.is_authenticated:
+                activity.last_moved_by = request.user
+                activity.last_moved_at = timezone.now()
+            activity.save()
+
+            # ── 2. Create new split activity on new_date ──
+            new_activity = JobActivity.objects.create(
+                job=activity.job,
+                activity=activity.activity,
+                plot=activity.plot,
+                is_strict=activity.is_strict,
+                total_area=area,
+                allocated_area=Decimal('0'),
+                remaining_area=area,
+                scheduled_date=new_date_obj,
+                original_scheduled_date=activity.original_scheduled_date or original_date,
+                rate_per_acre=activity.rate_per_acre,
+                transport_cost=activity.transport_cost,
+                other_cost=activity.other_cost,
+                estimated_workers=activity.estimated_workers,
+                location=activity.location,
+                is_manually_moved=True,
+                moved_from_activity=activity,
+                source='manual',
+                original_source=activity.original_source,
+                move_reason=reason,
+                api_activity_id='',
+                created_by=request.user if request.user.is_authenticated else None,
+                last_moved_by=request.user if request.user.is_authenticated else None,
+                last_moved_at=timezone.now() if request.user.is_authenticated else None,
+            )
+
+            # ── 3. Cascade shift subsequent pending activities ──
+            warnings = []
+            shifted_activities = []
+
+            if day_delta != 0 and original_date:
+                # All other activities on the same job, scheduled strictly after
+                # the original date, excluding the activity we just split
+                subsequent = JobActivity.objects.filter(
+                    job=activity.job,
+                    scheduled_date__gt=original_date,
+                    is_lost=False,
+                ).exclude(id=activity.id).exclude(id=new_activity.id)
+
+                for act in subsequent:
+                    if act.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+                        warnings.append({
+                            'activity_id':   act.id,
+                            'activity_name': act.activity.name,
+                            'old_date':      str(act.scheduled_date),
+                            'message':       f'Skipped — already {act.allocation_status}',
+                        })
+                        continue
+
+                    old_date = act.scheduled_date
+                    new_act_date = old_date + __import__('datetime').timedelta(days=day_delta)
+
+                    act.scheduled_date = new_act_date
+                    if request.user and request.user.is_authenticated:
+                        act.last_moved_by = request.user
+                        act.last_moved_at = timezone.now()
+                    act.move_reason = f'Cascade from activity {activity.id} move: {reason}'
+                    act.save(update_fields=[
+                        'scheduled_date', 'last_moved_by', 'last_moved_at', 'move_reason'
+                    ])
+
+                    shifted_activities.append({
+                        'activity_id':   act.id,
+                        'activity_name': act.activity.name,
+                        'old_date':      str(old_date),
+                        'new_date':      str(new_act_date),
+                        'status':        act.allocation_status,
+                    })
+
+        return Response({
+            'message':               f'{area} ac moved to {new_date}',
+            'reason':                reason,
+            'day_delta':             day_delta,
+            'original_activity_id':  activity.id,
+            'original_remaining':    float(activity.remaining_area),
+            'new_activity_id':       new_activity.id,
+            'new_date':              new_date,
+            'new_area':              float(area),
+            'shifted_activities':    shifted_activities,   # pending ones that moved
+            'warnings':              warnings,             # allocated/completed ones skipped
+        }, status=200)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        activity = self.get_object()
+
+        # ── Make sure all related objects are loaded ──
+        activity = JobActivity.objects.select_related(
+            'job__farmer',
+            'job__booking',
+            'activity',
+            'plot',
+        ).get(id=activity.id)
+
+        reason        = request.data.get('reason', '').strip()
+        cancel_allocs = bool(request.data.get('cancel_allocations', False))
+
+        if not reason:
+            return Response({'error': 'reason is required'}, status=400)
+        if activity.is_lost:
+            return Response({'error': 'Activity is already cancelled'}, status=400)
+
+        cancelled_allocations = []
+        skipped_allocations   = []
+
+        with transaction.atomic():
+            if cancel_allocs:
+                for alloc in activity.allocations.filter(
+                    status__in=['scheduled', 'in_progress']
+                ).select_related('mukkadam'):
+                    cancelled_allocations.append(
+                        _build_alloc_cancel_payload(
+                            alloc, activity, job=activity.job,
+                            reason=reason, user=request.user
+                        )
+                    )
+                    alloc.status = 'cancelled'
+                    alloc.save(update_fields=['status'])
+
+                for alloc in activity.allocations.filter(
+                    status='completed'
+                ).select_related('mukkadam'):
+                    skipped_allocations.append({
+                        'allocation_id': alloc.id,
+                        'mukkadam_name': alloc.mukkadam.mukkadam_name,
+                        'message':       'Skipped — already completed',
+                    })
+
+            activity.is_lost     = True
+            activity.lost_reason = reason
+            if request.user.is_authenticated:
+                activity.last_moved_by = request.user
+                activity.last_moved_at = timezone.now()
+            activity.save(update_fields=['is_lost', 'lost_reason', 'last_moved_by', 'last_moved_at'])
+
+        # ── Fire signals outside transaction ──
+        from .signals import allocation_cancelled, activity_cancelled
+
+        # Fire per cancelled allocation
+        for payload in cancelled_allocations:
+            try:
+                allocation_cancelled.send(sender=None, payload=payload)
+            except Exception as e:
+                logger.error(f"[SIGNAL] allocation_cancelled failed: {e}")
+
+        # Fire single activity-level cancel signal
+        try:
+            activity_cancelled.send(sender=None, payload={     # 👈 correct signal now
+                "activity_id":     activity.id,
+                "booking_id":      activity.job.booking.booking_id if activity.job.booking else None,
+                "api_activity_id": activity.api_activity_id or None,
+                "activity_name":   activity.activity.name,
+                "job_id":          activity.job.job_id,
+                "farmer_id":       activity.job.farmer.farmer_id,
+                "farmer_name":     activity.job.farmer.farmer_name,
+                "total_area":      float(activity.total_area),
+                "scheduled_date":  str(activity.scheduled_date) if activity.scheduled_date else None,
+                "cancel_reason":   reason,
+                "cancelled_at":    str(timezone.now()),
+                "cancelled_by_id":   request.user.id if request.user.is_authenticated else None,
+                "cancelled_by_name": request.user.get_full_name() or request.user.username if request.user.is_authenticated else None,
+                "allocations_cancelled": cancel_allocs,
+                "cancelled_allocations_count": len(cancelled_allocations),
+                "skipped_allocations_count":   len(skipped_allocations),
+            })
+        except Exception as e:
+            logger.error(f"[SIGNAL] activity_cancelled failed: {e}")
+
+        return Response({
+            'success':               True,
+            'message':               f'Activity {activity.id} cancelled',
+            'cancel_reason':         reason,
+            'allocations_cancelled': cancel_allocs,
+            'cancelled_allocations': cancelled_allocations,
+            'skipped_allocations':   skipped_allocations,
+        }, status=200)
+
+
+    @action(detail=True, methods=['delete'])
+    def hard_delete(self, request, pk=None):
+        activity = JobActivity.objects.select_related(
+            'job__farmer',
+            'job__booking',
+            'activity',
+            'plot',
+        ).get(id=pk)
+
+        if activity.allocation_status == 'completed':
+            return Response({'error': 'Cannot delete a completed activity'}, status=400)
+
+        reason = request.data.get('reason', '').strip()
+
+        with transaction.atomic():
+            # Cancel non-completed allocations first
+            for alloc in activity.allocations.exclude(status='completed'):
+                alloc.status = 'cancelled'
+                alloc.save(update_fields=['status'])
+
+            activity.delete()
+
+        logger.info(
+            f"[HARD DELETE] Activity {pk} ({activity.activity.name}) "
+            f"on job {activity.job.job_id} deleted by {request.user} — reason: {reason or 'none'}"
         )
 
         return Response({
-            'message': f'{area} ac moved to {new_date}',
-            'reason': reason,
-            'original_activity_id': activity.id,
-            'original_remaining': float(activity.remaining_area),
-            'new_activity_id': new_activity.id,
-            'new_date': new_date,
-            'new_area': float(area),
+            'success':    True,
+            'message':    f'Activity {pk} permanently deleted',
+            'reason':     reason or None,
+            'job_id':     activity.job.job_id,
+            'activity':   activity.activity.name,
         }, status=200)
-# views.py
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def mukkadam_misc_no_job(request, mukkadam_id):
@@ -4357,7 +4645,12 @@ class AllocationViewSet(viewsets.ModelViewSet):
             with transaction.atomic():
                 # 2) Load objects WITH row lock on JobActivity
                 try:
-                    job_activity = JobActivity.objects.select_for_update().get(id=job_activity_id)
+                    job_activity = JobActivity.objects.select_related(
+    'job__farmer',
+    'job__booking',
+    'activity',
+    'plot',
+).select_for_update(of=('self',)).get(id=job_activity_id)
                     mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
                     cluster = Cluster.objects.get(id=cluster_id)
                 except (JobActivity.DoesNotExist, Mukkadam.DoesNotExist, Cluster.DoesNotExist) as e:
@@ -4440,7 +4733,13 @@ class AllocationViewSet(viewsets.ModelViewSet):
                             'Allocation created with productivity override'
                         )
 
+                from .signals import allocation_created
+
+                # after return Response(...) is built, fire before returning:
+                allocation_created.send(sender=Allocation, allocation=allocation)
                 return Response(response_data, status=status.HTTP_201_CREATED)
+
+                
 
         except Exception as e:
             return Response(
@@ -5078,13 +5377,41 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 avail.allocated_workers = max(0, avail.allocated_workers - allocation.allocated_workers)
                 avail.save()
 
+            from .signals import allocation_deleted
+
+            # build payload before allocation.delete()
+            deleted_payload = {
+                "allocation_id":   allocation.id,
+                "booking_id":      job_activity.job.booking.booking_id if job_activity.job.booking else None,
+                "api_activity_id": job_activity.api_activity_id or None,
+                "activity_name":   job_activity.activity.name,
+                "activity_status": job_activity.allocation_status,
+                "allocated_area":  float(allocation.allocated_area),
+                "allocated_date":  str(allocation.allocated_date),
+                "mukkadam_id":     allocation.mukkadam.mukkadam_id,
+                "mukkadam_name":   allocation.mukkadam.mukkadam_name,
+                "farmer_rate":     float(allocation.farmer_rate),
+                "mukkadam_rate":   float(allocation.mukkadam_rate),
+                "job_id":          job_activity.job.job_id,
+                "farmer_id":       job_activity.job.farmer.farmer_id,
+                "farmer_name":     job_activity.job.farmer.farmer_name,
+                "plot_id":         job_activity.plot.id if job_activity.plot else None,
+                "plot_code":       job_activity.plot.plot_code if job_activity.plot else None,
+                "last_modified_by_id":   allocation.last_modified_by.id if allocation.last_modified_by else None,
+                "last_modified_by_name": allocation.last_modified_by.get_full_name() or allocation.last_modified_by.username if allocation.last_modified_by else None,
+                "deleted_by_id":         request.user.id if request.user.is_authenticated else None,
+                "deleted_by_name":       request.user.get_full_name() or request.user.username if request.user.is_authenticated else None,
+                "deleted_at":            str(timezone.now()),
+                "deleted_at":      str(timezone.now()),
+            }
+
             # 4) Delete
             allocation.delete()
 
-        return Response(
-            {'success': True, 'message': 'Allocation deleted'},
-            status=status.HTTP_200_OK,
-        )
+            # fire AFTER delete, outside transaction
+            allocation_deleted.send(sender=None, payload=deleted_payload)
+
+        return Response({'success': True, 'message': 'Allocation deleted'}, status=status.HTTP_200_OK)
 
 
 from rest_framework.decorators import api_view
@@ -7549,6 +7876,11 @@ def mark_allocation_complete(request, allocation_id):
             # Permanent — set farmer_agreed to fire signal chain
             allocation.farmer_agreed = True
             allocation.save(update_fields=['farmer_agreed'])
+
+    from .signals import allocation_completed
+
+    # at the end of the with transaction.atomic() block:
+    allocation_completed.send(sender=Allocation, allocation=allocation)
     return Response({'success': True, 'allocation_id': allocation.id})
 
 @api_view(['POST'])

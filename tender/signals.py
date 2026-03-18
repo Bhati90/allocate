@@ -11,7 +11,14 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-
+# tender/signals.py
+from django.dispatch import Signal
+allocation_cancelled = Signal()
+activity_cancelled   = Signal() 
+job_cancelled        = Signal()  
+allocation_created   = Signal()   # create_allocation
+allocation_completed = Signal()   # mark_allocation_complete
+allocation_deleted   = Signal()   # delete_allocation # fired after mark_allocation_complete
 # ============================================================================
 # ALLOCATION SIGNALS — audit log + availability tracking
 # ============================================================================
