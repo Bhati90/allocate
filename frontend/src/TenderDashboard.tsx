@@ -1824,7 +1824,7 @@ const [expandedFarmerData, setExpandedFarmerData] = useState<any>(null);
 const [expandedFarmerLoading, setExpandedFarmerLoading] = useState(false);
 
 
-
+const [weekOffset, setWeekOffset] = useState(0); // 0 = current week, 7 = next, -7 = prev
 
 const [jobNotes, setJobNotes]               = useState<Record<string, any[]>>({}); // jobId → notes[]
 const [notesLoading, setNotesLoading]       = useState(false);
@@ -1856,25 +1856,78 @@ useEffect(() => {
 
 const [insightDayAllocations, setInsightDayAllocations] = useState<any[]>([]);
 const [insightDayMukkadams, setInsightDayMukkadams] = useState<any[]>([]);
+
+const [insightDayActivities, setInsightDayActivities] = useState<any[]>([]);
+const [insightDayJobs, setInsightDayJobs] = useState<any[]>([]);
 const fetchInsightDayData = async (date: Date, clusterId: number) => {
   const dateStr = formatDateInsight(date);
   const token = localStorage.getItem('auth_token');
 
   try {
-    const [allocRes, mukkRes] = await Promise.all([
-      fetch(`${API_BASE_URL}/api/allocations/?allocated_date=${dateStr}&cluster_id=${clusterId}`, {
+    const [allocRes, mukkRes, actRes, mukkDetailRes, jobsRes] = await Promise.all([
+      fetch(`${API_BASE_URL}/api/allocations/?allocated_date=${dateStr}`, {
         headers: { Authorization: `Token ${token}` },
       }),
       fetch(`${API_BASE_URL}/api/mukkadams/daily_capacity_all/?date=${dateStr}&cluster_id=${clusterId}`, {
         headers: { Authorization: `Token ${token}` },
       }),
+      fetch(`${API_BASE_URL}/api/activity-dashboard/?cluster_id=${clusterId}&date_from=${dateStr}&date_to=${dateStr}`, {
+        headers: { Authorization: `Token ${token}` },
+      }),
+      fetch(`${API_BASE_URL}/api/mukkadams/?cluster_id=${clusterId}`, {
+        headers: { Authorization: `Token ${token}` },
+      }),
+      // 👇 fetch the same jobs endpoint CalendarPanel uses
+      fetch(`${API_BASE_URL}/api/jobs/?cluster_id=${clusterId}&scheduled_date=${dateStr}`, {
+        headers: { Authorization: `Token ${token}` },
+      }),
     ]);
 
-    const allocData = await allocRes.json();
-    const mukkData  = await mukkRes.json();
+    const allocData     = await allocRes.json();
+    const mukkData      = await mukkRes.json();
+    const actData       = await actRes.json();
+    const mukkDetailData = await mukkDetailRes.json();
+    const jobsData      = await jobsRes.json();
 
-    setInsightDayAllocations(Array.isArray(allocData) ? allocData : allocData.results ?? []);
-    setInsightDayMukkadams(Array.isArray(mukkData) ? mukkData : []);
+    // Activities for the day
+    const fetchedActs = (actData?.activities || []).filter((a: any) => a.total_area > 0);
+    setInsightDayActivities(fetchedActs);
+
+    // Filter allocations by date + cluster job IDs
+    const clusterJobIds = new Set(fetchedActs.map((a: any) => String(a.job_id)));
+    const allAllocs = Array.isArray(allocData) ? allocData : allocData.results ?? [];
+    const clusterAllocs = allAllocs.filter((al: any) => {
+      const allocDate = (al.allocated_date ?? '').slice(0, 10);
+      return allocDate === dateStr && clusterJobIds.has(String(al.job_id));
+    });
+    setInsightDayAllocations(clusterAllocs);
+
+    // Jobs — use fetched jobs directly, filter activities to this date only
+    const jobs = (Array.isArray(jobsData) ? jobsData : jobsData.results ?? []);
+    const jobsForDay = jobs.map((job: any) => ({
+      ...job,
+      activities: (job.activities || []).filter((act: any) =>
+        act.scheduled_date?.slice(0, 10) === dateStr
+      ),
+    })).filter((job: any) => job.activities.length > 0);
+    setInsightDayJobs(jobsForDay);  // 👈 new state
+
+    // Mukkadams
+    const availMap = new Map(
+      (Array.isArray(mukkData) ? mukkData : []).map((m: any) => [m.mukkadam_id, m.available_crew_size])
+    );
+    const mukkDetails: any[] = Array.isArray(mukkDetailData)
+      ? mukkDetailData
+      : mukkDetailData.results ?? mukkDetailData.mukkadams ?? [];
+
+    const enriched = mukkDetails
+      .filter((m: any) => availMap.has(m.mukkadam_id))
+      .map((m: any) => ({
+        ...m,
+        available_crew_size: availMap.get(m.mukkadam_id) ?? m.crew_size,
+      }));
+    setInsightDayMukkadams(enriched);
+
   } catch (e) {
     console.error('Failed to fetch insight day data', e);
   }
@@ -2042,62 +2095,54 @@ const [expandedActJob, setExpandedActJob] = useState<string | null>(null);
 // Add this ref alongside your states
 const allActivitiesRef = useRef<any[]>([]);
 
-// Update fetchActivities — remove allActivities from deps
+// ── 1. Add a new state for "base" filtered activities (for counts) ──────────
+const [baseActivities, setBaseActivities] = useState<any[]>([]);
+
+// ── 2. Replace fetchActivities ───────────────────────────────────────────────
 const fetchActivities = useCallback(async () => {
   setActLoading(true);
   try {
-    const params: Record<string, string> = {};
-    if (actCluster)  params.cluster_id = actCluster;
-    if (actDateFrom) params.date_from  = actDateFrom;
-    if (actDateTo)   params.date_to    = actDateTo;
-    if (actSearch)   params.search     = actSearch;
-    if (actSubTab === 'upcoming')      params.upcoming = '1';
-    if (actSubTab === 'last10')        params.last10   = '1';
-    if (actSubTab === 'not_allocated') params.status   = 'pending';
-    if (actSubTab === 'in_progress')   params.status   = 'in_progress';
-    if (actSubTab === 'completed')     params.status   = 'completed';
+    const token = localStorage.getItem('auth_token');
+    const baseParams: Record<string, string> = {};
+    if (actCluster)  baseParams.cluster_id = actCluster;
+    if (actDateFrom) baseParams.date_from  = actDateFrom;
+    if (actDateTo)   baseParams.date_to    = actDateTo;
+    if (actSearch)   baseParams.search     = actSearch;
 
+    // Always fetch the base (no subtab filter) for correct counts
+    const baseRes = await axios.get(`${API_BASE_URL}/api/activity-dashboard/`, { params: baseParams });
+    const baseFetched = (baseRes.data?.activities || []).filter((a: any) => a.total_area > 0);
+    setBaseActivities(baseFetched);
+    allActivitiesRef.current = baseFetched;
+
+    // Only update allActivities (used elsewhere) when truly unfiltered
+    if (!actCluster && !actSearch && !actDateFrom && !actDateTo) {
+      setAllActivities(baseFetched);
+    }
+
+    // Now apply subtab filter
     if (actSubTab === 'split') {
-      // No API call needed — filter from ref
-      setActivities(allActivitiesRef.current.filter((a: any) => a.is_split === true));
-      setActLoading(false);
+      setActivities(baseFetched.filter((a: any) => a.is_split === true));
       return;
     }
 
-    const res = await axios.get(`${API_BASE_URL}/api/activity-dashboard/`, { params });
-    const fetched = (res.data?.activities || []).filter((a: any) => a.total_area > 0);
+    // For other subtabs that need API-side filtering
+    const subParams = { ...baseParams };
+    if (actSubTab === 'upcoming')      subParams.upcoming = '1';
+    if (actSubTab === 'last10')        subParams.last10   = '1';
+    if (actSubTab === 'not_allocated') subParams.status   = 'pending';
+    if (actSubTab === 'in_progress')   subParams.status   = 'in_progress';
+    if (actSubTab === 'completed')     subParams.status   = 'completed';
 
-    setActivities(fetched);
-
-    if (actSubTab === 'all' && !actSearch && !actDateFrom && !actDateTo) {
-      allActivitiesRef.current = fetched;   // update ref (no re-render trigger)
-      setAllActivities(fetched);     
-      
-      if (actSubTab === 'all' && !actSearch && !actDateFrom && !actDateTo) {
-  allActivitiesRef.current = fetched;
-  setAllActivities(fetched);
-  
-  // DEBUG
-  console.log('=== ACTIVITY DEBUG ===');
-  console.log('Total fetched:', fetched.length);
-  console.log('Sample activity:', fetched[0]);
-  console.log('Allocation count > 0:', fetched.filter((a: any) => a.allocation_count > 0).length);
-  console.log('Has allocations array:', fetched.filter((a: any) => a.allocations?.length > 0).length);
-  console.log('All completed:', fetched.filter((a: any) => 
-    a.allocation_count > 0 && a.allocations?.every((alloc: any) => alloc.work_status === 'completed')
-  ).length);
-  console.log('Work statuses sample:', fetched
-    .filter((a: any) => a.allocation_count > 0)
-    .slice(0, 3)
-    .map((a: any) => ({ 
-      id: a.activity_id, 
-      allocation_count: a.allocation_count,
-      allocations_length: a.allocations?.length,
-      statuses: a.allocations?.map((al: any) => al.work_status)
-    }))
-  );
-}// update state for counts display
+    // If subtab is 'all', reuse the base fetch result directly
+    if (actSubTab === 'all') {
+      setActivities(baseFetched);
+    } else {
+      const subRes = await axios.get(`${API_BASE_URL}/api/activity-dashboard/`, { params: subParams });
+      const subFetched = (subRes.data?.activities || []).filter((a: any) => a.total_area > 0);
+      setActivities(subFetched);
     }
+
   } catch (e) {
     console.error(e);
   } finally {
@@ -2105,6 +2150,22 @@ const fetchActivities = useCallback(async () => {
   }
 }, [actCluster, actDateFrom, actDateTo, actSearch, actSubTab]);
 
+// ── 3. Replace actCounts — now reads from baseActivities ────────────────────
+const actCounts = {
+  all:           baseActivities.length,
+  upcoming:      baseActivities.filter((a: any) =>
+    a.days_until !== null && a.days_until >= 0 && a.days_until <= 10).length,
+  last10:        baseActivities.filter((a: any) =>
+    a.days_until !== null && a.days_until >= -10 && a.days_until <= 0).length,
+  not_allocated: baseActivities.filter((a: any) =>
+    a.allocation_status === 'pending').length,
+  in_progress:   baseActivities.filter((a: any) =>
+    a.allocation_count > 0 &&
+    !a.allocations?.every((alloc: any) => alloc.work_status === 'completed')).length,
+  completed:     baseActivities.filter((a: any) =>
+    a.allocations?.some((alloc: any) => alloc.work_status === 'completed')).length,
+  split:         baseActivities.filter((a: any) => a.is_split === true).length,
+};
 
 // Fetch notes for all loaded activities' job IDs
 useEffect(() => {
@@ -2145,31 +2206,6 @@ useEffect(() => {
   fetchActivities();
 }, [tab, fetchActivities]);
 
-// Remove the separate debounced search useEffect — useCallback handles it
-// In fetchActivities, the 'all' fetch already gets everything
-// The issue is actCounts.completed filters allActivities but 
-// allActivities has allocation_status = 'fully_allocated', NOT 'completed'
-
-// Fix actCounts.completed — the activity has work_status=completed on allocation
-// but allocation_status='fully_allocated' on the activity itself
-
-const actCounts = {
-  all:           allActivities.length,
-  upcoming:      allActivities.filter((a: any) => 
-    a.days_until !== null && a.days_until >= 0 && a.days_until <= 10).length,
-  last10:        allActivities.filter((a: any) => 
-    a.days_until !== null && a.days_until >= -10 && a.days_until <= 0).length,
-  not_allocated: allActivities.filter((a: any) => 
-    a.allocation_status === 'pending').length,
-  in_progress:   allActivities.filter((a: any) =>
-    a.allocation_count > 0 &&
-    !a.allocations?.every((alloc: any) => alloc.work_status === 'completed')
-  ).length,
-  completed: allActivities.filter((a: any) =>
-  a.allocations?.some((alloc: any) => alloc.work_status === 'completed')
-).length,
-  split: allActivities.filter((a: any) => a.is_split === true).length,
-};
 // Filter by sub-tab on frontend
 const today     = new Date();
 const in10Days  = new Date(); in10Days.setDate(today.getDate() + 10);
@@ -2654,6 +2690,8 @@ useEffect(() => {
   if (allActivities.length === 0) {
     fetchActivities(); // 👈 fetch activities when global tab opens
   }
+
+  // wherever you call the insights API, add
   const token = localStorage.getItem('auth_token');
   fetch(`${API_BASE_URL}/api/insights/`, {
     headers: { Authorization: `Token ${token}` },
@@ -2663,6 +2701,38 @@ useEffect(() => {
     .catch(console.error)
     .finally(() => setInsightsLoading(false));
 }, [tab]);
+
+const fetchInsights = useCallback(async (offset = weekOffset) => {
+  const scrollY = window.scrollY; // ← save before fetch
+  setInsightsLoading(true);
+  try {
+    const token = localStorage.getItem('auth_token');
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() + offset);
+    const startDateStr = startDate.toISOString().slice(0, 10);
+    const res = await fetch(
+      `${API_BASE_URL}/api/insights/?start_date=${startDateStr}`,
+      { headers: { Authorization: `Token ${token}` } }
+    );
+    const d = await res.json();
+    setInsightsData(d);
+  } catch (e) {
+    console.error('Failed to fetch insights', e);
+  } finally {
+    setInsightsLoading(false);
+    // ← restore scroll after React re-renders
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: scrollY, behavior: 'instant' });
+      });
+    });
+  }
+}, [weekOffset]);
+useEffect(() => {
+  if (tab !== 'global') return;
+  fetchInsights(weekOffset);
+}, [tab, weekOffset]);  // ← tab + weekOffset together, one effect
+
 // ── Confirm ⅓-day allocation from Jobs tab ───────────────────────────────────
 const handleJobsConfirmAllocation = async () => {
   if (!jobsHalfDayDialog) return;
@@ -2899,20 +2969,21 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
           {/* Jobs filters */}
           {tab === 'jobs' && (
             <>
-              <input placeholder="🔍 Search farmer / activity / plot" value={actSearch} onChange={e => setActSearch(e.target.value)}
+              <input placeholder="🔍 Search farmer / activity / plot" value={actSearch} onChange={e => { setActSearch(e.target.value); setActSubTab('all'); }}
                 style={{ padding: '6px 12px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', minWidth: 200, fontFamily: 'inherit', color: S.stone900 }} />
               <select value={actCluster} onChange={e => { setActCluster(e.target.value); setActSubTab('all'); }}
                 style={{ padding: '6px 12px', borderRadius: 10, fontSize: 11, fontWeight: 600, border: `1px solid ${S.stone200}`, background: '#fff', color: S.stone700, cursor: 'pointer', fontFamily: 'inherit' }}>
                 <option value="">All Clusters</option>
                 {clusters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
-              <input type="date" value={actDateFrom} onChange={e => setActDateFrom(e.target.value)}
+              <input type="date" value={actDateFrom} onChange={e => { setActDateFrom(e.target.value); setActSubTab('all'); }}
                 style={{ padding: '6px 10px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', width: 122, fontFamily: 'inherit' }} />
               <span style={{ color: S.stone300, fontSize: 11 }}>–</span>
-              <input type="date" value={actDateTo} onChange={e => setActDateTo(e.target.value)}
+              <input type="date" value={actDateTo} onChange={e => { setActDateTo(e.target.value); setActSubTab('all'); }}
                 style={{ padding: '6px 10px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', width: 122, fontFamily: 'inherit' }} />
               {(actDateFrom || actDateTo) && (
-                <button onClick={() => { setActDateFrom(''); setActDateTo(''); }}
+                <button onClick={() => { setActDateFrom(''); setActDateTo(''); setActSubTab('all'); }}
+
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: S.stone400, fontSize: 12 }}>✕</button>
               )}
             </>
@@ -4082,6 +4153,41 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
 
           {/* ═══ SECTION 4: 7-Day Plan Grid ═══ */}
           <div style={{ marginBottom: 24 }}>
+
+{/* ═══ Week Navigation ═══ */}
+<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 16 }}>
+  <button
+    onClick={() => setWeekOffset(prev => prev - 7)}
+    style={{ padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit', border: '1px solid #e8e5de', background: '#fff', color: '#374151', fontSize: 13, fontWeight: 600 }}
+  >
+    ← Prev
+  </button>
+
+  <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, display: 'flex', alignItems: 'center', gap: 6 }}>
+    {insightsData?.days?.[0]?.label} – {insightsData?.days?.[6]?.label}
+    {weekOffset === 0 && (
+      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0', fontWeight: 600 }}>
+        This Week
+      </span>
+    )}
+  </div>
+
+  {weekOffset !== 0 && (
+    <button
+      onClick={() => setWeekOffset(0)}
+      style={{ padding: '6px 12px', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit', border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#16a34a', fontSize: 12, fontWeight: 600 }}
+    >
+      Today
+    </button>
+  )}
+
+  <button
+    onClick={() => setWeekOffset(prev => prev + 7)}
+    style={{ padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit', border: '1px solid #e8e5de', background: '#fff', color: '#374151', fontSize: 13, fontWeight: 600 }}
+  >
+    Next →
+  </button>
+</div>
             <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, marginBottom: 12 }}>📅 Next 7 Days — Team Availability</div>
 
             {/* Legend */}
@@ -4276,57 +4382,33 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
 {showInsightDayDetail && insightDetailDate && (
   <DayDetailModal
     date={insightDetailDate}
-    jobs={(() => {
-      const dateStr = formatDateInsight(insightDetailDate);
-      const jobMap = new Map<string, any>();
-      allActivities
-        .filter((a: any) => {
-          const dateMatch = a.scheduled_date?.slice(0, 10) === dateStr;
-          const clusterMatch = insightDetailCluster
-            ? (a.clusters ?? []).some((c: any) => c.id === insightDetailCluster.id) ||
-              (a.farmer_clusters ?? []).some((c: any) => c.id === insightDetailCluster.id)
-            : true;
-          return dateMatch && clusterMatch;
-        })
-        .forEach((a: any) => {
-          if (!jobMap.has(a.job_id)) {
-            jobMap.set(a.job_id, {
-              job_id:      a.job_id,
-              farmer_name: a.farmer_name,
-              crop_name:   a.crop_name,
-              variety:     a.variety,
-              plot_name:   a.plot_name,
-              plot_code:   a.plot_code,
-              status:      a.job_status,
-              activities:  [],
-              booking:     null,
-            });
-          }
-          jobMap.get(a.job_id).activities.push({
-            id:                a.activity_id,
-            activity_id:       a.activity_id,
-            activity_name:     a.activity_name,
-            name:              a.activity_name,
-            scheduled_date:    a.scheduled_date,
-            total_area:        a.total_area,
-            allocated_area:    a.allocated_area,
-            remaining_area:    a.remaining_area,
-            allocation_status: a.allocation_status,
-            is_manually_moved: a.is_manually_moved,
-            plot_name:         a.plot_name,
-            plot_code:         a.plot_code,
-            rate_per_acre:     a.rate_per_acre,
-          });
-        });
-      return Array.from(jobMap.values());
-    })()}
+jobs={insightDayJobs}
+allJobs={insightDayJobs}
     allocations={insightDayAllocations}
-    mukkadams={data?.mukkadams ?? []}  // 👈 pass ALL mukkadams, don't filter — modal uses clusterId to fetch availability itself
-    capacitySummary={{
-  used:             insightDayAllocations.reduce((s: number, a: any) => s + (a.allocated_workers || 0), 0),
-  total:            insightDayMukkadams.reduce((s: number, m: any) => s + (m.available_crew_size || 0), 0),
-  percentage:       0,
-  conflicts:        [],
+   mukkadams={insightDayMukkadams.map((m: any) => ({
+  mukkadam_id:         m.mukkadam_id ?? m.id,
+  mukkadam_name:       m.mukkadam_name ?? m.name,
+  mobile_numbers:      m.mobile_numbers ?? m.mobile,
+  crew_size:           m.crew_size,
+  max_crew_capacity:   m.max_crew_capacity ?? m.crew_size,
+  is_permanent:        m.clusters?.some((c: any) => c.mukkadam_type === 'permanent') ?? true,
+  district:            m.location?.district ?? m.district ?? '',
+  taluka:              m.location?.taluka ?? m.taluka ?? '',
+  village:             m.location?.village ?? m.village ?? '',
+  work_mode:           m.work_mode ?? '',
+  has_smartphone:      m.has_smartphone ?? '',
+  start_date:          m.availability?.start_date ?? m.start_date ?? null,
+  end_date:            m.availability?.end_date ?? m.end_date ?? null,
+  activity_rates:      m.activity_rates ?? [],
+  available_crew_size: m.available_crew_size ?? m.crew_size,
+}))}
+   capacitySummary={{
+  used: insightDayAllocations.reduce((s: number, a: any) => 
+    s + (a.allocated_workers || 0), 0),
+  total: insightDayMukkadams.reduce((s: number, m: any) => 
+    s + (m.available_crew_size || 0), 0),
+  percentage: 0,
+  conflicts: [],
   mukkadamsOnLeave: 0,
 }}
     leaves={[]}
@@ -4337,11 +4419,13 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
       }
     }}
     onClose={() => {
-      setShowInsightDayDetail(false);
-      setInsightDetailDate(null);
-      setInsightDetailCluster(null);
-      setInsightDayAllocations([]);
-    }}
+  setShowInsightDayDetail(false);
+  setInsightDetailDate(null);
+  setInsightDetailCluster(null);
+  setInsightDayAllocations([]);
+  setInsightDayActivities([]);
+  setInsightDayJobs([]);
+}}
     onAllocationDateChange={() => {}}
     onAllocationDelete={() => {}}
     onStartAllocation={() => {}}
@@ -4352,8 +4436,8 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
       plotId: null, activityId: null,
       cropName: null, variety: null,
     }}
-    allJobs={[]}
-    viewMode={['jobs']}
+
+    viewMode={['jobs', 'allocations']}  // 👈 was ['jobs']
     clusterId={insightDetailCluster?.id ?? 0}
   />
 )}

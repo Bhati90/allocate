@@ -316,7 +316,6 @@ def get_cluster_info(request, cluster_id):
         })
     except Cluster.DoesNotExist:
         return Response({'error': 'Cluster not found'}, status=404)
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def cluster_insights(request):
@@ -324,12 +323,37 @@ def cluster_insights(request):
     from decimal import Decimal
     from collections import defaultdict
 
-    today    = date.today()
-    tomorrow = today + timedelta(days=1)
+    # ── Accept optional start_date for week navigation ─────────────────────
+    start_date_str = request.GET.get('start_date')
+    if start_date_str:
+        try:
+            today = date.fromisoformat(start_date_str)
+        except ValueError:
+            today = date.today()
+    else:
+        today = date.today()
+
+    actual_today = date.today()          # used for is_today flag
+    tomorrow  = today + timedelta(days=1)
     week_days = [today + timedelta(days=i) for i in range(7)]
 
     def fmt_date(d):
         return d.strftime('%d %b').lstrip('0')
+
+    # ── helper: canonical unalloc count (deduped, no lost, no zero-area) ───
+    def unalloc_count_qs(base_filter: dict):
+        return (
+            JobActivity.objects
+            .filter(
+                allocation_status='pending',
+                total_area__gt=0,
+                is_lost=False,
+                **base_filter,
+            )
+            .values('job', 'plot', 'api_activity_id')
+            .distinct()
+            .count()
+        )
 
     clusters = Cluster.objects.all().order_by('name')
     activity_qs = JobActivity.objects.filter(
@@ -337,22 +361,19 @@ def cluster_insights(request):
         total_area__gt=0,
         plot__isnull=False,
     )
-    # ── Global KPIs — ALL data not just clustered ─────────────────────────
-    total_farmers    = Farmer.objects.count()
-    total_area       = JobActivity.objects.filter(total_area__gt=0).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
-    allocated_area   = JobActivity.objects.filter(total_area__gt=0).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
-    total_jobs       = Job.objects.count()
-    total_plots      = Plot.objects.count()
-    total_activities    = activity_qs.values('job', 'plot', 'api_activity_id').distinct().count()
 
-    # ── Global daily unallocated + crew ───────────────────────────────────
+    # ── Global KPIs ────────────────────────────────────────────────────────
+    total_farmers  = Farmer.objects.count()
+    total_area     = JobActivity.objects.filter(total_area__gt=0).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
+    allocated_area = JobActivity.objects.filter(total_area__gt=0).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
+    total_jobs     = Job.objects.count()
+    total_plots    = Plot.objects.count()
+    total_activities = activity_qs.values('job', 'plot', 'api_activity_id').distinct().count()
+
+    # ── Global daily unallocated + crew ────────────────────────────────────
     global_daily = []
     for d in week_days:
-        unalloc = JobActivity.objects.filter(
-            scheduled_date=d,
-            allocation_status='pending',
-            total_area__gt=0,
-        ).count()
+        unalloc = unalloc_count_qs({'scheduled_date': d})
         crew = Allocation.objects.filter(
             allocated_date=d,
         ).aggregate(s=models.Sum('allocated_workers'))['s'] or 0
@@ -364,7 +385,7 @@ def cluster_insights(request):
             'crew':        int(crew),
         })
 
-    # ── Per-cluster data ──────────────────────────────────────────────────
+    # ── Per-cluster data ───────────────────────────────────────────────────
     cluster_data = []
 
     for c in clusters:
@@ -375,26 +396,17 @@ def cluster_insights(request):
         c_alloc_area = JobActivity.objects.filter(
             plot__clusters=c, total_area__gt=0
         ).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
-        # ── Activity-wise pending breakdown ──────────────────────────────────
-        from django.db.models import Sum
 
+        # ── Activity-wise pending breakdown ───────────────────────────────
         activity_pending = (
             JobActivity.objects
-            .filter(
-                plot__clusters=c,
-                total_area__gt=0,
-                allocation_status='pending',
-            )
-            .values('activity__name')          # group by activity name
-            .annotate(pending_area=Sum('total_area'))
+            .filter(plot__clusters=c, total_area__gt=0, allocation_status='pending', is_lost=False)
+            .values('activity__name')
+            .annotate(pending_area=models.Sum('total_area'))
             .order_by('-pending_area')
         )
-
         activity_breakdown = [
-            {
-                'activity': row['activity__name'] or 'Unknown',
-                'pending_area': float(row['pending_area']),
-            }
+            {'activity': row['activity__name'] or 'Unknown', 'pending_area': float(row['pending_area'])}
             for row in activity_pending
         ]
 
@@ -402,80 +414,32 @@ def cluster_insights(request):
         c_jobs    = Job.objects.filter(clusters=c).distinct().count()
         c_plots   = Plot.objects.filter(clusters=c).count()
 
-        # ── Today status ──────────────────────────────────────────────────
-        today_allocs = Allocation.objects.filter(
-            cluster=c, allocated_date=today
-        ).select_related('mukkadam')
-
-        has_today = today_allocs.exists()
-        has_note  = bool(c.note)
-
-        if has_today and not has_note:
-            today_status = 'green'
-        elif has_today and has_note:
-            today_status = 'yellow'
-        else:
-            today_status = 'red'
-
-        today_teams = ', '.join(set(
-            f"{a.mukkadam.mukkadam_name} ({a.allocated_workers})"
-            for a in today_allocs
-        ))
-        # In the per-cluster loop, replace today_msg:
-
-        # Mukkadams assigned to cluster
         assigned_mukkadams = ClusterMukkadamAssignment.objects.filter(
             cluster=c, is_active=True,
         ).select_related('mukkadam')
 
-        assigned_names = [
-            f"{a.mukkadam.mukkadam_name} ({a.mukkadam.crew_size} crew, {'UP' if a.mukkadam_type == 'updown' else 'P'})"
-            for a in assigned_mukkadams
-        ]
+        # ── Today status ──────────────────────────────────────────────────
+        today_allocs = Allocation.objects.filter(cluster=c, allocated_date=today).select_related('mukkadam')
+        has_today = today_allocs.exists()
+        has_note  = bool(c.note)
 
-        if has_today:
-            today_msg = c.note if has_note else (today_teams or 'Active today')
-        else:
-            today_msg = c.note if has_note else (
-                f"No allocation — Assigned: " 
-            )
+        today_status = 'green' if has_today and not has_note else 'yellow' if has_today else 'red'
+        today_teams  = ', '.join(set(f"{a.mukkadam.mukkadam_name} ({a.allocated_workers})" for a in today_allocs))
+        today_msg    = c.note if has_note else (today_teams or 'Active today') if has_today else "No allocation — Assigned: "
 
- # ── Tomorrow status ───────────────────────────────────────────────
-        tmrw_allocs = Allocation.objects.filter(
-            cluster=c, allocated_date=tomorrow
-        ).select_related('mukkadam')
-
-        has_tmrw = tmrw_allocs.exists()
-
-        if has_tmrw and not has_note:
-            tmrw_status = 'green'
-        elif has_tmrw and has_note:
-            tmrw_status = 'yellow'
-        else:
-            tmrw_status = 'red'
-
-        tmrw_teams = ', '.join(set(
-            f"{a.mukkadam.mukkadam_name} ({a.allocated_workers})"
-            for a in tmrw_allocs
-        ))
-        # Same for tomorrow:
-        if has_tmrw:
-            tmrw_msg = tmrw_teams or 'Active tomorrow'
-        else:
-            tmrw_msg = f"No allocation — Assigned: " if assigned_names else 'No team scheduled'
+        # ── Tomorrow status ───────────────────────────────────────────────
+        tmrw_allocs  = Allocation.objects.filter(cluster=c, allocated_date=tomorrow).select_related('mukkadam')
+        has_tmrw     = tmrw_allocs.exists()
+        tmrw_status  = 'green' if has_tmrw and not has_note else 'yellow' if has_tmrw else 'red'
+        tmrw_teams   = ', '.join(set(f"{a.mukkadam.mukkadam_name} ({a.allocated_workers})" for a in tmrw_allocs))
+        tmrw_msg     = tmrw_teams or 'Active tomorrow' if has_tmrw else "No allocation — Assigned: " if assigned_mukkadams.exists() else 'No team scheduled'
 
         # ── 7-day week plan ───────────────────────────────────────────────
         week_plan = []
         for d in week_days:
-            day_allocs = Allocation.objects.filter(
-                cluster=c, allocated_date=d,
-            ).select_related('mukkadam', 'job_activity__activity').order_by('mukkadam_id')
-
+            day_allocs   = Allocation.objects.filter(cluster=c, allocated_date=d).select_related('mukkadam', 'job_activity__activity').order_by('mukkadam_id')
             mukkadam_ids = list(day_allocs.values_list('mukkadam_id', flat=True).distinct())
-            assignments  = ClusterMukkadamAssignment.objects.filter(
-                cluster=c, mukkadam_id__in=mukkadam_ids, is_active=True,
-            ).values('mukkadam_id', 'mukkadam_type')
-            type_map = {a['mukkadam_id']: a['mukkadam_type'] for a in assignments}
+            type_map     = {a['mukkadam_id']: a['mukkadam_type'] for a in ClusterMukkadamAssignment.objects.filter(cluster=c, mukkadam_id__in=mukkadam_ids, is_active=True).values('mukkadam_id', 'mukkadam_type')}
 
             seen_names = set()
             teams = []
@@ -486,145 +450,114 @@ def cluster_insights(request):
                 seen_names.add(mk_name)
                 mk_type = type_map.get(a.mukkadam_id, 'permanent')
                 teams.append({
-                    'mukkadam_id':   a.mukkadam_id,
-                    'name':          mk_name,
-                    'crew':          a.allocated_workers,
+                    'mukkadam_id': a.mukkadam_id, 'name': mk_name,
+                    'crew': a.allocated_workers,
                     'mukkadam_type': mk_type,
-                    'type_tag':      'UP' if mk_type == 'updown' else 'P',
-                    'status':        'confirmed',
+                    'type_tag': 'UP' if mk_type == 'updown' else 'P',
+                    'status': 'confirmed',
                 })
 
-            # ── NEW: if no confirmed allocation, show assigned mukkadams as available ──
             available_teams = []
             if not teams:
-                for a in assigned_mukkadams:   # already fetched above in the cluster loop
-                    mk_type = a.mukkadam_type
+                for a in assigned_mukkadams:
                     available_teams.append({
-                        'mukkadam_id':   a.mukkadam_id,
-                        'name':          a.mukkadam.mukkadam_name,
-                        'crew':          a.mukkadam.crew_size,
-                        'mukkadam_type': mk_type,
-                        'type_tag':      'UP' if mk_type == 'updown' else 'P',
-                        'status':        'available',   # <── key difference
+                        'mukkadam_id': a.mukkadam_id, 'name': a.mukkadam.mukkadam_name,
+                        'crew': a.mukkadam.crew_size,
+                        'mukkadam_type': a.mukkadam_type,
+                        'type_tag': 'UP' if a.mukkadam_type == 'updown' else 'P',
+                        'status': 'available',
                     })
 
-            unalloc_count = JobActivity.objects.filter(
-                plot__clusters=c,
-                scheduled_date=d,
-                allocation_status='pending',
-                total_area__gt=0,
-            ).count()
+            # ── FIX: use deduped job count, not area-as-int ────────────────
+            unalloc_jobs = unalloc_count_qs({'plot__clusters': c, 'scheduled_date': d})
 
             unalloc_area = JobActivity.objects.filter(
-                plot__clusters=c,
-                scheduled_date=d,
-                allocation_status='pending',
-                total_area__gt=0,
+                plot__clusters=c, scheduled_date=d,
+                allocation_status='pending', total_area__gt=0, is_lost=False,
             ).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
 
             alloc_area = JobActivity.objects.filter(
-                plot__clusters=c,
-                scheduled_date=d,
-                allocation_status='allocated',
-                total_area__gt=0,
+                plot__clusters=c, scheduled_date=d,
+                allocation_status='allocated', total_area__gt=0,
             ).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
-
-            total_day_area = unalloc_area + alloc_area
 
             week_plan.append({
                 'date':            str(d),
                 'label':           fmt_date(d),
                 'day_name':        d.strftime('%a'),
-                'is_today':        d == today,
+                'is_today':        d == actual_today,
                 'teams':           teams,
                 'available_teams': available_teams,
-                'unallocated':     int(unalloc_area),        # keep old field intact
-                'total_area':      float(total_day_area),
+                'unallocated':     unalloc_jobs,       # ✅ now a real job count
+                'total_area':      float(unalloc_area + alloc_area),
                 'allocated_area':  float(alloc_area),
                 'pending_area':    float(unalloc_area),
             })
+
         cluster_data.append({
-            'id':             c.id,
-            'name':           c.name,
-            'note':           c.note or '',
-            'districts':      c.districts or [],
-            'farmers':        c_farmers,
-            'plots':          c_plots,
-            'jobs':           c_jobs,
+            'id': c.id, 'name': c.name, 'note': c.note or '',
+            'districts': c.districts or [],
+            'farmers': c_farmers, 'plots': c_plots, 'jobs': c_jobs,
             'total_area':     float(c_total_area),
             'allocated_area': float(c_alloc_area),
-            'activity_breakdown': activity_breakdown,   # ← add this line
             'pending_area':   float(c_total_area - c_alloc_area),
             'pct':            round(float(c_alloc_area / c_total_area * 100), 1) if c_total_area > 0 else 0,
-            'today': {
-                'status': today_status,
-                'msg':    today_msg,
-            },
-            'tomorrow': {
-                'status': tmrw_status,
-                'msg':    tmrw_msg,
-            },
+            'activity_breakdown': activity_breakdown,
+            'today':    {'status': today_status, 'msg': today_msg},
+            'tomorrow': {'status': tmrw_status,  'msg': tmrw_msg},
             'week_plan': week_plan,
         })
 
-
-
-
-    # Sort: red first, yellow, green
     status_order = {'red': 0, 'yellow': 1, 'green': 2}
     cluster_data.sort(key=lambda c: status_order.get(c['today']['status'], 3))
 
-    # After the cluster loop, add "No Cluster" stats:
-
-    # Farmers with no cluster
+    # ── No Cluster row ─────────────────────────────────────────────────────
     no_cluster_farmers = Farmer.objects.filter(clusters__isnull=True).count()
     no_cluster_plots   = Plot.objects.filter(clusters__isnull=True).count()
     no_cluster_jobs    = Job.objects.filter(clusters__isnull=True).distinct().count()
-    no_cluster_area    = JobActivity.objects.filter(
-        plot__clusters__isnull=True, total_area__gt=0
-    ).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
-    no_cluster_alloc   = JobActivity.objects.filter(
-        plot__clusters__isnull=True, total_area__gt=0
-    ).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
+    no_cluster_area    = JobActivity.objects.filter(plot__clusters__isnull=True, total_area__gt=0).aggregate(s=models.Sum('total_area'))['s'] or Decimal('0')
+    no_cluster_alloc   = JobActivity.objects.filter(plot__clusters__isnull=True, total_area__gt=0).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
+
+    nc_week_plan = []
+    for d in week_days:
+        # ✅ FIX: deduped count + is_lost + total_area > 0
+        nc_unalloc = unalloc_count_qs({'plot__clusters__isnull': True, 'scheduled_date': d})
+        nc_week_plan.append({
+            'date': str(d), 'label': fmt_date(d), 'day_name': d.strftime('%a'),
+            'is_today': d == actual_today,
+            'teams': [], 'available_teams': [],
+            'unallocated': nc_unalloc,
+            'total_area': 0, 'allocated_area': 0, 'pending_area': 0,
+        })
 
     no_cluster_row = {
-        'id':             0,
-        'name':           '— No Cluster',
-        'note':           '',
-        'districts':      [],
-        'farmers':        no_cluster_farmers,
-        'plots':          no_cluster_plots,
-        'jobs':           no_cluster_jobs,
+        'id': 0, 'name': '— No Cluster', 'note': '', 'districts': [],
+        'farmers': no_cluster_farmers, 'plots': no_cluster_plots, 'jobs': no_cluster_jobs,
         'total_area':     float(no_cluster_area),
         'allocated_area': float(no_cluster_alloc),
         'pending_area':   float(no_cluster_area - no_cluster_alloc),
         'pct':            round(float(no_cluster_alloc / no_cluster_area * 100), 1) if no_cluster_area > 0 else 0,
-        'today':          {'status': 'yellow', 'msg': 'Not assigned to any cluster'},
-        'tomorrow':       {'status': 'yellow', 'msg': 'Not assigned to any cluster'},
-        'week_plan':      [{'date': str(d), 'label': fmt_date(d), 'day_name': d.strftime('%a'), 'is_today': d == today, 'teams': [], 'unallocated': JobActivity.objects.filter(plot__clusters__isnull=True, scheduled_date=d, allocation_status='pending', total_area__gt=0).count()} for d in week_days],
+        'today':    {'status': 'yellow', 'msg': 'Not assigned to any cluster'},
+        'tomorrow': {'status': 'yellow', 'msg': 'Not assigned to any cluster'},
+        'week_plan': nc_week_plan,
     }
 
     return Response({
-        'today':       str(today),
-        'tomorrow':    str(tomorrow),
+        'today':       str(actual_today),
+        'tomorrow':    str(actual_today + timedelta(days=1)),
+        'week_start':  str(today),           # ← so frontend knows which week is loaded
         'days':        [{'date': str(d), 'label': fmt_date(d), 'day_name': d.strftime('%a')} for d in week_days],
         'global_kpis': {
-            'total_farmers':    total_farmers,
-            'total_plots':      total_plots,
-            'total_area':       float(total_area),
-            'allocated_area':   float(allocated_area),
-            'pending_area':     float(total_area - allocated_area),
-            'pct_complete':     round(float(allocated_area / total_area * 100), 1) if total_area > 0 else 0,
-            'total_jobs':       total_jobs,
-            'total_activities': total_activities,
+            'total_farmers': total_farmers, 'total_plots': total_plots,
+            'total_area': float(total_area), 'allocated_area': float(allocated_area),
+            'pending_area': float(total_area - allocated_area),
+            'pct_complete': round(float(allocated_area / total_area * 100), 1) if total_area > 0 else 0,
+            'total_jobs': total_jobs, 'total_activities': total_activities,
         },
-        'global_daily':  global_daily,
-       
-        'no_cluster_row': no_cluster_row,
-    'clusters': cluster_data,
+        'global_daily':   global_daily,
+        'clusters':        cluster_data,
+        'no_cluster_row':  no_cluster_row,
     })
-
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def payment_overview(request):
