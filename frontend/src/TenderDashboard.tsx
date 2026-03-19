@@ -2802,6 +2802,54 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
   }
 };
 
+const jobMetrics = useMemo(() => {
+  const all = baseActivities;
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  const isCompleted = (a: any) =>
+    a.allocations?.some((al: any) => al.work_status === 'completed') ||
+    a.allocation_status === 'completed';
+
+  // ── Only count truly pending + has area + not completed/allocated ──
+  const isCountable = (a: any) =>
+    Number(a.total_area) > 0 &&
+    Number(a.remaining_area ?? a.total_area) > 0 &&
+    !isCompleted(a) &&
+    !['fully_allocated', 'in_progress'].includes(a.allocation_status);
+
+  const diffDays = (a: any): number | null => {
+    if (!a.scheduled_date) return null;
+    return Math.floor(
+      (new Date(a.scheduled_date.slice(0, 10)).getTime() - new Date(todayStr).getTime()) / 86_400_000
+    );
+  };
+
+  const overdue  = all.filter(a => { const d = diffDays(a); return d !== null && d < 0  && isCountable(a); });
+  const due0_3   = all.filter(a => { const d = diffDays(a); return d !== null && d >= 0 && d <= 3  && isCountable(a); });
+  const due3_10  = all.filter(a => { const d = diffDays(a); return d !== null && d >  3 && d <= 10 && isCountable(a); });
+  const due10p   = all.filter(a => { const d = diffDays(a); return d !== null && d >  10 && isCountable(a); });
+const mild = overdue.filter(a => { const d = diffDays(a) ?? 0; return d >= -7 && d < 0; }).length;
+  const critical = overdue.filter(a => (diffDays(a) ?? 0) < -30).length;
+  const severe   = overdue.filter(a => { const d = diffDays(a) ?? 0; return d >= -30 && d < -7; }).length;
+
+  const val = (arr: any[]) => arr.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0);
+  const fmt = (v: number) => v >= 100000 ? `₹${(v / 100000).toFixed(1)}L` : `₹${Math.round(v).toLocaleString('en-IN')}`;
+
+  const completedCount = all.filter(isCompleted).length;
+  const onTimeRate = completedCount + overdue.length > 0
+    ? Math.round((completedCount / (completedCount + overdue.length)) * 100)
+    : null;
+
+  return {
+    mild,
+    onTimeRate,
+    overdueNow:   overdue.length,   critical,   severe,
+    overdueValue: fmt(val(overdue)),
+    due0_3Count:  due0_3.length,    due0_3Value:  fmt(val(due0_3)),
+    due3_10Count: due3_10.length,   due3_10Value: fmt(val(due3_10)),
+    due10pCount:  due10p.length,    due10pValue:  fmt(val(due10p)),
+  };
+}, [baseActivities]);
 const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
 
 
@@ -4151,7 +4199,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
             );
           })()}
 
-          {/* ═══ SECTION 4: 7-Day Plan Grid ═══ */}
+         
           <div style={{ marginBottom: 24 }}>
 
 {/* ═══ Week Navigation ═══ */}
@@ -4513,6 +4561,114 @@ allJobs={insightDayJobs}
  
         ) : tab === 'jobs' ? (
           <>
+
+{!actLoading && baseActivities.length > 0 && (
+  <div style={{ padding: '16px 24px 0 24px' }}>
+
+    {/* ── On-Time Banner ── */}
+    {jobMetrics.onTimeRate !== null && (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 20px', borderRadius: 14, background: '#fff', border: `1px solid ${S.stone200}`, boxShadow: S.shadowCard, marginBottom: 12 }}>
+        {/* Donut */}
+        <div style={{ position: 'relative', width: 56, height: 56, flexShrink: 0 }}>
+          <svg width="56" height="56" style={{ transform: 'rotate(-90deg)' }}>
+            <circle cx="28" cy="28" r="22" fill="none" stroke={S.stone100} strokeWidth="5" />
+            <circle cx="28" cy="28" r="22" fill="none"
+              stroke={jobMetrics.onTimeRate >= 70 ? '#16a34a' : jobMetrics.onTimeRate >= 40 ? '#f59e0b' : '#ef4444'}
+              strokeWidth="5"
+              strokeDasharray={`${(jobMetrics.onTimeRate / 100) * 138} 138`}
+              strokeLinecap="round" />
+          </svg>
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: jobMetrics.onTimeRate >= 70 ? '#16a34a' : jobMetrics.onTimeRate >= 40 ? '#f59e0b' : '#ef4444' }}>{jobMetrics.onTimeRate}%</span>
+            <span style={{ fontSize: 7, color: S.stone400, fontWeight: 600 }}>ON-TIME</span>
+          </div>
+        </div>
+        {/* Text */}
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: S.stone900, marginBottom: 3 }}>
+            On-Time Delivery — {jobMetrics.onTimeRate >= 70 ? 'On Track' : jobMetrics.onTimeRate >= 40 ? 'Needs Attention' : 'Needs Urgent Attention'}
+          </div>
+          <div style={{ fontSize: 12, color: S.stone500, lineHeight: 1.5 }}>
+            Only <span style={{ color: '#f59e0b', fontWeight: 700 }}>{jobMetrics.onTimeRate}% completed on time</span>.{' '}
+            <span style={{ color: '#ef4444', fontWeight: 700 }}>{jobMetrics.overdueNow} jobs overdue</span> and{' '}
+            <span style={{ color: '#ea580c', fontWeight: 700 }}>{jobMetrics.due0_3Count} due in next 3 days remain unallocated</span>.
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ── 4 metric cards ── */}
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
+      {[
+        {
+           count:      jobMetrics.overdueNow,
+          label:      'OVERDUE NOW',
+          emoji:      '🔥',
+          sub:        `${jobMetrics.critical} critical (30d+) · ${jobMetrics.severe} severe (7-30d) · ${jobMetrics.mild} mild (1-7d)`,
+          
+
+          value:      `${jobMetrics.overdueValue} at risk`,
+          countColor: '#dc2626',
+          border:     '#fecaca',
+          bg:         '#fef2f2',
+          valueBg:    '#fee2e2',
+          valueColor: '#dc2626',
+        },
+        {
+          count:      jobMetrics.due0_3Count,
+          label:      'DUE IN 0–3 DAYS',
+          emoji:      '⚡',
+          sub:        'Unallocated — will miss deadline',
+          value:      `${jobMetrics.due0_3Value} at risk`,
+          countColor: '#ea580c',
+          border:     '#fed7aa',
+          bg:         '#fff7ed',
+          valueBg:    '#ffedd5',
+          valueColor: '#ea580c',
+        },
+        {
+          count:      jobMetrics.due3_10Count,
+          label:      'DUE IN 3–10 DAYS',
+          emoji:      '👁',
+          sub:        'Still time — needs planning now',
+          value:      `${jobMetrics.due3_10Value} at risk`,
+          countColor: '#2563eb',
+          border:     '#bfdbfe',
+          bg:         '#eff6ff',
+          valueBg:    '#dbeafe',
+          valueColor: '#2563eb',
+        },
+        {
+          count:      jobMetrics.due10pCount,
+          label:      'DUE IN 10+ DAYS',
+          emoji:      '✅',
+          sub:        'Comfortable runway — plan ahead',
+          value:      `${jobMetrics.due10pValue} planned`,
+          countColor: '#16a34a',
+          border:     '#bbf7d0',
+          bg:         '#f0fdf4',
+          valueBg:    '#dcfce7',
+          valueColor: '#16a34a',
+        },
+      ].map((card, i) => (
+        <div key={i} style={{ borderRadius: 14, padding: '16px 18px', background: card.bg, border: `1px solid ${card.border}`, boxShadow: S.shadowCard }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+            <span style={{ fontSize: 14 }}>{card.emoji}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', color: card.countColor }}>{card.label}</span>
+          </div>
+          <div style={{ fontSize: 36, fontWeight: 800, color: card.countColor, lineHeight: 1, letterSpacing: '-1px', marginBottom: 6 }}>
+            {card.count.toLocaleString('en-IN')}
+          </div>
+          <div style={{ fontSize: 11, color: S.stone500, marginBottom: 10, lineHeight: 1.4 }}>{card.sub}</div>
+          <div style={{ padding: '5px 10px', borderRadius: 8, background: card.valueBg, display: 'inline-block', fontSize: 12, fontWeight: 700, color: card.valueColor }}>
+            {card.value}
+          </div>
+        </div>
+      ))}
+    </div>
+
+  </div>
+)}
             {actLoading ? (
               <div style={{ display: 'flex', justifyContent: 'center', padding: '64px 0' }}>
                 <RefreshCw size={28} style={{ color: S.brand, animation: 'spin 1s linear infinite' }} />
@@ -4529,13 +4685,30 @@ allJobs={insightDayJobs}
               });
  
               return Object.entries(grouped).map(([actName, acts]) => {
-                const totalArea  = acts.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0);
-                const totalValue = acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0);
-                const unalloc    = acts.filter((a: any) => a.allocation_status === 'pending').length;
-                const ov30       = acts.filter((a: any) => a.days_until !== null && a.days_until < -30).length;
-                const ov7        = acts.filter((a: any) => a.days_until !== null && a.days_until >= -30 && a.days_until < -7).length;
- 
-                return (
+                
+const isOverdue = (a: any) =>
+  a.days_until !== null &&
+  Number(a.total_area) > 0 &&
+  Number(a.remaining_area) > 0 &&
+  !['fully_allocated', 'partially_allocated', 'in_progress', 'completed'].includes(a.allocation_status);
+// In the parent component where you compute these, after flatMap:
+const flatActs = acts.flatMap((a: any) =>
+  a.is_split && a.splits?.length > 0
+    ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status }))
+    : [a]
+);
+
+const totalArea  = flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0);
+const totalValue = acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0); // keep value on parent
+const unalloc    = flatActs.filter((a: any) => a.allocation_status === 'pending').length;
+const ov30       = flatActs.filter((a: any) => isOverdue(a) && a.days_until < -30).length;
+const ov7        = flatActs.filter((a: any) => isOverdue(a) && a.days_until >= -30 && a.days_until < -7).length;
+const ov1_7 = flatActs.filter((a: any) => isOverdue(a) && a.days_until >= -7  && a.days_until < 0).length;  
+const onTime = flatActs.filter((a: any) =>
+  a.allocations?.some((al: any) => al.work_status === 'completed') ||
+  a.allocation_status === 'fully_allocated'
+).length;
+return (
                   <GroupedActivitySection
                     key={actName}
                     actName={actName}
@@ -4545,6 +4718,8 @@ allJobs={insightDayJobs}
                     unalloc={unalloc}
                     ov30={ov30}
                     ov7={ov7}
+                    onTime={onTime} 
+                    ov1_7 = {ov1_7}
                     expandedActJob={expandedActJob}
                     setExpandedActJob={setExpandedActJob}
                     isAdmin={isAdmin}
@@ -5033,9 +5208,9 @@ allJobs={insightDayJobs}
 // GROUPED ACTIVITY SECTION  — new helper component used by Jobs tab above
 // Paste this OUTSIDE TenderDashboard, near MukkadamCard / FarmerCard
 // ─────────────────────────────────────────────────────────────────────────────
-function GroupedActivitySection({ actName, acts, totalArea, totalValue, unalloc, ov30, ov7, expandedActJob, setExpandedActJob, isAdmin, handleUpdownComplete, onAllocate, onAllocateWithMukkadam, onNote, maxWorkRows, onSuccess, jobNotes }:{
+function GroupedActivitySection({ actName, acts,ov1_7, totalArea, totalValue,onTime, unalloc, ov30, ov7, expandedActJob, setExpandedActJob, isAdmin, handleUpdownComplete, onAllocate, onAllocateWithMukkadam, onNote, maxWorkRows, onSuccess, jobNotes }:{
    actName: string; acts: any[]; totalArea: number; totalValue: number;
-  unalloc: number; ov30: number; ov7: number;
+  unalloc: number; ov30: number; ov7: number; ov1_7:number;onTime: number;
   expandedActJob: string | null; setExpandedActJob: (id: string | null) => void;
   isAdmin: boolean;
   handleUpdownComplete: (mId: number, aId: number) => void;
@@ -5083,6 +5258,9 @@ function GroupedActivitySection({ actName, acts, totalArea, totalValue, unalloc,
               <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px', color: S.stone400, marginTop: 2 }}>{s.lbl}</div>
             </div>
           ))}
+          {onTime > 0 && <span style={{ padding: '4px 14px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0', whiteSpace: 'nowrap' }}>✅ {onTime} On Time</span>}
+
+          {ov1_7 > 0 && <span style={{ padding: '4px 14px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: '#fefce8', color: '#ca8a04', border: '1px solid #fde68a',        whiteSpace: 'nowrap' }}>{ov1_7} Overdue 1-7d</span>}
           {ov30 > 0 && <span style={{ padding: '4px 14px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: S.red50, color: S.red700, border: `1px solid ${S.red100}`, whiteSpace: 'nowrap' }}>{ov30} Overdue 30d+</span>}
           {ov7  > 0 && <span style={{ padding: '4px 14px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: S.amber50, color: S.amber700, border: `1px solid ${S.amber100}`, whiteSpace: 'nowrap' }}>{ov7} Overdue 7-30d</span>}
         </div>
@@ -5113,13 +5291,35 @@ function GroupedActivitySection({ actName, acts, totalArea, totalValue, unalloc,
             </tr>
           </thead>
           <tbody>
-            {acts.map((a: any) => {
+            {
+
+              
+            
+            acts.flatMap((a: any) => {
+  if (a.is_split && a.splits?.length > 0) {
+    return a.splits.map((sp: any, si: number) => ({
+      ...a,
+      activity_id:       `${a.activity_id}_part_${si}`,
+      total_area:        sp.total_area,
+      remaining_area:    sp.remaining_area ?? sp.total_area,
+      allocated_area:    sp.allocated_area ?? 0,
+      allocation_status: sp.allocation_status,
+      scheduled_date:    sp.scheduled_date ?? a.scheduled_date,
+      allocation_count:  sp.allocation_count ?? 0,
+      allocations:       sp.allocations ?? [],
+      _part_label:       `Part ${si + 1}`,
+      _part_count:       a.splits.length,
+      _is_part:          true,
+    }));
+  }
+  return [a];
+}).map((a: any) => {
               console.log(acts[0])
               const isExp       = expandedActJob === String(a.activity_id);
               const isPending   = a.allocation_status === 'pending';
               const isCompleted = a.allocations?.some((al: any) => al.work_status === 'completed');
               const isUpcoming  = a.days_until !== null && a.days_until >= 0  && a.days_until <= 10;
-              const isOverdue   = a.days_until !== null && a.days_until < 0   && !isCompleted;
+              const isOverdue   = a.days_until !== null && a.days_until < 0   && !isCompleted  && a.allocation_status === 'pending';
               const overdueDays = a.days_until !== null ? Math.abs(a.days_until) : 0;
               const workerTeamRows = getWorkerRows(a.activity_name);
  const rowNotes: any[] = jobNotes[a.job_id] ?? [];
@@ -5222,7 +5422,7 @@ function GroupedActivitySection({ actName, acts, totalArea, totalValue, unalloc,
                         </div>
                       )}
                     </td>
-                    {/* action */}
+                   
                     {/* ── Action: Allocate / Move / Note / Cancel ── */}
 <td style={{ ...tdR, textAlign: 'right', paddingRight: 16 }} onClick={e => e.stopPropagation()}>
   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>

@@ -28,6 +28,8 @@ from .insight import ClusterInsightsView,GlobalInsightsView,GlobalDayInsightsVie
 router = DefaultRouter()
 
 
+from .datechange import reschedule_activities_view
+
 from .updown import updown_allocation_list,updown_complete_allocation
 # Register ViewSets
 router.register(r'extra-workers', ExtraWorkerViewSet, basename='extra-worker')
@@ -126,7 +128,7 @@ path('api/farmer/work-reports/', farmer_work_verification_detail, name='farmer_w
 path('api/cluster/<int:cluster_id>/payment-dashboard/', cluster_payment_dashboard),
 
 path('api/insights/', cluster_insights, name='cluster_insights'),
-
+path('api/reschedule-activities/', reschedule_activities_view, name='reschedule-activities'),
 path('api/farmer-bill/send-webhook/', send_farmer_bill_to_webhook),
 path('api/allocations/<int:allocation_id>/mark_complete/', mark_allocation_complete),
 

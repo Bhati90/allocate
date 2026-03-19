@@ -812,9 +812,9 @@ const JobsPanel: React.FC<JobsPanelProps> = ({
                                             currentPlotJobs.map((job: any) => (
                                               <div key={job.job_id}>
                                                 <div className="px-3 py-1.5 bg-stone-50">
-                                                  <span className="text-[11px] text-stone-600 font-semibold">
+                                                  {/* <span className="text-[11px] text-stone-600 font-semibold">
                                                     {job.crop_name}{job.variety ? ` · ${job.variety}` : ''}
-                                                  </span>
+                                                  </span> */}
                                                 </div>
                                                 {[...(job.activities || [])]
                                                   .sort((a: any, b: any) => {
