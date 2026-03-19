@@ -1805,7 +1805,8 @@ export default function TenderDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
    const [expandedCluster, setExpandedCluster] = useState<number | null>(null);
-
+const [actActivityFilter, setActActivityFilter] = useState<string[]>([]);
+const [activityDropdownOpen, setActivityDropdownOpen] = useState(false);
 
    const [showInsightDayDetail, setShowInsightDayDetail] = useState(false);
 const [insightDetailDate, setInsightDetailDate] = useState<Date | null>(null);
@@ -2098,6 +2099,10 @@ const allActivitiesRef = useRef<any[]>([]);
 // ── 1. Add a new state for "base" filtered activities (for counts) ──────────
 const [baseActivities, setBaseActivities] = useState<any[]>([]);
 
+
+const activityOptions = useMemo(() =>
+  [...new Set(baseActivities.map((a: any) => a.activity_name).filter(Boolean))].sort()
+, [baseActivities]);
 // ── 2. Replace fetchActivities ───────────────────────────────────────────────
 const fetchActivities = useCallback(async () => {
   setActLoading(true);
@@ -2150,22 +2155,21 @@ const fetchActivities = useCallback(async () => {
   }
 }, [actCluster, actDateFrom, actDateTo, actSearch, actSubTab]);
 
-// ── 3. Replace actCounts — now reads from baseActivities ────────────────────
+const filteredBase = actActivityFilter.length === 0
+  ? baseActivities
+  : baseActivities.filter((a: any) => actActivityFilter.includes(a.activity_name));
+
+// Replace ALL baseActivities references in actCounts with filteredBase:
 const actCounts = {
-  all:           baseActivities.length,
-  upcoming:      baseActivities.filter((a: any) =>
-    a.days_until !== null && a.days_until >= 0 && a.days_until <= 10).length,
-  last10:        baseActivities.filter((a: any) =>
-    a.days_until !== null && a.days_until >= -10 && a.days_until <= 0).length,
-  not_allocated: baseActivities.filter((a: any) =>
-    a.allocation_status === 'pending').length,
-  in_progress:   baseActivities.filter((a: any) =>
-    a.allocation_count > 0 &&
-    !a.allocations?.every((alloc: any) => alloc.work_status === 'completed')).length,
-  completed:     baseActivities.filter((a: any) =>
-    a.allocations?.some((alloc: any) => alloc.work_status === 'completed')).length,
-  split:         baseActivities.filter((a: any) => a.is_split === true).length,
+  all:           filteredBase.length,
+  upcoming:      filteredBase.filter((a: any) => a.days_until !== null && a.days_until >= 0 && a.days_until <= 10).length,
+  last10:        filteredBase.filter((a: any) => a.days_until !== null && a.days_until >= -10 && a.days_until <= 0).length,
+  not_allocated: filteredBase.filter((a: any) => a.allocation_status === 'pending').length,
+  in_progress:   filteredBase.filter((a: any) => a.allocation_count > 0 && !a.allocations?.every((alloc: any) => alloc.work_status === 'completed')).length,
+  completed:     filteredBase.filter((a: any) => a.allocations?.some((alloc: any) => alloc.work_status === 'completed')).length,
+  split:         filteredBase.filter((a: any) => a.is_split === true).length,
 };
+
 
 // Fetch notes for all loaded activities' job IDs
 useEffect(() => {
@@ -2803,9 +2807,9 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
 };
 
 const jobMetrics = useMemo(() => {
-  const all = baseActivities;
-  const todayStr = new Date().toISOString().slice(0, 10);
 
+  const todayStr = new Date().toISOString().slice(0, 10);
+const all = filteredBase;
   const isCompleted = (a: any) =>
     a.allocations?.some((al: any) => al.work_status === 'completed') ||
     a.allocation_status === 'completed';
@@ -2849,7 +2853,7 @@ const mild = overdue.filter(a => { const d = diffDays(a) ?? 0; return d >= -7 &&
     due3_10Count: due3_10.length,   due3_10Value: fmt(val(due3_10)),
     due10pCount:  due10p.length,    due10pValue:  fmt(val(due10p)),
   };
-}, [baseActivities]);
+}, [filteredBase]);
 const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
 
 
@@ -3017,6 +3021,58 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
           {/* Jobs filters */}
           {tab === 'jobs' && (
             <>
+
+  <div style={{ position: 'relative' }}>
+    {/* Trigger button */}
+    <button
+      onClick={() => setActivityDropdownOpen(p => !p)}
+      style={{ padding: '6px 12px', borderRadius: 10, border: `1px solid ${actActivityFilter.length > 0 ? '#16a34a' : S.stone200}`, background: actActivityFilter.length > 0 ? '#f0fdf4' : '#fff', color: actActivityFilter.length > 0 ? '#16a34a' : S.stone700, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}
+    >
+      🌿 {actActivityFilter.length === 0 ? 'All Activities' : `${actActivityFilter.length} selected`}
+      <span style={{ fontSize: 9 }}>▼</span>
+    </button>
+
+    {/* Dropdown */}
+    {activityDropdownOpen && (
+      <div style={{ position: 'absolute', top: '110%', left: 0, zIndex: 999, background: '#fff', border: `1px solid ${S.stone200}`, borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,.12)', minWidth: 240, maxHeight: 300, overflowY: 'auto', padding: '8px 0' }}>
+        {/* Clear all */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 14px 8px', borderBottom: `1px solid ${S.stone100}` }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: S.stone500, textTransform: 'uppercase', letterSpacing: '.5px' }}>Activities</span>
+          {actActivityFilter.length > 0 && (
+            <button onClick={() => setActActivityFilter([])}
+              style={{ fontSize: 11, color: '#dc2626', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              Clear all
+            </button>
+          )}
+        </div>
+
+        {activityOptions.map((name: string) => {
+          const selected = actActivityFilter.includes(name);
+          return (
+            <div key={name}
+              onClick={() => setActActivityFilter(prev =>
+                selected ? prev.filter(x => x !== name) : [...prev, name]
+              )}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', cursor: 'pointer', background: selected ? '#f0fdf4' : 'transparent', fontSize: 12, color: selected ? '#16a34a' : S.stone700, fontWeight: selected ? 600 : 400 }}
+              onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = S.stone50; }}
+              onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+            >
+              <div style={{ width: 16, height: 16, borderRadius: 4, border: `2px solid ${selected ? '#16a34a' : S.stone300}`, background: selected ? '#16a34a' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                {selected && <span style={{ color: '#fff', fontSize: 10, lineHeight: 1 }}>✓</span>}
+              </div>
+              {name}
+            </div>
+          );
+        })}
+      </div>
+    )}
+
+    {/* Click outside to close */}
+    {activityDropdownOpen && (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 998 }} onClick={() => setActivityDropdownOpen(false)} />
+    )}
+  </div>
+
               <input placeholder="🔍 Search farmer / activity / plot" value={actSearch} onChange={e => { setActSearch(e.target.value); setActSubTab('all'); }}
                 style={{ padding: '6px 12px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', minWidth: 200, fontFamily: 'inherit', color: S.stone900 }} />
               <select value={actCluster} onChange={e => { setActCluster(e.target.value); setActSubTab('all'); }}
@@ -3030,7 +3086,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
               <input type="date" value={actDateTo} onChange={e => { setActDateTo(e.target.value); setActSubTab('all'); }}
                 style={{ padding: '6px 10px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 11, background: '#fff', width: 122, fontFamily: 'inherit' }} />
               {(actDateFrom || actDateTo) && (
-                <button onClick={() => { setActDateFrom(''); setActDateTo(''); setActSubTab('all'); }}
+                <button onClick={() => { setActDateFrom(''); setActDateTo(''); setActSubTab('all'); setActActivityFilter([]); }}
 
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: S.stone400, fontSize: 12 }}>✕</button>
               )}
@@ -4678,7 +4734,11 @@ allJobs={insightDayJobs}
             ) : (() => {
               // group by activity_name
               const grouped: Record<string, any[]> = {};
-              activities.forEach((a: any) => {
+              const displayActivities = actActivityFilter.length === 0
+  ? activities
+  : activities.filter((a: any) => actActivityFilter.includes(a.activity_name));
+
+displayActivities.forEach((a: any) => {
                 const k = a.activity_name || 'Unknown';
                 if (!grouped[k]) grouped[k] = [];
                 grouped[k].push(a);
