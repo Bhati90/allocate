@@ -4,7 +4,7 @@ from rest_framework.authtoken.views import obtain_auth_token
 
 from .views import (
     ActivityCatalogViewSet,
-    ClusterViewSet,
+    ClusterViewSet,mukkadam_timeline,
     JobActivityViewSet,mukkadam_settlement_detail,raise_mukkadam_payment,
     JobViewSet,MakeCallViews,send_farmer_otp,verify_farmer_otp,
     LeaveViewSet,ExtraWorkerViewSet,send_start_otp,verify_start_otp,submit_day_end_report,verify_end_otp,resolve_dispute,
@@ -55,7 +55,7 @@ router.register(r'leaves', LeaveViewSet, basename='leave')
 router.register(r'planning', PlanningViewSet, basename='planning')
 urlpatterns = [
     path('api/', include(router.urls)),
-
+path('api/mukkadam-timeline/', mukkadam_timeline, name='mukkadam-timeline'),
     path('api/tender-activity-count/', tender_activity_count_from_api, name='tender_activity_count_from_api'),
 path('api/payment-overview/', payment_overview, name='payment_overview'),
 # path('api/activities/insert_between/', insert_activity_between, name='insert_activity_between'),

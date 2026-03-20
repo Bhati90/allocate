@@ -1642,6 +1642,8 @@ function MoveJobButtonTender({ act, onSuccess }: {
   const MOVE_REASONS = [
     'Not strict job — can reschedule',
     'Easy farmer — farmer agreed to move',
+    'Due To Lack Of Supply',
+    'Due To Farmer'
   ];
 
   const [open, setOpen]           = useState(false);
@@ -1935,7 +1937,11 @@ const fetchInsightDayData = async (date: Date, clusterId: number) => {
 };
   // Change the tab type
 // change tab type
-const [tab, setTab] = useState<'command' | 'calendar' |'global'| 'mukkadams' | 'farmers' | 'jobs' | 'payment'>('command');
+const [tab, setTab] = useState<'command' | 'calendar' | 'global' | 'mukkadams' | 'farmers' | 'jobs' | 'payment'>(() => {
+  const saved = localStorage.getItem('tenderDashTab');
+  const valid = ['command', 'calendar', 'global', 'mukkadams', 'farmers', 'jobs', 'payment'];
+  return (valid.includes(saved ?? '') ? saved : 'command') as any;
+});
 // Command Center state
 const [cmdClusters, setCmdClusters]         = useState<Cluster[]>([]);
 const [cmdLoading, setCmdLoading]           = useState(false);
@@ -2047,7 +2053,8 @@ const formatDateInsight = (date: Date): string => {
   };
   // ─────────────────────────────────────────────────────────────────
 
-
+const [timelineData, setTimelineData] = useState<any>(null);
+const [timelineLoading, setTimelineLoading] = useState(false);
 
   useEffect(() => { fetchData(); }, [clusterFilter]);
 const filteredMukkadams = (data?.mukkadams || []).filter(m => {
@@ -2709,6 +2716,15 @@ useEffect(() => {
 const fetchInsights = useCallback(async (offset = weekOffset) => {
   const scrollY = window.scrollY; // ← save before fetch
   setInsightsLoading(true);
+
+  // Inside fetchInsights, after setInsightsData(d):
+const token = localStorage.getItem('auth_token');
+const tlRes = await fetch(
+  `${API_BASE_URL}/api/mukkadam-timeline/`,
+  { headers: { Authorization: `Token ${token}` } }
+);
+const tlData = await tlRes.json();
+setTimelineData(tlData);
   try {
     const token = localStorage.getItem('auth_token');
     const startDate = new Date();
@@ -2890,7 +2906,13 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
             const isJobs   = t.key === 'jobs';
             return (
               <button key={t.key}
-                onClick={() => { setTab(t.key); setNoCluster(false); setClusterFilter(''); if (t.key === 'farmers') setFarmerSubTab('all'); }}
+                onClick={() => {
+  setTab(t.key);
+  localStorage.setItem('tenderDashTab', t.key);
+  setNoCluster(false);
+  setClusterFilter('');
+  if (t.key === 'farmers') setFarmerSubTab('all');
+}}
                 style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 18px', borderRadius: 11, fontSize: 12, fontWeight: 600, background: isActive ? (isJobs ? S.orange500 : '#fff') : 'transparent', color: isActive ? (isJobs ? '#fff' : S.stone900) : S.stone500, border: 'none', cursor: 'pointer', transition: 'all 250ms', fontFamily: 'inherit', boxShadow: isActive && !isJobs ? '0 1px 3px rgba(28,25,23,.08)' : isActive && isJobs ? '0 2px 8px rgba(249,115,22,.3)' : 'none' }}>
                 <span style={{ fontSize: 14 }}>{t.icon}</span>
                 {t.label}
@@ -4005,171 +4027,264 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
             </div>
           </div>
 
-          {/* ═══ SECTION 2: Cluster Breakdown Table ═══ */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, marginBottom: 12 }}>
-              📋 Cluster Breakdown
-              <span style={{ marginLeft: 8, padding: '2px 9px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0' }}>{raw.length}</span>
-            </div>
-            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'hidden' }}>
-              {/* Header */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px', padding: '10px 16px', fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#fafaf8', borderBottom: '1px solid #e8e5de' }}>
-                <div>Cluster</div>
-                <div style={{ textAlign: 'right' }}>Farmers</div>
-                <div style={{ textAlign: 'right' }}>Plots</div>
-                <div style={{ textAlign: 'right', cursor: 'pointer', color: insightSort === 'pending' ? '#16a34a' : '#a3a398' }} onClick={() => setInsightSort('pending')}>Total Ac ↕</div>
-                <div style={{ textAlign: 'right' }}>Jobs</div>
-                <div style={{ textAlign: 'right' }}>Allocated</div>
-                <div style={{ textAlign: 'right', cursor: 'pointer', color: insightSort === 'pending' ? '#16a34a' : '#a3a398' }} onClick={() => setInsightSort('pending')}>Pending ↕</div>
-                <div style={{ textAlign: 'center', cursor: 'pointer', color: insightSort === 'progress' ? '#16a34a' : '#a3a398' }} onClick={() => setInsightSort('progress')}>Progress ↕</div>
-              </div>
+{/* ═══ SECTION 2: Cluster Breakdown Table ═══ */}
+<div style={{ marginBottom: 24 }}>
+  <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, marginBottom: 12 }}>
+    📋 Cluster Breakdown
+    <span style={{ marginLeft: 8, padding: '2px 9px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0' }}>{raw.length}</span>
+  </div>
+  <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'hidden' }}>
 
-              {/* Rows */}
-              {/* Rows */}
-{sorted.map((cluster: any, i: number) => {
-  const pct = cluster.pct ?? 0;
-  const pc  = pctColor(pct);
-  const isExpanded = expandedCluster === cluster.id;
-  return (
-    <React.Fragment key={cluster.id}>
-      {/* ── Main row ── */}
-      <div
-        style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px', padding: '10px 16px', fontSize: 13, borderBottom: isExpanded ? 'none' : (i < sorted.length - 1 ? '1px solid #f0ede7' : 'none'), alignItems: 'center', background: insightHover === cluster.id ? '#fafaf8' : 'transparent', transition: 'background 0.1s', cursor: 'pointer' }}
-        onMouseEnter={() => setInsightHover(cluster.id)}
-        onMouseLeave={() => setInsightHover(null)}
-        onClick={() => setExpandedCluster(isExpanded ? null : cluster.id)}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          {statusDot(cluster.today?.status)}
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-              {cluster.name}
-              <span style={{ fontSize: 8, color: '#a3a398', display: 'inline-block', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>▼</span>
-            </div>
-            {cluster.note && <div style={{ fontSize: 10, color: '#ea580c', marginTop: 1 }}>{cluster.note.slice(0, 50)}{cluster.note.length > 50 ? '…' : ''}</div>}
+    {/* ── Header ── */}
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px 140px 140px', padding: '10px 16px', fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#fafaf8', borderBottom: '1px solid #e8e5de' }}>
+      <div>Cluster</div>
+      <div style={{ textAlign: 'right' }}>Farmers</div>
+      <div style={{ textAlign: 'right' }}>Plots</div>
+      <div style={{ textAlign: 'right', cursor: 'pointer', color: insightSort === 'pending' ? '#16a34a' : '#a3a398' }} onClick={() => setInsightSort('pending')}>Total Ac ↕</div>
+      <div style={{ textAlign: 'right' }}>Jobs</div>
+      <div style={{ textAlign: 'right' }}>Allocated</div>
+      <div style={{ textAlign: 'right', cursor: 'pointer', color: insightSort === 'pending' ? '#16a34a' : '#a3a398' }} onClick={() => setInsightSort('pending')}>Pending ↕</div>
+      <div style={{ textAlign: 'center', cursor: 'pointer', color: insightSort === 'progress' ? '#16a34a' : '#a3a398' }} onClick={() => setInsightSort('progress')}>Overall ↕</div>
+      <div style={{ textAlign: 'center', color: '#2563eb' }}>This Week</div>
+      <div style={{ textAlign: 'center', color: '#7c3aed' }}>This Month</div>
+    </div>
+
+    {/* ── Rows ── */}
+    {sorted.map((cluster: any, i: number) => {
+      const pct = cluster.pct ?? 0;
+      const pc  = pctColor(pct);
+      const isExpanded = expandedCluster === cluster.id;
+
+      const wp  = cluster.week_progress;
+      const mp  = cluster.month_progress;
+
+      const ProgressBar = ({ pct, color, allocated, pending }: { pct: number; color: string; allocated: number; pending: number }) => (
+        <>
+          <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden', marginBottom: 2 }}>
+            <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: color, borderRadius: 4 }} />
           </div>
-        </div>
-        <div style={{ textAlign: 'right', color: '#6b6b63' }}>{cluster.farmers}</div>
-        <div style={{ textAlign: 'right', color: '#6b6b63' }}>{cluster.plots}</div>
-        <div style={{ textAlign: 'right', fontWeight: 600 }}>{Number(cluster.total_area).toFixed(1)}</div>
-        <div style={{ textAlign: 'right', color: '#6b6b63' }}>{cluster.jobs}</div>
-        <div style={{ textAlign: 'right', color: '#16a34a', fontWeight: 600 }}>{Number(cluster.allocated_area).toFixed(1)}</div>
-        <div style={{ textAlign: 'right', color: Number(cluster.pending_area) > 20 ? '#dc2626' : Number(cluster.pending_area) > 0 ? '#ea580c' : '#16a34a', fontWeight: 700 }}>{Number(cluster.pending_area).toFixed(1)}</div>
-        <div style={{ paddingLeft: 8 }}>
-          <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden' }}>
-            <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: pc, borderRadius: 4 }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9 }}>
+            <span style={{ color: '#16a34a' }}>{allocated.toFixed(1)} ac</span>
+            <span style={{ fontWeight: 700, color }}>{pct}%</span>
+            <span style={{ color: '#dc2626' }}>{pending.toFixed(1)} left</span>
           </div>
-          <div style={{ fontSize: 10, textAlign: 'center', color: '#a3a398', marginTop: 2 }}>{pct.toFixed(0)}%</div>
-        </div>
+        </>
+      );
 
-        {/* ── 7-day area strip (always visible) ── */}
-
-      </div>
-
-      {/* ── Expandable activity breakdown ── */}
-      {isExpanded && (
-        <div style={{ padding: '10px 16px 12px 48px', background: '#f8fdf9', borderBottom: i < sorted.length - 1 ? '1px solid #f0ede7' : 'none', borderTop: '1px dashed #d1fae5' }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#16a34a', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Pending by Activity
-          </div>
-          {cluster.activity_breakdown?.length > 0 ? (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 10px' }}>
-              {cluster.activity_breakdown.map((ab: any) => (
-                <div key={ab.activity} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #e8e5de', borderRadius: 8, padding: '4px 10px' }}>
-                  <span style={{ fontSize: 11, color: '#374151', fontWeight: 600 }}>{ab.activity}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: ab.pending_area > 20 ? '#dc2626' : ab.pending_area > 0 ? '#ea580c' : '#16a34a' }}>
-                    {ab.pending_area.toFixed(1)} ac
-                  </span>
+      return (
+        <React.Fragment key={cluster.id}>
+          {/* ── Main row ── */}
+          <div
+            style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px 140px 140px', padding: '10px 16px', fontSize: 13, borderBottom: isExpanded ? 'none' : (i < sorted.length - 1 ? '1px solid #f0ede7' : 'none'), alignItems: 'center', background: insightHover === cluster.id ? '#fafaf8' : 'transparent', transition: 'background 0.1s', cursor: 'pointer' }}
+            onMouseEnter={() => setInsightHover(cluster.id)}
+            onMouseLeave={() => setInsightHover(null)}
+            onClick={() => setExpandedCluster(isExpanded ? null : cluster.id)}
+          >
+            {/* Cluster name */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              {statusDot(cluster.today?.status)}
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {cluster.name}
+                  <span style={{ fontSize: 8, color: '#a3a398', display: 'inline-block', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>▼</span>
                 </div>
-              ))}
+                {cluster.note && <div style={{ fontSize: 10, color: '#ea580c', marginTop: 1 }}>{cluster.note.slice(0, 50)}{cluster.note.length > 50 ? '…' : ''}</div>}
+              </div>
             </div>
-          ) : (
-            <div style={{ fontSize: 12, color: '#16a34a', fontWeight: 600 }}>✓ All activities allocated</div>
-          )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6, padding: '8px 16px 10px 16px', background: '#fafaf9', borderTop: '1px solid #f0ede7', borderBottom: isExpanded ? 'none' : (i < sorted.length - 1 ? '1px solid #f0ede7' : 'none') }}>
-  {(cluster.week_plan ?? []).map((day: any) => {
-    const hasData = day.total_area > 0;
-    const pendingColor = day.pending_area > 20 ? '#dc2626' : day.pending_area > 0 ? '#ea580c' : '#16a34a';
-    return (
-      <div key={day.date} style={{ background: day.is_today ? '#f0fdf4' : '#fff', border: `1px solid ${day.is_today ? '#bbf7d0' : '#e8e5de'}`, borderRadius: 8, padding: '6px 8px', textAlign: 'center' }}>
-        {/* Day name */}
-        <div style={{ fontSize: 9, fontWeight: 700, color: day.is_today ? '#16a34a' : '#a3a398', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>
-          {day.day_name}
+            <div style={{ textAlign: 'right', color: '#6b6b63' }}>{cluster.farmers}</div>
+            <div style={{ textAlign: 'right', color: '#6b6b63' }}>{cluster.plots}</div>
+            <div style={{ textAlign: 'right', fontWeight: 600 }}>{Number(cluster.total_area).toFixed(1)}</div>
+            <div style={{ textAlign: 'right', color: '#6b6b63' }}>{cluster.jobs}</div>
+            <div style={{ textAlign: 'right', color: '#16a34a', fontWeight: 600 }}>{Number(cluster.allocated_area).toFixed(1)}</div>
+            <div style={{ textAlign: 'right', color: Number(cluster.pending_area) > 20 ? '#dc2626' : Number(cluster.pending_area) > 0 ? '#ea580c' : '#16a34a', fontWeight: 700 }}>{Number(cluster.pending_area).toFixed(1)}</div>
+
+            {/* Overall progress */}
+            <div style={{ paddingLeft: 8, paddingRight: 4 }}>
+              <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: pc, borderRadius: 4 }} />
+              </div>
+              <div style={{ fontSize: 10, textAlign: 'center', color: '#a3a398', marginTop: 2 }}>{pct.toFixed(0)}%</div>
+            </div>
+
+            {/* Week progress */}
+            <div style={{ paddingLeft: 6, paddingRight: 6 }}>
+              {wp?.total_area > 0 ? (
+                <ProgressBar
+                  pct={wp.pct}
+                  color={pctColor(wp.pct)}
+                  allocated={wp.allocated_area}
+                  pending={wp.pending_area}
+                />
+              ) : (
+                <div style={{ fontSize: 9, color: '#d1d5db', textAlign: 'center' }}>—</div>
+              )}
+            </div>
+
+            {/* Month progress */}
+            <div style={{ paddingLeft: 6, paddingRight: 6 }}>
+              {mp?.total_area > 0 ? (
+                <ProgressBar
+                  pct={mp.pct}
+                  color={pctColor(mp.pct)}
+                  allocated={mp.allocated_area}
+                  pending={mp.pending_area}
+                />
+              ) : (
+                <div style={{ fontSize: 9, color: '#d1d5db', textAlign: 'center' }}>—</div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Expandable activity breakdown ── */}
+          {isExpanded && (
+            <div style={{ padding: '10px 16px 12px 48px', background: '#f8fdf9', borderBottom: i < sorted.length - 1 ? '1px solid #f0ede7' : 'none', borderTop: '1px dashed #d1fae5' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#16a34a', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Pending by Activity
+              </div>
+              {cluster.activity_breakdown?.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 10px' }}>
+                  {cluster.activity_breakdown.map((ab: any) => (
+                    <div key={ab.activity} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid #e8e5de', borderRadius: 8, padding: '4px 10px' }}>
+                      <span style={{ fontSize: 11, color: '#374151', fontWeight: 600 }}>{ab.activity}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: ab.pending_area > 20 ? '#dc2626' : ab.pending_area > 0 ? '#ea580c' : '#16a34a' }}>
+                        {ab.pending_area.toFixed(1)} ac
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: '#16a34a', fontWeight: 600 }}>✓ All activities allocated</div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6, padding: '8px 16px 10px 16px', background: '#fafaf9', borderTop: '1px solid #f0ede7' }}>
+                {(cluster.week_plan ?? []).map((day: any) => {
+                  const hasData = day.total_area > 0;
+                  const pendingColor = day.pending_area > 20 ? '#dc2626' : day.pending_area > 0 ? '#ea580c' : '#16a34a';
+                  return (
+                    <div key={day.date} style={{ background: day.is_today ? '#f0fdf4' : '#fff', border: `1px solid ${day.is_today ? '#bbf7d0' : '#e8e5de'}`, borderRadius: 8, padding: '6px 8px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: day.is_today ? '#16a34a' : '#a3a398', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>
+                        {day.day_name}
+                      </div>
+                      {hasData ? (
+                        <>
+                          <div style={{ fontSize: 10, color: '#6b6b63', marginBottom: 1 }}>
+                            <span style={{ fontWeight: 600, color: '#374151' }}>{day.total_area.toFixed(1)}</span>
+                            <span style={{ fontSize: 8, color: '#a3a398' }}> ac</span>
+                          </div>
+                          <div style={{ fontSize: 10, color: '#16a34a', marginBottom: 1 }}>✓ {day.allocated_area.toFixed(1)}</div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: pendingColor }}>⏳ {day.pending_area.toFixed(1)}</div>
+                        </>
+                      ) : (
+                        <div style={{ fontSize: 9, color: '#d1d5db', marginTop: 4 }}>—</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </React.Fragment>
+      );
+    })}
+
+    {/* ── Totals row ── */}
+    {(() => {
+      const totalWeekArea  = raw.reduce((s: number, c: any) => s + (c.week_progress?.total_area || 0), 0);
+      const totalWeekAlloc = raw.reduce((s: number, c: any) => s + (c.week_progress?.allocated_area || 0), 0);
+      const totalWeekPct   = totalWeekArea > 0 ? Math.round(totalWeekAlloc / totalWeekArea * 100) : 0;
+      const totalWeekPend  = totalWeekArea - totalWeekAlloc;
+
+      const totalMonthArea  = raw.reduce((s: number, c: any) => s + (c.month_progress?.total_area || 0), 0);
+      const totalMonthAlloc = raw.reduce((s: number, c: any) => s + (c.month_progress?.allocated_area || 0), 0);
+      const totalMonthPct   = totalMonthArea > 0 ? Math.round(totalMonthAlloc / totalMonthArea * 100) : 0;
+      const totalMonthPend  = totalMonthArea - totalMonthAlloc;
+
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px 140px 140px', padding: '10px 16px', fontSize: 13, fontWeight: 700, background: '#f5f4ef', borderTop: '2px solid #e8e5de' }}>
+          <div>Total</div>
+          <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + (c.farmers ?? 0), 0)}</div>
+          <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + (c.plots ?? 0), 0)}</div>
+          <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + Number(c.total_area ?? 0), 0).toFixed(1)}</div>
+          <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + (c.jobs ?? 0), 0)}</div>
+          <div style={{ textAlign: 'right', color: '#16a34a' }}>{raw.reduce((s: number, c: any) => s + Number(c.allocated_area ?? 0), 0).toFixed(1)}</div>
+          <div style={{ textAlign: 'right', color: '#dc2626' }}>{raw.reduce((s: number, c: any) => s + Number(c.pending_area ?? 0), 0).toFixed(1)}</div>
+
+          {/* Overall total progress */}
+          <div style={{ paddingLeft: 8, paddingRight: 4 }}>
+            <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden' }}>
+              <div style={{ width: `${Math.min(kpi.pct_complete, 100)}%`, height: '100%', background: pctColor(kpi.pct_complete), borderRadius: 4 }} />
+            </div>
+            <div style={{ fontSize: 10, textAlign: 'center', color: '#a3a398', marginTop: 2 }}>{kpi.pct_complete}%</div>
+          </div>
+
+          {/* Week total */}
+          <div style={{ paddingLeft: 6, paddingRight: 6 }}>
+            {totalWeekArea > 0 ? (
+              <>
+                <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden', marginBottom: 2 }}>
+                  <div style={{ width: `${Math.min(totalWeekPct, 100)}%`, height: '100%', background: pctColor(totalWeekPct), borderRadius: 4 }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9 }}>
+                  <span style={{ color: '#16a34a' }}>{totalWeekAlloc.toFixed(1)} ac</span>
+                  <span style={{ fontWeight: 700, color: pctColor(totalWeekPct) }}>{totalWeekPct}%</span>
+                  <span style={{ color: '#dc2626' }}>{totalWeekPend.toFixed(1)} left</span>
+                </div>
+              </>
+            ) : <div style={{ fontSize: 9, color: '#d1d5db', textAlign: 'center' }}>—</div>}
+          </div>
+
+          {/* Month total */}
+          <div style={{ paddingLeft: 6, paddingRight: 6 }}>
+            {totalMonthArea > 0 ? (
+              <>
+                <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden', marginBottom: 2 }}>
+                  <div style={{ width: `${Math.min(totalMonthPct, 100)}%`, height: '100%', background: pctColor(totalMonthPct), borderRadius: 4 }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9 }}>
+                  <span style={{ color: '#16a34a' }}>{totalMonthAlloc.toFixed(1)} ac</span>
+                  <span style={{ fontWeight: 700, color: pctColor(totalMonthPct) }}>{totalMonthPct}%</span>
+                  <span style={{ color: '#dc2626' }}>{totalMonthPend.toFixed(1)} left</span>
+                </div>
+              </>
+            ) : <div style={{ fontSize: 9, color: '#d1d5db', textAlign: 'center' }}>—</div>}
+          </div>
         </div>
-        {hasData ? (
-          <>
-            {/* Total */}
-            <div style={{ fontSize: 10, color: '#6b6b63', marginBottom: 1 }}>
-              <span style={{ fontWeight: 600, color: '#374151' }}>{day.total_area.toFixed(1)}</span>
-              <span style={{ fontSize: 8, color: '#a3a398' }}> ac</span>
+      );
+    })()}
+
+    {/* ── No Cluster row ── */}
+    {insightsData.no_cluster_row && (() => {
+      const nc = insightsData.no_cluster_row;
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px 140px 140px', padding: '10px 16px', fontSize: 13, background: '#fefce8', borderTop: '1px solid #fde68a', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ fontSize: 11 }}>⚠️</span>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#ca8a04' }}>{nc.name}</div>
+          </div>
+          <div style={{ textAlign: 'right', color: '#6b6b63' }}>{nc.farmers}</div>
+          <div style={{ textAlign: 'right', color: '#6b6b63' }}>{nc.plots}</div>
+          <div style={{ textAlign: 'right', fontWeight: 600 }}>{Number(nc.total_area).toFixed(1)}</div>
+          <div style={{ textAlign: 'right', color: '#6b6b63' }}>{nc.jobs}</div>
+          <div style={{ textAlign: 'right', color: '#16a34a', fontWeight: 600 }}>{Number(nc.allocated_area).toFixed(1)}</div>
+          <div style={{ textAlign: 'right', color: '#ca8a04', fontWeight: 700 }}>{Number(nc.pending_area).toFixed(1)}</div>
+          <div style={{ paddingLeft: 8 }}>
+            <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden' }}>
+              <div style={{ width: `${Math.min(nc.pct, 100)}%`, height: '100%', background: '#ca8a04', borderRadius: 4 }} />
             </div>
-            {/* Allocated */}
-            <div style={{ fontSize: 10, color: '#16a34a', marginBottom: 1 }}>
-              ✓ {day.allocated_area.toFixed(1)}
-            </div>
-            {/* Pending */}
-            <div style={{ fontSize: 10, fontWeight: 700, color: pendingColor }}>
-              ⏳ {day.pending_area.toFixed(1)}
-            </div>
-          </>
-        ) : (
-          <div style={{ fontSize: 9, color: '#d1d5db', marginTop: 4 }}>—</div>
-        )}
-      </div>
-    );
-  })}
+            <div style={{ fontSize: 10, textAlign: 'center', color: '#a3a398', marginTop: 2 }}>{nc.pct}%</div>
+          </div>
+          {/* No week/month for no-cluster row */}
+          <div style={{ fontSize: 9, color: '#d1d5db', textAlign: 'center' }}>—</div>
+          <div style={{ fontSize: 9, color: '#d1d5db', textAlign: 'center' }}>—</div>
+        </div>
+      );
+    })()}
+
+  </div>
 </div>
 
-        </div>
-      )}
-    </React.Fragment>
-  );
-})}
-              {/* Totals row */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px', padding: '10px 16px', fontSize: 13, fontWeight: 700, background: '#f5f4ef', borderTop: '2px solid #e8e5de' }}>
-                <div>Total</div>
-                <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + (c.farmers ?? 0), 0)}</div>
-                <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + (c.plots ?? 0), 0)}</div>
-                <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + Number(c.total_area ?? 0), 0).toFixed(1)}</div>
-                <div style={{ textAlign: 'right' }}>{raw.reduce((s: number, c: any) => s + (c.jobs ?? 0), 0)}</div>
-                <div style={{ textAlign: 'right', color: '#16a34a' }}>{raw.reduce((s: number, c: any) => s + Number(c.allocated_area ?? 0), 0).toFixed(1)}</div>
-                <div style={{ textAlign: 'right', color: '#dc2626' }}>{raw.reduce((s: number, c: any) => s + Number(c.pending_area ?? 0), 0).toFixed(1)}</div>
-                <div style={{ paddingLeft: 8 }}>
-                  <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.min(kpi.pct_complete, 100)}%`, height: '100%', background: pctColor(kpi.pct_complete), borderRadius: 4 }} />
-                  </div>
-                  <div style={{ fontSize: 10, textAlign: 'center', color: '#a3a398', marginTop: 2 }}>{kpi.pct_complete}%</div>
-                </div>
-              </div>
-
-              {/* No Cluster row */}
-{insightsData.no_cluster_row && (() => {
-  const nc = insightsData.no_cluster_row;
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 2fr) 70px 70px 90px 60px 90px 90px 100px', padding: '10px 16px', fontSize: 13, background: '#fefce8', borderTop: '1px solid #fde68a', alignItems: 'center' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-        <span style={{ fontSize: 11 }}>⚠️</span>
-        <div style={{ fontSize: 12, fontWeight: 600, color: '#ca8a04' }}>{nc.name}</div>
-      </div>
-      <div style={{ textAlign: 'right', color: '#6b6b63' }}>{nc.farmers}</div>
-      <div style={{ textAlign: 'right', color: '#6b6b63' }}>{nc.plots}</div>
-      <div style={{ textAlign: 'right', fontWeight: 600 }}>{Number(nc.total_area).toFixed(1)}</div>
-      <div style={{ textAlign: 'right', color: '#6b6b63' }}>{nc.jobs}</div>
-      <div style={{ textAlign: 'right', color: '#16a34a', fontWeight: 600 }}>{Number(nc.allocated_area).toFixed(1)}</div>
-      <div style={{ textAlign: 'right', color: '#ca8a04', fontWeight: 700 }}>{Number(nc.pending_area).toFixed(1)}</div>
-      <div style={{ paddingLeft: 8 }}>
-        <div style={{ background: '#f0ede7', borderRadius: 4, height: 5, overflow: 'hidden' }}>
-          <div style={{ width: `${Math.min(nc.pct, 100)}%`, height: '100%', background: '#ca8a04', borderRadius: 4 }} />
-        </div>
-        <div style={{ fontSize: 10, textAlign: 'center', color: '#a3a398', marginTop: 2 }}>{nc.pct}%</div>
-      </div>
-    </div>
-  );
-})()}
-            </div>
-          </div>
-
+{timelineData && <MukkadamTimeline data={timelineData} />}
           {/* ═══ SECTION 3: Today & Tomorrow Traffic Lights ═══ */}
           {(() => {
             const [showDay, setShowDay] = [insightShowDay, setInsightShowDay];
@@ -4758,6 +4873,8 @@ const flatActs = acts.flatMap((a: any) =>
     : [a]
 );
 
+
+
 const totalArea  = flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0);
 const totalValue = acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0); // keep value on parent
 const unalloc    = flatActs.filter((a: any) => a.allocation_status === 'pending').length;
@@ -4769,6 +4886,9 @@ const onTime = flatActs.filter((a: any) =>
   a.allocation_status === 'fully_allocated'
 ).length;
 return (
+
+
+  
                   <GroupedActivitySection
                     key={actName}
                     actName={actName}
@@ -5268,6 +5388,253 @@ return (
 // GROUPED ACTIVITY SECTION  — new helper component used by Jobs tab above
 // Paste this OUTSIDE TenderDashboard, near MukkadamCard / FarmerCard
 // ─────────────────────────────────────────────────────────────────────────────
+const CLUSTER_COLORS = [
+  '#4f46e5', '#0891b2', '#16a34a', '#ea580c',
+  '#9333ea', '#db2777', '#ca8a04', '#0284c7',
+  '#15803d', '#b45309', '#6d28d9', '#be185d',
+];
+
+function MukkadamTimeline({ data }: { data: any }) {
+  const [search, setSearch] = useState('');
+  if (!data) return null;
+
+  const { mukkadams, days, today, cluster_ids } = data;
+  const CELL_W   = 52;
+  const ROW_H    = 52;
+  const NAME_W   = 220;
+
+  // Stable cluster → color map
+  const clusterColorMap = new Map<number, string>();
+  cluster_ids.forEach((cid: number, i: number) => {
+    clusterColorMap.set(cid, CLUSTER_COLORS[i % CLUSTER_COLORS.length]);
+  });
+
+  const today_idx = days.indexOf(today);
+
+  const fmtHeader = (ds: string) => {
+    const d = new Date(ds + 'T00:00:00');
+    return {
+      day:     d.getDate(),
+      weekday: d.toLocaleString('en', { weekday: 'short' }).toUpperCase(),
+      isToday: ds === today,
+    };
+  };
+
+  // Collect legend
+  const legendMap = new Map<number, { name: string; color: string }>();
+  mukkadams.forEach((m: any) => {
+    m.days.forEach((d: any) => {
+      if (d.cluster_id && !legendMap.has(d.cluster_id)) {
+        legendMap.set(d.cluster_id, {
+          name:  d.cluster_name,
+          color: clusterColorMap.get(d.cluster_id) ?? '#6b7280',
+        });
+      }
+    });
+  });
+
+  const filtered = mukkadams.filter((m: any) =>
+    m.mukkadam_name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  // Build bars for a mukkadam
+  const getBars = (m: any) => {
+    const bars: any[] = [];
+    let barStart: number | null = null;
+    let barCluster: number | null = null;
+    let barName = '';
+    let barWorkers = 0;
+
+    m.days.forEach((day: any, idx: number) => {
+      if (day.cluster_id) {
+        if (barStart === null || day.cluster_id !== barCluster) {
+          if (barStart !== null && barCluster !== null) {
+            bars.push({ startIdx: barStart, endIdx: idx - 1, clusterId: barCluster, clusterName: barName, workers: barWorkers });
+          }
+          barStart   = idx;
+          barCluster = day.cluster_id;
+          barName    = day.cluster_name;
+          barWorkers = day.workers ?? 0;
+        }
+      } else {
+        if (barStart !== null && barCluster !== null) {
+          bars.push({ startIdx: barStart, endIdx: idx - 1, clusterId: barCluster, clusterName: barName, workers: barWorkers });
+          barStart = null; barCluster = null;
+        }
+      }
+    });
+    if (barStart !== null && barCluster !== null) {
+      bars.push({ startIdx: barStart, endIdx: m.days.length - 1, clusterId: barCluster, clusterName: barName, workers: barWorkers });
+    }
+    return bars;
+  };
+
+  const totalDays = days.length;
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: S.stone800 }}>
+            👥 Team Allocation Timeline
+          </div>
+          <div style={{ fontSize: 11, color: S.stone400, marginTop: 2 }}>
+            bars = confirmed allocations · gaps = idle · centered on today
+          </div>
+        </div>
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="🔍 Search mukkadam..."
+          style={{ padding: '7px 12px', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 12, fontFamily: 'inherit', width: 200, outline: 'none' }}
+        />
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginBottom: 14, padding: '10px 14px', background: '#fff', borderRadius: 10, border: `1px solid ${S.stone200}` }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: S.stone400, marginRight: 4, textTransform: 'uppercase', letterSpacing: '.5px' }}>Clusters:</span>
+        {Array.from(legendMap.entries()).map(([cid, info]) => (
+          <span key={cid} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: S.stone700 }}>
+            <span style={{ width: 14, height: 14, borderRadius: 4, background: info.color, display: 'inline-block', flexShrink: 0 }} />
+            {info.name}
+          </span>
+        ))}
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center' }}>
+          {[{ color: '#16a34a', label: 'Permanent' }, { color: '#2563eb', label: 'Updown' }].map(t => (
+            <span key={t.label} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: S.stone500 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.color, display: 'inline-block' }} />
+              {t.label}
+            </span>
+          ))}
+        </span>
+      </div>
+
+      {/* Main grid */}
+      <div style={{ background: '#fff', borderRadius: 14, border: `1px solid ${S.stone200}`, overflow: 'auto', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
+        <div style={{ minWidth: NAME_W + days.length * CELL_W }}>
+
+          {/* Day headers */}
+          <div style={{ display: 'flex', borderBottom: `2px solid ${S.stone200}`, background: '#fafaf8', position: 'sticky', top: 0, zIndex: 10 }}>
+            <div style={{ width: NAME_W, flexShrink: 0, padding: '10px 16px', fontSize: 10, fontWeight: 700, color: S.stone400, textTransform: 'uppercase', letterSpacing: '.6px', borderRight: `1px solid ${S.stone200}` }}>
+              Mukkadam
+            </div>
+            {days.map((ds: string) => {
+              const { day, weekday, isToday } = fmtHeader(ds);
+              return (
+                <div key={ds} style={{ width: CELL_W, flexShrink: 0, textAlign: 'center', padding: '8px 2px', borderRight: `1px solid #f0ede7`, background: isToday ? '#fffbeb' : 'transparent', position: 'relative' }}>
+                  <div style={{ fontSize: 13, fontWeight: isToday ? 800 : 600, color: isToday ? '#b45309' : S.stone700, lineHeight: 1 }}>
+                    {day}
+                  </div>
+                  <div style={{ fontSize: 9, fontWeight: 600, color: isToday ? '#b45309' : S.stone400, marginTop: 3, letterSpacing: '.4px' }}>
+                    {isToday ? 'TODAY' : weekday}
+                  </div>
+                  {isToday && (
+                    <div style={{ position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: 3, height: 4, background: '#b45309', borderRadius: '2px 2px 0 0' }} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Rows */}
+          {filtered.length === 0 ? (
+            <div style={{ padding: '48px', textAlign: 'center', color: S.stone400, fontSize: 13 }}>No mukkadams found</div>
+          ) : filtered.map((m: any, mi: number) => {
+            const bars = getBars(m);
+            const allocDays   = m.days.filter((d: any) => d.cluster_id).length;
+            const utilization = Math.round((allocDays / totalDays) * 100);
+            const dotCol      = m.mukkadam_type === 'permanent' ? '#16a34a' : '#2563eb';
+            const isLast      = mi === filtered.length - 1;
+
+            return (
+              <div key={m.mukkadam_id}
+                style={{ display: 'flex', borderBottom: isLast ? 'none' : `1px solid #f5f4f0`, transition: 'background 0.1s' }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#fafaf8')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                {/* Name cell */}
+                <div style={{ width: NAME_W, flexShrink: 0, padding: '0 16px', borderRight: `1px solid ${S.stone200}`, display: 'flex', alignItems: 'center', gap: 10, height: ROW_H }}>
+                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: dotCol, flexShrink: 0, boxShadow: `0 0 0 3px ${dotCol}22` }} />
+                  <div style={{ overflow: 'hidden' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: S.stone900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {m.mukkadam_name}
+                      <span style={{ fontSize: 11, color: S.stone400, fontWeight: 400, marginLeft: 4 }}>({m.crew_size})</span>
+                    </div>
+                    <div style={{ fontSize: 10, fontWeight: 700, marginTop: 2, color: utilization >= 60 ? '#16a34a' : utilization >= 25 ? '#ea580c' : '#dc2626' }}>
+                      {utilization}% utilized
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bar area */}
+                <div style={{ position: 'relative', flex: 1, height: ROW_H, display: 'flex' }}>
+
+                  {/* Background cells */}
+                  {days.map((ds: string) => (
+                    <div key={ds} style={{ width: CELL_W, flexShrink: 0, height: '100%', borderRight: `1px solid #f5f4f0`, background: ds === today ? 'rgba(202,138,4,0.04)' : 'transparent' }} />
+                  ))}
+
+                  {/* Allocation bars */}
+                  {bars.map((bar, bi) => {
+                    const color  = clusterColorMap.get(bar.clusterId) ?? '#6b7280';
+                    const left   = bar.startIdx * CELL_W + 3;
+                    const width  = (bar.endIdx - bar.startIdx + 1) * CELL_W - 6;
+                    const nDays  = bar.endIdx - bar.startIdx + 1;
+
+                    return (
+                      <div
+                        key={bi}
+                        title={`${bar.clusterName} · ${bar.workers} workers · ${nDays} day${nDays > 1 ? 's' : ''}`}
+                        style={{
+                          position:     'absolute',
+                          left,
+                          top:          '50%',
+                          transform:    'translateY(-50%)',
+                          width,
+                          height:       32,
+                          borderRadius: 8,
+                          background:   `linear-gradient(135deg, ${color}ee, ${color}cc)`,
+                          display:      'flex',
+                          alignItems:   'center',
+                          paddingLeft:  8,
+                          paddingRight: 4,
+                          overflow:     'hidden',
+                          cursor:       'default',
+                          boxShadow:    `0 2px 6px ${color}44`,
+                          transition:   'transform 0.15s, box-shadow 0.15s',
+                        }}
+                        onMouseEnter={e => {
+                          (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-50%) translateY(-1px)';
+                          (e.currentTarget as HTMLDivElement).style.boxShadow = `0 4px 10px ${color}66`;
+                        }}
+                        onMouseLeave={e => {
+                          (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-50%)';
+                          (e.currentTarget as HTMLDivElement).style.boxShadow = `0 2px 6px ${color}44`;
+                        }}
+                      >
+                        {width > 28 && (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 1px 2px rgba(0,0,0,0.2)' }}>
+                            {width > 70 ? bar.clusterName : bar.clusterName.split(' ')[0]}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {/* Today line */}
+                  {today_idx >= 0 && (
+                    <div style={{ position: 'absolute', left: today_idx * CELL_W + CELL_W / 2 - 1, top: 0, bottom: 0, width: 2, background: 'linear-gradient(to bottom, #b45309, #ca8a04)', opacity: 0.4, pointerEvents: 'none', borderRadius: 2 }} />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 function GroupedActivitySection({ actName, acts,ov1_7, totalArea, totalValue,onTime, unalloc, ov30, ov7, expandedActJob, setExpandedActJob, isAdmin, handleUpdownComplete, onAllocate, onAllocateWithMukkadam, onNote, maxWorkRows, onSuccess, jobNotes }:{
    actName: string; acts: any[]; totalArea: number; totalValue: number;
   unalloc: number; ov30: number; ov7: number; ov1_7:number;onTime: number;
@@ -5366,7 +5733,9 @@ function GroupedActivitySection({ actName, acts,ov1_7, totalArea, totalValue,onT
       allocation_status: sp.allocation_status,
       scheduled_date:    sp.scheduled_date ?? a.scheduled_date,
       allocation_count:  sp.allocation_count ?? 0,
-      allocations:       sp.allocations ?? [],
+      allocations: sp.allocations?.length > 0
+  ? sp.allocations
+  : (a.allocations ?? []).filter((al: any) => al.split_activity_id === sp.activity_id),
       _part_label:       `Part ${si + 1}`,
       _part_count:       a.splits.length,
       _is_part:          true,

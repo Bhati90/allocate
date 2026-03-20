@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.db.models import Sum, Count, Q
+from django.db import models
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django import forms
@@ -73,16 +74,21 @@ class PlotInline(admin.TabularInline):
     show_change_link = True
 
 
+
 class JobActivityInline(admin.TabularInline):
     model = JobActivity
     extra = 0
     fields = (
-        'activity', 'plot', 'total_area', 'allocated_area', 'remaining_area',
-        'scheduled_date', 'rate_per_acre', 'total_price', 'allocation_status'
+        'activity', 'plot', 'api_activity_id',
+        'total_area', 'allocated_area', 'remaining_area',
+        'scheduled_date', 'rate_per_acre', 'total_price',
+        'allocation_status', 'is_strict', 'is_lost',
+        'is_manually_moved', 'is_manually_edited', 'source',
     )
     readonly_fields = ('remaining_area', 'total_price', 'allocation_status')
     show_change_link = True
-    autocomplete_fields = ['activity']
+    autocomplete_fields = ['activity', 'plot']
+
 
 
 class JobBookingInline(admin.StackedInline):
@@ -391,28 +397,32 @@ class PlotAdmin(admin.ModelAdmin):
         return ', '.join([c.name for c in obj.clusters.all()]) or '-'
     cluster_list.short_description = 'Clusters'
 
-
-# ============================================================================
-# JOB
-# ============================================================================
-
 @admin.register(Job)
 class JobAdmin(admin.ModelAdmin):
     list_display = (
         'job_id', 'farmer', 'crop_name', 'status_badge',
         'priority_badge', 'cluster_list', 'scheduled_date',
-        'total_activities_amount', 'payment_status', 'booking_type', 'updated_at'
+        'total_activities_amount', 'payment_status', 'booking_type',
+        'activity_count', 'pending_activities', 'updated_at'
     )
     list_filter = (
         'status', 'priority', 'payment_status', 'booking_type',
-        'is_field_verified', 'is_complex', 'clusters'
+        'is_field_verified', 'is_complex', 'clusters',
+        'activities__allocation_status',   # filter by activity status
+        'activities__activity',            # filter by activity type
     )
-    search_fields = ('job_id', 'work_id', 'farmer__farmer_name', 'farmer__phone_number')
+    search_fields = (
+        'job_id', 'work_id',
+        'farmer__farmer_name', 'farmer__phone_number',
+        'activities__activity__name',      # search by activity name
+        'activities__api_activity_id',     # search by api activity id
+    )
     filter_horizontal = ('clusters',)
-    readonly_fields = ('created_at', 'updated_at', 'last_synced')
+    readonly_fields = ('created_at', 'updated_at', 'last_synced', 'activity_summary')
     date_hierarchy = 'scheduled_date'
     autocomplete_fields = ['farmer', 'plot']
     inlines = [JobActivityInline, JobBookingInline]
+    actions = ['mark_completed', 'mark_cancelled', 'recalculate_amounts']
 
     fieldsets = (
         ('Job Identity', {
@@ -429,6 +439,9 @@ class JobAdmin(admin.ModelAdmin):
         }),
         ('Financials', {
             'fields': ('booking_amount', 'total_activities_amount')
+        }),
+        ('Activity Summary', {
+            'fields': ('activity_summary',),
         }),
         ('Cluster Assignment', {
             'fields': ('clusters',)
@@ -451,6 +464,7 @@ class JobAdmin(admin.ModelAdmin):
         }),
     )
 
+    # ── List display helpers ───────────────────────────────────────────────
     def status_badge(self, obj):
         colors = {
             'pending': '#f59e0b', 'scheduled': '#3b82f6',
@@ -473,92 +487,213 @@ class JobAdmin(admin.ModelAdmin):
         return ', '.join([c.name for c in obj.clusters.all()]) or '-'
     cluster_list.short_description = 'Clusters'
 
+    def activity_count(self, obj):
+        count = obj.activities.count()
+        url = reverse('admin:tender_jobactivity_changelist') + f'?job__job_id={obj.job_id}'
+        return format_html('<a href="{}">{} activities</a>', url, count)
+    activity_count.short_description = 'Activities'
 
+    def pending_activities(self, obj):
+        pending = obj.activities.filter(allocation_status='pending', is_lost=False).count()
+        if pending == 0:
+            return format_html('<span style="color:#10b981;font-weight:bold;">✓ All done</span>')
+        return format_html(
+            '<span style="color:#ef4444;font-weight:bold;">{} pending</span>', pending
+        )
+    pending_activities.short_description = 'Pending'
+
+    # ── Detail page summary ────────────────────────────────────────────────
+    def activity_summary(self, obj):
+        from django.db.models import Sum, Count
+        stats = obj.activities.aggregate(
+            total=Count('id'),
+            total_area=Sum('total_area'),
+            allocated_area=Sum('allocated_area'),
+            pending=Count('id', filter=models.Q(allocation_status='pending')),
+            allocated=Count('id', filter=models.Q(allocation_status='fully_allocated')),
+            in_progress=Count('id', filter=models.Q(allocation_status='in_progress')),
+            lost=Count('id', filter=models.Q(is_lost=True)),
+        )
+        return format_html(
+            '''
+            <table style="border-collapse:collapse;font-size:13px;">
+              <tr>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;background:#f9fafb;font-weight:bold;">Total Activities</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;">{}</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;background:#f9fafb;font-weight:bold;">Total Area</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;">{} ac</td>
+              </tr>
+              <tr>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;background:#f9fafb;font-weight:bold;">Pending</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;color:#f59e0b;font-weight:bold;">{}</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;background:#f9fafb;font-weight:bold;">Allocated Area</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;color:#10b981;font-weight:bold;">{} ac</td>
+              </tr>
+              <tr>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;background:#f9fafb;font-weight:bold;">Fully Allocated</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;color:#10b981;font-weight:bold;">{}</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;background:#f9fafb;font-weight:bold;">In Progress</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;color:#8b5cf6;font-weight:bold;">{}</td>
+              </tr>
+              <tr>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;background:#f9fafb;font-weight:bold;">Lost / Cancelled</td>
+                <td style="padding:4px 12px;border:1px solid #e5e7eb;color:#ef4444;font-weight:bold;">{}</td>
+                <td></td><td></td>
+              </tr>
+            </table>
+            ''',
+            stats['total'], stats['total_area'] or 0,
+            stats['pending'], stats['allocated_area'] or 0,
+            stats['allocated'], stats['in_progress'],
+            stats['lost'],
+        )
+    activity_summary.short_description = 'Activity Summary'
+
+    # ── Bulk actions ───────────────────────────────────────────────────────
+    def mark_completed(self, request, queryset):
+        updated = queryset.update(status='completed')
+        self.message_user(request, f'✅ {updated} jobs marked as completed.')
+    mark_completed.short_description = '✅ Mark selected as Completed'
+
+    def mark_cancelled(self, request, queryset):
+        updated = queryset.update(status='cancelled')
+        self.message_user(request, f'❌ {updated} jobs marked as cancelled.')
+    mark_cancelled.short_description = '❌ Mark selected as Cancelled'
+
+    def recalculate_amounts(self, request, queryset):
+        from django.db.models import Sum
+        updated = 0
+        for job in queryset:
+            total = job.activities.aggregate(s=Sum('subtotal'))['s'] or 0
+            job.total_activities_amount = total
+            job.save(update_fields=['total_activities_amount'])
+            updated += 1
+        self.message_user(request, f'🔄 Recalculated amounts for {updated} jobs.')
+    recalculate_amounts.short_description = '🔄 Recalculate activity amounts'
 @admin.register(JobActivity)
 class JobActivityAdmin(admin.ModelAdmin):
     list_display = (
-        'job', 'activity', 'plot', 'total_area',
+        'id', 'job', 'activity', 'plot', 'total_area',
         'allocated_area', 'remaining_area', 'scheduled_date',
         'allocation_status_badge', 'rate_per_acre', 'subtotal',
-        'is_strict', 'is_lost', 'is_manually_moved'
+        'is_strict', 'is_lost', 'is_manually_moved', 'api_activity_id'
     )
     list_filter = (
         'allocation_status', 'is_strict', 'is_fully_allocated',
-        'is_lost', 'is_manually_edited', 'is_manually_moved', 'activity'
+        'is_lost', 'is_manually_edited', 'is_manually_moved',
+        'activity', 'source',
     )
-    search_fields = ('job__job_id', 'job__farmer__farmer_name', 'activity__name')
-    
-    # ✅ Remove allocation_status and is_fully_allocated from readonly
+    search_fields = (
+        'job__job_id',
+        'job__farmer__farmer_name',
+        'activity__name',
+        'api_activity_id',
+        'plot__name',
+        'plot__plot_code',
+    )
     readonly_fields = (
         'remaining_area', 'total_price', 'subtotal',
-        'created_at', 'updated_at'
+        'created_at', 'updated_at',
     )
-    
+    list_editable = (
+        'scheduled_date',   # quick reschedule from list
+    )
     date_hierarchy = 'scheduled_date'
     autocomplete_fields = ['job', 'activity', 'plot']
     inlines = [AllocationInline]
+    actions = ['recalculate_status', 'mark_lost', 'mark_not_lost', 'mark_manually_moved', 'clear_manually_moved']
 
     fieldsets = (
         ('Job & Activity', {
-            'fields': ('job', 'activity', 'plot', 'api_activity_id')
+            'fields': ('job', 'activity', 'plot', 'api_activity_id', 'source', 'original_source')
         }),
         ('Area', {
             'fields': ('total_area', 'allocated_area', 'remaining_area', 'crop_bundles')
         }),
         ('Schedule', {
-            'fields': ('scheduled_date', 'scheduled_time', 'estimated_workers')
+            'fields': (
+                'scheduled_date', 'original_scheduled_date',
+                'scheduled_time', 'estimated_workers',
+                'is_manually_moved', 'last_moved_by', 'last_moved_at',
+            )
         }),
         ('Pricing', {
             'fields': ('rate_per_acre', 'total_price', 'transport_cost', 'other_cost', 'subtotal')
         }),
         ('Status', {
-            # ✅ Now editable
-            'fields': ('allocation_status', 'is_fully_allocated', 'is_strict', 'is_manually_edited', 'is_manually_moved'),
-            'description': '⚠️ Manually overriding status will not recalculate remaining_area. Use with caution.'
+            'fields': (
+                'allocation_status', 'is_fully_allocated',
+                'is_strict', 'is_manually_edited',
+            ),
+            'description': '⚠️ Manually overriding status will not recalculate remaining_area. Use the Recalculate action instead.'
         }),
-        ('Lost', {
+        ('Lost / Cancelled', {
             'fields': ('is_lost', 'lost_reason'),
+            'classes': ('collapse',)
+        }),
+        ('Move History', {
+            'fields': ('moved_from_activity', 'move_reason'),
             'classes': ('collapse',)
         }),
         ('Location', {
             'fields': ('location',),
         }),
-        ('Timestamps', {
-            'fields': ('created_at', 'updated_at'),
+        ('Audit', {
+            'fields': ('created_by', 'created_at', 'updated_at'),
             'classes': ('collapse',)
         }),
     )
 
-
+    # ── Badges ────────────────────────────────────────────────────────────
     def allocation_status_badge(self, obj):
         colors = {
-            'pending': '#f59e0b', 'partially_allocated': '#3b82f6',
-            'fully_allocated': '#10b981', 'in_progress': '#8b5cf6', 'completed': '#6b7280',
+            'pending':              '#f59e0b',
+            'partially_allocated':  '#3b82f6',
+            'fully_allocated':      '#10b981',
+            'in_progress':          '#8b5cf6',
+            'completed':            '#6b7280',
         }
         color = colors.get(obj.allocation_status, '#6b7280')
         return format_html(
-            '<span style="background:{};color:white;padding:2px 8px;border-radius:12px;font-size:11px;">{}</span>',
+            '<span style="background:{};color:white;padding:2px 8px;'
+            'border-radius:12px;font-size:11px;font-weight:600;">{}</span>',
             color, obj.get_allocation_status_display()
         )
-    allocation_status_badge.short_description = 'Alloc. Status'
+    allocation_status_badge.short_description = 'Status'
 
-    # ✅ Add admin action to reset status based on actual allocated_area
-    actions = ['recalculate_status']
-
+    # ── Actions ───────────────────────────────────────────────────────────
     def recalculate_status(self, request, queryset):
+        from django.db.models import Sum
         updated = 0
         for obj in queryset:
-            # Recalculate from DB truth — sum of all allocations
-            from django.db.models import Sum
             total = obj.allocations.filter(
                 status__in=['scheduled', 'in_progress', 'completed']
             ).aggregate(total=Sum('allocated_area'))['total'] or 0
-
             obj.allocated_area = total
-            obj.save()  # triggers remaining_area recalc in model.save()
+            obj.save()
             updated += 1
-        self.message_user(request, f'✅ Recalculated status for {updated} activities.')
-    recalculate_status.short_description = '🔄 Recalculate status from actual allocations'
+        self.message_user(request, f'✅ Recalculated {updated} activities.')
+    recalculate_status.short_description = '🔄 Recalculate status from allocations'
+
+    def mark_lost(self, request, queryset):
+        updated = queryset.update(is_lost=True)
+        self.message_user(request, f'🚫 Marked {updated} activities as lost.')
+    mark_lost.short_description = '🚫 Mark as Lost'
+
+    def mark_not_lost(self, request, queryset):
+        updated = queryset.update(is_lost=False)
+        self.message_user(request, f'✅ Restored {updated} activities.')
+    mark_not_lost.short_description = '✅ Restore (unmark lost)'
+
+    def mark_manually_moved(self, request, queryset):
+        updated = queryset.update(is_manually_moved=True)
+        self.message_user(request, f'📌 Marked {updated} as manually moved.')
+    mark_manually_moved.short_description = '📌 Mark as Manually Moved'
+
+    def clear_manually_moved(self, request, queryset):
+        updated = queryset.update(is_manually_moved=False)
+        self.message_user(request, f'🔓 Cleared manually moved flag on {updated} activities.')
+    clear_manually_moved.short_description = '🔓 Clear Manually Moved flag'
 @admin.register(JobBooking)
 class JobBookingAdmin(admin.ModelAdmin):
     list_display = ('booking_id', 'job', 'status', 'total_amount', 'advance_paid', 'balance', 'assignee_number')
@@ -991,91 +1126,13 @@ class ExtraWorkerAdmin(admin.ModelAdmin):
     autocomplete_fields = ['mukkadam']
 
 
-# ============================================================================
-# LOGS & AUDIT (read-only)
-# ============================================================================
-
-@admin.register(ActivityLogTender)
-class ActivityLogTenderAdmin(admin.ModelAdmin):
-    list_display = ('action', 'job', 'job_activity', 'performed_by', 'created_at')
-    list_filter = ('action',)
-    search_fields = ('job__job_id',)
-    readonly_fields = ('action', 'job', 'job_activity', 'performed_by', 'details', 'created_at')
-    date_hierarchy = 'created_at'
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-
-@admin.register(AllocationChangeLogTender)
-class AllocationChangeLogTenderAdmin(admin.ModelAdmin):
-    list_display = ('allocation', 'change_type', 'field_changed', 'old_value', 'new_value', 'changed_by', 'changed_at')
-    list_filter = ('change_type',)
-    search_fields = ('allocation__job_activity__job__job_id',)
-    readonly_fields = (
-        'allocation', 'change_type', 'field_changed', 'old_value', 'new_value',
-        'change_reason', 'changed_by', 'changed_at', 'allocation_snapshot'
-    )
-    date_hierarchy = 'changed_at'
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-
+# Replace PaymentChangeLogAdmin
 @admin.register(PaymentChangeLog)
 class PaymentChangeLogAdmin(admin.ModelAdmin):
     list_display = ('payment_type', 'change_type', 'field_changed', 'old_value', 'new_value', 'changed_by', 'changed_at')
     list_filter = ('payment_type', 'change_type')
-    readonly_fields = (
-        'payment_type', 'farmer_payment', 'mukkadam_payment', 'change_type',
-        'field_changed', 'old_value', 'new_value', 'change_reason',
-        'changed_by', 'changed_at', 'payment_snapshot'
-    )
+    readonly_fields = ('changed_at',)
     date_hierarchy = 'changed_at'
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-
-@admin.register(WebhookLog)
-class WebhookLogAdmin(admin.ModelAdmin):
-    list_display = (
-        'id', 'status_badge', 'farmer_id', 'job_id',
-        'cluster_matched', 'activities_processed', 'activities_failed',
-        'plots_created', 'error_type', 'created_at'
-    )
-    list_filter = ('status', 'cluster_matched')
-    search_fields = ('farmer_id', 'job_id', 'error_type', 'error_message')
-    readonly_fields = (
-        'webhook_data', 'status', 'error_type', 'error_message',
-        'farmer_id', 'job_id', 'cluster_matched', 'cluster_id',
-        'activities_processed', 'activities_failed', 'plots_created', 'created_at'
-    )
-    date_hierarchy = 'created_at'
-
-    def status_badge(self, obj):
-        colors = {'success': '#10b981', 'partial': '#f59e0b', 'failed': '#ef4444'}
-        color = colors.get(obj.status, '#6b7280')
-        return format_html(
-            '<span style="background:{};color:white;padding:2px 8px;border-radius:12px;font-size:11px;">{}</span>',
-            color, obj.status.upper()
-        )
-    status_badge.short_description = 'Status'
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
 
 
 # ============================================================================
@@ -1089,108 +1146,211 @@ class SystemConfigurationAdmin(admin.ModelAdmin):
     readonly_fields = ('updated_at',)
 
 
-@admin.register(APISync)
-class APISyncAdmin(admin.ModelAdmin):
-    list_display = ('sync_type', 'status_badge', 'records_synced', 'last_sync_at', 'error_message')
-    list_filter = ('sync_type', 'status')
-    readonly_fields = ('sync_type', 'last_sync_at', 'status', 'records_synced', 'error_message')
-    date_hierarchy = 'last_sync_at'
-
-    def status_badge(self, obj):
-        colors = {'success': '#10b981', 'partial': '#f59e0b', 'failed': '#ef4444'}
-        color = colors.get(obj.status, '#6b7280')
-        return format_html(
-            '<span style="background:{};color:white;padding:2px 8px;border-radius:12px;font-size:11px;">{}</span>',
-            color, obj.status.upper()
-        )
-    status_badge.short_description = 'Status'
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-    
-
 
 from django.contrib import admin
 from .models import FarmerBillWebhookLog
 
-@admin.register(FarmerBillWebhookLog)
-class FarmerBillWebhookLogAdmin(admin.ModelAdmin):
-    list_display = [
-        'created_at',
-        'farmer_name',
-        'farmer_phone',
-        'job_id',
-        'crop_name',
-        'plot_name',
-        'mukkadam_name',
-        'mukkadam_mobile',
-        'total_billed',
-        'total_paid',
-        'balance_due',
-        'sent_by_name',
-        'sent_by_email',
-        'webhook_status',
-    ]
-    list_filter  = [
-        'webhook_status',
-        'created_at',
-    ]
-    search_fields = [
-        'farmer_name',
-        'farmer_id',
-        'farmer_phone',
-        'job_id',
-        'crop_name',
-        'mukkadam_name',
-        'sent_by_name',
-        'sent_by_email',
-    ]
-    readonly_fields = [
-        'auth_token',
-        'sent_by_name',
-        'sent_by_email',
-        'sent_by_id',
-        'farmer_id',
-        'farmer_name',
-        'farmer_phone',
-        'job_id',
-        'crop_name',
-        'plot_name',
-        'mukkadam_name',
-        'mukkadam_mobile',
-        'total_billed',
-        'total_paid',
-        'balance_due',
-        'full_payload',
-        'webhook_status',
-        'webhook_response',
-        'created_at',
-    ]
-    ordering = ['-created_at']
-
-    # Disable add/delete — this is a log, should only be viewed
-    def has_add_permission(self, request):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return False
-    
-
 
 from .models import FarmerPaymentWebhookLog
 
+# ============================================================================
+# MISSING MODEL REGISTRATIONS
+# ============================================================================
+
+from .models import JobNote, AllocationAuditLog, MukkadamOTPRequest, FarmerCall, PaymentProof
+
+@admin.register(JobNote)
+class JobNoteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'job', 'author', 'note_date', 'is_resolved', 'resolved_by', 'created_at')
+    list_filter = ('is_resolved', 'note_date', 'tags')
+    search_fields = ('job__job_id', 'text', 'author__username')
+    readonly_fields = ('created_at', 'updated_at')
+    date_hierarchy = 'note_date'
+    filter_horizontal = ('mentions',)
+    autocomplete_fields = ['job', 'author', 'resolved_by']
+    fieldsets = (
+        ('Note', {
+            'fields': ('job', 'author', 'text', 'tags', 'mentions', 'note_date')
+        }),
+        ('Resolution', {
+            'fields': ('is_resolved', 'resolved_by', 'resolved_at', 'resolution_note')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(AllocationAuditLog)
+class AllocationAuditLogAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'action', 'allocation_id', 'job_id',
+        'mukkadam_name', 'farmer_name', 'activity_name',
+        'allocated_date', 'allocated_area', 'changed_by', 'changed_at'
+    )
+    list_filter = ('action', 'allocated_date', 'changed_by')
+    search_fields = ('job_id', 'mukkadam_name', 'farmer_name', 'activity_name')
+    readonly_fields = ('changed_at',)
+    date_hierarchy = 'changed_at'
+    fieldsets = (
+        ('Event', {
+            'fields': ('action', 'allocation_id', 'job_activity_id', 'job_id')
+        }),
+        ('Who', {
+            'fields': ('mukkadam_id', 'mukkadam_name', 'farmer_name', 'activity_name')
+        }),
+        ('Details', {
+            'fields': ('allocated_date', 'allocated_area', 'allocated_workers', 'notes')
+        }),
+        ('Snapshot', {
+            'fields': ('snapshot',),
+            'classes': ('collapse',)
+        }),
+        ('Audit', {
+            'fields': ('changed_by', 'changed_at'),
+        }),
+    )
+
+
+@admin.register(MukkadamOTPRequest)
+class MukkadamOTPRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'mukkadam', 'phone', 'otp_type',
+        'crew_size', 'allocation', 'is_used', 'requested_at'
+    )
+    list_filter = ('otp_type', 'is_used')
+    search_fields = ('mukkadam__mukkadam_name', 'phone')
+    readonly_fields = ('requested_at',)
+    list_editable = ('is_used',)
+    date_hierarchy = 'requested_at'
+    autocomplete_fields = ['mukkadam', 'allocation']
+    fieldsets = (
+        ('Request', {
+            'fields': ('mukkadam', 'phone', 'otp_type', 'crew_size', 'allocation')
+        }),
+        ('Status', {
+            'fields': ('is_used', 'requested_at')
+        }),
+    )
+
+
+@admin.register(FarmerCall)
+class FarmerCallAdmin(admin.ModelAdmin):
+    list_display = (
+        'call_sid', 'mobile_number', 'from_number', 'purpose',
+        'status', 'direction', 'duration', 'talk_time',
+        'has_recording', 'initiated_at', 'created_by'
+    )
+    list_filter = ('purpose', 'status', 'direction')
+    search_fields = ('call_sid', 'mobile_number', 'job_id', 'notes')
+    readonly_fields = ('initiated_at', 'call_sid')
+    date_hierarchy = 'initiated_at'
+    fieldsets = (
+        ('Call Identity', {
+            'fields': ('call_sid', 'mobile_number', 'from_number', 'direction', 'purpose')
+        }),
+        ('Status & Metrics', {
+            'fields': ('status', 'state', 'duration', 'talk_time', 'price')
+        }),
+        ('Recording', {
+            'fields': ('recording_url', 'recording_urls', 's3_key'),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('initiated_at', 'answered_at', 'completed_at', 'created_time', 'updated_time'),
+            'classes': ('collapse',)
+        }),
+        ('Exotel Data', {
+            'fields': ('virtual_number', 'custom_field', 'legs_url'),
+            'classes': ('collapse',)
+        }),
+        ('Context', {
+            'fields': ('job_id', 'notes', 'webhook_data', 'created_by'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(PaymentProof)
+class PaymentProofAdmin(admin.ModelAdmin):
+    list_display = ('id', 'proof_type', 'reference_id', 'file_name', 's3_key', 'uploaded_at', 'uploaded_by')
+    list_filter = ('proof_type', 'uploaded_at')
+    search_fields = ('file_name', 's3_key', 'reference_id')
+    readonly_fields = ('uploaded_at',)
+    fieldsets = (
+        ('Proof', {
+            'fields': ('proof_type', 'reference_id', 'file_name', 's3_key', 's3_url')
+        }),
+        ('Audit', {
+            'fields': ('uploaded_by', 'uploaded_at')
+        }),
+    )
+
+
+# In ActivityLogTenderAdmin — remove has_change_permission, keep has_add = False
+@admin.register(ActivityLogTender)
+class ActivityLogTenderAdmin(admin.ModelAdmin):
+    list_display = ('action', 'job', 'job_activity', 'performed_by', 'created_at')
+    list_filter = ('action',)
+    search_fields = ('job__job_id',)
+    readonly_fields = ('created_at',)   # only timestamp is readonly
+    date_hierarchy = 'created_at'
+    # ← no has_add/change/delete overrides = all enabled
+
+
+# In AllocationChangeLogTenderAdmin — make editable
+@admin.register(AllocationChangeLogTender)
+class AllocationChangeLogTenderAdmin(admin.ModelAdmin):
+    list_display = ('allocation', 'change_type', 'field_changed', 'old_value', 'new_value', 'changed_by', 'changed_at')
+    list_filter = ('change_type',)
+    search_fields = ('allocation__job_activity__job__job_id',)
+    readonly_fields = ('changed_at',)
+    date_hierarchy = 'changed_at'
+
+
+# In WebhookLogAdmin — make editable
+@admin.register(WebhookLog)
+class WebhookLogAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'status', 'farmer_id', 'job_id',
+        'cluster_matched', 'activities_processed', 'activities_failed',
+        'plots_created', 'error_type', 'created_at'
+    )
+    list_filter = ('status', 'cluster_matched')
+    search_fields = ('farmer_id', 'job_id', 'error_type')
+    readonly_fields = ('created_at',)
+    date_hierarchy = 'created_at'
+
+
+# In APISyncAdmin — make editable
+@admin.register(APISync)
+class APISyncAdmin(admin.ModelAdmin):
+    list_display = ('sync_type', 'status', 'records_synced', 'last_sync_at', 'error_message')
+    list_filter = ('sync_type', 'status')
+    readonly_fields = ('last_sync_at',)
+    date_hierarchy = 'last_sync_at'
+
+
+# In FarmerBillWebhookLogAdmin — enable delete at minimum
+@admin.register(FarmerBillWebhookLog)
+class FarmerBillWebhookLogAdmin(admin.ModelAdmin):
+    list_display = [
+        'created_at', 'farmer_name', 'farmer_phone', 'job_id',
+        'crop_name', 'mukkadam_name', 'total_billed', 'balance_due',
+        'sent_by_name', 'webhook_status',
+    ]
+    list_filter = ['webhook_status', 'created_at']
+    search_fields = ['farmer_name', 'farmer_id', 'job_id', 'sent_by_name']
+    readonly_fields = ['created_at', 'full_payload']
+    ordering = ['-created_at']
+    # ← all permissions enabled by default
+
+
+# In FarmerPaymentWebhookLogAdmin — enable delete
 @admin.register(FarmerPaymentWebhookLog)
 class FarmerPaymentWebhookLogAdmin(admin.ModelAdmin):
-    list_display    = ['created_at', 'booking_id', 'amount', 'mode', 'transaction_id', 'payment_created', 'confirmation_sent', 'confirmation_status', 'status']
-    list_filter     = ['status', 'payment_created', 'confirmation_sent', 'created_at']
-    search_fields   = ['booking_id', 'transaction_id', 'notes']
-    readonly_fields = ['booking', 'booking_id', 'amount', 'mode', 'transaction_id', 'notes', 'paid_at', 'payment_created', 'farmer_payment', 'raw_payload', 'confirmation_sent', 'confirmation_webhook_url', 'confirmation_status', 'status', 'error', 'created_at']
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return False
+    list_display = ['created_at', 'booking_id', 'amount', 'mode', 'transaction_id', 'payment_created', 'status']
+    list_filter = ['status', 'payment_created', 'created_at']
+    search_fields = ['booking_id', 'transaction_id']
+    readonly_fields = ['created_at', 'raw_payload']

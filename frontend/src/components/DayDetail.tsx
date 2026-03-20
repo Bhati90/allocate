@@ -548,8 +548,10 @@ function MoveJobButton({ job, act }: {
   act: any;
   
 }) {const MOVE_REASONS = [
-  'Not strict job — can reschedule',
-  'Easy farmer — farmer agreed to move',
+    'Not strict job — can reschedule',
+    'Easy farmer — farmer agreed to move',
+    'Due To Lack Of Supply',
+    'Due To Farmer'
 ];
 
 // Add to state:
@@ -2198,9 +2200,7 @@ return (
 {/* ══════════════════════════════════════════════════════
     TAB 2 — JOBS (styled like the demo DayModal table)
 ══════════════════════════════════════════════════════ */}
-{/* ══════════════════════════════════════════════════════
-    TAB 2 — JOBS (DayModal style, acres-based)
-══════════════════════════════════════════════════════ */}
+
 {activeTab === 'jobs' && (
   <div className="flex-1">
     {jobsOnThisDay.length === 0 ? (

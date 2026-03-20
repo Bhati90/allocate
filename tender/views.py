@@ -339,6 +339,20 @@ def cluster_insights(request):
 
     def fmt_date(d):
         return d.strftime('%d %b').lstrip('0')
+    
+    from datetime import date
+    import calendar
+
+    # ── Week range (Mon–Sun of current actual week) ───────────────────────
+    actual_today = date.today()
+    week_start = actual_today - timedelta(days=actual_today.weekday())  # Monday
+    week_end   = week_start + timedelta(days=6)                          # Sunday
+
+    # ── Month range ───────────────────────────────────────────────────────
+    month_start = actual_today.replace(day=1)
+    month_end   = actual_today.replace(
+        day=calendar.monthrange(actual_today.year, actual_today.month)[1]
+    )
 
     # ── helper: canonical unalloc count (deduped, no lost, no zero-area) ───
     def unalloc_count_qs(base_filter: dict):
@@ -409,6 +423,36 @@ def cluster_insights(request):
             {'activity': row['activity__name'] or 'Unknown', 'pending_area': float(row['pending_area'])}
             for row in activity_pending
         ]
+
+        # ── Weekly progress (Mon–Sun this week) ──────────────────────────────
+        week_total = JobActivity.objects.filter(
+            plot__clusters=c,
+            scheduled_date__range=(week_start, week_end),
+            total_area__gt=0,
+            is_lost=False,
+        ).aggregate(
+            total=models.Sum('total_area'),
+            allocated=models.Sum('allocated_area'),
+        )
+        week_total_area  = float(week_total['total']    or 0)
+        week_alloc_area  = float(week_total['allocated'] or 0)
+        week_pending     = round(week_total_area - week_alloc_area, 2)
+        week_pct         = round((week_alloc_area / week_total_area * 100), 1) if week_total_area > 0 else 0
+
+        # ── Monthly progress ──────────────────────────────────────────────────
+        month_total = JobActivity.objects.filter(
+            plot__clusters=c,
+            scheduled_date__range=(month_start, month_end),
+            total_area__gt=0,
+            is_lost=False,
+        ).aggregate(
+            total=models.Sum('total_area'),
+            allocated=models.Sum('allocated_area'),
+        )
+        month_total_area = float(month_total['total']    or 0)
+        month_alloc_area = float(month_total['allocated'] or 0)
+        month_pending    = round(month_total_area - month_alloc_area, 2)
+        month_pct        = round((month_alloc_area / month_total_area * 100), 1) if month_total_area > 0 else 0
 
         c_farmers = Farmer.objects.filter(clusters=c).count()
         c_jobs    = Job.objects.filter(clusters=c).distinct().count()
@@ -500,6 +544,20 @@ def cluster_insights(request):
             'farmers': c_farmers, 'plots': c_plots, 'jobs': c_jobs,
             'total_area':     float(c_total_area),
             'allocated_area': float(c_alloc_area),
+            'week_progress': {
+                'total_area':     week_total_area,
+                'allocated_area': week_alloc_area,
+                'pending_area':   week_pending,
+                'pct':            week_pct,
+                'label':          f"{week_start.strftime('%d %b')} – {week_end.strftime('%d %b')}",
+            },
+            'month_progress': {
+                'total_area':     month_total_area,
+                'allocated_area': month_alloc_area,
+                'pending_area':   month_pending,
+                'pct':            month_pct,
+                'label':          actual_today.strftime('%B %Y'),
+            },
             'pending_area':   float(c_total_area - c_alloc_area),
             'pct':            round(float(c_alloc_area / c_total_area * 100), 1) if c_total_area > 0 else 0,
             'activity_breakdown': activity_breakdown,
@@ -558,6 +616,80 @@ def cluster_insights(request):
         'clusters':        cluster_data,
         'no_cluster_row':  no_cluster_row,
     })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def mukkadam_timeline(request):
+    from datetime import date, timedelta
+    from collections import defaultdict
+
+    today     = date.today()
+    start_date = today - timedelta(days=10)
+    end_date   = today + timedelta(days=9)
+    all_days   = [start_date + timedelta(days=i) for i in range(20)]
+
+    # All mukkadams
+    mukkadams = Mukkadam.objects.prefetch_related(
+        'cluster_assignments__cluster'
+    ).order_by('mukkadam_name')
+
+    # All allocations in range
+    allocations = Allocation.objects.filter(
+        allocated_date__range=(start_date, end_date)
+    ).select_related('mukkadam', 'cluster').values(
+        'mukkadam_id', 'cluster_id', 'cluster__name', 'allocated_date', 'allocated_workers'
+    )
+
+    # Build per mukkadam: { date_str -> { cluster_id, cluster_name, workers } }
+    alloc_map = defaultdict(dict)
+    for a in allocations:
+        alloc_map[a['mukkadam_id']][str(a['allocated_date'])] = {
+            'cluster_id':   a['cluster_id'],
+            'cluster_name': a['cluster__name'] or '—',
+            'workers':      a['allocated_workers'],
+        }
+
+    # All unique clusters for color mapping
+    cluster_ids = list({a['cluster_id'] for a in allocations if a['cluster_id']})
+
+    result = []
+    for m in mukkadams:
+        assignments = list(m.cluster_assignments.filter(is_active=True).values(
+            'cluster_id', 'cluster__name', 'mukkadam_type'
+        ))
+        primary_type = assignments[0]['mukkadam_type'] if assignments else 'permanent'
+
+        days_data = []
+        for d in all_days:
+            ds = str(d)
+            alloc = alloc_map[m.mukkadam_id].get(ds)
+            days_data.append({
+                'date':         ds,
+                'is_today':     d == today,
+                'cluster_id':   alloc['cluster_id']   if alloc else None,
+                'cluster_name': alloc['cluster_name'] if alloc else None,
+                'workers':      alloc['workers']       if alloc else None,
+            })
+
+        result.append({
+            'mukkadam_id':   m.mukkadam_id,
+            'mukkadam_name': m.mukkadam_name,
+            'crew_size':     m.crew_size,
+            'mukkadam_type': primary_type,
+            'days':          days_data,
+        })
+
+    return Response({
+        'start_date':  str(start_date),
+        'end_date':    str(end_date),
+        'today':       str(today),
+        'days':        [str(d) for d in all_days],
+        'cluster_ids': cluster_ids,
+        'mukkadams':   result,
+    })
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def payment_overview(request):
@@ -2205,7 +2337,7 @@ def activity_dashboard(request):
         days_until = (a.scheduled_date - today).days if a.scheduled_date else None
 
         # Dedup key — same logic as summary card
-        dedup_key = (job.job_id, plot.id if plot else None, a.api_activity_id or a.activity.name)
+        dedup_key = (job.job_id, plot.id if plot else None, a.activity.name)
 
         if dedup_key not in merged:
             merged[dedup_key] = {
@@ -2281,7 +2413,9 @@ def activity_dashboard(request):
             if STATUS_PRIORITY.get(a.allocation_status, 0) < STATUS_PRIORITY.get(existing['allocation_status'], 0):
                 existing['allocation_status'] = a.allocation_status
 
+            # In the merge block, replace existing['splits'].append:
             existing['splits'].append({
+                'id':                a.id,
                 'activity_id':       a.id,
                 'scheduled_date':    str(a.scheduled_date) if a.scheduled_date else None,
                 'total_area':        float(a.total_area),
@@ -2289,6 +2423,7 @@ def activity_dashboard(request):
                 'remaining_area':    float(a.remaining_area),
                 'allocation_status': a.allocation_status,
                 'allocation_count':  len(alloc_data),
+                'allocations':       alloc_data,  # ← add this
             })
 
     data = list(merged.values())
