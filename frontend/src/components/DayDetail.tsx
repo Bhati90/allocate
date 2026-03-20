@@ -548,8 +548,8 @@ function MoveJobButton({ job, act }: {
   act: any;
   
 }) {const MOVE_REASONS = [
-    'Not strict job — can reschedule',
-    'Easy farmer — farmer agreed to move',
+    // 'Not strict job — can reschedule',
+    // 'Easy farmer — farmer agreed to move',
     'Due To Lack Of Supply',
     'Due To Farmer'
 ];

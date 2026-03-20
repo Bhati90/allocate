@@ -861,6 +861,7 @@ import { useCurrentUser } from "./hooks/currentUser";
 import ClusterActivityCalendar from "./ClusterCalender";
 import FarmerBillingPage from "./components/FarmerBillPage";
 import DayDetailModal from "./components/DayDetail";
+import AgroIntelUnified from "./Insight";
 
 // ─── Plot Cluster Control ─────────────────────────────────
 function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess }: {
@@ -1640,8 +1641,8 @@ function MoveJobButtonTender({ act, onSuccess }: {
   onSuccess: () => void;
 }) {
   const MOVE_REASONS = [
-    'Not strict job — can reschedule',
-    'Easy farmer — farmer agreed to move',
+    // 'Not strict job — can reschedule',
+    // 'Easy farmer — farmer agreed to move',
     'Due To Lack Of Supply',
     'Due To Farmer'
   ];
@@ -1937,9 +1938,9 @@ const fetchInsightDayData = async (date: Date, clusterId: number) => {
 };
   // Change the tab type
 // change tab type
-const [tab, setTab] = useState<'command' | 'calendar' | 'global' | 'mukkadams' | 'farmers' | 'jobs' | 'payment'>(() => {
+const [tab, setTab] = useState<'command' | 'calendar' | 'global' | 'mukkadams' | 'farmers' | 'jobs' | 'payment' | 'plan'>(() => {
   const saved = localStorage.getItem('tenderDashTab');
-  const valid = ['command', 'calendar', 'global', 'mukkadams', 'farmers', 'jobs', 'payment'];
+  const valid = ['command', 'calendar', 'global', 'mukkadams', 'farmers', 'jobs', 'payment', 'plan'];
   return (valid.includes(saved ?? '') ? saved : 'command') as any;
 });
 // Command Center state
@@ -2896,11 +2897,12 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: S.stone100, borderRadius: 14, padding: 3, border: `1px solid ${S.stone200}` }}>
           {([
             { key: 'command',   icon: '🏠', label: 'Command',   count: cmdClusters.length },
-{ key: 'payment', icon: '💰', label: 'Payment' },
-{ key: 'global', icon: '', label: 'Insight' },
-            { key: 'mukkadams', icon: '👥', label: 'Mukkadams', count: data?.mukkadams?.length || 0 },
-            { key: 'farmers',   icon: '👨‍🌾', label: 'Farmers',   count: data?.farmers?.length   || 0 },
-{ key: 'jobs', icon: '📋', label: 'Jobs', count: data?.summary?.total_tender_jobs || 0 },
+  { key: 'payment',  icon: '💰', label: 'Payment' },
+  { key: 'global',   icon: '', label: 'Plan' },
+  { key: 'mukkadams', icon: '👥', label: 'Mukkadams', count: data?.mukkadams?.length || 0 },
+  { key: 'farmers',  icon: '👨‍🌾', label: 'Farmers',   count: data?.farmers?.length || 0 },
+  { key: 'jobs',     icon: '📋', label: 'Jobs',       count: data?.summary?.total_tender_jobs || 0 },
+  { key: 'plan',     icon: '🗓️', label: 'Insight' }, 
           ] as const).map(t => {
             const isActive = tab === t.key;
             const isJobs   = t.key === 'jobs';
@@ -4946,7 +4948,11 @@ return (
             })()}
           </>
  
-        ) : null}
+        ): tab === 'plan' ? (
+          <>
+      <AgroIntelUnified/>
+          </>
+        )  : null}
       </div>
 
       {/* ══════ ALLOCATE DIALOG ══════ */}
