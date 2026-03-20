@@ -1949,8 +1949,12 @@ class JobViewSet(viewsets.ModelViewSet):
         cluster_id = self.request.query_params.get('cluster_id')
 
         # ✅ Build activities queryset filtered by plot or cluster's plots
-        activities_qs = JobActivity.objects.select_related('activity', 'plot').order_by('scheduled_date')
-        
+        activities_qs = JobActivity.objects.select_related('activity', 'plot').prefetch_related(
+            Prefetch(
+                'allocations',
+                queryset=Allocation.objects.select_related('mukkadam').order_by('allocated_date')
+            )
+        ).order_by('scheduled_date')
         if plot_id:
             activities_qs = activities_qs.filter(plot_id=plot_id)
         elif cluster_id:
@@ -5393,6 +5397,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to update allocation: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+        
 
     @action(detail=True, methods=['delete'])
     def delete_allocation(self, request, pk=None):
@@ -5401,7 +5406,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             job_activity = allocation.job_activity
 
-            # 1) ✅ Log BEFORE deleting
+            # ── Log BEFORE deleting ──
             AllocationAuditLog.objects.create(
                 action           = 'deleted',
                 allocation_id    = allocation.id,
@@ -5428,26 +5433,18 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 notes      = f"Deleted via dashboard — restored {allocation.allocated_area}ac to activity",
             )
 
-            # 2) Restore job activity area
-            job_activity.allocated_area = max(
-                Decimal('0'),
-                job_activity.allocated_area - allocation.allocated_area
-            )
-            job_activity.save()
+            # ── DELETE THESE TWO LINES — signal handles it ──
+            # job_activity.allocated_area = max(
+            #     Decimal('0'),
+            #     job_activity.allocated_area - allocation.allocated_area
+            # )
+            # job_activity.save()
 
-            # 3) Restore mukkadam availability
-            from .models import MukkadamAvailability
-            avail = MukkadamAvailability.objects.filter(
-                mukkadam=allocation.mukkadam,
-                date=allocation.allocated_date
-            ).first()
-            if avail:
-                avail.allocated_workers = max(0, avail.allocated_workers - allocation.allocated_workers)
-                avail.save()
+            # ── DELETE THESE — signal handles mukkadam availability too ──
+            # avail = MukkadamAvailability.objects.filter(...)
+            # if avail: avail.allocated_workers = ...
 
-            from .signals import allocation_deleted
-
-            # build payload before allocation.delete()
+            # Build payload before delete
             deleted_payload = {
                 "allocation_id":   allocation.id,
                 "booking_id":      job_activity.job.booking.booking_id if job_activity.job.booking else None,
@@ -5466,21 +5463,19 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 "plot_id":         job_activity.plot.id if job_activity.plot else None,
                 "plot_code":       job_activity.plot.plot_code if job_activity.plot else None,
                 "last_modified_by_id":   allocation.last_modified_by.id if allocation.last_modified_by else None,
-                "last_modified_by_name": allocation.last_modified_by.get_full_name() or allocation.last_modified_by.username if allocation.last_modified_by else None,
-                "deleted_by_id":         request.user.id if request.user.is_authenticated else None,
-                "deleted_by_name":       request.user.get_full_name() or request.user.username if request.user.is_authenticated else None,
-                "deleted_at":            str(timezone.now()),
+                "last_modified_by_name": allocation.last_modified_by.get_full_name() if allocation.last_modified_by else None,
+                "deleted_by_id":   request.user.id if request.user.is_authenticated else None,
+                "deleted_by_name": request.user.get_full_name() or request.user.username if request.user.is_authenticated else None,
                 "deleted_at":      str(timezone.now()),
             }
 
-            # 4) Delete
+            # Delete — signals fire here and handle area + availability restore
             allocation.delete()
+            from .signals import allocation_deleted
 
-            # fire AFTER delete, outside transaction
             allocation_deleted.send(sender=None, payload=deleted_payload)
 
         return Response({'success': True, 'message': 'Allocation deleted'}, status=status.HTTP_200_OK)
-
 
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -5694,16 +5689,15 @@ class JobNoteViewSet(viewsets.ModelViewSet):
 
         date       = self.request.query_params.get('date')
         cluster_id = self.request.query_params.get('cluster_id')
-        job_id     = self.request.query_params.get('job_id')
+        job_ids    = self.request.query_params.getlist('job_id')  # ← supports multiple
 
         if date:
             qs = qs.filter(note_date=date)
         if cluster_id:
             qs = qs.filter(job__clusters__id=cluster_id)
-        if job_id:
-            qs = qs.filter(job_id=job_id)
+        if job_ids:
+            qs = qs.filter(job_id__in=job_ids)  # ← filters by list
 
-        # Unresolved first, then by newest
         from django.db.models import Case, When, IntegerField
         qs = qs.annotate(
             sort_order=Case(
@@ -5714,7 +5708,6 @@ class JobNoteViewSet(viewsets.ModelViewSet):
         ).order_by('sort_order', '-created_at')
 
         return qs
-
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
 

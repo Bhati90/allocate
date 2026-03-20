@@ -2099,7 +2099,7 @@ const [actCluster, setActCluster]       = useState('');
 const [actSearch, setActSearch]         = useState('');
 const [actDateFrom, setActDateFrom]     = useState('');
 const [actDateTo, setActDateTo]         = useState('');
-const [actSubTab, setActSubTab]         = useState<'all' | 'upcoming' | 'last10' | 'not_allocated' | 'in_progress' |'split'| 'completed'>('all');
+const [actSubTab, setActSubTab]         = useState<'all' | 'upcoming' | 'last10' | 'not_allocated' |'overdue'|'data_issue'| 'in_progress' |'split'| 'completed'>('all');
 const [expandedActJob, setExpandedActJob] = useState<string | null>(null);
 // Add this ref alongside your states
 const allActivitiesRef = useRef<any[]>([]);
@@ -2139,6 +2139,31 @@ const fetchActivities = useCallback(async () => {
       return;
     }
 
+    if (actSubTab === 'overdue') {
+  setActivities(baseFetched.filter((a: any) => {
+    const sched = a.scheduled_date?.slice(0, 10);
+    return sched && sched < todayStr &&
+      a.allocation_status === 'pending' &&
+      Number(a.total_area) > 0;
+  }));
+  return;
+}
+
+if (actSubTab === 'in_progress') {
+  const subRes = await axios.get(`${API_BASE_URL}/api/activity-dashboard/`, {
+    params: { ...baseParams, status: 'in_progress', date_to: todayStr }
+  });
+  const subFetched = (subRes.data?.activities || []).filter((a: any) => a.total_area > 0);
+  setActivities(subFetched);
+  return;
+}
+
+
+// In fetchActivities, add:
+if (actSubTab === 'data_issue') {
+  setActivities(baseFetched);
+  return;
+}
     // For other subtabs that need API-side filtering
     const subParams = { ...baseParams };
     if (actSubTab === 'upcoming')      subParams.upcoming = '1';
@@ -2166,9 +2191,11 @@ const fetchActivities = useCallback(async () => {
 const filteredBase = actActivityFilter.length === 0
   ? baseActivities
   : baseActivities.filter((a: any) => actActivityFilter.includes(a.activity_name));
-
+const todayStr = new Date().toISOString().slice(0, 10);
 // Replace ALL baseActivities references in actCounts with filteredBase:
 const actCounts = {
+
+  
   all:           filteredBase.length,
   upcoming:      filteredBase.filter((a: any) => a.days_until !== null && a.days_until >= 0 && a.days_until <= 10).length,
   last10:        filteredBase.filter((a: any) => a.days_until !== null && a.days_until >= -10 && a.days_until <= 0).length,
@@ -2176,43 +2203,61 @@ const actCounts = {
   in_progress:   filteredBase.filter((a: any) => a.allocation_count > 0 && !a.allocations?.every((alloc: any) => alloc.work_status === 'completed')).length,
   completed:     filteredBase.filter((a: any) => a.allocations?.some((alloc: any) => alloc.work_status === 'completed')).length,
   split:         filteredBase.filter((a: any) => a.is_split === true).length,
+
+  overdue: filteredBase.filter((a: any) => {
+    if (!a.scheduled_date || a.allocation_status !== 'pending') return false;
+    return a.scheduled_date < todayStr && Number(a.total_area) > 0;
+  }).length,
+  // Find:
+data_issue: filteredBase.filter((a: any) =>
+  Object.keys(jobNotes).length > 0 &&
+  (jobNotes[a.job_id] ?? []).some((n: any) => !n.is_resolved)
+).length,
 };
 
-
-// Fetch notes for all loaded activities' job IDs
+// Replace the notes useEffect with:
 useEffect(() => {
-  if (tab !== 'jobs' || activities.length === 0) return;
+  if (tab !== 'jobs' || baseActivities.length === 0) return;
 
-  const jobIds = [...new Set(activities.map((a: any) => a.job_id))];
+  const jobIds = [...new Set(baseActivities.map((a: any) => a.job_id))];
   if (jobIds.length === 0) return;
 
   const token = localStorage.getItem('auth_token');
   setNotesLoading(true);
 
-  // Fetch notes filtered by these job IDs
-  // Use actCluster if set, otherwise fetch without cluster filter
-  const cid = actCluster || '';
-  const params = new URLSearchParams();
-  if (cid) params.set('cluster_id', cid);
-  // API supports job_ids as comma-separated or multiple params
-  jobIds.forEach(id => params.append('job_id', id));
+  const BATCH_SIZE = 50; // max job_ids per request
+  const batches: string[][] = [];
+  for (let i = 0; i < jobIds.length; i += BATCH_SIZE) {
+    batches.push(jobIds.slice(i, i + BATCH_SIZE));
+  }
 
-  fetch(`${API_BASE_URL}/api/job-notes/?${params.toString()}`, {
-    headers: { Authorization: `Token ${token}` },
-  })
-    .then(r => r.json())
-    .then((data: any[]) => {
-      // Group by job_id
+  const cid = actCluster || '';
+
+  Promise.all(
+    batches.map(batch => {
+      const params = new URLSearchParams();
+      if (cid) params.set('cluster_id', cid);
+      batch.forEach(id => params.append('job_id', id));
+      return fetch(`${API_BASE_URL}/api/job-notes/?${params.toString()}`, {
+        headers: { Authorization: `Token ${token}` },
+      }).then(r => r.json());
+    })
+  )
+    .then(results => {
       const grouped: Record<string, any[]> = {};
-      (Array.isArray(data) ? data : data.results ?? []).forEach((n: any) => {
-        if (!grouped[n.job_id]) grouped[n.job_id] = [];
-        grouped[n.job_id].push(n);
+      results.flat().forEach((batch: any) => {
+        const notes = Array.isArray(batch) ? batch : batch.results ?? [];
+        notes.forEach((n: any) => {
+          if (!grouped[n.job_id]) grouped[n.job_id] = [];
+          grouped[n.job_id].push(n);
+        });
       });
       setJobNotes(grouped);
     })
     .catch(() => {})
     .finally(() => setNotesLoading(false));
-}, [activities, tab, actCluster]);// ← allActivities REMOVED
+
+}, [baseActivities, tab, actCluster]); 
 useEffect(() => {
   if (tab !== 'jobs') return;
   fetchActivities();
@@ -2475,7 +2520,7 @@ const handleConfirmAllocate = async () => {
 
     // Log the actual error for debugging
     const d = await res.json();
-    console.log('Allocation response:', res.status, d);
+    // console.log('Allocation response:', res.status, d);
 
     if (res.ok) {
       const slotLabel = ['1st', '2nd', '3rd'][slotsUsed] ?? `${slotsUsed + 1}th`;
@@ -2849,6 +2894,12 @@ const all = filteredBase;
   const due0_3   = all.filter(a => { const d = diffDays(a); return d !== null && d >= 0 && d <= 3  && isCountable(a); });
   const due3_10  = all.filter(a => { const d = diffDays(a); return d !== null && d >  3 && d <= 10 && isCountable(a); });
   const due10p   = all.filter(a => { const d = diffDays(a); return d !== null && d >  10 && isCountable(a); });
+
+  const overdueAcres  = overdue.reduce((s: number, a: any) => s + Number(a.remaining_area || 0), 0);
+const due0_3Acres   = due0_3.reduce((s: number, a: any) => s + Number(a.remaining_area || 0), 0);
+const due3_10Acres  = due3_10.reduce((s: number, a: any) => s + Number(a.remaining_area || 0), 0);
+const due10pAcres   = due10p.reduce((s: number, a: any) => s + Number(a.remaining_area || 0), 0);
+
 const mild = overdue.filter(a => { const d = diffDays(a) ?? 0; return d >= -7 && d < 0; }).length;
   const critical = overdue.filter(a => (diffDays(a) ?? 0) < -30).length;
   const severe   = overdue.filter(a => { const d = diffDays(a) ?? 0; return d >= -30 && d < -7; }).length;
@@ -2865,6 +2916,10 @@ const mild = overdue.filter(a => { const d = diffDays(a) ?? 0; return d >= -7 &&
     mild,
     onTimeRate,
     overdueNow:   overdue.length,   critical,   severe,
+    overdueAcres:  Math.round(overdueAcres * 10) / 10,
+  due0_3Acres:   Math.round(due0_3Acres  * 10) / 10,
+  due3_10Acres:  Math.round(due3_10Acres * 10) / 10,
+  due10pAcres:   Math.round(due10pAcres  * 10) / 10,
     overdueValue: fmt(val(overdue)),
     due0_3Count:  due0_3.length,    due0_3Value:  fmt(val(due0_3)),
     due3_10Count: due3_10.length,   due3_10Value: fmt(val(due3_10)),
@@ -2989,6 +3044,9 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
           { key: 'not_allocated', label: '⚠️ Not Allocated', count: actCounts.not_allocated },
           { key: 'in_progress',   label: '⚡ In Progress',   count: actCounts.in_progress   },
           { key: 'completed',     label: '✅ Completed',     count: actCounts.completed     },
+          // Find your Jobs sub-pills array and add:
+{ key: 'overdue',     label: '🔥 Overdue',      count: actCounts.overdue     },
+// { key: 'data_issue',  label: '📋 Data Issues',   count: actCounts.data_issue  },
         ] as const).map(t => {
           const active = actSubTab === t.key;
           return (
@@ -4590,13 +4648,13 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
           </div>
 {showInsightDayDetail && insightDetailDate && (() => {
   const dateStr = formatDateInsight(insightDetailDate);
-  console.log('=== INSIGHT DAY DEBUG ===');
-  console.log('dateStr:', dateStr);
-  console.log('allActivities length:', allActivities.length);
-  console.log('matching activities:', allActivities.filter((a: any) => 
-    a.scheduled_date?.slice(0, 10) === dateStr
-  ).length);
-  console.log('sample activity scheduled_date:', allActivities[0]?.scheduled_date);
+  // console.log('=== INSIGHT DAY DEBUG ===');
+  // console.log('dateStr:', dateStr);
+  // console.log('allActivities length:', allActivities.length);
+  // console.log('matching activities:', allActivities.filter((a: any) => 
+  //   a.scheduled_date?.slice(0, 10) === dateStr
+  // ).length);
+  // console.log('sample activity scheduled_date:', allActivities[0]?.scheduled_date);
   return null;
 })()}
 
@@ -4774,55 +4832,53 @@ allJobs={insightDayJobs}
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
       {[
         {
-           count:      jobMetrics.overdueNow,
-          label:      'OVERDUE NOW',
-          emoji:      '🔥',
-          sub:        `${jobMetrics.critical} critical (30d+) · ${jobMetrics.severe} severe (7-30d) · ${jobMetrics.mild} mild (1-7d)`,
-          
-
-          value:      `${jobMetrics.overdueValue} at risk`,
-          countColor: '#dc2626',
-          border:     '#fecaca',
-          bg:         '#fef2f2',
-          valueBg:    '#fee2e2',
-          valueColor: '#dc2626',
-        },
-        {
-          count:      jobMetrics.due0_3Count,
-          label:      'DUE IN 0–3 DAYS',
-          emoji:      '⚡',
-          sub:        'Unallocated — will miss deadline',
-          value:      `${jobMetrics.due0_3Value} at risk`,
-          countColor: '#ea580c',
-          border:     '#fed7aa',
-          bg:         '#fff7ed',
-          valueBg:    '#ffedd5',
-          valueColor: '#ea580c',
-        },
-        {
-          count:      jobMetrics.due3_10Count,
-          label:      'DUE IN 3–10 DAYS',
-          emoji:      '👁',
-          sub:        'Still time — needs planning now',
-          value:      `${jobMetrics.due3_10Value} at risk`,
-          countColor: '#2563eb',
-          border:     '#bfdbfe',
-          bg:         '#eff6ff',
-          valueBg:    '#dbeafe',
-          valueColor: '#2563eb',
-        },
-        {
-          count:      jobMetrics.due10pCount,
-          label:      'DUE IN 10+ DAYS',
-          emoji:      '✅',
-          sub:        'Comfortable runway — plan ahead',
-          value:      `${jobMetrics.due10pValue} planned`,
-          countColor: '#16a34a',
-          border:     '#bbf7d0',
-          bg:         '#f0fdf4',
-          valueBg:    '#dcfce7',
-          valueColor: '#16a34a',
-        },
+  count:      jobMetrics.overdueNow,
+  label:      'OVERDUE NOW',
+  emoji:      '🔥',
+  sub:        `${jobMetrics.overdueAcres} ac unallocated · ${jobMetrics.critical} critical (30d+) · ${jobMetrics.severe} severe (7-30d) · ${jobMetrics.mild} mild (1-7d)`,
+  value:      `${jobMetrics.overdueValue} at risk`,
+  countColor: '#dc2626',
+  border:     '#fecaca',
+  bg:         '#fef2f2',
+  valueBg:    '#fee2e2',
+  valueColor: '#dc2626',
+},
+{
+  count:      jobMetrics.due0_3Count,
+  label:      'DUE IN 0–3 DAYS',
+  emoji:      '⚡',
+  sub:        `${jobMetrics.due0_3Acres} ac unallocated — will miss deadline`,
+  value:      `${jobMetrics.due0_3Value} at risk`,
+  countColor: '#ea580c',
+  border:     '#fed7aa',
+  bg:         '#fff7ed',
+  valueBg:    '#ffedd5',
+  valueColor: '#ea580c',
+},
+{
+  count:      jobMetrics.due3_10Count,
+  label:      'DUE IN 3–10 DAYS',
+  emoji:      '👁',
+  sub:        `${jobMetrics.due3_10Acres} ac · Still time — needs planning now`,
+  value:      `${jobMetrics.due3_10Value} at risk`,
+  countColor: '#2563eb',
+  border:     '#bfdbfe',
+  bg:         '#eff6ff',
+  valueBg:    '#dbeafe',
+  valueColor: '#2563eb',
+},
+{
+  count:      jobMetrics.due10pCount,
+  label:      'DUE IN 10+ DAYS',
+  emoji:      '✅',
+  sub:        `${jobMetrics.due10pAcres} ac · Comfortable runway — plan ahead`,
+  value:      `${jobMetrics.due10pValue} planned`,
+  countColor: '#16a34a',
+  border:     '#bbf7d0',
+  bg:         '#f0fdf4',
+  valueBg:    '#dcfce7',
+  valueColor: '#16a34a',
+},
       ].map((card, i) => (
         <div key={i} style={{ borderRadius: 14, padding: '16px 18px', background: card.bg, border: `1px solid ${card.border}`, boxShadow: S.shadowCard }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
@@ -4846,106 +4902,154 @@ allJobs={insightDayJobs}
               <div style={{ display: 'flex', justifyContent: 'center', padding: '64px 0' }}>
                 <RefreshCw size={28} style={{ color: S.brand, animation: 'spin 1s linear infinite' }} />
               </div>
-            ) : activities.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '64px 0', color: S.stone400 }}>No activities found</div>
-            ) : (() => {
-              // group by activity_name
-              const grouped: Record<string, any[]> = {};
-              const displayActivities = actActivityFilter.length === 0
-  ? activities
-  : activities.filter((a: any) => actActivityFilter.includes(a.activity_name));
+            ) 
+            : activities.length === 0 ? (
+  <div style={{ textAlign: 'center', padding: '64px 0', color: S.stone400 }}>No activities found</div>
+) : (() => {
+  const todayStr = new Date().toISOString().slice(0, 10);
 
-displayActivities.forEach((a: any) => {
-                const k = a.activity_name || 'Unknown';
-                if (!grouped[k]) grouped[k] = [];
-                grouped[k].push(a);
-              });
- 
-              return Object.entries(grouped).map(([actName, acts]) => {
-                
-const isOverdue = (a: any) =>
-  a.days_until !== null &&
-  Number(a.total_area) > 0 &&
-  Number(a.remaining_area) > 0 &&
-  !['fully_allocated', 'partially_allocated', 'in_progress', 'completed'].includes(a.allocation_status);
-// In the parent component where you compute these, after flatMap:
-const flatActs = acts.flatMap((a: any) =>
-  a.is_split && a.splits?.length > 0
-    ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status }))
-    : [a]
-);
+  const displayActivities = (() => {
+    let base = actActivityFilter.length === 0
+      ? activities
+      : activities.filter((a: any) => actActivityFilter.includes(a.activity_name));
+    if (actSubTab === 'data_issue') {
+      base = base.filter((a: any) =>
+        (jobNotes[a.job_id] ?? []).some((n: any) => !n.is_resolved)
+      );
+    }
+    return base;
+  })();
 
+  // ── OVERDUE tab ──────────────────────────────────────────────────────
+  if (actSubTab === 'overdue') {
+    const mild   = displayActivities.filter((a: any) => { const d = Math.floor((new Date(todayStr).getTime() - new Date(a.scheduled_date).getTime()) / 86400000); return d >= 1 && d <= 7; });
+    const severe = displayActivities.filter((a: any) => { const d = Math.floor((new Date(todayStr).getTime() - new Date(a.scheduled_date).getTime()) / 86400000); return d > 7; });
 
+    const renderOverdueSection = (label: string, color: string, bg: string, border: string, items: any[]) => {
+      if (items.length === 0) return null;
+      const grp: Record<string, any[]> = {};
+      items.forEach((a: any) => { const k = a.activity_name || 'Unknown'; if (!grp[k]) grp[k] = []; grp[k].push(a); });
+      return (
+        <div key={label} style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '10px 16px', borderRadius: 10, background: bg, border: `1px solid ${border}` }}>
+            <span style={{ fontSize: 16 }}>{label.split(' ')[0]}</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color }}>{label}</div>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>{items.length} jobs · {items.reduce((s: number, a: any) => s + Number(a.remaining_area || 0), 0).toFixed(1)} ac unallocated</div>
+            </div>
+          </div>
+          {Object.entries(grp).map(([actName, acts]: [string, any[]]) => {
+            const flatActs = acts.flatMap((a: any) => a.is_split && a.splits?.length > 0 ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status })) : [a]);
+            return (
+              <GroupedActivitySection key={actName} actName={actName} acts={acts}
+                totalArea={flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0)}
+                totalValue={acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0)}
+                unalloc={flatActs.filter((a: any) => a.allocation_status === 'pending').length}
+                ov30={flatActs.filter((a: any) => { const d = Math.floor((new Date(todayStr).getTime() - new Date(a.scheduled_date).getTime()) / 86400000); return d > 30 && a.allocation_status === 'pending'; }).length}
+                ov7={flatActs.filter((a: any) => { const d = Math.floor((new Date(todayStr).getTime() - new Date(a.scheduled_date).getTime()) / 86400000); return d > 7 && d <= 30 && a.allocation_status === 'pending'; }).length}
+                ov1_7={flatActs.filter((a: any) => { const d = Math.floor((new Date(todayStr).getTime() - new Date(a.scheduled_date).getTime()) / 86400000); return d >= 1 && d <= 7 && a.allocation_status === 'pending'; }).length}
+                onTime={flatActs.filter((a: any) => a.allocations?.some((al: any) => al.work_status === 'completed') || a.allocation_status === 'fully_allocated').length}
+                expandedActJob={expandedActJob} setExpandedActJob={setExpandedActJob} isAdmin={isAdmin}
+                handleUpdownComplete={handleUpdownComplete} maxWorkRows={jobsMaxWorkRows}
+                onAllocate={async (act: any, isoDate: string) => { setAllocDialog({ open: true, act, job: { job_id: act.job_id, farmer_name: act.farmer_name }, isoDate, mukkadams: [], loadingMukkadams: true }); await fetchJobsCapacity(isoDate, act); }}
+                onAllocateWithMukkadam={(act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => { setJobsHalfDayDialog({ open: true, jobId: act.job_id, act, mukkadam: workerRow.mukkadamObj, rate: workerRow.rate, availableWorkers: workerRow.availableWorkers, neededWorkers: 0, remainingArea, isSecondJob: slotsUsed >= 1, jobSlotsUsed: slotsUsed, targetDate: isoDate }); }}
+                jobNotes={jobNotes} onSuccess={fetchDataSilent}
+                onNote={(jobId: string, label: string) => { setJobsNoteJobId(jobId); setJobsNoteJobLabel(label); }}
+              />
+            );
+          })}
+        </div>
+      );
+    };
 
-const totalArea  = flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0);
-const totalValue = acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0); // keep value on parent
-const unalloc    = flatActs.filter((a: any) => a.allocation_status === 'pending').length;
-const ov30       = flatActs.filter((a: any) => isOverdue(a) && a.days_until < -30).length;
-const ov7        = flatActs.filter((a: any) => isOverdue(a) && a.days_until >= -30 && a.days_until < -7).length;
-const ov1_7 = flatActs.filter((a: any) => isOverdue(a) && a.days_until >= -7  && a.days_until < 0).length;  
-const onTime = flatActs.filter((a: any) =>
-  a.allocations?.some((al: any) => al.work_status === 'completed') ||
-  a.allocation_status === 'fully_allocated'
-).length;
-return (
+    return (
+      <>
+        {renderOverdueSection('🔥 1–7 Days Overdue', '#dc2626', '#fef2f2', '#fecaca', mild)}
+        {renderOverdueSection('💀 7+ Days Overdue',  '#7f1d1d', '#fff1f0', '#fca5a5', severe)}
+        {mild.length === 0 && severe.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '64px 0', color: '#16a34a', fontSize: 14, fontWeight: 600 }}>✅ No overdue jobs!</div>
+        )}
+      </>
+    );
+  }
 
+  // ── DATA ISSUE tab ────────────────────────────────────────────────────
+  if (actSubTab === 'data_issue') {
+    if (displayActivities.length === 0) {
+      return <div style={{ textAlign: 'center', padding: '64px 0', color: '#16a34a', fontSize: 14, fontWeight: 600 }}>✅ No open data issues!</div>;
+    }
+    const grp: Record<string, any[]> = {};
+    displayActivities.forEach((a: any) => { const k = a.activity_name || 'Unknown'; if (!grp[k]) grp[k] = []; grp[k].push(a); });
+    return (
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, padding: '10px 16px', borderRadius: 10, background: '#fef3c7', border: '1px solid #fde68a' }}>
+          <span style={{ fontSize: 16 }}>📌</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>Data Issues — Jobs with Unresolved Notes</div>
+            <div style={{ fontSize: 11, color: '#6b7280' }}>{displayActivities.length} jobs need attention</div>
+          </div>
+        </div>
+        {Object.entries(grp).map(([actName, acts]: [string, any[]]) => {
+          const flatActs = acts.flatMap((a: any) => a.is_split && a.splits?.length > 0 ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status })) : [a]);
+          return (
+            <GroupedActivitySection key={actName} actName={actName} acts={acts}
+              totalArea={flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0)}
+              totalValue={acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0)}
+              unalloc={flatActs.filter((a: any) => a.allocation_status === 'pending').length}
+              ov30={0} ov7={0} ov1_7={0} onTime={0}
+              expandedActJob={expandedActJob} setExpandedActJob={setExpandedActJob} isAdmin={isAdmin}
+              handleUpdownComplete={handleUpdownComplete} maxWorkRows={jobsMaxWorkRows}
+              onAllocate={async (act: any, isoDate: string) => { setAllocDialog({ open: true, act, job: { job_id: act.job_id, farmer_name: act.farmer_name }, isoDate, mukkadams: [], loadingMukkadams: true }); await fetchJobsCapacity(isoDate, act); }}
+              onAllocateWithMukkadam={(act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => { setJobsHalfDayDialog({ open: true, jobId: act.job_id, act, mukkadam: workerRow.mukkadamObj, rate: workerRow.rate, availableWorkers: workerRow.availableWorkers, neededWorkers: 0, remainingArea, isSecondJob: slotsUsed >= 1, jobSlotsUsed: slotsUsed, targetDate: isoDate }); }}
+              jobNotes={jobNotes} onSuccess={fetchDataSilent}
+              onNote={(jobId: string, label: string) => { setJobsNoteJobId(jobId); setJobsNoteJobLabel(label); }}
+            />
+          );
+        })}
+      </div>
+    );
+  }
 
-  
-                  <GroupedActivitySection
-                    key={actName}
-                    actName={actName}
-                    acts={acts}
-                    totalArea={totalArea}
-                    totalValue={totalValue}
-                    unalloc={unalloc}
-                    ov30={ov30}
-                    ov7={ov7}
-                    onTime={onTime} 
-                    ov1_7 = {ov1_7}
-                    expandedActJob={expandedActJob}
-                    setExpandedActJob={setExpandedActJob}
-                    isAdmin={isAdmin}
-                    handleUpdownComplete={handleUpdownComplete}
-                    maxWorkRows={jobsMaxWorkRows}
-                    onAllocate={async (act: any, isoDate: string) => {
-                      // Open dialog immediately with loading state
-                      setAllocDialog({
-                        open: true,
-                        act,
-                        job: { job_id: act.job_id, farmer_name: act.farmer_name },
-                        isoDate,
-                        mukkadams: [],
-                        loadingMukkadams: true,
-                      });
-                      // fetchJobsCapacity fetches capacity + mukkadam details,
-                      // enriches them, and calls setAllocDialog with the result
-                      await fetchJobsCapacity(isoDate, act);
-                    }}
-                    onAllocateWithMukkadam={(act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => {
-                      setJobsHalfDayDialog({
-                        open: true,
-                        jobId: act.job_id,
-                        act,
-                        mukkadam: workerRow.mukkadamObj,
-                        rate: workerRow.rate,
-                        availableWorkers: workerRow.availableWorkers,
-                        neededWorkers: 0,
-                        remainingArea,
-                        isSecondJob: slotsUsed >= 1,
-                        jobSlotsUsed: slotsUsed,
-                        targetDate: isoDate,
-                      });
-                    }}
-                    jobNotes={jobNotes}
-                    onSuccess={fetchDataSilent}
-                    onNote={(jobId: string, label: string) => {
-                      setJobsNoteJobId(jobId);
-                      setJobsNoteJobLabel(label);
-                    }}
-                  />
-                );
-              });
-            })()}
+  // ── DEFAULT grouped view ─────────────────────────────────────────────
+  const grouped: Record<string, any[]> = {};
+  displayActivities.forEach((a: any) => {
+    const k = a.activity_name || 'Unknown';
+    if (!grouped[k]) grouped[k] = [];
+    grouped[k].push(a);
+  });
+
+  return Object.entries(grouped).map(([actName, acts]) => {
+    const isOverdue = (a: any) =>
+      a.days_until !== null && Number(a.total_area) > 0 && Number(a.remaining_area) > 0 &&
+      !['fully_allocated', 'partially_allocated', 'in_progress', 'completed'].includes(a.allocation_status);
+
+    const flatActs = acts.flatMap((a: any) =>
+      a.is_split && a.splits?.length > 0
+        ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status }))
+        : [a]
+    );
+    const totalArea  = flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0);
+    const totalValue = acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0);
+    const unalloc    = flatActs.filter((a: any) => a.allocation_status === 'pending').length;
+    const ov30       = flatActs.filter((a: any) => isOverdue(a) && a.days_until < -30).length;
+    const ov7        = flatActs.filter((a: any) => isOverdue(a) && a.days_until >= -30 && a.days_until < -7).length;
+    const ov1_7      = flatActs.filter((a: any) => isOverdue(a) && a.days_until >= -7  && a.days_until < 0).length;
+    const onTime     = flatActs.filter((a: any) => a.allocations?.some((al: any) => al.work_status === 'completed') || a.allocation_status === 'fully_allocated').length;
+
+    return (
+      <GroupedActivitySection key={actName} actName={actName} acts={acts}
+        totalArea={totalArea} totalValue={totalValue} unalloc={unalloc}
+        ov30={ov30} ov7={ov7} ov1_7={ov1_7} onTime={onTime}
+        expandedActJob={expandedActJob} setExpandedActJob={setExpandedActJob} isAdmin={isAdmin}
+        handleUpdownComplete={handleUpdownComplete} maxWorkRows={jobsMaxWorkRows}
+        onAllocate={async (act: any, isoDate: string) => { setAllocDialog({ open: true, act, job: { job_id: act.job_id, farmer_name: act.farmer_name }, isoDate, mukkadams: [], loadingMukkadams: true }); await fetchJobsCapacity(isoDate, act); }}
+        onAllocateWithMukkadam={(act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => { setJobsHalfDayDialog({ open: true, jobId: act.job_id, act, mukkadam: workerRow.mukkadamObj, rate: workerRow.rate, availableWorkers: workerRow.availableWorkers, neededWorkers: 0, remainingArea, isSecondJob: slotsUsed >= 1, jobSlotsUsed: slotsUsed, targetDate: isoDate }); }}
+        jobNotes={jobNotes} onSuccess={fetchDataSilent}
+        onNote={(jobId: string, label: string) => { setJobsNoteJobId(jobId); setJobsNoteJobLabel(label); }}
+      />
+    );
+  });
+})()}
           </>
  
         ): tab === 'plan' ? (
@@ -5749,7 +5853,7 @@ function GroupedActivitySection({ actName, acts,ov1_7, totalArea, totalValue,onT
   }
   return [a];
 }).map((a: any) => {
-              console.log(acts[0])
+              // console.log(acts[0])
               const isExp       = expandedActJob === String(a.activity_id);
               const isPending   = a.allocation_status === 'pending';
               const isCompleted = a.allocations?.some((al: any) => al.work_status === 'completed');
@@ -5991,54 +6095,119 @@ function GroupedActivitySection({ actName, acts,ov1_7, totalArea, totalValue,onT
                           )}
 
                           {/* ── Notes for this job ── */}
-                          {rowNotes.length > 0 && (
-                            <div style={{ marginTop: 12, borderTop: `1px solid ${S.stone100}`, paddingTop: 12 }}>
-                              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginBottom: 8 }}>
-                                ✏️ Notes ({rowNotes.length})
-                              </div>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                {rowNotes.map((n: any) => (
-                                  <div key={n.id} style={{ padding: '10px 12px', borderRadius: 10, background: n.is_resolved ? '#f0fdf4' : '#fff', border: `1px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, opacity: n.is_resolved ? 0.75 : 1 }}>
-                                    {/* Job context banner */}
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                        {n.tags?.map((t: string) => (
-                                          <span key={t} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 999, background: '#f3f4f6', color: '#6b7280', fontWeight: 600 }}>{t}</span>
-                                        ))}
-                                        {n.is_resolved && (
-                                          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontWeight: 700 }}>✅ Resolved</span>
-                                        )}
-                                      </div>
-                                      <span style={{ fontSize: 10, color: S.stone400, fontFamily: 'monospace' }}>
-                                        {n.author?.full_name} · {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                                      </span>
-                                    </div>
-                                    {/* Note text */}
-                                    <div style={{ fontSize: 12, color: n.is_resolved ? '#6b7280' : '#111827', lineHeight: 1.5, textDecoration: n.is_resolved ? 'line-through' : 'none' }}>
-                                      {n.text}
-                                    </div>
-                                    {/* Resolution note */}
-                                    {n.resolution_note && (
-                                      <div style={{ fontSize: 11, color: '#15803d', fontStyle: 'italic', marginTop: 4 }}>
-                                        ✅ {n.resolution_note}
-                                        {n.resolved_by?.full_name && ` — ${n.resolved_by.full_name}`}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                              {/* Quick add note button */}
-                              <button
-                                onClick={() => {
-                                  const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – ');
-                                  onNote(a.job_id, label);
-                                }}
-                                style={{ marginTop: 8, padding: '5px 12px', borderRadius: 8, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
-                              >
-                                + Add another note
-                              </button>
-                            </div>
-                          )}
+                          {/* ── Notes for this job ── */}
+{rowNotes.length > 0 && (
+  <div style={{ marginTop: 12, borderTop: `1px solid ${S.stone100}`, paddingTop: 12 }}>
+    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginBottom: 8 }}>
+      ✏️ Notes ({rowNotes.length}) · {unresolvedNotes.length > 0 && <span style={{ color: '#dc2626' }}>{unresolvedNotes.length} open</span>}
+    </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {rowNotes.map((n: any) => (
+        <div key={n.id} style={{ borderRadius: 12, background: n.is_resolved ? '#f0fdf4' : '#fff', border: `1.5px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, overflow: 'hidden' }}>
+
+          {/* ── Header row ── */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: n.is_resolved ? '#f0fdf4' : '#fef2f2', borderBottom: `1px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, flexWrap: 'wrap' }}>
+
+            {/* Author avatar + name */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ width: 26, height: 26, borderRadius: '50%', background: n.is_resolved ? '#16a34a' : '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
+                {(n.author?.full_name || n.author?.username || '?').slice(0, 1).toUpperCase()}
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: S.stone800 }}>
+                  {n.author?.full_name || n.author?.username || 'Unknown'}
+                </div>
+                <div style={{ fontSize: 10, color: S.stone400 }}>
+                  {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  {' · '}
+                  {new Date(n.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              </div>
+            </div>
+
+            {/* Tags */}
+            {(n.tags ?? []).length > 0 && (
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {n.tags.map((tag: string) => {
+                  const tagStyles: Record<string, { bg: string; color: string; border: string }> = {
+                    urgent:         { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+                    important:      { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa' },
+                    mukkadam_issue: { bg: '#f0f9ff', color: '#0284c7', border: '#bae6fd' },
+                    farmer_issue:   { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+                    sales:          { bg: '#faf5ff', color: '#7c3aed', border: '#e9d5ff' },
+                    operations:     { bg: '#f8fafc', color: '#475569', border: '#cbd5e1' },
+                    data_wrong:     { bg: '#fefce8', color: '#ca8a04', border: '#fde68a' },
+                    price_mismatch: { bg: '#fff1f2', color: '#be123c', border: '#fecdd3' },
+                    team_charging:  { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
+                  };
+                  const TAG_LABELS: Record<string, string> = {
+                    urgent: '🔴 Urgent', important: '⚠️ Important',
+                    mukkadam_issue: '👷 Mukkadam', farmer_issue: '🌾 Farmer',
+                    sales: '💼 Sales', operations: '⚙️ Ops',
+                    data_wrong: '📊 Data Wrong', price_mismatch: '💰 Price',
+                    team_charging: '⚡ Team',
+                  };
+                  const ts = tagStyles[tag] ?? { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb' };
+                  return (
+                    <span key={tag} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ts.bg, color: ts.color, border: `1px solid ${ts.border}` }}>
+                      {TAG_LABELS[tag] ?? tag}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Resolved badge */}
+            {n.is_resolved && (
+              <span style={{ marginLeft: 'auto', fontSize: 10, padding: '2px 8px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontWeight: 700, border: '1px solid #bbf7d0' }}>
+                ✅ Resolved
+              </span>
+            )}
+          </div>
+
+          {/* ── Note body ── */}
+          <div style={{ padding: '10px 12px' }}>
+            <div style={{ fontSize: 13, color: n.is_resolved ? '#6b7280' : '#111827', lineHeight: 1.6, textDecoration: n.is_resolved ? 'line-through' : 'none' }}>
+              {n.text}
+            </div>
+
+            {/* Mentions */}
+            {(n.mentions ?? []).length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 10, color: S.stone400 }}>Mentioned:</span>
+                {n.mentions.map((m: any) => (
+                  <span key={m.id} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe' }}>
+                    @{m.full_name || m.username}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Resolution */}
+            {n.resolution_note && (
+              <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 11, color: '#15803d' }}>
+                ✅ <strong>{n.resolved_by?.full_name || n.resolved_by?.username}</strong>: {n.resolution_note}
+                <span style={{ color: S.stone400, marginLeft: 6 }}>
+                  · {n.resolved_at ? new Date(n.resolved_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <button
+      onClick={() => {
+        const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – ');
+        onNote(a.job_id, label);
+      }}
+      style={{ marginTop: 10, padding: '6px 14px', borderRadius: 8, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+    >
+      + Add note
+    </button>
+  </div>
+)}
                         </div>
                       </td>
                     </tr>

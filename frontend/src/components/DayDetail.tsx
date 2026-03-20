@@ -2260,8 +2260,12 @@ return (
                     (r) => r.activityName === act.activity_name,
                   );
 
-                  const actAllocations = filteredAllocations.filter(
-  (al) => al.job_id === job.job_id && al.job_activity === act.id,
+                  const actAllocations = (
+  (act as any).allocations?.length > 0
+    ? (act as any).allocations
+    : filteredAllocations.filter(
+        (al) => al.job_id === job.job_id && al.job_activity === act.id,
+      )
 ) as AllocationWithReport[];
 
 
@@ -2446,27 +2450,38 @@ const mukkadamHasHalfDay =
   const alMukkadam = mukkadams.find((mk) => mk.mukkadam_id === al.mukkadam);
   const vs = getVerifyStatus(al);
   const vstyle = VERIFY_STYLE[vs];
-  const isThirdDay = (al as any).allows_second_job === true;  // this specific allocation
+  const isThirdDay = (al as any).allows_second_job === true;
+
+  // ← get date from either field name
+  const allocDate = (al as any).allocated_date || (al as any).date;
 
   return (
-    <div key={al.id} className="flex items-center gap-2 text-xs">
+    <div key={al.id} className="flex items-center gap-2 text-xs flex-wrap">
       <span className="font-medium text-stone-700">
         {alMukkadam?.mukkadam_name || 'N/A'}
       </span>
+
+      {/* ── Allocated date ── */}
+      {allocDate && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-500 border border-stone-200 font-medium">
+          📅 {new Date(allocDate + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+        </span>
+      )}
+
       <span className="text-stone-400 tabular-nums">
         {Number(al.allocated_area).toFixed(2)} ac
       </span>
 
-      {/* ⅓ day badge — per allocation, not per mukkadam */}
       {isThirdDay && (
         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
-          ⅓ day job  {/* ← was ½ */}
+          ⅓ day job
         </span>
       )}
 
       {al.is_carry_forward && (
         <span className="text-violet-500 text-[10px]">🔄</span>
       )}
+
       <span
         className="px-1.5 py-0.5 rounded-full text-[10px] font-bold"
         style={{ background: vstyle.bg, color: vstyle.color }}
@@ -2476,7 +2491,6 @@ const mukkadamHasHalfDay =
     </div>
   );
 })}
-
                           </div>
                         ) : workerRows.length === 0 ? (
                           <span className="text-xs text-stone-400 italic">

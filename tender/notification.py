@@ -2,8 +2,8 @@
 
 import requests
 
-# NOTIFICATION_API = "http://localhost:8001/ap/push/send/"
-NOTIFICATION_API = "https://allocation.bharatintelligence.ai/ap/push/send/"
+NOTIFICATION_API = "http://localhost:8001/ap/push/send/"
+# NOTIFICATION_API = "https://allocation.bharatintelligence.ai/ap/push/send/"
 
 def notify_farmer(mobile_number, title, body, data=None):
     """Send push notification to farmer"""
