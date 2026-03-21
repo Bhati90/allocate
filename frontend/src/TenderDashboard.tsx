@@ -2242,18 +2242,17 @@ useEffect(() => {
         headers: { Authorization: `Token ${token}` },
       }).then(r => r.json());
     })
-  )
-    .then(results => {
-      const grouped: Record<string, any[]> = {};
-      results.flat().forEach((batch: any) => {
-        const notes = Array.isArray(batch) ? batch : batch.results ?? [];
-        notes.forEach((n: any) => {
-          if (!grouped[n.job_id]) grouped[n.job_id] = [];
-          grouped[n.job_id].push(n);
-        });
-      });
-      setJobNotes(grouped);
-    })
+  ).then(results => {
+  const grouped: Record<string, any[]> = {};
+  results.forEach((batchResult: any) => {
+    const notes = Array.isArray(batchResult) ? batchResult : batchResult.results ?? [];
+    notes.forEach((n: any) => {
+      if (!grouped[n.job_id]) grouped[n.job_id] = [];
+      grouped[n.job_id].push(n);
+    });
+  });
+  setJobNotes(grouped);
+})
     .catch(() => {})
     .finally(() => setNotesLoading(false));
 
@@ -3046,7 +3045,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
           { key: 'completed',     label: '✅ Completed',     count: actCounts.completed     },
           // Find your Jobs sub-pills array and add:
 { key: 'overdue',     label: '🔥 Overdue',      count: actCounts.overdue     },
-// { key: 'data_issue',  label: '📋 Data Issues',   count: actCounts.data_issue  },
+{ key: 'data_issue',  label: '📋 Data Issues',   count: actCounts.data_issue  },
         ] as const).map(t => {
           const active = actSubTab === t.key;
           return (
@@ -4941,7 +4940,7 @@ allJobs={insightDayJobs}
           {Object.entries(grp).map(([actName, acts]: [string, any[]]) => {
             const flatActs = acts.flatMap((a: any) => a.is_split && a.splits?.length > 0 ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status })) : [a]);
             return (
-              <GroupedActivitySection key={actName} actName={actName} acts={acts}
+              <GroupedActivitySection key={actName} actName={actName} acts={acts}  actSubTab={actSubTab}
                 totalArea={flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0)}
                 totalValue={acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0)}
                 unalloc={flatActs.filter((a: any) => a.allocation_status === 'pending').length}
@@ -4992,7 +4991,7 @@ allJobs={insightDayJobs}
         {Object.entries(grp).map(([actName, acts]: [string, any[]]) => {
           const flatActs = acts.flatMap((a: any) => a.is_split && a.splits?.length > 0 ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status })) : [a]);
           return (
-            <GroupedActivitySection key={actName} actName={actName} acts={acts}
+            <GroupedActivitySection key={actName} actName={actName} acts={acts} actSubTab={actSubTab} 
               totalArea={flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0)}
               totalValue={acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0)}
               unalloc={flatActs.filter((a: any) => a.allocation_status === 'pending').length}
@@ -5037,7 +5036,7 @@ allJobs={insightDayJobs}
     const onTime     = flatActs.filter((a: any) => a.allocations?.some((al: any) => al.work_status === 'completed') || a.allocation_status === 'fully_allocated').length;
 
     return (
-      <GroupedActivitySection key={actName} actName={actName} acts={acts}
+      <GroupedActivitySection key={actName} actName={actName} acts={acts} actSubTab={actSubTab} 
         totalArea={totalArea} totalValue={totalValue} unalloc={unalloc}
         ov30={ov30} ov7={ov7} ov1_7={ov1_7} onTime={onTime}
         expandedActJob={expandedActJob} setExpandedActJob={setExpandedActJob} isAdmin={isAdmin}
@@ -5745,9 +5744,10 @@ function MukkadamTimeline({ data }: { data: any }) {
     </div>
   );
 }
-function GroupedActivitySection({ actName, acts,ov1_7, totalArea, totalValue,onTime, unalloc, ov30, ov7, expandedActJob, setExpandedActJob, isAdmin, handleUpdownComplete, onAllocate, onAllocateWithMukkadam, onNote, maxWorkRows, onSuccess, jobNotes }:{
+function GroupedActivitySection({ actName,actSubTab, acts,ov1_7, totalArea, totalValue,onTime, unalloc, ov30, ov7, expandedActJob, setExpandedActJob, isAdmin, handleUpdownComplete, onAllocate, onAllocateWithMukkadam, onNote, maxWorkRows, onSuccess, jobNotes }:{
    actName: string; acts: any[]; totalArea: number; totalValue: number;
   unalloc: number; ov30: number; ov7: number; ov1_7:number;onTime: number;
+  actSubTab?: string;
   expandedActJob: string | null; setExpandedActJob: (id: string | null) => void;
   isAdmin: boolean;
   handleUpdownComplete: (mId: number, aId: number) => void;
@@ -5866,6 +5866,78 @@ function GroupedActivitySection({ actName, acts,ov1_7, totalArea, totalValue,onT
                   const resolvedNotes   = rowNotes.filter((n: any) => n.is_resolved);
               const dotColor = isPending ? S.amber500 : isCompleted ? S.brand : S.sky600;
               const tdR: React.CSSProperties = { padding: '10px 14px', borderBottom: isExp ? 'none' : `1px solid ${S.stone100}`, verticalAlign: 'middle', fontSize: 12 };
+
+
+              if (actSubTab === 'data_issue') {
+  return (
+    <tr key={a.activity_id}>
+      <td colSpan={11} style={{ padding: '0 0 8px 0', background: 'transparent', border: 'none' }}>
+        {rowNotes.map((n: any) => (
+          <div key={n.id} style={{ margin: '8px 16px 0', borderRadius: 12, background: n.is_resolved ? '#f0fdf4' : '#fff', border: `1.5px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, overflow: 'hidden' }}>
+            {/* Header: mentions → tags → resolved → author/time */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', background: n.is_resolved ? '#f0fdf4' : '#fef2f2', borderBottom: `1px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, flexWrap: 'wrap' }}>
+              {(n.mentions ?? []).length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: 10, color: '#6b7280' }}>@</span>
+                  {n.mentions.map((m: any) => (
+                    <span key={m.id} style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe' }}>
+                      {m.full_name || m.username}
+                    </span>
+                  ))}
+                  <span style={{ width: 1, height: 12, background: '#e5e7eb', margin: '0 4px' }} />
+                </div>
+              )}
+              {(n.tags ?? []).map((tag: string) => {
+                const TAG_STYLES: Record<string, { bg: string; color: string; border: string; label: string }> = {
+                  urgent:         { bg: '#fef2f2', color: '#dc2626', border: '#fecaca',  label: '🔴 Urgent'     },
+                  important:      { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa',  label: '⚠️ Important'  },
+                  mukkadam_issue: { bg: '#f0f9ff', color: '#0284c7', border: '#bae6fd',  label: '👷 Mukkadam'   },
+                  farmer_issue:   { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0',  label: '🌾 Farmer'     },
+                  sales:          { bg: '#faf5ff', color: '#7c3aed', border: '#e9d5ff',  label: '💼 Sales'      },
+                  operations:     { bg: '#f8fafc', color: '#475569', border: '#cbd5e1',  label: '⚙️ Ops'        },
+                  data_wrong:     { bg: '#fefce8', color: '#ca8a04', border: '#fde68a',  label: '📊 Data Wrong' },
+                  price_mismatch: { bg: '#fff1f2', color: '#be123c', border: '#fecdd3',  label: '💰 Price'      },
+                  team_charging:  { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe',  label: '⚡ Team'       },
+                };
+                const ts = TAG_STYLES[tag] ?? { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb', label: tag };
+                return <span key={tag} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ts.bg, color: ts.color, border: `1px solid ${ts.border}` }}>{ts.label}</span>;
+              })}
+              {n.is_resolved && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontWeight: 700, border: '1px solid #bbf7d0' }}>✅ Resolved</span>}
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}>
+                <div style={{ width: 20, height: 20, borderRadius: '50%', background: n.is_resolved ? '#16a34a' : '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff' }}>
+                  {(n.author?.full_name || n.author?.username || '?').slice(0, 1).toUpperCase()}
+                </div>
+                <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>{n.author?.full_name || n.author?.username}</span>
+                <span style={{ fontSize: 10, color: '#9ca3af' }}>
+                  · {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                  {' '}{new Date(n.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            </div>
+            {/* Note text + job context */}
+            <div style={{ padding: '9px 12px' }}>
+              <div style={{ fontSize: 13, color: n.is_resolved ? '#9ca3af' : '#111827', lineHeight: 1.6, textDecoration: n.is_resolved ? 'line-through' : 'none' }}>{n.text}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>📋 Job #{a.job_id}</span>
+                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>🌿 {a.activity_name}</span>
+                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>👤 {a.farmer_name}</span>
+                {a.plot_name && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>📍 {a.plot_name}</span>}
+                {a.clusters?.[0]?.name && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#eff6ff', color: '#2563eb', fontWeight: 600, border: '1px solid #bfdbfe' }}>🏘 {a.clusters[0].name}</span>}
+                {a.scheduled_date && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#fefce8', color: '#ca8a04', fontWeight: 600, border: '1px solid #fde68a' }}>📅 {a.scheduled_date.slice(5).replace('-', ' ')}</span>}
+              </div>
+              {n.resolution_note && (
+                <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 11, color: '#15803d' }}>
+                  ✅ <strong>{n.resolved_by?.full_name || n.resolved_by?.username}</strong>: {n.resolution_note}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </td>
+    </tr>
+  );
+}
+
  
               return (
                 <React.Fragment key={a.activity_id}>
@@ -6007,211 +6079,225 @@ function GroupedActivitySection({ actName, acts,ov1_7, totalArea, totalValue,onT
                       <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 8, border: `1px solid ${isExp ? S.brand : S.stone200}`, background: isExp ? S.brand : '#fff', color: isExp ? '#fff' : S.stone400, fontSize: 11, transition: 'all 250ms', transform: isExp ? 'rotate(180deg)' : 'none', boxShadow: isExp ? '0 2px 6px rgba(5,150,105,.3)' : 'none' }}>▾</div>
                     </td>
                   </tr>
- 
-                  {/* Expanded detail */}
-                  {isExp && (
-                    <tr>
-                      <td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${S.stone200}`, background: S.stone25 }}>
-                        <div style={{ padding: '16px 20px' }}>
-                          {/* Stat strip */}
-                          <div style={{ display: 'flex', borderRadius: 14, overflow: 'hidden', background: '#fff', marginBottom: 14, boxShadow: S.shadowCard }}>
-                            {[{ val: `Job #${a.booking_id ?? '—'} · Act #${a.api_activity_id || '—'}`, lbl: 'Job ID' },
-                              { val: `${a.crop_name}${a.variety ? ` (${a.variety})` : ''}`, lbl: 'Crop' },
-                              { val: `${a.total_area} ac`,     lbl: 'Plot Area'    },
-                              { val: <span style={{ color: S.green700 }}>₹{Math.round(a.total_price).toLocaleString('en-IN')}</span>, lbl: 'Farmer Cost' },
-                              { val: a.allocation_status === 'pending' ? <span style={{ color: S.amber600 }}>Pending</span> : isCompleted ? <span style={{ color: S.green600 }}>Completed</span> : <span style={{ color: S.sky600 }}>Allocated</span>, lbl: 'Status' },
-                            ].map((s, i) => (
-                              <div key={i} style={{ flex: 1, padding: '10px 14px', textAlign: 'center', borderRight: i < 4 ? `1px solid ${S.stone100}` : 'none', position: 'relative' }}>
-                                <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 24, height: 2, borderRadius: 1, background: S.green100 }} />
-                                <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: '-.3px', lineHeight: 1.3, marginTop: 4 }}>{s.val}</div>
-                                <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginTop: 3 }}>{s.lbl}</div>
-                              </div>
-                            ))}
-                          </div>
- 
-                          {/* Split info */}
-                          {a.is_split && a.splits?.length > 1 && (
-                            <div style={{ marginBottom: 12, padding: '10px 14px', background: '#faf5ff', borderRadius: 10, border: '1px solid #e9d5ff' }}>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: S.violet700, marginBottom: 6 }}>🔀 Split into {a.splits.length} parts</div>
-                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                {a.splits.map((sp: any, si: number) => (
-                                  <div key={si} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 8, background: '#fff', border: '1px solid #e9d5ff', color: S.stone600 }}>
-                                    <span style={{ fontWeight: 700, color: S.violet700 }}>Part {si + 1}</span> · {sp.total_area} ac · <span style={{ color: sp.allocation_status === 'pending' ? S.red600 : S.green600 }}>{sp.allocation_status}</span>
-                                    {sp.scheduled_date && ` · ${sp.scheduled_date}`} · 👷 {sp.allocation_count}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
- 
-                          {/* Allocations */}
-                          {a.allocation_count === 0 ? (
-                            <div style={{ padding: '12px 16px', background: '#fff', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 12, color: S.stone400 }}>
-                              <div style={{ fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${S.stone100}` }}>⚠ No Allocations Yet</div>
-                              <div style={{ background: S.stone50, borderRadius: 8, padding: '8px 12px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0' }}>
-                                  <span style={{ color: S.stone500 }}>Scheduled</span>
-                                  <span style={{ fontWeight: 600 }}>{a.scheduled_date || '—'}</span>
-                                </div>
-                                {isOverdue && (
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', borderTop: `1px solid ${S.stone100}` }}>
-                                    <span style={{ color: S.stone500 }}>Overdue</span>
-                                    <span style={{ fontWeight: 600, color: S.red600 }}>{overdueDays} days</span>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          ) : (
-                            <div>
-                              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${S.stone100}` }}>📝 Allocation Details</div>
-                              {(a.allocations || []).map((alloc: any, ai: number) => {
-                                const isDone = alloc.work_status === 'completed';
-                                return (
-                                  <div key={ai} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 6, borderRadius: 10, background: isDone ? S.green50 : '#fff', border: `1px solid ${isDone ? S.green100 : S.stone200}`, fontSize: 12 }}>
-                                    <div style={{ minWidth: 140 }}>
-                                      <div style={{ fontWeight: 700, color: S.stone900 }}>👷 {alloc.mukkadam_name}</div>
-                                      {alloc.mukkadam_mobile && <div style={{ fontFamily: S.mono, fontSize: 10, color: S.stone400 }}>📞 {alloc.mukkadam_mobile}</div>}
-                                    </div>
-                                    {alloc.cluster_name && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: S.sky50, color: S.sky700, border: `1px solid ${S.sky100}` }}>🏘 {alloc.cluster_name}</span>}
-                                    <div style={{ color: S.stone600 }}>📅 {alloc.allocated_date || '—'}</div>
-                                    <div style={{ color: S.green700 }}>🌾 {alloc.allocated_area} ac{alloc.actual_area_done != null ? ` · ✓ ${alloc.actual_area_done} actual` : ''}</div>
-                                    <div style={{ color: S.stone600 }}>👥 {alloc.allocated_workers} workers{alloc.actual_crew_size != null ? ` · ✓ ${alloc.actual_crew_size}` : ''}</div>
-                                    <div style={{ color: S.violet600, fontWeight: 600, fontFamily: S.mono, fontSize: 11 }}>₹{alloc.mukkadam_rate}/ac → ₹{Math.round(alloc.mukkadam_est).toLocaleString('en-IN')}</div>
-                                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700, background: isDone ? S.green50 : alloc.work_status === 'in_progress' ? S.sky50 : S.stone100, color: isDone ? S.green700 : alloc.work_status === 'in_progress' ? S.sky700 : S.stone600, border: `1px solid ${isDone ? S.green100 : alloc.work_status === 'in_progress' ? S.sky100 : S.stone200}` }}>{alloc.work_status}</span>
-                                    {alloc.report_submitted && <span style={{ fontSize: 11, color: S.sky600 }}>📋 Report</span>}
-                                    {alloc.farmer_agreed === true  && <span style={{ fontSize: 11, color: S.green700 }}>✅ Agreed</span>}
-                                    {alloc.farmer_agreed === false && <span style={{ fontSize: 11, color: S.red600  }}>❌ Disputed</span>}
-                                    {!isDone && isAdmin && (
-                                      <button onClick={() => { if (confirm(`Mark ${alloc.mukkadam_name}'s allocation as complete?`)) handleUpdownComplete(alloc.mukkadam_id, alloc.allocation_id); }}
-                                        style={{ marginLeft: 'auto', padding: '5px 14px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#059669,#047857)', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 1px 4px rgba(5,150,105,.25)' }}>
-                                        ✅ Mark Complete
-                                      </button>
-                                    )}
-                                    {isDone && <span style={{ marginLeft: 'auto', fontSize: 11, color: S.green700, fontWeight: 700 }}>✅ Done</span>}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
+{/* Expanded detail */}
+{isExp && (
+  <tr>
+    <td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${S.stone200}`, background: S.stone25 }}>
+      <div style={{ padding: '16px 20px' }}>
 
-                          {/* ── Notes for this job ── */}
-                          {/* ── Notes for this job ── */}
-{rowNotes.length > 0 && (
-  <div style={{ marginTop: 12, borderTop: `1px solid ${S.stone100}`, paddingTop: 12 }}>
-    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginBottom: 8 }}>
-      ✏️ Notes ({rowNotes.length}) · {unresolvedNotes.length > 0 && <span style={{ color: '#dc2626' }}>{unresolvedNotes.length} open</span>}
-    </div>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {rowNotes.map((n: any) => (
-        <div key={n.id} style={{ borderRadius: 12, background: n.is_resolved ? '#f0fdf4' : '#fff', border: `1.5px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, overflow: 'hidden' }}>
-
-          {/* ── Header row ── */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: n.is_resolved ? '#f0fdf4' : '#fef2f2', borderBottom: `1px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, flexWrap: 'wrap' }}>
-
-            {/* Author avatar + name */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <div style={{ width: 26, height: 26, borderRadius: '50%', background: n.is_resolved ? '#16a34a' : '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
-                {(n.author?.full_name || n.author?.username || '?').slice(0, 1).toUpperCase()}
+        {actSubTab === 'data_issue' ? (
+          // ── DATA ISSUE: notes only ──
+          rowNotes.length > 0 ? (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                ✏️ Notes ({rowNotes.length})
+                {unresolvedNotes.length > 0 && (
+                  <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 10, background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', fontWeight: 700 }}>
+                    {unresolvedNotes.length} open
+                  </span>
+                )}
               </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: S.stone800 }}>
-                  {n.author?.full_name || n.author?.username || 'Unknown'}
-                </div>
-                <div style={{ fontSize: 10, color: S.stone400 }}>
-                  {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                  {' · '}
-                  {new Date(n.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {rowNotes.map((n: any) => (
+                  <div key={n.id} style={{ borderRadius: 12, background: n.is_resolved ? '#f0fdf4' : '#fff', border: `1.5px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', background: n.is_resolved ? '#f0fdf4' : '#fef2f2', borderBottom: `1px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, flexWrap: 'wrap' }}>
+                      {(n.mentions ?? []).length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ fontSize: 10, color: '#6b7280' }}>@</span>
+                          {n.mentions.map((m: any) => (
+                            <span key={m.id} style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe' }}>
+                              {m.full_name || m.username}
+                            </span>
+                          ))}
+                          <span style={{ width: 1, height: 12, background: '#e5e7eb', margin: '0 4px' }} />
+                        </div>
+                      )}
+                      {(n.tags ?? []).map((tag: string) => {
+                        const TAG_STYLES: Record<string, { bg: string; color: string; border: string; label: string }> = {
+                          urgent:         { bg: '#fef2f2', color: '#dc2626', border: '#fecaca',  label: '🔴 Urgent'     },
+                          important:      { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa',  label: '⚠️ Important'  },
+                          mukkadam_issue: { bg: '#f0f9ff', color: '#0284c7', border: '#bae6fd',  label: '👷 Mukkadam'   },
+                          farmer_issue:   { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0',  label: '🌾 Farmer'     },
+                          sales:          { bg: '#faf5ff', color: '#7c3aed', border: '#e9d5ff',  label: '💼 Sales'      },
+                          operations:     { bg: '#f8fafc', color: '#475569', border: '#cbd5e1',  label: '⚙️ Ops'        },
+                          data_wrong:     { bg: '#fefce8', color: '#ca8a04', border: '#fde68a',  label: '📊 Data Wrong' },
+                          price_mismatch: { bg: '#fff1f2', color: '#be123c', border: '#fecdd3',  label: '💰 Price'      },
+                          team_charging:  { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe',  label: '⚡ Team'       },
+                        };
+                        const ts = TAG_STYLES[tag] ?? { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb', label: tag };
+                        return <span key={tag} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ts.bg, color: ts.color, border: `1px solid ${ts.border}` }}>{ts.label}</span>;
+                      })}
+                      {n.is_resolved && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontWeight: 700, border: '1px solid #bbf7d0' }}>✅ Resolved</span>}
+                      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <div style={{ width: 20, height: 20, borderRadius: '50%', background: n.is_resolved ? '#16a34a' : '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff' }}>
+                          {(n.author?.full_name || n.author?.username || '?').slice(0, 1).toUpperCase()}
+                        </div>
+                        <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>{n.author?.full_name || n.author?.username}</span>
+                        <span style={{ fontSize: 10, color: '#9ca3af' }}>
+                          · {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                          {' '}{new Date(n.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ padding: '9px 12px' }}>
+                      <div style={{ fontSize: 13, color: n.is_resolved ? '#9ca3af' : '#111827', lineHeight: 1.6, textDecoration: n.is_resolved ? 'line-through' : 'none' }}>{n.text}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>📋 Job #{a.job_id}</span>
+                        <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>🌿 {a.activity_name}</span>
+                        <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>👤 {a.farmer_name}</span>
+                        {a.plot_name && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>📍 {a.plot_name}</span>}
+                        {a.clusters?.[0]?.name && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#eff6ff', color: '#2563eb', fontWeight: 600, border: '1px solid #bfdbfe' }}>🏘 {a.clusters[0].name}</span>}
+                        {a.scheduled_date && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#fefce8', color: '#ca8a04', fontWeight: 600, border: '1px solid #fde68a' }}>📅 {a.scheduled_date.slice(5).replace('-', ' ')}</span>}
+                      </div>
+                      {n.resolution_note && (
+                        <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 11, color: '#15803d' }}>
+                          ✅ <strong>{n.resolved_by?.full_name || n.resolved_by?.username}</strong>: {n.resolution_note}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
+              <button
+                onClick={() => { const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – '); onNote(a.job_id, label); }}
+                style={{ marginTop: 10, padding: '6px 14px', borderRadius: 8, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                + Add note
+              </button>
+            </div>
+          ) : (
+            <span style={{ fontSize: 12, color: S.stone400 }}>No notes</span>
+          )
+        ) : (
+          // ── ALL OTHER TABS: full detail ──
+          <>
+            {/* Stat strip */}
+            <div style={{ display: 'flex', borderRadius: 14, overflow: 'hidden', background: '#fff', marginBottom: 14, boxShadow: S.shadowCard }}>
+              {[
+                { val: `Job #${a.booking_id ?? '—'} · Act #${a.api_activity_id || '—'}`, lbl: 'Job ID' },
+                { val: `${a.crop_name}${a.variety ? ` (${a.variety})` : ''}`, lbl: 'Crop' },
+                { val: `${a.total_area} ac`, lbl: 'Plot Area' },
+                { val: <span style={{ color: S.green700 }}>₹{Math.round(a.total_price).toLocaleString('en-IN')}</span>, lbl: 'Farmer Cost' },
+                { val: a.allocation_status === 'pending' ? <span style={{ color: S.amber600 }}>Pending</span> : isCompleted ? <span style={{ color: S.green600 }}>Completed</span> : <span style={{ color: S.sky600 }}>Allocated</span>, lbl: 'Status' },
+              ].map((s, i) => (
+                <div key={i} style={{ flex: 1, padding: '10px 14px', textAlign: 'center', borderRight: i < 4 ? `1px solid ${S.stone100}` : 'none', position: 'relative' }}>
+                  <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 24, height: 2, borderRadius: 1, background: S.green100 }} />
+                  <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: '-.3px', lineHeight: 1.3, marginTop: 4 }}>{s.val}</div>
+                  <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginTop: 3 }}>{s.lbl}</div>
+                </div>
+              ))}
             </div>
 
-            {/* Tags */}
-            {(n.tags ?? []).length > 0 && (
-              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                {n.tags.map((tag: string) => {
-                  const tagStyles: Record<string, { bg: string; color: string; border: string }> = {
-                    urgent:         { bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
-                    important:      { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa' },
-                    mukkadam_issue: { bg: '#f0f9ff', color: '#0284c7', border: '#bae6fd' },
-                    farmer_issue:   { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
-                    sales:          { bg: '#faf5ff', color: '#7c3aed', border: '#e9d5ff' },
-                    operations:     { bg: '#f8fafc', color: '#475569', border: '#cbd5e1' },
-                    data_wrong:     { bg: '#fefce8', color: '#ca8a04', border: '#fde68a' },
-                    price_mismatch: { bg: '#fff1f2', color: '#be123c', border: '#fecdd3' },
-                    team_charging:  { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
-                  };
-                  const TAG_LABELS: Record<string, string> = {
-                    urgent: '🔴 Urgent', important: '⚠️ Important',
-                    mukkadam_issue: '👷 Mukkadam', farmer_issue: '🌾 Farmer',
-                    sales: '💼 Sales', operations: '⚙️ Ops',
-                    data_wrong: '📊 Data Wrong', price_mismatch: '💰 Price',
-                    team_charging: '⚡ Team',
-                  };
-                  const ts = tagStyles[tag] ?? { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb' };
+            {/* Split info */}
+            {a.is_split && a.splits?.length > 1 && (
+              <div style={{ marginBottom: 12, padding: '10px 14px', background: '#faf5ff', borderRadius: 10, border: '1px solid #e9d5ff' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: S.violet700, marginBottom: 6 }}>🔀 Split into {a.splits.length} parts</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {a.splits.map((sp: any, si: number) => (
+                    <div key={si} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 8, background: '#fff', border: '1px solid #e9d5ff', color: S.stone600 }}>
+                      <span style={{ fontWeight: 700, color: S.violet700 }}>Part {si + 1}</span> · {sp.total_area} ac · <span style={{ color: sp.allocation_status === 'pending' ? S.red600 : S.green600 }}>{sp.allocation_status}</span>
+                      {sp.scheduled_date && ` · ${sp.scheduled_date}`} · 👷 {sp.allocation_count}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Allocations */}
+            {a.allocation_count === 0 ? (
+              <div style={{ padding: '12px 16px', background: '#fff', borderRadius: 10, border: `1px solid ${S.stone200}`, fontSize: 12, color: S.stone400 }}>
+                <div style={{ fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${S.stone100}` }}>⚠ No Allocations Yet</div>
+                <div style={{ background: S.stone50, borderRadius: 8, padding: '8px 12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0' }}>
+                    <span style={{ color: S.stone500 }}>Scheduled</span>
+                    <span style={{ fontWeight: 600 }}>{a.scheduled_date || '—'}</span>
+                  </div>
+                  {isOverdue && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', borderTop: `1px solid ${S.stone100}` }}>
+                      <span style={{ color: S.stone500 }}>Overdue</span>
+                      <span style={{ fontWeight: 600, color: S.red600 }}>{overdueDays} days</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${S.stone100}` }}>📝 Allocation Details</div>
+                {(a.allocations || []).map((alloc: any, ai: number) => {
+                  const isDone = alloc.work_status === 'completed';
                   return (
-                    <span key={tag} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ts.bg, color: ts.color, border: `1px solid ${ts.border}` }}>
-                      {TAG_LABELS[tag] ?? tag}
-                    </span>
+                    <div key={ai} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', marginBottom: 6, borderRadius: 10, background: isDone ? S.green50 : '#fff', border: `1px solid ${isDone ? S.green100 : S.stone200}`, fontSize: 12 }}>
+                      <div style={{ minWidth: 140 }}>
+                        <div style={{ fontWeight: 700, color: S.stone900 }}>👷 {alloc.mukkadam_name}</div>
+                        {alloc.mukkadam_mobile && <div style={{ fontFamily: S.mono, fontSize: 10, color: S.stone400 }}>📞 {alloc.mukkadam_mobile}</div>}
+                      </div>
+                      {alloc.cluster_name && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: S.sky50, color: S.sky700, border: `1px solid ${S.sky100}` }}>🏘 {alloc.cluster_name}</span>}
+                      <div style={{ color: S.stone600 }}>📅 {alloc.allocated_date || '—'}</div>
+                      <div style={{ color: S.green700 }}>🌾 {alloc.allocated_area} ac{alloc.actual_area_done != null ? ` · ✓ ${alloc.actual_area_done} actual` : ''}</div>
+                      <div style={{ color: S.stone600 }}>👥 {alloc.allocated_workers} workers{alloc.actual_crew_size != null ? ` · ✓ ${alloc.actual_crew_size}` : ''}</div>
+                      <div style={{ color: S.violet600, fontWeight: 600, fontFamily: S.mono, fontSize: 11 }}>₹{alloc.mukkadam_rate}/ac → ₹{Math.round(alloc.mukkadam_est).toLocaleString('en-IN')}</div>
+                      <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700, background: isDone ? S.green50 : alloc.work_status === 'in_progress' ? S.sky50 : S.stone100, color: isDone ? S.green700 : alloc.work_status === 'in_progress' ? S.sky700 : S.stone600, border: `1px solid ${isDone ? S.green100 : alloc.work_status === 'in_progress' ? S.sky100 : S.stone200}` }}>{alloc.work_status}</span>
+                      {alloc.report_submitted && <span style={{ fontSize: 11, color: S.sky600 }}>📋 Report</span>}
+                      {alloc.farmer_agreed === true  && <span style={{ fontSize: 11, color: S.green700 }}>✅ Agreed</span>}
+                      {alloc.farmer_agreed === false && <span style={{ fontSize: 11, color: S.red600  }}>❌ Disputed</span>}
+                      {!isDone && isAdmin && (
+                        <button onClick={() => { if (confirm(`Mark ${alloc.mukkadam_name}'s allocation as complete?`)) handleUpdownComplete(alloc.mukkadam_id, alloc.allocation_id); }}
+                          style={{ marginLeft: 'auto', padding: '5px 14px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#059669,#047857)', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 1px 4px rgba(5,150,105,.25)' }}>
+                          ✅ Mark Complete
+                        </button>
+                      )}
+                      {isDone && <span style={{ marginLeft: 'auto', fontSize: 11, color: S.green700, fontWeight: 700 }}>✅ Done</span>}
+                    </div>
                   );
                 })}
               </div>
             )}
 
-            {/* Resolved badge */}
-            {n.is_resolved && (
-              <span style={{ marginLeft: 'auto', fontSize: 10, padding: '2px 8px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontWeight: 700, border: '1px solid #bbf7d0' }}>
-                ✅ Resolved
-              </span>
-            )}
-          </div>
-
-          {/* ── Note body ── */}
-          <div style={{ padding: '10px 12px' }}>
-            <div style={{ fontSize: 13, color: n.is_resolved ? '#6b7280' : '#111827', lineHeight: 1.6, textDecoration: n.is_resolved ? 'line-through' : 'none' }}>
-              {n.text}
-            </div>
-
-            {/* Mentions */}
-            {(n.mentions ?? []).length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 10, color: S.stone400 }}>Mentioned:</span>
-                {n.mentions.map((m: any) => (
-                  <span key={m.id} style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe' }}>
-                    @{m.full_name || m.username}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* Resolution */}
-            {n.resolution_note && (
-              <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 11, color: '#15803d' }}>
-                ✅ <strong>{n.resolved_by?.full_name || n.resolved_by?.username}</strong>: {n.resolution_note}
-                <span style={{ color: S.stone400, marginLeft: 6 }}>
-                  · {n.resolved_at ? new Date(n.resolved_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-
-    <button
-      onClick={() => {
-        const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – ');
-        onNote(a.job_id, label);
-      }}
-      style={{ marginTop: 10, padding: '6px 14px', borderRadius: 8, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
-    >
-      + Add note
-    </button>
-  </div>
-)}
+            {/* Notes */}
+            {rowNotes.length > 0 && (
+              <div style={{ marginTop: 12, borderTop: `1px solid ${S.stone100}`, paddingTop: 12 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.7px', color: S.stone400, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  ✏️ Notes ({rowNotes.length})
+                  {unresolvedNotes.length > 0 && <span style={{ color: '#dc2626' }}>{unresolvedNotes.length} open</span>}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {rowNotes.map((n: any) => (
+                    <div key={n.id} style={{ padding: '10px 12px', borderRadius: 10, background: n.is_resolved ? '#f0fdf4' : '#fff', border: `1px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, opacity: n.is_resolved ? 0.75 : 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {n.tags?.map((t: string) => (
+                            <span key={t} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 999, background: '#f3f4f6', color: '#6b7280', fontWeight: 600 }}>{t}</span>
+                          ))}
+                          {n.is_resolved && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontWeight: 700 }}>✅ Resolved</span>}
                         </div>
-                      </td>
-                    </tr>
-                  )}
+                        <span style={{ fontSize: 10, color: S.stone400, fontFamily: 'monospace' }}>
+                          {n.author?.full_name} · {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 12, color: n.is_resolved ? '#6b7280' : '#111827', lineHeight: 1.5, textDecoration: n.is_resolved ? 'line-through' : 'none' }}>{n.text}</div>
+                      {n.resolution_note && (
+                        <div style={{ fontSize: 11, color: '#15803d', fontStyle: 'italic', marginTop: 4 }}>
+                          ✅ {n.resolution_note}{n.resolved_by?.full_name && ` — ${n.resolved_by.full_name}`}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={() => { const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – '); onNote(a.job_id, label); }}
+                  style={{ marginTop: 8, padding: '5px 12px', borderRadius: 8, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                >
+                  + Add another note
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+      </div>
+    </td>
+  </tr>
+)}
                 </React.Fragment>
               );
             })}
