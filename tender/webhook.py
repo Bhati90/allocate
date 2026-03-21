@@ -1216,8 +1216,8 @@ def send_farmer_bill_to_webhook(request):
                 FARMER_BILL_WEBHOOK_URL,
                 json=payload,
                 timeout=10,
-                headers={'Content-Type': 'application/json'},
-            )
+                headers={'Content-Type': 'application/json','Authorization' :'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'},
+           )
             webhook_status   = wh_res.status_code
             webhook_response = wh_res.text
         except Exception as e:
@@ -1432,8 +1432,8 @@ def farmer_payment_webhook(request):
                 confirmation_url,
                 json=confirmation_payload,
                 timeout=10,
-                headers={'Content-Type': 'application/json'},
-            )
+                headers={'Content-Type': 'application/json','Authorization' :'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'},
+             )
             log.confirmation_sent   = True
             log.confirmation_status = conf_res.status_code
             log.save()

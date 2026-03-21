@@ -553,7 +553,8 @@ class Job(models.Model):
 class JobActivity(models.Model):
     job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='activities')
     activity = models.ForeignKey(ActivityCatalog, on_delete=models.PROTECT, related_name='job_activities')
-
+    # In JobActivity model, add:
+    sales_date = models.DateField(null=True, blank=True, help_text="Expected sales/next activity date based on gap days")
     # which plot this activity is on
     plot = models.ForeignKey(
         Plot, null=True, blank=True,
@@ -701,6 +702,39 @@ class JobActivity(models.Model):
         self.subtotal = (self.total_price + self.transport_cost + self.other_cost).quantize(
             Decimal('0.01'), rounding=ROUND_HALF_UP
         )
+
+        if not self.sales_date:
+            try:
+                from datetime import timedelta
+                pruning_date = self.job.scheduled_date
+                if pruning_date:
+                    gap_days = 3
+
+                    clusters = list(self.plot.clusters.all()) if self.plot_id else []
+                    if not clusters:
+                        clusters = list(self.job.clusters.all())
+
+                    for cluster in clusters:
+                        rule = ClusterActivityScheduleRule.objects.filter(
+                            cluster=cluster, activity=self.activity
+                        ).first()
+                        if rule:
+                            gap_days = rule.gap_days
+                            break
+                    else:
+                        global_rule = ActivityScheduleRule.objects.filter(
+                            activity=self.activity
+                        ).first()
+                        if global_rule:
+                            gap_days = global_rule.gap_days
+                        else:
+                            gap_days = self.activity.default_gap_days or 3
+
+                    self.sales_date = pruning_date + timedelta(days=gap_days)
+            except Exception as e:
+                logger.warning(f"Could not calculate sales_date for JA {self.pk}: {e}")
+
+
 
      
         super().save(*args, **kwargs)

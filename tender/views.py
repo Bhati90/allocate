@@ -2578,7 +2578,7 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 source='manual',
                 original_source=activity.original_source,
                 move_reason=reason,
-                api_activity_id='',
+                api_activity_id=activity.api_activity_id,
                 created_by=request.user if request.user.is_authenticated else None,
                 last_moved_by=request.user if request.user.is_authenticated else None,
                 last_moved_at=timezone.now() if request.user.is_authenticated else None,

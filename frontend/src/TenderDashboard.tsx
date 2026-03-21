@@ -2200,7 +2200,14 @@ const actCounts = {
   upcoming:      filteredBase.filter((a: any) => a.days_until !== null && a.days_until >= 0 && a.days_until <= 10).length,
   last10:        filteredBase.filter((a: any) => a.days_until !== null && a.days_until >= -10 && a.days_until <= 0).length,
   not_allocated: filteredBase.filter((a: any) => a.allocation_status === 'pending').length,
-  in_progress:   filteredBase.filter((a: any) => a.allocation_count > 0 && !a.allocations?.every((alloc: any) => alloc.work_status === 'completed')).length,
+  in_progress: filteredBase.filter((a: any) => {
+  if (!a.allocation_count || a.allocation_count === 0) return false;
+  if (a.allocations?.every((alloc: any) => alloc.work_status === 'completed')) return false;
+  // only count if scheduled date is today or in the past
+  if (!a.scheduled_date) return false;
+  return a.scheduled_date <= todayStr;
+}).length,
+
   completed:     filteredBase.filter((a: any) => a.allocations?.some((alloc: any) => alloc.work_status === 'completed')).length,
   split:         filteredBase.filter((a: any) => a.is_split === true).length,
 
