@@ -410,11 +410,41 @@ function ActivityBillModal({
       }
 
       const result = await res.json();
+
+      if (!res.ok) {
+        throw new Error(result.error || `HTTP ${res.status}`);
+      }
+
+      // ── Webhook fired but OPS returned an issue ──
+      if (result.success && result.webhook_success === false) {
+        // Bill was saved in DB but OPS rejected it
+        const msg = result.detail || result.message || 'Bill sent but OPS reported an issue';
+        alert(`⚠️ ${msg}`);
+        // Still mark as sent since we saved it
+        setSent(true);
+        setSendResult({ success: result.webhook_success !== false, detail: result.detail });
+
+        onSent();
+        return;
+      }
+
+      // ── Already paid case ──
+      if (result.detail && result.detail.toLowerCase().includes('already paid')) {
+        alert(`ℹ️ ${result.detail}`);
+        setSent(true);
+        setSendResult({ success: result.webhook_success !== false, detail: result.detail });
+
+        onSent();
+        return;
+      }
+
       if (result.success) {
         setSent(true);
+        setSendResult({ success: result.webhook_success !== false, detail: result.detail });
+
         onSent();
       } else {
-        throw new Error(result.error || 'Unknown error');
+        throw new Error(result.error || result.message || 'Unknown error');
       }
     } catch (e: any) {
       alert(`❌ Failed to send bill: ${e.message}`);
@@ -576,8 +606,13 @@ function ActivityBillModal({
           </span>
           <button onClick={onClose} style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #ddd', background: '#fff', color: '#555', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
           {sent ? (
-            <div style={{ padding: '8px 18px', borderRadius: 8, background: '#e8f8f0', color: '#27ae60', fontSize: 13, fontWeight: 700 }}>✅ Sent</div>
-          ) : (
+  <div style={{
+    padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 700,
+    background: sendResult?.success === false ? '#fef3c7' : '#e8f8f0',
+    color: sendResult?.success === false ? '#92400e' : '#27ae60',
+  }}>
+    {sendResult?.success === false ? `⚠️ ${sendResult.detail?.slice(0, 60) || 'Sent with warning'}` : '✅ Sent'}
+  </div>) : (
             <button onClick={handleSend} disabled={sending} style={{ padding: '8px 18px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600, cursor: sending ? 'not-allowed' : 'pointer', background: sending ? '#aaa' : balanceDue > 0.01 ? '#1a1a2e' : '#27ae60', color: '#fff' }}>
               {sending ? 'Sending...' : balanceDue > 0.01 ? `✉️ Send Bill ₹${Math.round(balanceDue).toLocaleString('en-IN')} Due` : '✉️ Send Bill ₹0 Due'}
             </button>
@@ -753,6 +788,7 @@ export default function FarmerBillingPage({
   embeddedFarmerId?: string;
 }) {
   const [searchParams] = useSearchParams();
+const [sendResult, setSendResult] = useState<{ success: boolean; detail?: string } | null>(null);
 
   // Use prop if provided, else fall back to URL param
   const clusterId = propClusterId ?? searchParams.get('cluster');

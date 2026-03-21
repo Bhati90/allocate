@@ -593,15 +593,47 @@ function ActivityRowWithEfficiency({ activity, mukkadamEfficiency }: {
     </tr>
   );
 }
-function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false }: {
+function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false, selectedDate }: {
   m: Mukkadam;
   clusters: ClusterOption[];
   onSuccess: () => void;
   onCallClick: (number: string) => void;
   isAdmin?: boolean;
+  selectedDate: string;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded]           = useState(false);
+  const [statusDropOpen, setStatusDropOpen] = useState(false);
+  const [settingStatus, setSettingStatus]   = useState(false);
   const av = avColor(m.id);
+
+  // ── Resolved status ──────────────────────────────────────
+  const resolvedStatus: 'active' | 'on_hold' | 'inactive' | 'idle' =
+    m.manual_status === 'on_hold'  ? 'on_hold'  :
+    m.manual_status === 'inactive' ? 'inactive' :
+    m.allocated_on_date            ? 'active'   : 'idle';
+
+  const ST = {
+    active:   { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0', dot: '#16a34a', label: '🟢 Active'   },
+    on_hold:  { bg: '#fffbeb', color: '#ca8a04', border: '#fde68a', dot: '#ca8a04', label: '🟡 On Hold'  },
+    inactive: { bg: '#fef2f2', color: '#dc2626', border: '#fecaca', dot: '#dc2626', label: '🔴 Inactive' },
+    idle:     { bg: '#f8fafc', color: '#64748b', border: '#e2e8f0', dot: '#94a3b8', label: '⚪ Idle'     },
+  }[resolvedStatus];
+
+  const handleSetStatus = async (newStatus: string | null) => {
+    setSettingStatus(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      await fetch(`${API_BASE_URL}/api/mukkadams/${m.mukkadam_id ?? m.id}/set_status/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${token}` },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      onSuccess();
+    } finally {
+      setSettingStatus(false);
+      setStatusDropOpen(false);
+    }
+  };
   const totalRate = (m.activity_rates || m.activities || []).reduce(
     (s: number, a: any) => s + Number(a.rate_per_acre ?? parseFloat(a.price || '0')), 0
   );
@@ -611,6 +643,8 @@ function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false }: 
     padding: '10px 14px', borderBottom: expanded ? 'none' : `1px solid ${S.stone100}`,
     verticalAlign: 'middle', fontSize: 12,
   };
+
+  
  
   return (
     <>
@@ -685,6 +719,64 @@ function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false }: 
             </div>
           </div>
         </td>
+
+        {/* Status */}
+        <td style={{ ...tdBase, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <button
+              onClick={() => isAdmin && setStatusDropOpen(o => !o)}
+              disabled={settingStatus}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700,
+                background: ST.bg, color: ST.color, border: `1px solid ${ST.border}`,
+                cursor: isAdmin ? 'pointer' : 'default', fontFamily: 'inherit',
+              }}
+            >
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: ST.dot, display: 'inline-block' }} />
+              {ST.label}
+              {isAdmin && <span style={{ fontSize: 9, opacity: 0.5 }}>▾</span>}
+            </button>
+
+            {/* Note shown below badge */}
+            {m.manual_status_note && (
+              <div style={{ fontSize: 9, color: '#9ca3af', marginTop: 2, maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {m.manual_status_note}
+              </div>
+            )}
+
+            {/* Dropdown */}
+            {statusDropOpen && isAdmin && (
+              <div style={{
+                position: 'absolute', top: 'calc(100% + 4px)', left: '50%', transform: 'translateX(-50%)',
+                background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 999, minWidth: 170, overflow: 'hidden',
+              }}>
+                {[
+                  { key: 'on_hold',  label: '🟡 On Hold',  desc: 'Temporarily unavailable' },
+                  { key: 'inactive', label: '🔴 Inactive',  desc: 'Remove from roster'       },
+                  { key: null,       label: '🔄 Reset',     desc: 'Back to auto (idle/active)' },
+                ].map(opt => (
+                  <button
+                    key={String(opt.key)}
+                    onClick={() => handleSetStatus(opt.key)}
+                    style={{
+                      display: 'block', width: '100%', padding: '9px 14px', textAlign: 'left',
+                      background: 'none', border: 'none', borderBottom: '1px solid #f3f4f6',
+                      cursor: 'pointer', fontFamily: 'inherit',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#f9fafb')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#111827' }}>{opt.label}</div>
+                    <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 1 }}>{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </td>
+
  
         {/* Total rate */}
         <td style={{ ...tdBase, textAlign: 'right', fontFamily: S.mono, fontWeight: 700, fontSize: 12, color: S.green700 }}>
@@ -710,7 +802,7 @@ function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false }: 
       {/* ── EXPANDED DETAIL ROW ── */}
       {expanded && (
         <tr>
-          <td colSpan={8} style={{ padding: 0, borderBottom: `1px solid ${S.stone200}`, background: S.stone25 }}>
+          <td colSpan={9} style={{ padding: 0, borderBottom: `1px solid ${S.stone200}`, background: S.stone25 }}>
             <div style={{ padding: '20px 24px' }}>
  
               {/* Stat strip */}
@@ -2873,7 +2965,9 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
     alert('Failed to mark complete. Please try again.');
   }
 };
-
+// const todayStr = new Date().toISOString().slice(0, 10);
+const [selectedDate, setSelectedDate] = useState(todayStr);
+const [statusFilter, setStatusFilter] = useState('all');
 const jobMetrics = useMemo(() => {
 
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -4733,17 +4827,49 @@ allJobs={insightDayJobs}
   : tab === 'mukkadams' ? (
 
           <>
+            {/* ── Date + Status filters ── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+              <input type="date" value={selectedDate}
+                onChange={e => { setSelectedDate(e.target.value); fetchDataSilent(); }}
+                style={{ padding: '6px 10px', borderRadius: 8, border: `1px solid ${S.stone200}`, fontSize: 12, fontFamily: 'inherit', color: S.stone800 }}
+              />
+              {([
+                { key: 'all',      label: 'All',         count: (data?.mukkadams || []).length },
+                { key: 'active',   label: '🟢 Active',   count: (data?.mukkadams || []).filter((m: any) => !m.manual_status && m.allocated_on_date).length },
+                { key: 'idle',     label: '⚪ Idle',     count: (data?.mukkadams || []).filter((m: any) => !m.manual_status && !m.allocated_on_date).length },
+                { key: 'on_hold',  label: '🟡 On Hold',  count: (data?.mukkadams || []).filter((m: any) => m.manual_status === 'on_hold').length },
+                { key: 'inactive', label: '🔴 Inactive', count: (data?.mukkadams || []).filter((m: any) => m.manual_status === 'inactive').length },
+              ] as const).map(f => (
+                <button key={f.key} onClick={() => setStatusFilter(f.key)}
+                  style={{
+                    padding: '5px 12px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+                    cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5,
+                    border: `1px solid ${statusFilter === f.key ? S.brand : S.stone200}`,
+                    background: statusFilter === f.key ? S.brand : '#fff',
+                    color: statusFilter === f.key ? '#fff' : S.stone600,
+                  }}>
+                  {f.label}
+                  <span style={{ padding: '0 5px', borderRadius: 999, fontSize: 10,
+                    background: statusFilter === f.key ? 'rgba(255,255,255,0.25)' : S.stone100,
+                    color: statusFilter === f.key ? '#fff' : S.stone500 }}>
+                    {f.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+
             <table style={{ width: '100%', background: '#fff', borderRadius: 18, boxShadow: S.shadowCard, overflow: 'hidden', borderCollapse: 'separate', borderSpacing: 0 }}>
               <thead>
                 <tr>
                   {[
                     { h: 'Mukkadam', pl: 20 },
                     { h: 'Location' },
-                    { h: 'Crew',      ac: true },
+                    { h: 'Crew',       ac: true },
                     { h: 'Activities', ac: true },
                     { h: 'Cluster' },
-                    { h: 'Rate/ac',   ar: true },
-                    { h: 'Actions',   ar: true },
+                    { h: 'Status',     ac: true },
+                    { h: 'Rate/ac',    ar: true },
+                    { h: 'Actions',    ar: true },
                     { h: '' },
                   ].map((col, i) => (
                     <th key={i} style={{ background: 'linear-gradient(180deg,#fafaf9 0%,#f7f6f4 100%)', padding: `10px ${col.pl ?? 14}px`, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, textAlign: col.ac ? 'center' : col.ar ? 'right' : 'left', borderBottom: `2px solid ${S.stone200}`, whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 10 }}>
@@ -4757,6 +4883,7 @@ allJobs={insightDayJobs}
                   ? <tr><td colSpan={8} style={{ textAlign: 'center', padding: 48, color: S.stone400 }}>No mukkadams found</td></tr>
                   : filteredMukkadams.map(m => (
                     <MukkadamCard key={m.id} m={m} clusters={clusters} isAdmin={isAdmin} onSuccess={fetchDataSilent}
+                      selectedDate={selectedDate}
                       onCallClick={(num: string) => { setDialpadNumber(num || ''); setDialpadOpen(true); }} />
                   ))
                 }

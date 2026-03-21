@@ -1107,6 +1107,15 @@ class Mukkadam(models.Model):
     mukkadam_name = models.CharField(max_length=200)
     mobile_numbers = models.CharField(max_length=100)
 
+    MUKKADAM_STATUS_CHOICES = [
+    ('active',   'Active'),
+    ('on_hold',  'On Hold'),
+    ('inactive', 'Inactive'),
+    ]
+    manual_status_set_by  = models.CharField(max_length=255, null=True, blank=True)
+    manual_status      = models.CharField(max_length=20, choices=MUKKADAM_STATUS_CHOICES, null=True, blank=True)
+    manual_status_note = models.CharField(max_length=255, null=True, blank=True)
+    manual_status_set_at = models.DateTimeField(null=True, blank=True)
     clusters = models.ManyToManyField(
         'Cluster', 
         through='ClusterMukkadamAssignment',

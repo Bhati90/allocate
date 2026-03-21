@@ -1094,7 +1094,7 @@ from .models import FarmerBillWebhookLog
 logger = logging.getLogger(__name__)
 
 # ── Paste your webhook URL here ──────────────────────────────
-FARMER_BILL_WEBHOOK_URL = 'https://444e-157-20-14-50.ngrok-free.app/ops/allocation/bill_collect/'
+FARMER_BILL_WEBHOOK_URL = 'https://ops.bharatintelligence.ai/ops/allocation/bill_collect/'
 from rest_framework.authentication import BasicAuthentication
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -1102,17 +1102,14 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 @authentication_classes([])
 @permission_classes([AllowAny])
 def send_farmer_bill_to_webhook(request):
+    import threading
     try:
         data = request.data
 
-        # ── Validate ─────────────────────────────────────────
         required = ['farmer', 'job', 'mukkadam', 'work_done', 'bill_summary']
-        missing = [f for f in required if f not in data]
+        missing  = [f for f in required if f not in data]
         if missing:
-            return Response(
-                {'error': f'Missing fields: {", ".join(missing)}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': f'Missing fields: {", ".join(missing)}'}, status=status.HTTP_400_BAD_REQUEST)
 
         farmer        = data.get('farmer', {})
         job           = data.get('job', {})
@@ -1120,85 +1117,77 @@ def send_farmer_bill_to_webhook(request):
         payments      = data.get('payment_history', [])
         bill          = data.get('bill_summary', {})
         work_done     = data.get('work_done', [])
-        activity_name = data.get('activity_name', '')   # ← NEW
+        activity_name = data.get('activity_name', '')
 
-        # ── Fetch user info from auth token ──────────────────
+        # ── Auth token ────────────────────────────────────────
+        auth_header = request.headers.get('Authorization', '')
+        auth_token  = auth_header.replace('Token ', '').replace('Bearer ', '').strip() or data.get('auth_token', '')
+
+        # ── User + Cluster in parallel threads ───────────────
         sent_by_name  = None
         sent_by_email = None
         sent_by_id    = None
-        auth_header   = request.headers.get('Authorization', '')
-        auth_token = auth_header.replace('Token ', '').replace('Bearer ', '').strip()
-        if not auth_token:
-            auth_token = data.get('auth_token', '') 
+        cluster_obj   = None
 
-        if auth_token:
+        def resolve_user():
+            nonlocal sent_by_name, sent_by_email, sent_by_id
             try:
-                user_response = requests.get(
-                    'https://tender.bharatintelligence.ai/tender/auth/me/',
-                    headers={
-                        'Authorization': f'Token {auth_token}',
-                        'Content-Type': 'application/json',
-                    },
-                    timeout=5,
-                )
-                if user_response.status_code == 200:
-                    user_data     = user_response.json()
+                from rest_framework.authtoken.models import Token
+                if not auth_token:
+                    return
+                token_obj = Token.objects.select_related('user__profile').filter(key=auth_token).first()
+                if token_obj:
+                    user          = token_obj.user
+                    sent_by_id    = str(user.id)
+                    sent_by_email = user.email
                     sent_by_name  = (
-                        user_data.get('name')
-                        or user_data.get('full_name')
-                        or user_data.get('username')
-                    )
-                    sent_by_email = user_data.get('email')
-                    sent_by_id    = str(
-                        user_data.get('id') or user_data.get('user_id') or ''
+                        getattr(user, 'get_full_name', lambda: '')() or
+                        getattr(user.profile, 'full_name', None) or
+                        user.username
                     )
             except Exception as e:
-                logger.warning(f"Could not fetch user info: {e}")
+                logger.warning(f"Could not resolve user: {e}")
 
-        # ── Build webhook payload ─────────────────────────────
+        def resolve_cluster():
+            nonlocal cluster_obj
+            try:
+                job_id = job.get('id')
+                if job_id:
+                    # One query — get cluster directly
+                    from .models import Job
+                    job_obj = Job.objects.filter(job_id=job_id).prefetch_related('clusters').first()
+                    if job_obj:
+                        cluster_obj = job_obj.clusters.first()
+            except Exception as e:
+                logger.warning(f"Could not resolve cluster: {e}")
+
+        # Run user + cluster lookup in parallel
+        t1 = threading.Thread(target=resolve_user)
+        t2 = threading.Thread(target=resolve_cluster)
+        t1.start(); t2.start()
+        t1.join();  t2.join()
+
+        # ── Build payload ─────────────────────────────────────
         payload = {
             'event':         'farmer_bill_collect_initiated',
             'timestamp':     data.get('timestamp'),
-            'activity_name': activity_name,             # ← NEW
-            'sent_by': {
-                'name':  sent_by_name,
-                'email': sent_by_email,
-                'id':    sent_by_id,
-            },
-            'farmer': {
-                'id':    farmer.get('id'),
-                'name':  farmer.get('name'),
-                'phone': farmer.get('phone'),
-            },
-            'job': {
-                'id':   job.get('id'),
-                'crop': job.get('crop'),
-                'plot': job.get('plot'),
-            },
-            'mukkadam': {
-                'name':   mukkadam.get('name'),
-                'mobile': mukkadam.get('mobile'),
-            },
-            'work_done': [
-                {
-                    'activity':      w.get('activity'),
-                    'plot_name':     w.get('plot_name', ''),   # ← pass through
-                    'date':          w.get('date'),
-                    'acres_done':    w.get('acres_done'),
-                    'rate_per_acre': w.get('rate_per_acre'),
-                    'amount':        w.get('amount'),
-                }
-                for w in work_done
-            ],
-            'payment_history': [
-                {
-                    'date':   p.get('date'),
-                    'amount': p.get('amount'),
-                    'mode':   p.get('mode'),
-                    'notes':  p.get('notes', ''),
-                }
-                for p in payments
-            ],
+            'activity_name': activity_name,
+            'sent_by':       {'name': sent_by_name, 'email': sent_by_email, 'id': sent_by_id},
+            'farmer':        {'id': farmer.get('id'), 'name': farmer.get('name'), 'phone': farmer.get('phone')},
+            'job':           {'id': job.get('id'), 'crop': job.get('crop'), 'plot': job.get('plot')},
+            'mukkadam':      {'name': mukkadam.get('name'), 'mobile': mukkadam.get('mobile')},
+            'work_done': [{
+                'activity':      w.get('activity'),
+                'plot_name':     w.get('plot_name', ''),
+                'date':          w.get('date'),
+                'acres_done':    w.get('acres_done'),
+                'rate_per_acre': w.get('rate_per_acre'),
+                'amount':        w.get('amount'),
+            } for w in work_done],
+            'payment_history': [{
+                'date': p.get('date'), 'amount': p.get('amount'),
+                'mode': p.get('mode'), 'notes': p.get('notes', ''),
+            } for p in payments],
             'bill_summary': {
                 'total_billed':       bill.get('total_billed'),
                 'total_already_paid': bill.get('total_already_paid'),
@@ -1207,50 +1196,45 @@ def send_farmer_bill_to_webhook(request):
             },
         }
 
-        # Replace the webhook fire block:
-        webhook_status    = None
-        webhook_response  = None
-        webhook_detail    = None
-        webhook_booking_id = None
+        # ── Fire webhook + save DB in parallel ───────────────
+        webhook_status         = None
+        webhook_response       = None
+        webhook_detail         = None
+        webhook_booking_id     = None
         webhook_booking_status = None
-        webhook_success   = None
+        webhook_success        = None
 
-        try:
-            wh_res = requests.post(
-                FARMER_BILL_WEBHOOK_URL,
-                json=payload,
-                timeout=10,
-                headers={
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
-                },
-            )
-            webhook_status   = wh_res.status_code
-            webhook_response = wh_res.text
-
-            # ── Parse structured response ──
+        def fire_webhook():
+            nonlocal webhook_status, webhook_response, webhook_detail
+            nonlocal webhook_booking_id, webhook_booking_status, webhook_success
             try:
-                resp_json = wh_res.json()
-                webhook_detail         = resp_json.get('detail') or resp_json.get('message') or resp_json.get('error')
-                webhook_booking_id     = str(resp_json.get('booking_id', '')) or None
-                webhook_booking_status = resp_json.get('status')
-                webhook_success        = wh_res.status_code == 200 and 'already paid' not in str(webhook_detail or '').lower()
-            except Exception:
-                webhook_success = wh_res.status_code == 200
+                wh_res = requests.post(
+                    FARMER_BILL_WEBHOOK_URL,
+                    json=payload,
+                    timeout=10,
+                    headers={
+                        'Content-Type':  'application/json',
+                        'Authorization': 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000',
+                    },
+                )
+                webhook_status   = wh_res.status_code
+                webhook_response = wh_res.text
+                try:
+                    resp_json              = wh_res.json()
+                    webhook_detail         = resp_json.get('detail') or resp_json.get('message') or resp_json.get('error')
+                    webhook_booking_id     = str(resp_json.get('booking_id', '')) or None
+                    webhook_booking_status = resp_json.get('status')
+                    webhook_success        = wh_res.status_code == 200 and 'already paid' not in str(webhook_detail or '').lower()
+                except Exception:
+                    webhook_success = wh_res.status_code == 200
+            except Exception as e:
+                webhook_response = str(e)
+                webhook_success  = False
 
-        except Exception as e:
-            webhook_response = str(e)
-            webhook_success  = False
-
-        cluster_obj = None
-        try:
-            from .models import Job, Cluster
-            job_obj = Job.objects.filter(job_id=job.get('id')).first()
-            if job_obj:
-                cluster_obj = job_obj.clusters.first()
-        except Exception:
-            pass
-
+        # Fire webhook in background — don't block response
+        wh_thread = threading.Thread(target=fire_webhook)
+        wh_thread.start()
+        wh_thread.join(timeout=8)  # wait max 8s, then continue
 
         # ── Save to DB ────────────────────────────────────────
         FarmerBillWebhookLog.objects.create(
@@ -1274,31 +1258,26 @@ def send_farmer_bill_to_webhook(request):
             full_payload           = payload,
             webhook_status         = webhook_status,
             webhook_response       = webhook_response,
-            webhook_detail         = webhook_detail,          # ← NEW
-            webhook_booking_id     = webhook_booking_id,      # ← NEW
-            webhook_booking_status = webhook_booking_status,  # ← NEW
-            webhook_success        = webhook_success,          # ← NEW
+            webhook_detail         = webhook_detail,
+            webhook_booking_id     = webhook_booking_id,
+            webhook_booking_status = webhook_booking_status,
+            webhook_success        = webhook_success,
         )
+
         return Response({
             'success':         True,
             'webhook_status':  webhook_status,
             'webhook_success': webhook_success,
-            'detail':          webhook_detail,          # ← so frontend knows "already paid" etc
+            'detail':          webhook_detail,
             'booking_status':  webhook_booking_status,
             'message':         webhook_detail or 'Bill details sent and saved successfully',
         }, status=status.HTTP_200_OK)
 
     except Exception as e:
         logger.error(f"Webhook error: {e}")
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
-
-
-
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 # ── Paste your confirmation webhook URL here ─────────────────
-FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = 'https://444e-157-20-14-50.ngrok-free.app/ops/allocation/bill_collect/'
+FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = 'https://ops.bharatintelligence.ai/ops/allocation/bill_collect/'
 from .models import FarmerPaymentWebhookLog
 
 @api_view(['POST'])

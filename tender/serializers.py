@@ -277,12 +277,56 @@ class MukkadamActivityRateSerializer(serializers.ModelSerializer):
         ]
 
 class MukkadamSerializer(serializers.ModelSerializer):
-    activity_rates = MukkadamActivityRateSerializer(many=True, read_only=True)
-    
-    class Meta:
-        model = Mukkadam
-        fields = '__all__'
+    activity_rates   = MukkadamActivityRateSerializer(many=True, read_only=True)
+    clusters         = serializers.SerializerMethodField()
+    allocated_on_date = serializers.SerializerMethodField()
+    resolved_status  = serializers.SerializerMethodField()
 
+    def get_clusters(self, obj):
+        return [
+            {
+                'id':             c.id,
+                'name':           c.name,
+                'mukkadam_type':  self._get_mukkadam_type(obj, c),
+            }
+            for c in obj.clusters.all()
+        ]
+
+    def _get_mukkadam_type(self, mukkadam, cluster):
+        try:
+            from .models import ClusterMukkadamAssignment
+            assignment = ClusterMukkadamAssignment.objects.filter(
+                mukkadam=mukkadam, cluster=cluster, is_active=True
+            ).order_by('-joined_at').first()
+            return assignment.mukkadam_type if assignment else 'permanent'
+        except Exception:
+            return 'permanent'
+
+    def get_allocated_on_date(self, obj):
+        # Date injected by viewset via context
+        date = self.context.get('selected_date')
+        if not date:
+            return False
+        return Allocation.objects.filter(
+            mukkadam=obj,
+            allocated_date=date,
+        ).exists()
+
+    def get_resolved_status(self, obj):
+        if obj.manual_status in ('on_hold', 'inactive'):
+            return obj.manual_status
+        date = self.context.get('selected_date')
+        if date:
+            allocated = Allocation.objects.filter(
+                mukkadam=obj, allocated_date=date
+            ).exists()
+            if allocated:
+                return 'active'
+        return 'idle'
+
+    class Meta:
+        model  = Mukkadam
+        fields = '__all__'
 
 class MukkadamAvailabilitySerializer(serializers.ModelSerializer):
     mukkadam_name = serializers.CharField(source='mukkadam.mukkadam_name', read_only=True)
