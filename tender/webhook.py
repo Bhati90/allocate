@@ -1094,7 +1094,7 @@ from .models import FarmerBillWebhookLog
 logger = logging.getLogger(__name__)
 
 # ── Paste your webhook URL here ──────────────────────────────
-FARMER_BILL_WEBHOOK_URL = 'https://ops.bharatintelligence.ai/ops/allocation/bill_collect/'
+FARMER_BILL_WEBHOOK_URL = 'https://444e-157-20-14-50.ngrok-free.app/ops/allocation/bill_collect/'
 from rest_framework.authentication import BasicAuthentication
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -1127,10 +1127,9 @@ def send_farmer_bill_to_webhook(request):
         sent_by_email = None
         sent_by_id    = None
         auth_header   = request.headers.get('Authorization', '')
-        auth_token    = (
-            auth_header.replace('Token ', '').replace('Bearer ', '').strip()
-            or request.data.get('auth_token')
-        )
+        auth_token = auth_header.replace('Token ', '').replace('Bearer ', '').strip()
+        if not auth_token:
+            auth_token = data.get('auth_token', '') 
 
         if auth_token:
             try:
@@ -1208,21 +1207,40 @@ def send_farmer_bill_to_webhook(request):
             },
         }
 
-        # ── Fire to webhook ───────────────────────────────────
-        webhook_status   = None
-        webhook_response = None
+        # Replace the webhook fire block:
+        webhook_status    = None
+        webhook_response  = None
+        webhook_detail    = None
+        webhook_booking_id = None
+        webhook_booking_status = None
+        webhook_success   = None
+
         try:
             wh_res = requests.post(
                 FARMER_BILL_WEBHOOK_URL,
                 json=payload,
                 timeout=10,
-                headers={'Content-Type': 'application/json','Authorization' :'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'},
-           )
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Token 89b9fd0698faed6c12c1a8e714fca12c86ee2000'
+                },
+            )
             webhook_status   = wh_res.status_code
             webhook_response = wh_res.text
+
+            # ── Parse structured response ──
+            try:
+                resp_json = wh_res.json()
+                webhook_detail         = resp_json.get('detail') or resp_json.get('message') or resp_json.get('error')
+                webhook_booking_id     = str(resp_json.get('booking_id', '')) or None
+                webhook_booking_status = resp_json.get('status')
+                webhook_success        = wh_res.status_code == 200 and 'already paid' not in str(webhook_detail or '').lower()
+            except Exception:
+                webhook_success = wh_res.status_code == 200
+
         except Exception as e:
             webhook_response = str(e)
-
+            webhook_success  = False
 
         cluster_obj = None
         try:
@@ -1236,32 +1254,38 @@ def send_farmer_bill_to_webhook(request):
 
         # ── Save to DB ────────────────────────────────────────
         FarmerBillWebhookLog.objects.create(
-            auth_token       = auth_token,
-            sent_by_name     = sent_by_name,
-            sent_by_email    = sent_by_email,
-            sent_by_id       = sent_by_id,
-            cluster = cluster_obj,
-            farmer_id        = farmer.get('id'),
-            farmer_name      = farmer.get('name'),
-            farmer_phone     = farmer.get('phone'),
-            job_id           = job.get('id'),
-            crop_name        = job.get('crop'),
-            plot_name        = job.get('plot'),
-            mukkadam_name    = mukkadam.get('name'),
-            mukkadam_mobile  = mukkadam.get('mobile'),
-            activity_name    = activity_name,           # ← NEW
-            total_billed     = bill.get('total_billed'),
-            total_paid       = bill.get('total_already_paid'),
-            balance_due      = bill.get('balance_due_now'),
-            full_payload     = payload,
-            webhook_status   = webhook_status,
-            webhook_response = webhook_response,
+            auth_token             = auth_token,
+            sent_by_name           = sent_by_name,
+            sent_by_email          = sent_by_email,
+            sent_by_id             = sent_by_id,
+            cluster                = cluster_obj,
+            farmer_id              = farmer.get('id'),
+            farmer_name            = farmer.get('name'),
+            farmer_phone           = farmer.get('phone'),
+            job_id                 = job.get('id'),
+            crop_name              = job.get('crop'),
+            plot_name              = job.get('plot'),
+            mukkadam_name          = mukkadam.get('name'),
+            mukkadam_mobile        = mukkadam.get('mobile'),
+            activity_name          = activity_name,
+            total_billed           = bill.get('total_billed'),
+            total_paid             = bill.get('total_already_paid'),
+            balance_due            = bill.get('balance_due_now'),
+            full_payload           = payload,
+            webhook_status         = webhook_status,
+            webhook_response       = webhook_response,
+            webhook_detail         = webhook_detail,          # ← NEW
+            webhook_booking_id     = webhook_booking_id,      # ← NEW
+            webhook_booking_status = webhook_booking_status,  # ← NEW
+            webhook_success        = webhook_success,          # ← NEW
         )
-
         return Response({
-            'success':        True,
-            'webhook_status': webhook_status,
-            'message':        'Bill details sent and saved successfully',
+            'success':         True,
+            'webhook_status':  webhook_status,
+            'webhook_success': webhook_success,
+            'detail':          webhook_detail,          # ← so frontend knows "already paid" etc
+            'booking_status':  webhook_booking_status,
+            'message':         webhook_detail or 'Bill details sent and saved successfully',
         }, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -1274,7 +1298,7 @@ def send_farmer_bill_to_webhook(request):
 
 
 # ── Paste your confirmation webhook URL here ─────────────────
-FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = 'https://ops.bharatintelligence.ai/ops/allocation/bill_collect/'
+FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = 'https://444e-157-20-14-50.ngrok-free.app/ops/allocation/bill_collect/'
 from .models import FarmerPaymentWebhookLog
 
 @api_view(['POST'])

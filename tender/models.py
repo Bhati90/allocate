@@ -1217,6 +1217,12 @@ class FarmerBillWebhookLog(models.Model):
     farmer_name       = models.CharField(max_length=255, blank=True, null=True)
     farmer_phone      = models.CharField(max_length=50,  blank=True, null=True)
 
+    # Add to FarmerBillWebhookLog:
+    webhook_detail        = models.TextField(blank=True, null=True)   # parsed 'detail' message
+    webhook_booking_id    = models.CharField(max_length=100, blank=True, null=True)
+    webhook_booking_status = models.CharField(max_length=50, blank=True, null=True)
+    webhook_success       = models.BooleanField(null=True, blank=True)  # True=success, False=failed/already paid
+
     # ── Job ──────────────────────────────────────────────────
     job_id            = models.CharField(max_length=100, blank=True, null=True)
     crop_name         = models.CharField(max_length=255, blank=True, null=True)
