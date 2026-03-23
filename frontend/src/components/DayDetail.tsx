@@ -1655,13 +1655,28 @@ return (
 
                   <p className="text-xs text-gray-500 mt-0.5">
                     Team: <strong className="text-gray-700">{m?.mukkadam_name || 'N/A'}</strong>
+                    {' · '}
                     Farmer: <strong className="text-gray-700">{a?.farmer_name || 'N/A'}</strong>
-                    {/* Plot: <strong className="text-gray-700">{a?.plot_name || 'N/A'}</strong> */}
                     {' · '}Job{' '}
                     <span className="font-mono text-blue-600">#{a.job_id}</span>
-                    {/* <span className="font-mono text-blue-600">#{a.farmer_name}</span> */}
-                    
                   </p>
+                  {(a.plot_name || a.plot_code) && (
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-100">
+                        📍 {a.plot_name || a.plot_code}
+                      </span>
+                      {a.plot_code && a.plot_name && a.plot_code !== a.plot_name && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500 font-mono">
+                          #{a.plot_code}
+                        </span>
+                      )}
+                      {a.cluster_name && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-50 text-violet-700 border border-violet-100">
+                          🏘 {a.cluster_name}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {a.notes && (
                     <p className="text-xs text-purple-600 mt-0.5 italic">{a.notes}</p>
                   )}

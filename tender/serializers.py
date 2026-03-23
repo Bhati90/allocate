@@ -506,13 +506,18 @@ class LeaveSerializer(serializers.ModelSerializer):
         return attrs
 
 class AllocationSerializer(serializers.ModelSerializer):
-    job_id = serializers.CharField(source='job_activity.job.job_id', read_only=True)
-    farmer_id = serializers.CharField(source='job_activity.job.farmer.farmer_id', read_only=True)
-    farmer_name = serializers.CharField(source='job_activity.job.farmer.farmer_name', read_only=True)
-    activity_id = serializers.IntegerField(source='job_activity.activity.id', read_only=True)
-    activity_name = serializers.CharField(source='job_activity.activity.name', read_only=True)
-    is_strict = serializers.BooleanField(source='job_activity.activity.is_strict', read_only=True)
-    mukkadam_name = serializers.CharField(source='mukkadam.mukkadam_name', read_only=True)
+    job_id        = serializers.CharField(source='job_activity.job.job_id',            read_only=True)
+    farmer_id     = serializers.CharField(source='job_activity.job.farmer.farmer_id',  read_only=True)
+    farmer_name   = serializers.CharField(source='job_activity.job.farmer.farmer_name',read_only=True)
+    activity_id   = serializers.IntegerField(source='job_activity.activity.id',        read_only=True)
+    activity_name = serializers.CharField(source='job_activity.activity.name',         read_only=True)
+    is_strict     = serializers.BooleanField(source='job_activity.activity.is_strict', read_only=True)
+    mukkadam_name = serializers.CharField(source='mukkadam.mukkadam_name',             read_only=True)
+
+    # ── ADD THESE THREE ──────────────────────────────────────────────
+    plot_name     = serializers.CharField(source='job_activity.plot.name',      read_only=True, default=None)
+    plot_code     = serializers.CharField(source='job_activity.plot.plot_code', read_only=True, default=None)
+    cluster_name  = serializers.CharField(source='cluster.name',                read_only=True, default=None)
 
     class Meta:
         model = Allocation
@@ -523,7 +528,12 @@ class AllocationSerializer(serializers.ModelSerializer):
             'farmer_name', 'job_id', 'allocated_date', 'allocated_area', 'allocated_workers',
             'farmer_rate', 'mukkadam_rate', 'farmer_amount', 'mukkadam_amount',
             'profit', 'status', 'notes', 'is_carry_forward', 'carry_forward_from',
-            'allows_second_job',           # ✅ ADD THIS — needed by frontend to skip capacity deduction
+            'allows_second_job',
+
+            # ── ADD THESE THREE ──
+            'plot_name',
+            'plot_code',
+            'cluster_name',
 
             # Day-end report fields
             'report_submitted',
@@ -541,7 +551,6 @@ class AllocationSerializer(serializers.ModelSerializer):
 
             'created_at', 'updated_at',
         ]
-
 class AllocationDetailSerializer(serializers.ModelSerializer):
     job_activity = serializers.SerializerMethodField()
     mukkadam = serializers.SerializerMethodField()

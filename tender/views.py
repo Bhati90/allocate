@@ -5488,6 +5488,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
             # avail = MukkadamAvailability.objects.filter(...)
             # if avail: avail.allocated_workers = ...
 
+            # ── Force status back to pending ──
+            job_activity.allocation_status = 'pending'
+            job_activity.save(update_fields=['allocation_status'])
+
             # Build payload before delete
             deleted_payload = {
                 "allocation_id":   allocation.id,
@@ -5518,6 +5522,14 @@ class AllocationViewSet(viewsets.ModelViewSet):
             from .signals import allocation_deleted
 
             allocation_deleted.send(sender=None, payload=deleted_payload)
+
+            JobActivity.objects.filter(pk=job_activity.pk).update(
+                allocation_status  = 'pending',
+                allocated_area     = 0,
+                remaining_area     = job_activity.total_area,
+                is_fully_allocated = False,
+            )
+
 
         return Response({'success': True, 'message': 'Allocation deleted'}, status=status.HTTP_200_OK)
 
@@ -6041,7 +6053,7 @@ def tender_dashboard(request):
     cluster_id_int = int(cluster_id) if cluster_id else None
     selected_date  = request.query_params.get('date')
 
-    # ============ MUKKADAMS ============
+    # ============ MUKKADAMS ============delete
     mukkadams_qs = Mukkadam.objects.all().prefetch_related(
         'clusters',
         'cluster_assignments__cluster',
