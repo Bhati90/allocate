@@ -32,6 +32,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://allocate-1.onrender.com",
     "https://tender.bharatintelligence.ai",
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://furtive-chrissy-reparably.ngrok-free.dev",
     "http://127.0.0.1:3000",
     "http://localhost:5174",
     "http://127.0.0.1:8000",

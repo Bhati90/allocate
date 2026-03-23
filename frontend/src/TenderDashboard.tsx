@@ -146,6 +146,15 @@ interface Mukkadam {
   total_price: number;
   reference_image_url: string;
   efficiency: number;
+  last_location?: {
+    date:         string | null;
+    farmer_name:  string | null;
+    plot_name:    string | null;
+    plot_code:    string | null;
+    cluster_name: string | null;
+    village:      string | null;
+    taluka:       string | null;
+  } | null;
   // In your TypeScript interfaces, update clusters:
 clusters: {
   id: number;
@@ -674,10 +683,56 @@ function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false, se
         </td>
  
         {/* Location */}
-        <td style={{ ...tdBase, color: S.stone600 }}>
-          {m.location?.village}{m.location?.village && m.location?.district ? ', ' : ''}{m.location?.district}
-        </td>
- 
+{/* Location */}
+<td style={{ ...tdBase, color: S.stone600 }}>
+  {m.last_location ? (
+    <div>
+      {/* Cluster / area name */}
+      <div style={{ fontSize: 12, fontWeight: 600, color: S.stone700 }}>
+        {m.last_location.cluster_name || m.last_location.village || m.last_location.taluka || '—'}
+      </div>
+
+      {/* Date + farmer */}
+      <div style={{ fontSize: 10, color: S.stone400, marginTop: 2, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+        {m.last_location.date && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+            📅 {m.last_location.date.slice(5).replace('-', ' ')}
+          </span>
+        )}
+        {m.last_location.farmer_name && (
+          <>
+            <span style={{ color: S.stone300 }}>·</span>
+            <span style={{ fontWeight: 600, color: S.stone600 }}>{m.last_location.farmer_name.split(' ')[0]}</span>
+          </>
+        )}
+        {m.last_location.plot_code && (
+          <>
+            <span style={{ color: S.stone300 }}>·</span>
+            <span style={{ fontFamily: S.mono }}>#{m.last_location.plot_code}</span>
+          </>
+        )}
+      </div>
+
+      {/* Farmer's village — where the work was */}
+      {(m.last_location.farmer_village || m.last_location.farmer_taluka || m.last_location.farmer_district) && (
+        <div style={{ fontSize: 10, color: S.stone400, marginTop: 1, display: 'flex', alignItems: 'center', gap: 3 }}>
+          <span>📍</span>
+          <span>
+            {[
+              m.last_location.farmer_village,
+              m.last_location.farmer_taluka,
+              m.last_location.farmer_district,
+            ].filter(Boolean).join(', ')}
+          </span>
+        </div>
+      )}
+    </div>
+  ) : (
+    <span style={{ fontSize: 12, color: S.stone400 }}>
+      {m.location?.village}{m.location?.village && m.location?.district ? ', ' : ''}{m.location?.district || '—'}
+    </span>
+  )}
+</td>
         {/* Crew */}
         <td style={{ ...tdBase, textAlign: 'center' }}>
           <span style={{ fontWeight: 700, color: S.violet600, fontSize: 13 }}>{m.crew_size}</span>
@@ -954,6 +1009,7 @@ import ClusterActivityCalendar from "./ClusterCalender";
 import FarmerBillingPage from "./components/FarmerBillPage";
 import DayDetailModal from "./components/DayDetail";
 import AgroIntelUnified from "./Insight";
+import SalesPerformance from "./sales";
 
 // ─── Plot Cluster Control ─────────────────────────────────
 function PlotClusterControl({ plot, clusterGroups, clusters, farmerId, onSuccess }: {
@@ -1383,7 +1439,33 @@ function formatPruningDate(date: Date | null): React.ReactNode {
   );
 }
 
+ function formatDate(dateStr: string | null): string {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
  
+// ✅ Add TypeScript interface for allocation
+interface Allocation {
+  allocation_id: number;
+  allocated_date: string;
+  allocated_area: number;
+  mukkadam_name: string;
+  mukkadam_id: number;
+  work_status: string;
+  farmer_amount: number;
+}
+ 
+interface Activity {
+  id: number;
+  total_area: number;
+  allocated_area: number;
+  remaining_area: number;
+  scheduled_date: string | null;
+  total_price: number;
+  allocation_status: string;
+  allocations: Allocation[];  // ✅ NEW
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // FARMER CARD  — replace the whole existing FarmerCard function
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1550,32 +1632,210 @@ function FarmerCard({ farmer, clusters, onSuccess, isAdmin = false }: FarmerCard
                           {/* plot jobs expanded */}
                           {expandedPlot === plot.plot_id && (
                             <div style={{ padding: '10px 14px' }}>
-                              {plot.jobs.length === 0 ? (
-                                <p style={{ fontSize: 11, color: S.stone400, fontStyle: 'italic' }}>No tender jobs for this plot</p>
-                              ) : plot.jobs.map(job => (
-                                <div key={job.job_id} style={{ marginBottom: 8 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: 'linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%)', borderRadius: 8, marginBottom: 6, border: `1px solid ${S.sky100}` }}>
-    <span style={{ fontSize: 11, fontWeight: 700, color: S.sky700 }}>#{job.job_id}</span>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>  {/* 👈 wrap in div */}
-      <span style={{ fontSize: 11, color: S.sky600 }}>{job.activities.length} activities</span>
-      <CancelJobButton job={job} onSuccess={onSuccess} />  {/* 👈 add this */}
+                              {plot.jobs.map(job => {
+  // Calculate job-level totals
+  const jobTotalValue = job.booking?.total_amount || 0;
+  const jobCompletedBill = job.activities.reduce((sum, a) => {
+    return sum + (a.allocations || [])
+      .filter(alloc => alloc.work_status === 'completed')
+      .reduce((allocSum, alloc) => allocSum + alloc.farmer_amount, 0);
+  }, 0);
+ 
+  return (
+    <div key={job.job_id} style={{ marginBottom: 8 }}>
+      {/* Job Header with Totals */}
+      <div style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'space-between', 
+        padding: '8px 10px', 
+        background: 'linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%)', 
+        borderRadius: 8, 
+        marginBottom: 6, 
+        border: `1px solid ${S.sky100}` 
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: S.sky700 }}>#{job.job_id}</span>
+          <span style={{ fontSize: 10, color: S.sky600 }}>{job.activities.length} activities</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {/* Job Total Value */}
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '.5px', color: S.stone500 }}>Job Value</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: S.stone700 }}>₹{jobTotalValue.toLocaleString()}</div>
+          </div>
+          {/* Completed Bill */}
+          {jobCompletedBill > 0 && (
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '.5px', color: S.green600 }}>Completed</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: S.green700 }}>₹{jobCompletedBill.toLocaleString()}</div>
+            </div>
+          )}
+          <CancelJobButton job={job} onSuccess={onSuccess} />
+        </div>
+      </div>
+ 
+      {/* Activities List */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {job.activities.map(a => {
+          const hasAllocations = a.allocations && a.allocations.length > 0;
+          const completedAllocations = a.allocations?.filter(alloc => alloc.work_status === 'completed') || [];
+          const completedBill = completedAllocations.reduce((sum, alloc) => sum + alloc.farmer_amount, 0);
+ 
+          return (
+            <div 
+              key={a.id} 
+              style={{ 
+                display: 'flex', 
+                alignItems: 'flex-start', 
+                gap: 10, 
+                padding: '8px 10px', 
+                borderRadius: 6, 
+                fontSize: 12, 
+                background: '#fff',
+                border: `1px solid ${S.stone100}`,
+                transition: 'all 150ms'
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = S.stone25;
+                e.currentTarget.style.borderColor = S.stone200;
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = '#fff';
+                e.currentTarget.style.borderColor = S.stone100;
+              }}
+            >
+              {/* Activity Name & Dates */}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, color: S.stone900, marginBottom: 4 }}>{a.name}</div>
+                
+                {/* Scheduled Date */}
+                <div style={{ fontSize: 10, color: S.stone500, display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                  <span style={{ fontSize: 9 }}>📅</span>
+                  <span>Scheduled: {formatDate(a.scheduled_date)}</span>
+                </div>
+ 
+                {/* Allocation Details */}
+                {hasAllocations && (
+                  <div style={{ marginTop: 6, paddingLeft: 8, borderLeft: `2px solid ${S.sky200}` }}>
+                    {a.allocations.map((alloc, idx) => (
+                      <div key={alloc.allocation_id} style={{ 
+                        fontSize: 10, 
+                        color: S.stone600, 
+                        marginBottom: idx < a.allocations.length - 1 ? 4 : 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        flexWrap: 'wrap'
+                      }}>
+                        {/* Allocation Date */}
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <span style={{ fontSize: 9 }}>🗓️</span>
+                          <span style={{ fontWeight: 600 }}>{formatDate(alloc.allocated_date)}</span>
+                        </span>
+ 
+                        {/* Mukkadam */}
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <span style={{ fontSize: 9 }}>👷</span>
+                          <span style={{ color: S.sky700, fontWeight: 500 }}>{alloc.mukkadam_name}</span>
+                        </span>
+ 
+                        {/* Area */}
+                        <span style={{ 
+                          padding: '1px 6px', 
+                          borderRadius: 4, 
+                          background: S.stone50, 
+                          fontSize: 9, 
+                          fontFamily: S.mono,
+                          color: S.stone600 
+                        }}>
+                          {alloc.allocated_area} ac
+                        </span>
+ 
+                        {/* Work Status */}
+                        <span style={{ 
+                          padding: '2px 6px', 
+                          borderRadius: 999, 
+                          fontSize: 9, 
+                          fontWeight: 700, 
+                          textTransform: 'uppercase', 
+                          letterSpacing: '.3px',
+                          background: alloc.work_status === 'completed' ? S.green50 : 
+                                     alloc.work_status === 'in_progress' ? S.amber50 : S.stone50,
+                          color: alloc.work_status === 'completed' ? S.green700 : 
+                                alloc.work_status === 'in_progress' ? S.amber700 : S.stone600
+                        }}>
+                          {alloc.work_status.replace('_', ' ')}
+                        </span>
+ 
+                        {/* Completed Bill Amount */}
+                        {alloc.work_status === 'completed' && (
+                          <span style={{ 
+                            padding: '2px 6px', 
+                            borderRadius: 4, 
+                            background: S.green50, 
+                            fontSize: 9, 
+                            fontWeight: 700,
+                            color: S.green700,
+                            fontFamily: S.mono
+                          }}>
+                            ₹{alloc.farmer_amount.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+ 
+              {/* Area & Status Summary */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, minWidth: 120 }}>
+                {/* Total Area */}
+                <div style={{ 
+                  fontFamily: S.mono, 
+                  fontSize: 10, 
+                  color: S.stone500,
+                  textAlign: 'right'
+                }}>
+                  {a.total_area} ac total
+                </div>
+ 
+                {/* Activity Status Badge */}
+                <span style={{ 
+                  padding: '3px 8px', 
+                  borderRadius: 999, 
+                  fontSize: 10, 
+                  fontWeight: 700, 
+                  textTransform: 'uppercase', 
+                  letterSpacing: '.4px', 
+                  background: a.allocation_status === 'fully_allocated' || a.allocation_status === 'completed' ? S.green50 : 
+                             a.allocation_status === 'partially_allocated' ? S.sky50 : S.amber50, 
+                  color: a.allocation_status === 'fully_allocated' || a.allocation_status === 'completed' ? S.green700 : 
+                        a.allocation_status === 'partially_allocated' ? S.sky700 : S.amber700 
+                }}>
+                  {a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated' ? 'Done' : 'Partial'}
+                </span>
+ 
+                {/* Completed Bill for this Activity */}
+                {completedBill > 0 && (
+                  <div style={{ 
+                    fontSize: 11, 
+                    fontWeight: 700, 
+                    color: S.green700,
+                    fontFamily: S.mono,
+                    textAlign: 'right'
+                  }}>
+                    ₹{completedBill.toLocaleString()}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
-  </div>
-                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                    {job.activities.map(a => (
-                                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderRadius: 6, fontSize: 12, transition: 'background 150ms' }}
-                                        onMouseEnter={e => (e.currentTarget.style.background = S.stone50)}
-                                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                                        <div style={{ flex: 1, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
-                                        <div style={{ fontFamily: S.mono, fontSize: 10, color: S.stone500, minWidth: 50, textAlign: 'right' }}>{a.total_area} ac</div>
-                                        <span style={{ padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', background: a.allocation_status === 'fully_allocated' || a.allocation_status === 'completed' ? S.green50 : a.allocation_status === 'partially_allocated' ? S.sky50 : S.amber50, color: a.allocation_status === 'fully_allocated' || a.allocation_status === 'completed' ? S.green700 : a.allocation_status === 'partially_allocated' ? S.sky700 : S.amber700 }}>
-                                          {a.allocation_status === 'fully_allocated' ? 'Allocated' : a.allocation_status === 'partially_allocated' ? 'Partial' : a.allocation_status === 'completed' ? 'Done' : 'Pending'}
-                                        </span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              ))}
+  );
+})}
                             </div>
                           )}
                         </div>
@@ -1902,7 +2162,9 @@ export default function TenderDashboard() {
    const [expandedCluster, setExpandedCluster] = useState<number | null>(null);
 const [actActivityFilter, setActActivityFilter] = useState<string[]>([]);
 const [activityDropdownOpen, setActivityDropdownOpen] = useState(false);
-
+const [resolvingNoteId, setResolvingNoteId] = useState<number | null>(null);
+const [resolveText, setResolveText]         = useState('');
+const [resolveModalNoteId, setResolveModalNoteId] = useState<number | null>(null);
    const [showInsightDayDetail, setShowInsightDayDetail] = useState(false);
 const [insightDetailDate, setInsightDetailDate] = useState<Date | null>(null);
 const [insightDetailCluster, setInsightDetailCluster] = useState<any | null>(null);
@@ -1924,8 +2186,30 @@ const [weekOffset, setWeekOffset] = useState(0); // 0 = current week, 7 = next, 
 
 const [jobNotes, setJobNotes]               = useState<Record<string, any[]>>({}); // jobId → notes[]
 const [notesLoading, setNotesLoading]       = useState(false);
-
-  const [farmerSubTab, setFarmerSubTab] = useState<'all' | 'full' | 'partial' | 'none' | 'new'>('all');
+const [expandedMukkadam,       setExpandedMukkadam]       = useState<string | null>(null);
+const [completedView,          setCompletedView]           = useState<'activities' | 'mukkadams'>('activities');
+const [mukkadamPayouts,        setMukkadamPayouts]         = useState<any>(null);
+const [mukkadamPayoutsLoading, setMukkadamPayoutsLoading]  = useState(false);
+const fetchMukkadamPayouts = async () => {
+  setMukkadamPayoutsLoading(true);
+  const token = localStorage.getItem('auth_token');
+  try {
+    const params = new URLSearchParams();
+    if (actCluster)  params.set('cluster_id', actCluster);
+    if (actDateFrom) params.set('date_from',  actDateFrom);
+    if (actDateTo)   params.set('date_to',    actDateTo);
+    const res = await fetch(`${API_BASE_URL}/api/mukkadam-payout-summary/?${params.toString()}`, {
+      headers: { Authorization: `Token ${token}` },
+    });
+    const d = await res.json();
+    setMukkadamPayouts(d);
+  } finally {
+    setMukkadamPayoutsLoading(false);
+  }
+};
+  
+// REPLACE WITH:
+const [farmerSubTab, setFarmerSubTab] = useState<'all' | 'full' | 'partial' | 'none' | 'new' | 'completed'>('all');
    const navigate = useNavigate();
 
    const [isAdmin, setIsAdmin] = useState(false);
@@ -1934,7 +2218,62 @@ const { user: currentUser } = useCurrentUser();
   const currentUserId   = currentUser?.id   ?? 0;
   const currentUserName = currentUser?.full_name ?? currentUser?.username ?? '';
    
+const handleResolveNote = async (noteId: number, resolutionNote: string) => {
+  setResolvingNoteId(noteId);
+  const token = localStorage.getItem('auth_token');
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/job-notes/${noteId}/resolve/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Token ${token}` },
+      body: JSON.stringify({ resolution_note: resolutionNote || 'Resolved' }),
+    });
+    if (res.ok) {
+      toast.success('Note resolved');
+      setResolveModalNoteId(null);
+      setResolveText('');
+      // Refresh notes
+      const jobIds = [...new Set(baseActivities.map((a: any) => a.job_id))];
+      const BATCH_SIZE = 50;
+      const batches: string[][] = [];
+      for (let i = 0; i < jobIds.length; i += BATCH_SIZE) batches.push(jobIds.slice(i, i + BATCH_SIZE));
+      const results = await Promise.all(batches.map(batch => {
+        const params = new URLSearchParams();
+        batch.forEach(id => params.append('job_id', id));
+        return fetch(`${API_BASE_URL}/api/job-notes/?${params.toString()}`, {
+          headers: { Authorization: `Token ${token}` },
+        }).then(r => r.json());
+      }));
+      const grouped: Record<string, any[]> = {};
+      results.forEach((batchResult: any) => {
+        const notes = Array.isArray(batchResult) ? batchResult : batchResult.results ?? [];
+        notes.forEach((n: any) => {
+          if (!grouped[n.job_id]) grouped[n.job_id] = [];
+          grouped[n.job_id].push(n);
+        });
+      });
+      setJobNotes(grouped);
+    } else {
+      const d = await res.json();
+      toast.error(d.error || 'Failed to resolve');
+    }
+  } finally {
+    setResolvingNoteId(null);
+  }
+};
 
+const handleUnresolveNote = async (noteId: number) => {
+  const token = localStorage.getItem('auth_token');
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/job-notes/${noteId}/unresolve/`, {
+      method: 'POST',
+      headers: { Authorization: `Token ${token}` },
+    });
+    if (res.ok) {
+      toast.success('Note reopened');
+      // same refresh as above — extract to a helper if preferred
+    }
+  } catch { toast.error('Failed'); }
+};
 useEffect(() => {
   const token = localStorage.getItem('auth_token'); // ← use whatever key you store it under
 
@@ -2094,24 +2433,25 @@ useEffect(() => {
     .then(setStates)
     .catch(() => {});
 }, []);
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const params: Record<string, string> = {};
-      if (clusterFilter) params.cluster_id = clusterFilter;
+const fetchData = async () => {
+  setLoading(true);
+  try {
+    const params: Record<string, string> = {};
+    if (clusterFilter) params.cluster_id = clusterFilter;
+    if (selectedDate) params.date = selectedDate;   // ← ADD THIS
 
-      const [dashRes, clusterRes] = await Promise.all([
-        axios.get(`${API_BASE_URL}/api/tender-dashboard/`, { params }),
-        axios.get(`${API_BASE_URL}/api/clusters/`),
-      ]);
-      setData(dashRes.data);
-      setClusters(clusterRes.data?.results || clusterRes.data || []);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+    const [dashRes, clusterRes] = await Promise.all([
+      axios.get(`${API_BASE_URL}/api/tender-dashboard/`, { params }),
+      axios.get(`${API_BASE_URL}/api/clusters/`),
+    ]);
+    setData(dashRes.data);
+    setClusters(clusterRes.data?.results || clusterRes.data || []);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    setLoading(false);
+  }
+};
 const formatDateInsight = (date: Date): string => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -2121,43 +2461,35 @@ const formatDateInsight = (date: Date): string => {
   // ── ADD THIS ─────────────────────────────────────────────────────
   // Silent refresh — no spinner, no scroll-to-top.
   // Used by MukkadamCard/FarmerCard onSuccess after add-to-cluster.
-  const fetchDataSilent = async () => {
-    const scrollY = window.scrollY;          // save position BEFORE fetch
-    try {
-      const params: Record<string, string> = {};
-      if (clusterFilter) params.cluster_id = clusterFilter;
+const fetchDataSilent = async () => {
+  const scrollY = window.scrollY;
+  try {
+    const params: Record<string, string> = {};
+    if (clusterFilter) params.cluster_id = clusterFilter;
+    if (selectedDate) params.date = selectedDate;   // ← ADD THIS
 
-      const [dashRes, clusterRes] = await Promise.all([
-        axios.get(`${API_BASE_URL}/api/tender-dashboard/`, { params }),
-        axios.get(`${API_BASE_URL}/api/clusters/`),
-      ]);
-      setData(dashRes.data);
-      setClusters(clusterRes.data?.results || clusterRes.data || []);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      // Restore scroll after React re-renders (two frames to be safe)
+    const [dashRes, clusterRes] = await Promise.all([
+      axios.get(`${API_BASE_URL}/api/tender-dashboard/`, { params }),
+      axios.get(`${API_BASE_URL}/api/clusters/`),
+    ]);
+    setData(dashRes.data);
+    setClusters(clusterRes.data?.results || clusterRes.data || []);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          window.scrollTo({ top: scrollY, behavior: 'instant' });
-        });
+        window.scrollTo({ top: scrollY, behavior: 'instant' });
       });
-    }
-  };
+    });
+  }
+};
   // ─────────────────────────────────────────────────────────────────
 
 const [timelineData, setTimelineData] = useState<any>(null);
 const [timelineLoading, setTimelineLoading] = useState(false);
 
   useEffect(() => { fetchData(); }, [clusterFilter]);
-const filteredMukkadams = (data?.mukkadams || []).filter(m => {
-  const matchesSearch = 
-    m.name.toLowerCase().includes(search.toLowerCase()) ||
-    m.mobile.includes(search);
-  if (noCluster) return matchesSearch && m.clusters.length === 0;
-  return matchesSearch;
-});
-
 
 const filteredFarmers = (data?.farmers || []).filter(f => {
   const matchesSearch =
@@ -2308,10 +2640,14 @@ const actCounts = {
     return a.scheduled_date < todayStr && Number(a.total_area) > 0;
   }).length,
   // Find:
-data_issue: filteredBase.filter((a: any) =>
-  Object.keys(jobNotes).length > 0 &&
-  (jobNotes[a.job_id] ?? []).some((n: any) => !n.is_resolved)
-).length,
+data_issue: (() => {
+  const uniqueJobs = new Set(
+    filteredBase
+      .filter((a: any) => (jobNotes[a.job_id] ?? []).some((n: any) => !n.is_resolved))
+      .map((a: any) => a.job_id)
+  );
+  return uniqueJobs.size;
+})(),
 };
 
 // Replace the notes useEffect with:
@@ -2383,12 +2719,34 @@ const farmerCounts = {
   full:    filteredFarmers.filter((f: any) => classifyFarmer(f) === 'full').length,
   partial: filteredFarmers.filter((f: any) => classifyFarmer(f) === 'partial').length,
   none:    filteredFarmers.filter((f: any) => classifyFarmer(f) === 'none').length,
+  // ADD to farmerCounts:
+completed: filteredFarmers.filter((f: any) =>
+  (f.plots_by_cluster ?? []).some((g: any) =>
+    (g.plots ?? []).some((p: any) =>
+      (p.jobs ?? []).some((j: any) =>
+        (j.activities ?? []).some((a: any) =>
+          a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated'  // ← FIX
+        )
+      )
+    )
+  )
+).length,
 };
 
 // Updated subTabFilteredFarmers
 const subTabFilteredFarmers = filteredFarmers.filter((f: any) => {
   if (farmerSubTab === 'all')     return true;
   if (farmerSubTab === 'new')     return isNewFarmer(f);
+  if (farmerSubTab === 'completed') return (f.plots_by_cluster ?? []).some((g: any) =>
+  (g.plots ?? []).some((p: any) =>
+    (p.jobs ?? []).some((j: any) =>
+      (j.activities ?? []).some((a: any) =>
+        a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated'  // ← FIX
+      )
+    )
+  )
+);
+
   return classifyFarmer(f) === farmerSubTab;
 });
 
@@ -2968,6 +3326,25 @@ const handleUpdownComplete = async (mukkadamId: number, allocationId: number) =>
 // const todayStr = new Date().toISOString().slice(0, 10);
 const [selectedDate, setSelectedDate] = useState(todayStr);
 const [statusFilter, setStatusFilter] = useState('all');
+
+const filteredMukkadams = (data?.mukkadams || []).filter((m: any) => {
+  const matchesSearch =
+    m.name.toLowerCase().includes(search.toLowerCase()) ||
+    m.mobile.includes(search);
+  if (!matchesSearch) return false;
+  if (noCluster && m.clusters.length !== 0) return false;
+
+  // Status filter
+  if (statusFilter === 'active')   return !m.manual_status && m.allocated_on_date;
+  if (statusFilter === 'idle')     return !m.manual_status && !m.allocated_on_date;
+  if (statusFilter === 'on_hold')  return m.manual_status === 'on_hold';
+  if (statusFilter === 'inactive') return m.manual_status === 'inactive';
+  return true; // 'all'
+});
+
+useEffect(() => {
+  fetchData();
+}, [selectedDate, clusterFilter]);
 const jobMetrics = useMemo(() => {
 
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -3054,7 +3431,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
             { key: 'command',   icon: '🏠', label: 'Command',   count: cmdClusters.length },
   { key: 'payment',  icon: '💰', label: 'Payment' },
   { key: 'global',   icon: '', label: 'Plan' },
-  { key: 'mukkadams', icon: '👥', label: 'Mukkadams', count: data?.mukkadams?.length || 0 },
+{ key: 'mukkadams', icon: '👥', label: 'Mukkadams', count: (data?.mukkadams || []).filter((m: any) => !m.manual_status || m.manual_status === 'active').length },
   { key: 'farmers',  icon: '👨‍🌾', label: 'Farmers',   count: data?.farmers?.length || 0 },
   { key: 'jobs',     icon: '📋', label: 'Jobs',       count: data?.summary?.total_tender_jobs || 0 },
   { key: 'plan',     icon: '🗓️', label: 'Insight' }, 
@@ -3124,6 +3501,8 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
           { key: 'full',    label: '✅ Clustered',   count: farmerCounts.full    },
           { key: 'partial', label: '⚡ Partial',     count: farmerCounts.partial },
           { key: 'none',    label: '⚠ No Cluster',  count: farmerCounts.none    },
+          // In farmers sub-pills array, add:
+{ key: 'completed', label: '✅ Completed', count: farmerCounts.completed },
         ] as const).map(t => {
           const active = farmerSubTab === t.key;
           return (
@@ -4830,7 +5209,7 @@ allJobs={insightDayJobs}
             {/* ── Date + Status filters ── */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
               <input type="date" value={selectedDate}
-                onChange={e => { setSelectedDate(e.target.value); fetchDataSilent(); }}
+                onChange={e => setSelectedDate(e.target.value)}
                 style={{ padding: '6px 10px', borderRadius: 8, border: `1px solid ${S.stone200}`, fontSize: 12, fontFamily: 'inherit', color: S.stone800 }}
               />
               {([
@@ -4893,37 +5272,141 @@ allJobs={insightDayJobs}
           </>
  
         ) : tab === 'farmers' ? (
-          <table style={{ width: '100%', background: '#fff', borderRadius: 18, boxShadow: S.shadowCard, overflow: 'hidden', borderCollapse: 'separate', borderSpacing: 0 }}>
-            <thead>
-              <tr>
-                {[
-                  { h: 'Farmer',     pl: 20 },
-                  { h: 'Location' },
-                  { h: 'Plots',      ac: true },
-                  { h: 'Jobs',       ac: true },
-                  { h: 'Cluster' },
-                  { h: 'Activities', ac: true },
-                  { h: 'Pruning' },
-                  { h: 'Actions',    ar: true },
-                  { h: '' },
-                ].map((col, i) => (
-                  <th key={i} style={{ background: 'linear-gradient(180deg,#fafaf9 0%,#f7f6f4 100%)', padding: `10px ${col.pl ?? 14}px`, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, textAlign: col.ac ? 'center' : col.ar ? 'right' : 'left', borderBottom: `2px solid ${S.stone200}`, whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 10 }}>
-                    {col.h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {subTabFilteredFarmers.length === 0
-                ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 48, color: S.stone400 }}>No farmers found</td></tr>
-                : subTabFilteredFarmers.map((f: any) => (
-                  <FarmerCard key={f.farmer_id} farmer={f} clusters={clusters} isAdmin={isAdmin} onSuccess={fetchDataSilent} />
-                ))
-              }
-            </tbody>
-          </table>
- 
-        ) : tab === 'jobs' ? (
+  farmerSubTab === 'completed' ? (
+    // ── COMPLETED VIEW: flat list of completed activities grouped by farmer ──
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {subTabFilteredFarmers.map((f: any) => {
+        // Collect all completed activities across all plots/jobs
+        const completedActs: any[] = [];
+        (f.plots_by_cluster ?? []).forEach((g: any) => {
+          (g.plots ?? []).forEach((p: any) => {
+            (p.jobs ?? []).forEach((j: any) => {
+              (j.activities ?? []).forEach((a: any) => {
+                if (a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated') {
+                  completedActs.push({
+                    ...a,
+                    plot_code:    p.plot_code,
+                    plot_name:    p.name,
+                    area_acres:   p.area_acres,
+                    crop_name:    p.crop_name,
+                    cluster_name: g.cluster_name,
+                    job_id:       j.job_id,
+                  });
+                }
+              });
+            });
+          });
+        });
+        if (completedActs.length === 0) return null;
+
+        const av = avColor(f.farmer_id);
+        return (
+          <div key={f.farmer_id} style={{ background: '#fff', borderRadius: 14, border: '1px solid #bbf7d0', overflow: 'hidden', boxShadow: S.shadowCard }}>
+
+            {/* Farmer header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 18px', background: '#f0fdf4', borderBottom: '1px solid #bbf7d0' }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: av.bg, color: av.fg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>
+                {mkInitials(f.farmer_name)}
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: S.stone900 }}>{f.farmer_name}</div>
+                <div style={{ fontSize: 11, color: S.stone400, marginTop: 1 }}>
+                  {f.phone_number} · {f.clusters.map((c: any) => c.name).join(', ') || 'No cluster'}
+                </div>
+              </div>
+              <span style={{ marginLeft: 'auto', padding: '4px 12px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontSize: 12, fontWeight: 700, border: '1px solid #bbf7d0' }}>
+                ✅ {completedActs.length} completed
+              </span>
+            </div>
+
+            {/* Completed activities table */}
+            <div style={{ padding: '12px 18px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    {['Activity', 'Plot', 'Cluster', 'Area', 'Scheduled', 'Job'].map((h, i) => (
+                      <th key={i} style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', color: S.stone400, padding: '6px 10px', textAlign: i > 2 ? 'right' : 'left', borderBottom: `1px solid ${S.stone100}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {completedActs.map((a: any, i: number) => (
+                    <tr key={`${a.id}-${i}`}
+                      style={{ background: i % 2 === 0 ? '#fafaf8' : '#fff' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = '#f0fdf4')}
+                      onMouseLeave={e => (e.currentTarget.style.background = i % 2 === 0 ? '#fafaf8' : '#fff')}>
+                      <td style={{ padding: '8px 10px', fontWeight: 600, color: S.stone800 }}>
+                        <span style={{ marginRight: 6 }}>✅</span>{a.name}
+                      </td>
+                      <td style={{ padding: '8px 10px', fontFamily: S.mono, color: S.stone500 }}>
+                        {a.plot_code} · {a.crop_name}
+                      </td>
+                      <td style={{ padding: '8px 10px', color: S.stone500 }}>
+                        {a.cluster_name || '—'}
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>
+                        {Number(a.total_area).toFixed(2)} ac
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', color: S.stone500 }}>
+                        {a.scheduled_date?.slice(5).replace('-', ' ') || '—'}
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: S.mono, fontSize: 11, color: S.sky600 }}>
+                        #{a.job_id}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                {/* Totals */}
+                <tfoot>
+                  <tr style={{ borderTop: `2px solid ${S.stone200}` }}>
+                    <td colSpan={3} style={{ padding: '8px 10px', fontWeight: 700, fontSize: 12, color: S.stone700 }}>
+                      Total
+                    </td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: S.green700 }}>
+                      {completedActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0).toFixed(2)} ac
+                    </td>
+                    <td colSpan={2} />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  ) : (
+    // ── ALL OTHER SUBTABS: existing table ──
+    <table style={{ width: '100%', background: '#fff', borderRadius: 18, boxShadow: S.shadowCard, overflow: 'hidden', borderCollapse: 'separate', borderSpacing: 0 }}>
+      <thead>
+        <tr>
+          {[
+            { h: 'Farmer',     pl: 20 },
+            { h: 'Location' },
+            { h: 'Plots',      ac: true },
+            { h: 'Jobs',       ac: true },
+            { h: 'Cluster' },
+            { h: 'Activities', ac: true },
+            { h: 'Pruning' },
+            { h: 'Actions',    ar: true },
+            { h: '' },
+          ].map((col, i) => (
+            <th key={i} style={{ background: 'linear-gradient(180deg,#fafaf9 0%,#f7f6f4 100%)', padding: `10px ${col.pl ?? 14}px`, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, textAlign: col.ac ? 'center' : col.ar ? 'right' : 'left', borderBottom: `2px solid ${S.stone200}`, whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 10 }}>
+              {col.h}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {subTabFilteredFarmers.length === 0
+          ? <tr><td colSpan={9} style={{ textAlign: 'center', padding: 48, color: S.stone400 }}>No farmers found</td></tr>
+          : subTabFilteredFarmers.map((f: any) => (
+            <FarmerCard key={f.farmer_id} farmer={f} clusters={clusters} isAdmin={isAdmin} onSuccess={fetchDataSilent} />
+          ))
+        }
+      </tbody>
+    </table>
+  )
+) : tab === 'jobs' ? (
           <>
 
 {!actLoading && baseActivities.length > 0 && (
@@ -5074,7 +5557,7 @@ allJobs={insightDayJobs}
           {Object.entries(grp).map(([actName, acts]: [string, any[]]) => {
             const flatActs = acts.flatMap((a: any) => a.is_split && a.splits?.length > 0 ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status })) : [a]);
             return (
-              <GroupedActivitySection key={actName} actName={actName} acts={acts}  actSubTab={actSubTab}
+              <GroupedActivitySection key={actName} actName={actName} acts={acts}  actSubTab={actSubTab} filteredBase= {filteredBase}
                 totalArea={flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0)}
                 totalValue={acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0)}
                 unalloc={flatActs.filter((a: any) => a.allocation_status === 'pending').length}
@@ -5105,44 +5588,368 @@ allJobs={insightDayJobs}
       </>
     );
   }
+// ── COMPLETED tab — metrics + mukkadam breakdown ──────────────────
+if (actSubTab === 'completed') {
+  const totalAcresDone   = displayActivities.reduce((s: number, a: any) => s + Number(a.allocated_area || 0), 0);
+  const totalValueDone   = displayActivities.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0);
+  const totalMukkadamPay = displayActivities.reduce((s: number, a: any) =>
+    s + (a.allocations ?? []).reduce((as: number, al: any) =>
+      as + Number(al.mukkadam_rate || 0) * Number(al.allocated_area || 0), 0), 0);
+  const margin = totalValueDone - totalMukkadamPay;
 
-  // ── DATA ISSUE tab ────────────────────────────────────────────────────
-  if (actSubTab === 'data_issue') {
-    if (displayActivities.length === 0) {
-      return <div style={{ textAlign: 'center', padding: '64px 0', color: '#16a34a', fontSize: 14, fontWeight: 600 }}>✅ No open data issues!</div>;
-    }
-    const grp: Record<string, any[]> = {};
-    displayActivities.forEach((a: any) => { const k = a.activity_name || 'Unknown'; if (!grp[k]) grp[k] = []; grp[k].push(a); });
-    return (
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, padding: '10px 16px', borderRadius: 10, background: '#fef3c7', border: '1px solid #fde68a' }}>
-          <span style={{ fontSize: 16 }}>📌</span>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>Data Issues — Jobs with Unresolved Notes</div>
-            <div style={{ fontSize: 11, color: '#6b7280' }}>{displayActivities.length} jobs need attention</div>
+  const fmt = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
+  return (
+    <div>
+      {/* ── Summary metric strip ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
+        {[
+          { label: 'Total Completed', val: displayActivities.length,         color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0', emoji: '✅' },
+          { label: 'Acres Done',      val: `${totalAcresDone.toFixed(1)} ac`, color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe', emoji: '🌾' },
+          { label: 'Farmer Value',    val: fmt(totalValueDone),               color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0', emoji: '💰' },
+          { label: 'Mukkadam Payout', val: mukkadamPayouts ? fmt(mukkadamPayouts.summary?.total_payout ?? 0) : fmt(totalMukkadamPay), color: '#7c3aed', bg: '#faf5ff', border: '#e9d5ff', emoji: '👷' },
+        ].map((c, i) => (
+          <div key={i} style={{ borderRadius: 12, padding: '14px 16px', background: c.bg, border: `1px solid ${c.border}`, boxShadow: S.shadowCard }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', color: c.color, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span>{c.emoji}</span>{c.label}
+            </div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: c.color, letterSpacing: '-1px' }}>{c.val}</div>
           </div>
-        </div>
-        {Object.entries(grp).map(([actName, acts]: [string, any[]]) => {
-          const flatActs = acts.flatMap((a: any) => a.is_split && a.splits?.length > 0 ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status })) : [a]);
-          return (
-            <GroupedActivitySection key={actName} actName={actName} acts={acts} actSubTab={actSubTab} 
-              totalArea={flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0)}
-              totalValue={acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0)}
-              unalloc={flatActs.filter((a: any) => a.allocation_status === 'pending').length}
-              ov30={0} ov7={0} ov1_7={0} onTime={0}
-              expandedActJob={expandedActJob} setExpandedActJob={setExpandedActJob} isAdmin={isAdmin}
-              handleUpdownComplete={handleUpdownComplete} maxWorkRows={jobsMaxWorkRows}
-              onAllocate={async (act: any, isoDate: string) => { setAllocDialog({ open: true, act, job: { job_id: act.job_id, farmer_name: act.farmer_name }, isoDate, mukkadams: [], loadingMukkadams: true }); await fetchJobsCapacity(isoDate, act); }}
-              onAllocateWithMukkadam={(act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => { setJobsHalfDayDialog({ open: true, jobId: act.job_id, act, mukkadam: workerRow.mukkadamObj, rate: workerRow.rate, availableWorkers: workerRow.availableWorkers, neededWorkers: 0, remainingArea, isSecondJob: slotsUsed >= 1, jobSlotsUsed: slotsUsed, targetDate: isoDate }); }}
-              jobNotes={jobNotes} onSuccess={fetchDataSilent}
-              onNote={(jobId: string, label: string) => { setJobsNoteJobId(jobId); setJobsNoteJobLabel(label); }}
-            />
-          );
-        })}
+        ))}
       </div>
-    );
+
+      {/* Margin row + view toggle */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderRadius: 10, background: '#fff', border: `1px solid ${S.stone200}`, marginBottom: 16, boxShadow: S.shadowSm }}>
+        <span style={{ fontSize: 12, color: S.stone500 }}>Gross Margin</span>
+        <span style={{ fontSize: 15, fontWeight: 800, color: margin >= 0 ? '#16a34a' : '#dc2626' }}>{fmt(margin)}</span>
+        <span style={{ fontSize: 11, color: S.stone400 }}>
+          ({totalValueDone > 0 ? Math.round((margin / totalValueDone) * 100) : 0}% of farmer value)
+        </span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          {([
+            { key: 'activities', label: '📋 By Activity' },
+            { key: 'mukkadams',  label: '👷 By Mukkadam' },
+          ] as const).map(v => (
+            <button key={v.key}
+              onClick={() => {
+                setCompletedView(v.key);
+                if (v.key === 'mukkadams' && !mukkadamPayouts && !mukkadamPayoutsLoading) {
+                  fetchMukkadamPayouts();
+                }
+              }}
+              style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+                border: `1px solid ${completedView === v.key ? S.brand : S.stone200}`,
+                background: completedView === v.key ? S.brand : '#fff',
+                color: completedView === v.key ? '#fff' : S.stone600 }}>
+              {v.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── VIEW: Mukkadams ── */}
+      {completedView === 'mukkadams' ? (
+        mukkadamPayoutsLoading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '48px 0' }}>
+            <RefreshCw size={24} style={{ color: S.brand, animation: 'spin 1s linear infinite' }} />
+          </div>
+        ) : !mukkadamPayouts ? (
+          <div style={{ textAlign: 'center', padding: '48px 0' }}>
+            <button onClick={fetchMukkadamPayouts}
+              style={{ padding: '10px 24px', borderRadius: 10, background: S.brand, color: '#fff', border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              Load Mukkadam Payouts
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {(mukkadamPayouts.mukkadams ?? []).map((mk: any) => {
+              const isExp = expandedMukkadam === String(mk.mukkadam_id);
+              return (
+                <div key={mk.mukkadam_id} style={{ background: '#fff', borderRadius: 14, border: `1px solid ${S.stone200}`, overflow: 'hidden', boxShadow: S.shadowCard }}>
+
+                  {/* Header */}
+                  <div onClick={() => setExpandedMukkadam(isExp ? null : String(mk.mukkadam_id))}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', cursor: 'pointer', background: isExp ? '#faf5ff' : '#fff', borderBottom: isExp ? `1px solid ${S.stone200}` : 'none' }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 10, background: '#faf5ff', color: '#7c3aed', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, border: '1px solid #e9d5ff' }}>
+                      {mkInitials(mk.mukkadam_name)}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: S.stone900 }}>👷 {mk.mukkadam_name}</div>
+                      <div style={{ fontSize: 11, color: S.stone400, marginTop: 1 }}>{mk.mobile} · {mk.total_jobs} job{mk.total_jobs !== 1 ? 's' : ''} completed</div>
+                    </div>
+                    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 16 }}>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700 }}>{Number(mk.total_area).toFixed(2)} ac</div>
+                        <div style={{ fontSize: 10, color: S.stone400 }}>Total Area</div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: '#7c3aed' }}>₹{Math.round(mk.total_payout).toLocaleString('en-IN')}</div>
+                        <div style={{ fontSize: 10, color: S.stone400 }}>Total Payout</div>
+                      </div>
+                      <div style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${isExp ? S.brand : S.stone200}`, background: isExp ? S.brand : '#fff', color: isExp ? '#fff' : S.stone400, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, transform: isExp ? 'rotate(180deg)' : 'none', transition: 'all 250ms' }}>▾</div>
+                    </div>
+                  </div>
+
+                  {/* Expanded job breakdown */}
+                  {isExp && (
+                    <div>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            {['Date', 'Job #', 'Farmer', 'Activity', 'Plot', 'Cluster', 'Area', 'Rate', 'Amount', 'Farmer OK', 'Allocated By'].map((h, i) => (
+                              <th key={i} style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: S.stone400, padding: '8px 12px', textAlign: i > 5 ? 'right' : 'left', borderBottom: `1px solid ${S.stone100}`, background: S.stone25, whiteSpace: 'nowrap' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(mk.jobs ?? []).slice().sort((a: any, b: any) => b.allocated_date?.localeCompare(a.allocated_date)).map((j: any, i: number) => (
+                            <tr key={j.allocation_id}
+                              style={{ background: i % 2 === 0 ? '#fafaf8' : '#fff' }}
+                              onMouseEnter={e => (e.currentTarget.style.background = '#faf5ff')}
+                              onMouseLeave={e => (e.currentTarget.style.background = i % 2 === 0 ? '#fafaf8' : '#fff')}>
+                              <td style={{ padding: '8px 12px', color: S.stone500, whiteSpace: 'nowrap' }}>{j.allocated_date?.slice(5).replace('-', ' ')}</td>
+                              <td style={{ padding: '8px 12px', fontFamily: S.mono, color: S.sky600 }}>#{j.job_id}</td>
+                              <td style={{ padding: '8px 12px', fontWeight: 600 }}>{j.farmer_name}</td>
+                              <td style={{ padding: '8px 12px', color: S.stone600 }}>{j.activity_name}</td>
+                              <td style={{ padding: '8px 12px', fontFamily: S.mono, color: S.stone500, fontSize: 11 }}>{j.plot_code || j.plot_name || '—'}</td>
+                              <td style={{ padding: '8px 12px', fontSize: 11, color: S.stone500 }}>{j.cluster_name || '—'}</td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>
+                                {j.actual_area_done ? (
+                                  <span>
+                                    {j.actual_area_done} ac
+                                    <span style={{ fontSize: 9, color: S.stone400, marginLeft: 3 }}>actual</span>
+                                  </span>
+                                ) : `${Number(j.area).toFixed(2)} ac`}
+                              </td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: S.mono, color: S.stone500 }}>₹{j.rate}/ac</td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: '#7c3aed' }}>₹{Math.round(j.amount).toLocaleString('en-IN')}</td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right' }}>
+                                {j.farmer_agreed === true  && <span style={{ fontSize: 10, color: '#16a34a', fontWeight: 700 }}>✅</span>}
+                                {j.farmer_agreed === false && <span style={{ fontSize: 10, color: '#dc2626', fontWeight: 700 }}>❌</span>}
+                                {j.farmer_agreed === null  && <span style={{ fontSize: 10, color: S.stone400 }}>—</span>}
+                              </td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right', fontSize: 11, color: S.stone400 }}>{j.allocated_by || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr style={{ borderTop: `2px solid ${S.stone200}`, background: '#faf5ff' }}>
+                            <td colSpan={6} style={{ padding: '8px 12px', fontWeight: 700 }}>Total</td>
+                            <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{Number(mk.total_area).toFixed(2)} ac</td>
+                            <td />
+                            <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 800, color: '#7c3aed' }}>₹{Math.round(mk.total_payout).toLocaleString('en-IN')}</td>
+                            <td colSpan={2} />
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )
+      ) : (
+        // ── VIEW: Activities ──
+        (() => {
+          const grouped: Record<string, any[]> = {};
+          displayActivities.forEach((a: any) => {
+            const k = a.activity_name || 'Unknown';
+            if (!grouped[k]) grouped[k] = [];
+            grouped[k].push(a);
+          });
+          return Object.entries(grouped).map(([actName, acts]) => {
+            const flatActs = acts.flatMap((a: any) =>
+              a.is_split && a.splits?.length > 0 ? a.splits.map((sp: any) => ({ ...a, ...sp })) : [a]
+            );
+            return (
+              <GroupedActivitySection key={actName} actName={actName} acts={acts} actSubTab={actSubTab}
+                filteredBase={filteredBase}
+                totalArea={flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0)}
+                totalValue={acts.reduce((s: number, a: any) => s + Number(a.total_price || 0), 0)}
+                unalloc={0} ov30={0} ov7={0} ov1_7={0}
+                onTime={flatActs.filter((a: any) =>
+                  a.allocations?.some((al: any) => al.work_status === 'completed') ||
+                  a.allocation_status === 'fully_allocated'
+                ).length}
+                expandedActJob={expandedActJob} setExpandedActJob={setExpandedActJob} isAdmin={isAdmin}
+                handleUpdownComplete={handleUpdownComplete} maxWorkRows={jobsMaxWorkRows}
+                onAllocate={async (act: any, isoDate: string) => {
+                  setAllocDialog({ open: true, act, job: { job_id: act.job_id, farmer_name: act.farmer_name }, isoDate, mukkadams: [], loadingMukkadams: true });
+                  await fetchJobsCapacity(isoDate, act);
+                }}
+                onAllocateWithMukkadam={(act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => {
+                  setJobsHalfDayDialog({ open: true, jobId: act.job_id, act, mukkadam: workerRow.mukkadamObj, rate: workerRow.rate, availableWorkers: workerRow.availableWorkers, neededWorkers: 0, remainingArea, isSecondJob: slotsUsed >= 1, jobSlotsUsed: slotsUsed, targetDate: isoDate });
+                }}
+                jobNotes={jobNotes} onSuccess={fetchDataSilent}
+                onNote={(jobId: string, label: string) => { setJobsNoteJobId(jobId); setJobsNoteJobLabel(label); }}
+              />
+            );
+          });
+        })()
+      )}
+    </div>
+  );
+}
+// ── DATA ISSUE tab ────────────────────────────────────────────────────
+if (actSubTab === 'data_issue') {
+
+  // Build jobId → { activity + unresolved notes } from filteredBase directly
+  const jobNoteMap: Record<string, { a: any; notes: any[] }> = {};
+  (filteredBase ?? baseActivities).forEach((a: any) => {
+    const unresolved = (jobNotes[a.job_id] ?? []).filter((n: any) => !n.is_resolved);
+    if (unresolved.length === 0) return;
+    if (!jobNoteMap[a.job_id]) {
+      jobNoteMap[a.job_id] = { a, notes: unresolved };
+    } else {
+      const existing = new Set(jobNoteMap[a.job_id].notes.map((n: any) => n.id));
+      unresolved.forEach((n: any) => { if (!existing.has(n.id)) jobNoteMap[a.job_id].notes.push(n); });
+    }
+  });
+
+  const jobEntries = Object.values(jobNoteMap);
+
+  if (jobEntries.length === 0) {
+    return <div style={{ textAlign: 'center', padding: '64px 0', color: '#16a34a', fontSize: 14, fontWeight: 600 }}>✅ No open data issues!</div>;
   }
 
+  const TAG_STYLES: Record<string, { bg: string; color: string; border: string; label: string }> = {
+    urgent:         { bg: '#fef2f2', color: '#dc2626', border: '#fecaca',  label: '🔴 Urgent'     },
+    important:      { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa',  label: '⚠️ Important'  },
+    mukkadam_issue: { bg: '#f0f9ff', color: '#0284c7', border: '#bae6fd',  label: '👷 Mukkadam'   },
+    farmer_issue:   { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0',  label: '🌾 Farmer'     },
+    sales:          { bg: '#faf5ff', color: '#7c3aed', border: '#e9d5ff',  label: '💼 Sales'      },
+    operations:     { bg: '#f8fafc', color: '#475569', border: '#cbd5e1',  label: '⚙️ Ops'        },
+    data_wrong:     { bg: '#fefce8', color: '#ca8a04', border: '#fde68a',  label: '📊 Data Wrong' },
+    price_mismatch: { bg: '#fff1f2', color: '#be123c', border: '#fecdd3',  label: '💰 Price'      },
+    team_charging:  { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe',  label: '⚡ Team'       },
+  };
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      {/* Banner */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, padding: '10px 16px', borderRadius: 10, background: '#fef3c7', border: '1px solid #fde68a' }}>
+        <span style={{ fontSize: 16 }}>📌</span>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>Data Issues — Jobs with Unresolved Notes</div>
+          <div style={{ fontSize: 11, color: '#6b7280' }}>
+            {jobEntries.length} job{jobEntries.length !== 1 ? 's' : ''} need attention · {jobEntries.reduce((s, e) => s + e.notes.length, 0)} open notes
+          </div>
+        </div>
+      </div>
+
+      {/* One card per job */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {jobEntries.map(({ a, notes }) => (
+          <div key={a.job_id} style={{ background: '#fff', borderRadius: 14, border: '1.5px solid #fecaca', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+
+            {/* Job header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: '#fef2f2', borderBottom: '1px solid #fecaca', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#dc2626', fontFamily: 'monospace' }}>Job #{a.job_id}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#374151' }}>👤 {a.farmer_name}</span>
+              <span style={{ fontSize: 11, color: '#6b7280' }}>🌿 {a.activity_name}</span>
+              {a.plot_name && <span style={{ fontSize: 11, color: '#6b7280' }}>📍 {a.plot_name}</span>}
+              {a.clusters?.[0]?.name && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', fontWeight: 600, border: '1px solid #bfdbfe' }}>🏘 {a.clusters[0].name}</span>}
+              {a.scheduled_date && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#fefce8', color: '#ca8a04', fontWeight: 600, border: '1px solid #fde68a' }}>📅 {a.scheduled_date.slice(5).replace('-', ' ')}</span>}
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700,
+                  background: a.allocation_status === 'pending' ? '#fef3c7' : '#f0fdf4',
+                  color: a.allocation_status === 'pending' ? '#92400e' : '#16a34a',
+                  border: `1px solid ${a.allocation_status === 'pending' ? '#fde68a' : '#bbf7d0'}` }}>
+                  {a.allocation_status}
+                </span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#374151' }}>{Number(a.total_area).toFixed(2)} ac</span>
+                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#fef2f2', color: '#dc2626', fontWeight: 700, border: '1px solid #fecaca' }}>
+                  {notes.length} open note{notes.length !== 1 ? 's' : ''}
+                </span>
+                <button
+                  onClick={() => { setJobsNoteJobId(a.job_id); setJobsNoteJobLabel(`${a.activity_name} – ${a.farmer_name}`); }}
+                  style={{ padding: '3px 10px', borderRadius: 7, fontSize: 10, fontWeight: 600, border: '1px solid #e9d5ff', background: '#f5f3ff', color: '#7c3aed', cursor: 'pointer', fontFamily: 'inherit' }}>
+                  + Note
+                </button>
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {notes.map((n: any) => (
+                <div key={n.id} style={{ borderRadius: 10, background: '#fff', border: '1px solid #fecaca', overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: '#fef2f2', borderBottom: '1px solid #fecaca', flexWrap: 'wrap' }}>
+                    {(n.mentions ?? []).length > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ fontSize: 10, color: '#6b7280' }}>@</span>
+                        {n.mentions.map((m: any) => (
+                          <span key={m.id} style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe' }}>
+                            {m.full_name || m.username}
+                          </span>
+                        ))}
+                        <span style={{ width: 1, height: 12, background: '#e5e7eb', margin: '0 4px' }} />
+                      </div>
+                    )}
+                    {(n.tags ?? []).map((tag: string) => {
+                      const ts = TAG_STYLES[tag] ?? { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb', label: tag };
+                      return <span key={tag} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ts.bg, color: ts.color, border: `1px solid ${ts.border}` }}>{ts.label}</span>;
+                    })}
+                    <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 700, color: '#fff' }}>
+                        {(n.author?.full_name || n.author?.username || '?').slice(0, 1).toUpperCase()}
+                      </div>
+                      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>{n.author?.full_name || n.author?.username}</span>
+                      <span style={{ fontSize: 10, color: '#9ca3af' }}>
+                        · {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                        {' '}{new Date(n.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  </div>
+                  {/* Note text */}
+                  <div style={{ padding: '8px 10px', fontSize: 13, color: '#111827', lineHeight: 1.6 }}>{n.text}</div>
+
+                  {/* ── Resolve footer ── */}
+                  <div style={{ padding: '6px 10px', borderTop: '1px solid #fee2e2', background: '#fafafa', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {resolveModalNoteId === n.id ? (
+                      <div style={{ display: 'flex', flex: 1, gap: 6 }}>
+                        <input
+                          autoFocus
+                          value={resolveText}
+                          onChange={e => setResolveText(e.target.value)}
+                          placeholder="How was it resolved?..."
+                          style={{ flex: 1, padding: '4px 8px', borderRadius: 7, border: '1px solid #bbf7d0', fontSize: 11, fontFamily: 'inherit', outline: 'none' }}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && resolveText.trim()) handleResolveNote(n.id, resolveText);
+                            if (e.key === 'Escape') { setResolveModalNoteId(null); setResolveText(''); }
+                          }}
+                        />
+                        <button
+                          onClick={() => handleResolveNote(n.id, resolveText)}
+                          disabled={!resolveText.trim() || resolvingNoteId === n.id}
+                          style={{ padding: '3px 10px', borderRadius: 7, fontSize: 10, fontWeight: 700, border: 'none', background: resolveText.trim() ? '#16a34a' : '#d1d5db', color: '#fff', cursor: resolveText.trim() ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
+                          {resolvingNoteId === n.id ? '...' : '✅ Done'}
+                        </button>
+                        <button
+                          onClick={() => { setResolveModalNoteId(null); setResolveText(''); }}
+                          style={{ padding: '3px 8px', borderRadius: 7, fontSize: 10, border: '1px solid #e5e7eb', background: '#fff', color: '#6b7280', cursor: 'pointer', fontFamily: 'inherit' }}>
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setResolveModalNoteId(n.id); setResolveText(''); }}
+                        style={{ marginLeft: 'auto', padding: '3px 10px', borderRadius: 7, fontSize: 10, fontWeight: 600, border: '1px solid #bbf7d0', background: '#f0fdf4', color: '#16a34a', cursor: 'pointer', fontFamily: 'inherit' }}>
+                        ✅ Mark Resolved
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
   // ── DEFAULT grouped view ─────────────────────────────────────────────
   const grouped: Record<string, any[]> = {};
   displayActivities.forEach((a: any) => {
@@ -5187,6 +5994,7 @@ allJobs={insightDayJobs}
  
         ): tab === 'plan' ? (
           <>
+          <SalesPerformance/>
       <AgroIntelUnified/>
           </>
         )  : null}
@@ -5878,8 +6686,8 @@ function MukkadamTimeline({ data }: { data: any }) {
     </div>
   );
 }
-function GroupedActivitySection({ actName,actSubTab, acts,ov1_7, totalArea, totalValue,onTime, unalloc, ov30, ov7, expandedActJob, setExpandedActJob, isAdmin, handleUpdownComplete, onAllocate, onAllocateWithMukkadam, onNote, maxWorkRows, onSuccess, jobNotes }:{
-   actName: string; acts: any[]; totalArea: number; totalValue: number;
+function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, totalArea, totalValue,onTime, unalloc, ov30, ov7, expandedActJob, setExpandedActJob, isAdmin, handleUpdownComplete, onAllocate, onAllocateWithMukkadam, onNote, maxWorkRows, onSuccess, jobNotes }:{
+   actName: string; acts: any[]; totalArea: number; totalValue: number; filteredBase: any[],
   unalloc: number; ov30: number; ov7: number; ov1_7:number;onTime: number;
   actSubTab?: string;
   expandedActJob: string | null; setExpandedActJob: (id: string | null) => void;
@@ -6001,77 +6809,131 @@ function GroupedActivitySection({ actName,actSubTab, acts,ov1_7, totalArea, tota
               const dotColor = isPending ? S.amber500 : isCompleted ? S.brand : S.sky600;
               const tdR: React.CSSProperties = { padding: '10px 14px', borderBottom: isExp ? 'none' : `1px solid ${S.stone100}`, verticalAlign: 'middle', fontSize: 12 };
 
+// if (actSubTab === 'data_issue') {
+//   // Build: jobId → { activity info + unresolved notes }
+//   const jobNoteMap: Record<string, { a: any; notes: any[] }> = {};
+//   (filteredBase ?? acts).forEach((a: any) => {
+//     const unresolved = (jobNotes[a.job_id] ?? []).filter((n: any) => !n.is_resolved);
+//     if (unresolved.length === 0) return;
+//     if (!jobNoteMap[a.job_id]) {
+//       jobNoteMap[a.job_id] = { a, notes: unresolved };
+//     } else {
+//       // merge notes — avoid duplicates
+//       const existing = new Set(jobNoteMap[a.job_id].notes.map((n: any) => n.id));
+//       unresolved.forEach((n: any) => { if (!existing.has(n.id)) jobNoteMap[a.job_id].notes.push(n); });
+//     }
+//   });
 
-              if (actSubTab === 'data_issue') {
-  return (
-    <tr key={a.activity_id}>
-      <td colSpan={11} style={{ padding: '0 0 8px 0', background: 'transparent', border: 'none' }}>
-        {rowNotes.map((n: any) => (
-          <div key={n.id} style={{ margin: '8px 16px 0', borderRadius: 12, background: n.is_resolved ? '#f0fdf4' : '#fff', border: `1.5px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, overflow: 'hidden' }}>
-            {/* Header: mentions → tags → resolved → author/time */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', background: n.is_resolved ? '#f0fdf4' : '#fef2f2', borderBottom: `1px solid ${n.is_resolved ? '#bbf7d0' : '#fecaca'}`, flexWrap: 'wrap' }}>
-              {(n.mentions ?? []).length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span style={{ fontSize: 10, color: '#6b7280' }}>@</span>
-                  {n.mentions.map((m: any) => (
-                    <span key={m.id} style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe' }}>
-                      {m.full_name || m.username}
-                    </span>
-                  ))}
-                  <span style={{ width: 1, height: 12, background: '#e5e7eb', margin: '0 4px' }} />
-                </div>
-              )}
-              {(n.tags ?? []).map((tag: string) => {
-                const TAG_STYLES: Record<string, { bg: string; color: string; border: string; label: string }> = {
-                  urgent:         { bg: '#fef2f2', color: '#dc2626', border: '#fecaca',  label: '🔴 Urgent'     },
-                  important:      { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa',  label: '⚠️ Important'  },
-                  mukkadam_issue: { bg: '#f0f9ff', color: '#0284c7', border: '#bae6fd',  label: '👷 Mukkadam'   },
-                  farmer_issue:   { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0',  label: '🌾 Farmer'     },
-                  sales:          { bg: '#faf5ff', color: '#7c3aed', border: '#e9d5ff',  label: '💼 Sales'      },
-                  operations:     { bg: '#f8fafc', color: '#475569', border: '#cbd5e1',  label: '⚙️ Ops'        },
-                  data_wrong:     { bg: '#fefce8', color: '#ca8a04', border: '#fde68a',  label: '📊 Data Wrong' },
-                  price_mismatch: { bg: '#fff1f2', color: '#be123c', border: '#fecdd3',  label: '💰 Price'      },
-                  team_charging:  { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe',  label: '⚡ Team'       },
-                };
-                const ts = TAG_STYLES[tag] ?? { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb', label: tag };
-                return <span key={tag} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ts.bg, color: ts.color, border: `1px solid ${ts.border}` }}>{ts.label}</span>;
-              })}
-              {n.is_resolved && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontWeight: 700, border: '1px solid #bbf7d0' }}>✅ Resolved</span>}
-              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}>
-                <div style={{ width: 20, height: 20, borderRadius: '50%', background: n.is_resolved ? '#16a34a' : '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff' }}>
-                  {(n.author?.full_name || n.author?.username || '?').slice(0, 1).toUpperCase()}
-                </div>
-                <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>{n.author?.full_name || n.author?.username}</span>
-                <span style={{ fontSize: 10, color: '#9ca3af' }}>
-                  · {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                  {' '}{new Date(n.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-            </div>
-            {/* Note text + job context */}
-            <div style={{ padding: '9px 12px' }}>
-              <div style={{ fontSize: 13, color: n.is_resolved ? '#9ca3af' : '#111827', lineHeight: 1.6, textDecoration: n.is_resolved ? 'line-through' : 'none' }}>{n.text}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>📋 Job #{a.job_id}</span>
-                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>🌿 {a.activity_name}</span>
-                <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>👤 {a.farmer_name}</span>
-                {a.plot_name && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#f3f4f6', color: '#374151', fontWeight: 600, border: '1px solid #e5e7eb' }}>📍 {a.plot_name}</span>}
-                {a.clusters?.[0]?.name && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#eff6ff', color: '#2563eb', fontWeight: 600, border: '1px solid #bfdbfe' }}>🏘 {a.clusters[0].name}</span>}
-                {a.scheduled_date && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 6, background: '#fefce8', color: '#ca8a04', fontWeight: 600, border: '1px solid #fde68a' }}>📅 {a.scheduled_date.slice(5).replace('-', ' ')}</span>}
-              </div>
-              {n.resolution_note && (
-                <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 11, color: '#15803d' }}>
-                  ✅ <strong>{n.resolved_by?.full_name || n.resolved_by?.username}</strong>: {n.resolution_note}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </td>
-    </tr>
-  );
-}
+//   const jobEntries = Object.values(jobNoteMap);
 
+//   if (jobEntries.length === 0) {
+//     return <div style={{ textAlign: 'center', padding: '64px 0', color: '#16a34a', fontSize: 14, fontWeight: 600 }}>✅ No open data issues!</div>;
+//   }
+
+//   const TAG_STYLES: Record<string, { bg: string; color: string; border: string; label: string }> = {
+//     urgent:         { bg: '#fef2f2', color: '#dc2626', border: '#fecaca',  label: '🔴 Urgent'     },
+//     important:      { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa',  label: '⚠️ Important'  },
+//     mukkadam_issue: { bg: '#f0f9ff', color: '#0284c7', border: '#bae6fd',  label: '👷 Mukkadam'   },
+//     farmer_issue:   { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0',  label: '🌾 Farmer'     },
+//     sales:          { bg: '#faf5ff', color: '#7c3aed', border: '#e9d5ff',  label: '💼 Sales'      },
+//     operations:     { bg: '#f8fafc', color: '#475569', border: '#cbd5e1',  label: '⚙️ Ops'        },
+//     data_wrong:     { bg: '#fefce8', color: '#ca8a04', border: '#fde68a',  label: '📊 Data Wrong' },
+//     price_mismatch: { bg: '#fff1f2', color: '#be123c', border: '#fecdd3',  label: '💰 Price'      },
+//     team_charging:  { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe',  label: '⚡ Team'       },
+//   };
+
+//   return (
+//     <div style={{ marginBottom: 24 }}>
+
+//       {/* Header banner */}
+//       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, padding: '10px 16px', borderRadius: 10, background: '#fef3c7', border: '1px solid #fde68a' }}>
+//         <span style={{ fontSize: 16 }}>📌</span>
+//         <div>
+//           <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>Data Issues — Jobs with Unresolved Notes</div>
+//           <div style={{ fontSize: 11, color: '#6b7280' }}>{jobEntries.length} job{jobEntries.length !== 1 ? 's' : ''} need attention · {jobEntries.reduce((s, e) => s + e.notes.length, 0)} open notes</div>
+//         </div>
+//         {/* Resolve all button placeholder */}
+//       </div>
+
+//       {/* One card per job */}
+//       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+//         {jobEntries.map(({ a, notes }) => (
+//           <div key={a.job_id} style={{ background: '#fff', borderRadius: 14, border: '1.5px solid #fecaca', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+
+//             {/* Job header */}
+//             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: '#fef2f2', borderBottom: '1px solid #fecaca', flexWrap: 'wrap' }}>
+//               <span style={{ fontSize: 11, fontWeight: 700, color: '#dc2626', fontFamily: 'monospace' }}>Job #{a.job_id}</span>
+//               <span style={{ fontSize: 11, fontWeight: 600, color: '#374151' }}>👤 {a.farmer_name}</span>
+//               <span style={{ fontSize: 11, color: '#6b7280' }}>🌿 {a.activity_name}</span>
+//               {a.plot_name && <span style={{ fontSize: 11, color: '#6b7280' }}>📍 {a.plot_name}</span>}
+//               {a.clusters?.[0]?.name && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', fontWeight: 600, border: '1px solid #bfdbfe' }}>🏘 {a.clusters[0].name}</span>}
+//               {a.scheduled_date && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#fefce8', color: '#ca8a04', fontWeight: 600, border: '1px solid #fde68a' }}>📅 {a.scheduled_date.slice(5).replace('-', ' ')}</span>}
+
+//               {/* Status + area */}
+//               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+//                 <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700,
+//                   background: a.allocation_status === 'pending' ? '#fef3c7' : '#f0fdf4',
+//                   color: a.allocation_status === 'pending' ? '#92400e' : '#16a34a',
+//                   border: `1px solid ${a.allocation_status === 'pending' ? '#fde68a' : '#bbf7d0'}` }}>
+//                   {a.allocation_status}
+//                 </span>
+//                 <span style={{ fontSize: 11, fontWeight: 700, color: '#374151' }}>{Number(a.total_area).toFixed(2)} ac</span>
+//                 <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#fef2f2', color: '#dc2626', fontWeight: 700, border: '1px solid #fecaca' }}>
+//                   {notes.length} open note{notes.length !== 1 ? 's' : ''}
+//                 </span>
+//                 {/* Quick action — add note */}
+//                 <button onClick={() => { setJobsNoteJobId(a.job_id); setJobsNoteJobLabel(`${a.activity_name} – ${a.farmer_name}`); }}
+//                   style={{ padding: '3px 10px', borderRadius: 7, fontSize: 10, fontWeight: 600, border: '1px solid #e9d5ff', background: '#f5f3ff', color: '#7c3aed', cursor: 'pointer', fontFamily: 'inherit' }}>
+//                   + Note
+//                 </button>
+//               </div>
+//             </div>
+
+//             {/* Notes */}
+//             <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+//               {notes.map((n: any) => (
+//                 <div key={n.id} style={{ borderRadius: 10, background: '#fff', border: '1px solid #fecaca', overflow: 'hidden' }}>
+
+//                   {/* Note header: mentions → tags → author/time */}
+//                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: '#fef2f2', borderBottom: '1px solid #fecaca', flexWrap: 'wrap' }}>
+//                     {(n.mentions ?? []).length > 0 && (
+//                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+//                         <span style={{ fontSize: 10, color: '#6b7280' }}>@</span>
+//                         {n.mentions.map((m: any) => (
+//                           <span key={m.id} style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe' }}>
+//                             {m.full_name || m.username}
+//                           </span>
+//                         ))}
+//                         <span style={{ width: 1, height: 12, background: '#e5e7eb', margin: '0 4px' }} />
+//                       </div>
+//                     )}
+//                     {(n.tags ?? []).map((tag: string) => {
+//                       const ts = TAG_STYLES[tag] ?? { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb', label: tag };
+//                       return <span key={tag} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ts.bg, color: ts.color, border: `1px solid ${ts.border}` }}>{ts.label}</span>;
+//                     })}
+//                     <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}>
+//                       <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 700, color: '#fff' }}>
+//                         {(n.author?.full_name || n.author?.username || '?').slice(0, 1).toUpperCase()}
+//                       </div>
+//                       <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>{n.author?.full_name || n.author?.username}</span>
+//                       <span style={{ fontSize: 10, color: '#9ca3af' }}>
+//                         · {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+//                         {' '}{new Date(n.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+//                       </span>
+//                     </div>
+//                   </div>
+
+//                   {/* Note text */}
+//                   <div style={{ padding: '8px 10px', fontSize: 13, color: '#111827', lineHeight: 1.6 }}>{n.text}</div>
+//                 </div>
+//               ))}
+//             </div>
+//           </div>
+//         ))}
+//       </div>
+//     </div>
+//   );
+// }
  
               return (
                 <React.Fragment key={a.activity_id}>

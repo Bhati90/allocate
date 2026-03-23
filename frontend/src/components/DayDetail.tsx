@@ -133,19 +133,33 @@ onAllocationDelete: (allocation: Allocation) => void;
 }
 // ── helper types ──────────────────────────────────────────────────────────────
 interface AllocationWithReport extends Allocation {
-  report_submitted?: boolean;
-  allows_second_job?:boolean;
-  actual_area_done?: number | null;
-  actual_crew_size?: number | null;
-  actual_start_time?: string | null;
-  actual_end_time?: string | null;
-  report_submitted_at?: string | null;
-  farmer_agreed?: boolean | null;
-  farmer_response_at?: string | null;
-  farmer_dispute_reason?: string | null;
-  use_actual_for_settlement?: boolean;
-  is_carry_forward?: boolean;
-  notes?: string;
+  // Day-end report
+  report_submitted?:      boolean;
+  report_submitted_at?:   string | null;
+  actual_area_done?:      number | null;
+  actual_crew_size?:      number | null;
+  actual_start_time?:     string | null;
+  actual_end_time?:       string | null;
+
+  // Farmer verification
+  farmer_agreed?:              boolean | null;
+  farmer_response_at?:         string | null;
+  farmer_dispute_reason?:      string | null;
+  use_actual_for_settlement?:  boolean;
+
+  // Allocation flags
+  allows_second_job?:  boolean;
+  is_carry_forward?:   boolean;
+  notes?:              string;
+
+  // Plot + cluster context
+  plot_name?:    string | null;
+  plot_code?:    string | null;
+  cluster_name?: string | null;
+
+  // Status
+  work_status?:    string | null;
+  payment_status?: string | null;
 }
 // simple example implementation
 type CapBarProps = {

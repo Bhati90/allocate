@@ -21,6 +21,371 @@ import concurrent.futures
 PRESIGN_API_URL = 'https://demand.bharatintelligence.ai/chat/presign_obj_api/'
 PRESIGN_TOKEN = 'c432208626a204d2d8de3d00b29f948eae61ebdb'
 from django.core.cache import cache
+
+
+"""
+Add this view to your tender/views.py (or a new file and wire it in urls.py).
+
+URL: GET /api/sales-performance/?cluster_id=&date_from=&date_to=
+"""
+
+from datetime import datetime, timedelta
+from collections import defaultdict
+from django.db.models import Q
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+
+# ── helpers ───────────────────────────────────────────────────────────
+
+def _pct(n, d):
+    return round(n / d * 100, 1) if d > 0 else 0
+
+
+def _bucket_label(diff):
+    if diff <= 0:   return 'on_time'
+    if diff == 1:   return 'late_1d'
+    if diff == 2:   return 'late_2d'
+    if diff == 3:   return 'late_3d'
+    if diff <= 6:   return 'late_4_6d'
+    if diff <= 10:  return 'late_7_10d'
+    if diff <= 15:  return 'late_11_15d'
+    if diff <= 30:  return 'late_16_30d'
+    return 'late_30p'
+
+
+BUCKET_ORDER = [
+    'on_time', 'late_1d', 'late_2d', 'late_3d',
+    'late_4_6d', 'late_7_10d', 'late_11_15d', 'late_16_30d', 'late_30p',
+]
+
+BUCKET_META = {
+    'on_time':      {'label': '✅ On Time (≤ 0d)',  'severity': 'green'},
+    'late_1d':      {'label': '🟢 Late 1d',          'severity': 'lime'},
+    'late_2d':      {'label': '🟡 Late 2d',          'severity': 'yellow'},
+    'late_3d':      {'label': '🟡 Late 3d',          'severity': 'gold'},
+    'late_4_6d':    {'label': '🟠 Late 4–6d',        'severity': 'orange'},
+    'late_7_10d':   {'label': '🔶 Late 7–10d',       'severity': 'deep_orange'},
+    'late_11_15d':  {'label': '🔴 Late 11–15d',      'severity': 'red'},
+    'late_16_30d':  {'label': '🔴 Late 16–30d',      'severity': 'red'},
+    'late_30p':     {'label': '💀 Late 30d+',         'severity': 'critical'},
+}
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def sales_performance(request):
+    from tender.models import JobActivity  # adjust import to your app
+
+    cluster_id = request.query_params.get('cluster_id')
+    date_from  = request.query_params.get('date_from')
+    date_to    = request.query_params.get('date_to')
+
+    qs = JobActivity.objects.filter(
+        is_lost=False,
+        total_area__gt=0,
+        sales_date__isnull=False,
+        allocations__work_status='completed',
+    ).distinct().select_related(
+        'activity', 'job__farmer', 'plot'
+    ).prefetch_related('allocations', 'plot__clusters', 'job__clusters')
+
+    if cluster_id:
+        qs = qs.filter(
+            Q(plot__clusters__id=cluster_id) |
+            Q(job__clusters__id=cluster_id)
+        ).distinct()
+
+    if date_from:
+        qs = qs.filter(sales_date__gte=date_from)
+    if date_to:
+        qs = qs.filter(sales_date__lte=date_to)
+
+    # ── Build deduplicated item list ──────────────────────────────────
+    seen = {}
+    for ja in qs:
+        completed_alloc = ja.allocations.filter(
+            work_status='completed'
+        ).order_by('allocated_date').first()
+        if not completed_alloc:
+            continue
+
+        if completed_alloc.actual_end_time:
+            completed_date = completed_alloc.actual_end_time.date()
+        elif completed_alloc.report_submitted_at:
+            completed_date = completed_alloc.report_submitted_at.date()
+        elif completed_alloc.allocated_date:
+            completed_date = completed_alloc.allocated_date
+        else:
+            continue
+
+        sales_date = ja.sales_date
+        diff       = (completed_date - sales_date).days
+
+        cluster_name = (
+            ja.plot.clusters.first().name if ja.plot and ja.plot.clusters.exists() else
+            ja.job.clusters.first().name  if ja.job.clusters.exists() else '—'
+        )
+
+        item = {
+            'ja_id':          ja.id,
+            'job_id':         str(ja.job.job_id),
+            'farmer':         ja.job.farmer.farmer_name,
+            'activity':       ja.activity.name,
+            'plot':           ja.plot.name if ja.plot else '—',
+            'cluster':        cluster_name,
+            'scheduled_date': str(ja.scheduled_date) if ja.scheduled_date else '—',
+            'sales_date':     str(sales_date),
+            'completed_date': str(completed_date),
+            'diff_days':      diff,
+            'total_area':     float(ja.total_area),
+            'bucket':         _bucket_label(diff),
+        }
+
+        dedup_key = (str(ja.job.job_id), str(ja.plot_id or ''), ja.activity.name)
+        if dedup_key not in seen or diff < seen[dedup_key]['diff_days']:
+            seen[dedup_key] = item
+
+    all_items = list(seen.values())
+    counted   = len(all_items)
+    if counted == 0:
+        return Response({
+            'counted': 0,
+            'kpis': {},
+            'buckets': [],
+            'rollup': [],
+            'weekly_trend': [],
+            'cluster_breakdown': [],
+            'activity_heatmap': [],
+            'farmer_performance': [],
+            'recent_items': [],
+        })
+
+    total_area = sum(i['total_area'] for i in all_items)
+
+    # ── Bucket counts ─────────────────────────────────────────────────
+    buckets: dict = defaultdict(list)
+    for item in all_items:
+        buckets[item['bucket']].append(item)
+
+    on_time_items = buckets['on_time']
+    late_1_3_items = buckets['late_1d'] + buckets['late_2d'] + buckets['late_3d']
+
+    ot_count   = len(on_time_items)
+    w3_count   = ot_count + len(late_1_3_items)
+    ot_area    = sum(i['total_area'] for i in on_time_items)
+    w3_area    = ot_area + sum(i['total_area'] for i in late_1_3_items)
+    avg_days   = round(sum(i['diff_days'] for i in all_items) / counted, 1)
+
+    # ── KPIs ──────────────────────────────────────────────────────────
+    kpis = {
+        'total_activities': counted,
+        'total_area':       round(total_area, 1),
+        'on_time_pct':      _pct(ot_count, counted),
+        'within_3d_pct':    _pct(w3_count, counted),
+        'on_time_area_pct': _pct(ot_area, total_area),
+        'w3_area_pct':      _pct(w3_area, total_area),
+        'avg_days_late':    avg_days,
+    }
+
+    # ── Bucket breakdown ──────────────────────────────────────────────
+    bucket_rows = []
+    for key in BUCKET_ORDER:
+        items = buckets[key]
+        n     = len(items)
+        ac    = sum(i['total_area'] for i in items)
+        avg_d = round(sum(i['diff_days'] for i in items) / n, 1) if n else 0
+        area_wtd = round(
+            sum(i['diff_days'] * i['total_area'] for i in items) / ac, 1
+        ) if ac > 0 else 0
+        bucket_rows.append({
+            'key':        key,
+            **BUCKET_META[key],
+            'count':      n,
+            'pct':        _pct(n, counted),
+            'avg_days':   avg_d,
+            'area_ac':    round(ac, 1),
+            'area_wtd_avg': area_wtd,
+        })
+
+    # ── Rollup (grouped ranges) ───────────────────────────────────────
+    rollup_groups = [
+        ('on_time',    '✅ On Time (≤ 0d)',  'green',       ['on_time']),
+        ('late_1_3d',  '🟢 Late 1–3d',       'lime',        ['late_1d', 'late_2d', 'late_3d']),
+        ('late_4_6d',  '🟠 Late 4–6d',       'orange',      ['late_4_6d']),
+        ('late_7_10d', '🔶 Late 7–10d',      'deep_orange', ['late_7_10d']),
+        ('late_11_15d','🔴 Late 11–15d',     'red',         ['late_11_15d']),
+        ('late_16_30d','🔴 Late 16–30d',     'red',         ['late_16_30d']),
+        ('late_30p',   '💀 Late 30d+',        'critical',    ['late_30p']),
+    ]
+    rollup_rows = []
+    for key, label, severity, bucket_keys in rollup_groups:
+        items = [i for bk in bucket_keys for i in buckets[bk]]
+        n     = len(items)
+        ac    = sum(i['total_area'] for i in items)
+        avg_d = round(sum(i['diff_days'] for i in items) / n, 1) if n else 0
+        rollup_rows.append({
+            'key': key, 'label': label, 'severity': severity,
+            'count': n, 'pct': _pct(n, counted),
+            'avg_days': avg_d, 'area_ac': round(ac, 1),
+        })
+
+    # ── Weekly trend ─────────────────────────────────────────────────
+    week_stats: dict = defaultdict(lambda: {
+        'total': 0, 'ot': 0, 'w3': 0,
+        'area': 0.0, 'ot_area': 0.0, 'diff_sum': 0,
+    })
+    for item in all_items:
+        sd = datetime.strptime(item['sales_date'], '%Y-%m-%d').date()
+        wk = sd - timedelta(days=sd.weekday())
+        week_stats[wk]['total'] += 1
+        week_stats[wk]['area']  += item['total_area']
+        week_stats[wk]['diff_sum'] += item['diff_days']
+        if item['diff_days'] <= 0:
+            week_stats[wk]['ot'] += 1
+            week_stats[wk]['ot_area'] += item['total_area']
+        if item['diff_days'] <= 3:
+            week_stats[wk]['w3'] += 1
+
+    weekly_trend = []
+    prev_ot = prev_w3 = None
+    for wk in sorted(week_stats.keys()):
+        s    = week_stats[wk]
+        ot_p = _pct(s['ot'], s['total'])
+        w3_p = _pct(s['w3'], s['total'])
+        ot_a = _pct(s['ot_area'], s['area']) if s['area'] else 0
+        avg_d = round(s['diff_sum'] / s['total'], 1) if s['total'] else 0
+        weekly_trend.append({
+            'week_start': str(wk),
+            'week_label': wk.strftime('%d %b'),
+            'total':      s['total'],
+            'on_time':    s['ot'],
+            'within_3d':  s['w3'],
+            'on_time_pct': ot_p,
+            'within_3d_pct': w3_p,
+            'on_time_area_pct': ot_a,
+            'avg_days_late': avg_d,
+            'area_ac': round(s['area'], 1),
+            'wow_ot':  round(ot_p - prev_ot, 1) if prev_ot is not None else None,
+            'wow_w3':  round(w3_p - prev_w3, 1) if prev_w3 is not None else None,
+        })
+        prev_ot, prev_w3 = ot_p, w3_p
+
+    # ── Cluster breakdown ────────────────────────────────────────────
+    cs: dict = defaultdict(lambda: {
+        'ot': 0, 'l1_3': 0, 'l4_6': 0, 'l7_10': 0,
+        'l11_15': 0, 'l16_30': 0, 'l30p': 0,
+        'area': 0.0, 'ot_area': 0.0, 'w3_area': 0.0,
+    })
+    bucket_to_group = {
+        'on_time': 'ot',
+        'late_1d': 'l1_3', 'late_2d': 'l1_3', 'late_3d': 'l1_3',
+        'late_4_6d': 'l4_6', 'late_7_10d': 'l7_10',
+        'late_11_15d': 'l11_15', 'late_16_30d': 'l16_30', 'late_30p': 'l30p',
+    }
+    for item in all_items:
+        cl  = item['cluster']
+        grp = bucket_to_group[item['bucket']]
+        cs[cl][grp] += 1
+        cs[cl]['area'] += item['total_area']
+        if grp == 'ot':
+            cs[cl]['ot_area'] += item['total_area']
+        if grp in ('ot', 'l1_3'):
+            cs[cl]['w3_area'] += item['total_area']
+
+    cluster_breakdown = []
+    for cl, s in sorted(cs.items(), key=lambda x: -(
+        sum(v for k, v in x[1].items() if k not in ('area','ot_area','w3_area'))
+    )):
+        tot   = sum(v for k, v in s.items() if k not in ('area','ot_area','w3_area'))
+        ot_p  = _pct(s['ot'], tot)
+        w3_p  = _pct(s['ot'] + s['l1_3'], tot)
+        ot_a  = _pct(s['ot_area'], s['area']) if s['area'] else 0
+        cluster_breakdown.append({
+            'cluster': cl, 'total': tot,
+            'on_time': s['ot'], 'late_1_3d': s['l1_3'],
+            'late_4_6d': s['l4_6'], 'late_7_10d': s['l7_10'],
+            'late_11_15d': s['l11_15'], 'late_16_30d': s['l16_30'],
+            'late_30p': s['l30p'],
+            'on_time_pct': ot_p, 'within_3d_pct': w3_p,
+            'area_ac': round(s['area'], 1), 'on_time_area_pct': ot_a,
+        })
+
+    # ── Activity heatmap ─────────────────────────────────────────────
+    ca: dict = defaultdict(lambda: defaultdict(
+        lambda: {'total': 0, 'ot': 0, 'area': 0.0}))
+    for item in all_items:
+        ca[item['cluster']][item['activity']]['total'] += 1
+        ca[item['cluster']][item['activity']]['area']  += item['total_area']
+        if item['diff_days'] <= 0:
+            ca[item['cluster']][item['activity']]['ot'] += 1
+
+    activities_list = sorted({i['activity'] for i in all_items})
+    heatmap_rows = []
+    for cl in sorted(ca.keys()):
+        row = {'cluster': cl, 'activities': {}}
+        cl_total = cl_ot = 0
+        for act in activities_list:
+            s = ca[cl][act]
+            cl_total += s['total']
+            cl_ot    += s['ot']
+            row['activities'][act] = {
+                'total': s['total'],
+                'ot': s['ot'],
+                'pct': _pct(s['ot'], s['total']) if s['total'] else None,
+            }
+        row['overall_ot_pct'] = _pct(cl_ot, cl_total) if cl_total else 0
+        heatmap_rows.append(row)
+
+    # ── Farmer performance ───────────────────────────────────────────
+    fs: dict = defaultdict(lambda: {
+        'total': 0, 'ot': 0, 'w3': 0,
+        'area': 0.0, 'ot_area': 0.0, 'diff_sum': 0, 'clusters': set(),
+    })
+    for item in all_items:
+        f = item['farmer']
+        fs[f]['total']    += 1
+        fs[f]['area']     += item['total_area']
+        fs[f]['diff_sum'] += item['diff_days']
+        fs[f]['clusters'].add(item['cluster'])
+        if item['diff_days'] <= 0:
+            fs[f]['ot'] += 1
+            fs[f]['ot_area'] += item['total_area']
+        if item['diff_days'] <= 3:
+            fs[f]['w3'] += 1
+
+    farmer_performance = []
+    for fname, s in sorted(fs.items(), key=lambda x: _pct(x[1]['ot'], x[1]['total'])):
+        ot_p  = _pct(s['ot'], s['total'])
+        w3_p  = _pct(s['w3'], s['total'])
+        avg_d = round(s['diff_sum'] / s['total'], 1) if s['total'] else 0
+        farmer_performance.append({
+            'farmer': fname,
+            'clusters': sorted(s['clusters']),
+            'total': s['total'],
+            'on_time': s['ot'],
+            'on_time_pct': ot_p,
+            'within_3d': s['w3'],
+            'within_3d_pct': w3_p,
+            'avg_days_late': avg_d,
+            'area_ac': round(s['area'], 1),
+            'late_area': round(s['area'] - s['ot_area'], 1),
+        })
+
+    return Response({
+        'counted':            counted,
+        'total_area':         round(total_area, 1),
+        'kpis':               kpis,
+        'buckets':            bucket_rows,
+        'rollup':             rollup_rows,
+        'weekly_trend':       weekly_trend,
+        'cluster_breakdown':  cluster_breakdown,
+        'activity_heatmap':   heatmap_rows,
+        'activities_list':    activities_list,
+        'farmer_performance': farmer_performance,
+    })
+
+
 def get_presigned_urls_batch(s3_keys):
     """
     ✅ Get multiple presigned URLs in parallel

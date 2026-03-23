@@ -13,7 +13,7 @@ from .views import (
     MukkadamActivityRateViewSet,add_weekly_payment,UserProfileView,UserListAPIView,mukkadam_payment_overview,verify_misc_cost,
     PlanningViewSet,search_farmers_for_cluster,search_mukkadams_for_cluster,add_farmer_plots_to_cluster,add_mukkadam_to_cluster,
     PlotViewSet,tender_dashboard,list_all_settlements,pay_mukkadam_settlement,add_misc_cost,mukkadam_misc_no_job,
-    get_cluster_plots,get_districts,get_states,get_talukas,get_villages,UserSearchView,cluster_insights,
+    get_cluster_plots,get_districts,get_states,get_talukas,get_villages,UserSearchView,cluster_insights,mukkadam_payout_summary,
     insert_activity_between,farmer_all_jobs_billing,farmer_job_billing,record_farmer_payment,payment_overview,
     reset_cluster_activity_rate,get_cluster_info,global_activity_catalog,JobNoteViewSet,activity_dashboard,
     search_villages,farmer_work_verification_detail,tender_activity_count_from_api,mark_allocation_complete,
@@ -27,7 +27,7 @@ from django.views.decorators.csrf import csrf_exempt
 from .insight import ClusterInsightsView,GlobalInsightsView,GlobalDayInsightsView
 router = DefaultRouter()
 
-
+from .utils import sales_performance
 from .datechange import reschedule_activities_view
 
 from .updown import updown_allocation_list,updown_complete_allocation
@@ -75,6 +75,9 @@ path('api/settlements/', list_all_settlements, name='list-settlements'),
     ),
 
 
+    path('api/sales-performance/', sales_performance),
+
+path('api/mukkadam-payout-summary/', mukkadam_payout_summary),
    
 path('api/mukkadam/<int:mukkadam_id>/updown-allocations/',
        updown_allocation_list, name='updown-allocation-list'),

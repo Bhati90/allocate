@@ -1,7 +1,7 @@
 // config.ts
 // export const API_BASE_URL = 'http://localhost:8002/tender';
 export const API_BASE_URL = 'https://tender.bharatintelligence.ai/tender';
-// export const API_BASE_URL = 'https://allocate-l7fb.onrender.com/tender';
+// export const API_BASE_URL = 'https://furtive-chrissy-reparably.ngrok-free.dev/tender';
 
 // src/utils/refreshEvents.ts
 

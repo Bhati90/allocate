@@ -4300,7 +4300,7 @@ useEffect(() => {
       loadAllocations(currentMonth), // ✅ explicit month
       loadLeaves(currentMonth),       // ✅ explicit month
       loadMukkadams(),
-      loadOverload(),
+      // loadOverload(),
       loadPotential(),
     ]);
   };

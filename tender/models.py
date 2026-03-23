@@ -562,6 +562,17 @@ class JobActivity(models.Model):
         related_name='activities'
     )
 
+    # models.py — JobActivity
+    original_gap_days = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Gap in days from the previous activity in sequence at the time this "
+            "activity was created. Used for cascade recalculation after a move."
+        )
+    )
+
+
     # In JobActivity model, add this field:
     is_manually_moved = models.BooleanField(default=False)  # ✅ True = moved via H button  
 
