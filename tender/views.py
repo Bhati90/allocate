@@ -2389,8 +2389,10 @@ def activity_dashboard(request):
             area = alloc.actual_area_done or alloc.allocated_area or Decimal('0')
             mukkadam_est = (area * Decimal(str(alloc.mukkadam_rate or 0))).quantize(Decimal('0.01'))
             total_mukkadam_est += mukkadam_est
+            farmer_amount = (area * Decimal(str(alloc.farmer_rate or 0))).quantize(Decimal('0.01'))
             alloc_data.append({
                 'allocation_id':     alloc.id,
+                'farmer_amount': float(farmer_amount),
                 'mukkadam_id':       alloc.mukkadam.mukkadam_id,
                 'mukkadam_name':     alloc.mukkadam.mukkadam_name,
                 'mukkadam_mobile':   alloc.mukkadam.mobile_numbers,
@@ -2706,6 +2708,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             a.id,
         ))
 
+
+
         # Find current activity's position in the sequence
         try:
             current_idx = next(i for i, a in enumerate(all_activities) if a.id == activity.id)
@@ -2718,58 +2722,58 @@ class JobActivityViewSet(viewsets.ModelViewSet):
         # ── Rule 1: Block if an unallocated predecessor exists ───────────────────
         # Exception: predecessor is cancelled (allocation_status doesn't have 'cancelled'
         # but is_lost=True covers it; also check allocation_status='pending' with is_lost=False)
-        for pred in predecessors:
-            if pred.allocation_status == 'pending' and not pred.is_lost:
-                return Response(
-                    {
-                        'error': (
-                            f'Cannot move "{activity.activity.name}" — '
-                            f'"{pred.activity.name}" (scheduled {pred.scheduled_date}) '
-                            f'is not yet allocated or cancelled. Allocate or cancel it first.'
-                        )
-                    },
-                    status=400,
-                )
+        # for pred in predecessors:
+        #     if pred.allocation_status == 'pending' and not pred.is_lost:
+        #         return Response(
+        #             {
+        #                 'error': (
+        #                     f'Cannot move "{activity.activity.name}" — '
+        #                     f'"{pred.activity.name}" (scheduled {pred.scheduled_date}) '
+        #                     f'is not yet allocated or cancelled. Allocate or cancel it first.'
+        #                 )
+        #             },
+        #             status=400,
+        #         )
 
         # ── Rule 4: Block if new_date is before the nearest allocated predecessor ─
-        nearest_alloc_pred = None
-        for pred in reversed(predecessors):
-            if pred.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                nearest_alloc_pred = pred
-                break
+        # nearest_alloc_pred = None
+        # for pred in reversed(predecessors):
+        #     if pred.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+        #         nearest_alloc_pred = pred
+        #         break
 
-        if nearest_alloc_pred and new_date_obj <= nearest_alloc_pred.scheduled_date:
-            return Response(
-                {
-                    'error': (
-                        f'New date {new_date_obj} is on or before '
-                        f'"{nearest_alloc_pred.activity.name}" '
-                        f'(allocated on {nearest_alloc_pred.scheduled_date}). '
-                        f'Move or cancel that allocation first.'
-                    )
-                },
-                status=400,
-            )
+        # if nearest_alloc_pred and new_date_obj <= nearest_alloc_pred.scheduled_date:
+        #     return Response(
+        #         {
+        #             'error': (
+        #                 f'New date {new_date_obj} is on or before '
+        #                 f'"{nearest_alloc_pred.activity.name}" '
+        #                 f'(allocated on {nearest_alloc_pred.scheduled_date}). '
+        #                 f'Move or cancel that allocation first.'
+        #             )
+        #         },
+        #         status=400,
+        #     )
 
         # ── Rule 4: Block if new_date is after the nearest allocated successor ────
-        nearest_alloc_succ = None
-        for succ in successors:
-            if succ.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                nearest_alloc_succ = succ
-                break
+        # nearest_alloc_succ = None
+        # for succ in successors:
+        #     if succ.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+        #         nearest_alloc_succ = succ
+        #         break
 
-        if nearest_alloc_succ and new_date_obj >= nearest_alloc_succ.scheduled_date:
-            return Response(
-                {
-                    'error': (
-                        f'New date {new_date_obj} is on or after '
-                        f'"{nearest_alloc_succ.activity.name}" '
-                        f'(allocated on {nearest_alloc_succ.scheduled_date}). '
-                        f'Move that allocation further first.'
-                    )
-                },
-                status=400,
-            )
+        # if nearest_alloc_succ and new_date_obj >= nearest_alloc_succ.scheduled_date:
+        #     return Response(
+        #         {
+        #             'error': (
+        #                 f'New date {new_date_obj} is on or after '
+        #                 f'"{nearest_alloc_succ.activity.name}" '
+        #                 f'(allocated on {nearest_alloc_succ.scheduled_date}). '
+        #                 f'Move that allocation further first.'
+        #             )
+        #         },
+        #         status=400,
+        #     )
 
         # ── Snapshot original gaps BEFORE any writes ─────────────────────────────
         # For each successor, we need to know its gap from the activity
@@ -5726,46 +5730,46 @@ class AllocationViewSet(viewsets.ModelViewSet):
         successors   = all_activities[current_idx + 1:]
 
         # ── Rule 4: Block if new_date <= nearest allocated predecessor ────────────
-        nearest_alloc_pred = None
-        for pred in reversed(predecessors):
-            if pred.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                nearest_alloc_pred = pred
-                break
+        # nearest_alloc_pred = None
+        # for pred in reversed(predecessors):
+        #     if pred.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+        #         nearest_alloc_pred = pred
+        #         break
 
-        if nearest_alloc_pred and new_date <= nearest_alloc_pred.scheduled_date:
-            return Response(
-                {
-                    "error": (
-                        f"New date {new_date} is on or before "
-                        f'"{nearest_alloc_pred.activity.name}" '
-                        f"(allocated on {nearest_alloc_pred.scheduled_date}). "
-                        f"Move or cancel that allocation first."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        # if nearest_alloc_pred and new_date <= nearest_alloc_pred.scheduled_date:
+        #     return Response(
+        #         {
+        #             "error": (
+        #                 f"New date {new_date} is on or before "
+        #                 f'"{nearest_alloc_pred.activity.name}" '
+        #                 f"(allocated on {nearest_alloc_pred.scheduled_date}). "
+        #                 f"Move or cancel that allocation first."
+        #             )
+        #         },
+        #         status=status.HTTP_400_BAD_REQUEST,
+        #     )
 
         # ── Rule 4: Block if new_date >= nearest allocated successor ─────────────
         # Exclude the current job_act itself when scanning successors —
         # a partial move may leave the original job_act allocated too.
-        nearest_alloc_succ = None
-        for succ in successors:
-            if succ.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                nearest_alloc_succ = succ
-                break
+        # nearest_alloc_succ = None
+        # for succ in successors:
+        #     if succ.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+        #         nearest_alloc_succ = succ
+        #         break
 
-        if nearest_alloc_succ and new_date >= nearest_alloc_succ.scheduled_date:
-            return Response(
-                {
-                    "error": (
-                        f"New date {new_date} is on or after "
-                        f'"{nearest_alloc_succ.activity.name}" '
-                        f"(allocated on {nearest_alloc_succ.scheduled_date}). "
-                        f"Move that allocation further first."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        # if nearest_alloc_succ and new_date >= nearest_alloc_succ.scheduled_date:
+        #     return Response(
+        #         {
+        #             "error": (
+        #                 f"New date {new_date} is on or after "
+        #                 f'"{nearest_alloc_succ.activity.name}" '
+        #                 f"(allocated on {nearest_alloc_succ.scheduled_date}). "
+        #                 f"Move that allocation further first."
+        #             )
+        #         },
+        #         status=status.HTTP_400_BAD_REQUEST,
+        #     )
 
         # ── Snapshot gap_map before writes ───────────────────────────────────────
         gap_map = {}
@@ -7517,6 +7521,9 @@ def tender_dashboard(request):
         'mukkadams': mukkadams_data,
         'farmers':   farmers_data,
     })
+
+
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])

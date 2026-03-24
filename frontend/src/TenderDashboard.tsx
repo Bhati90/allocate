@@ -1573,7 +1573,6 @@ interface Activity {
   allocations: Allocation[];  // ✅ NEW
 }
 
-
 const Si = {
   brand: '#059669',
   brandLight: '#d1fae5',
@@ -1604,6 +1603,306 @@ const Si = {
   shadowSm: '0 1px 2px 0 rgb(0 0 0 / 0.05)',
   shadowCard: '0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)',
 };
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TenderFunnelStats — computes live from dashboard farmer data
+// ─────────────────────────────────────────────────────────────────────────────
+const PRUNING_RE_F = /pruning|छाटणी/i;
+const isPruningAct = (name = '') => PRUNING_RE_F.test(name);
+
+const fmtRupeeF = (n: number) =>
+  n >= 1_000_000 ? `₹${(n / 1_000_000).toFixed(2)}M`
+  : n >= 1_000   ? `₹${(n / 1_000).toFixed(1)}K`
+  : `₹${Math.round(n).toLocaleString('en-IN')}`;
+const fmtAcresF = (n: number) => `${n % 1 === 0 ? n : n.toFixed(1)} ac`;
+const fmtNumF   = (n: number) => n.toLocaleString('en-IN');
+
+const FUNNEL_PALETTE = {
+  overview:   { accent: '#c06b00', light: '#fff9f3', mid: '#fde8c8', border: '#f6c87a' },
+  completed:  { accent: '#16a34a', light: '#f0fdf4', mid: '#d4edda', border: '#bbf7d0' },
+  inProgress: { accent: '#2563eb', light: '#eff6ff', mid: '#cce5ff', border: '#bfdbfe' },
+  pending:    { accent: '#dc2626', light: '#fef2f2', mid: '#f8d7da', border: '#fecaca' },
+} as const;
+
+function computeFunnelStats(farmers: any[]) {
+  const zero = () => ({ farmers:0, jobs:0, activities:0, pruningAcres:0, allAcres:0, worth:0, mukkadamAmt:0 });
+  const ov = { ...zero(), bookingValue:0, collected:0, balance:0 };
+  const co = zero(), ip = zero(), pe = zero();
+
+  // ── Activity dedup key: IDENTICAL to header logic ──
+  // header: activityKeys.add(`${j.job_id}-${p.plot_id}-${a.name}`) where p is the OUTER plot loop
+  // So we iterate plots_by_cluster → plots → jobs → activities, using the PLOT's id as the key part
+
+  // Global dedup sets (so same activity never counted twice across clusters)
+  const actKeySeen  = new Set<string>();  // for overview count
+  const jobSeen     = new Set<string>();  // for job dedup per farmer
+  const farmerJobActStatus = new Map<string, { // job_id → actKey → merged status+data
+    area:number; price:number; pruning:boolean; status:string; allocs:any[]; worth:number; mukkadamAmt:number
+  }>();
+
+  const STATUS_RANK: Record<string,number> = {
+    not_allocated:0, pending:0, partially_allocated:1,
+    fully_allocated:2, in_progress:3, completed:4,
+  };
+
+  for (const farmer of farmers) {
+    ov.farmers++;
+    ov.bookingValue += farmer.payment_summary?.total_amount ?? 0;
+    ov.collected    += farmer.payment_summary?.advance_paid ?? 0;
+    ov.balance      += farmer.payment_summary?.balance      ?? 0;
+
+    // Per-farmer tracking
+    const farmerJobsSeen = new Set<string>();
+    // actKey → {area, price, pruning, allocs, worstStatus}
+    const actMap = new Map<string, { area:number; price:number; pruning:boolean; allocs:any[]; statuses:string[] }>();
+
+    // Iterate exactly like the header: plots_by_cluster → plots → jobs → activities
+    for (const cl of farmer.plots_by_cluster ?? []) {
+      for (const pl of cl.plots ?? []) {
+        const plotId = pl.plot_id ?? pl.id ?? null;
+
+        for (const job of pl.jobs ?? []) {
+          farmerJobsSeen.add(job.job_id);
+
+          for (const a of job.activities ?? []) {
+            if (!a.total_area || Number(a.total_area) <= 0) continue;
+            // Same key as header
+            // Use || as separator — safe since job_id/plotId/name never contain ||
+            const key = `${job.job_id}||${plotId}||${a.name}`;
+            actKeySeen.add(key); // for ov.activities (matches header exactly)
+
+            if (!actMap.has(key)) {
+              actMap.set(key, {
+                area:     Number(a.total_area)  || 0,
+                price:    Number(a.total_price) || 0,
+                pruning:  isPruningAct(a.name),
+                allocs:   [...(a.allocations ?? [])],
+                statuses: [a.allocation_status || 'not_allocated'],
+              });
+            } else {
+              const ex = actMap.get(key)!;
+              ex.area     += Number(a.total_area)  || 0;
+              ex.price    += Number(a.total_price) || 0;
+              ex.allocs.push(...(a.allocations ?? []));
+              ex.statuses.push(a.allocation_status || 'not_allocated');
+            }
+          }
+        }
+      }
+    }
+
+    // ov.jobs = unique jobs for this farmer
+    ov.jobs += farmerJobsSeen.size;
+
+    // Now classify each unique activity
+    ov.activities += actMap.size;
+
+    let farmerDone = false, farmerWip = false;
+    // job → whether all its acts are done
+    const jobActStatus = new Map<string, { allDone:boolean; anyWip:boolean; anyStarted:boolean }>();
+
+    for (const [key, act] of actMap.entries()) {
+      // key = `${job_id}||${plotId}||${actName}`
+      const jobId = key.split('||')[0];
+
+      // Resolve merged status — use WORST (lowest rank) across splits
+      const worstStatus = act.statuses.reduce((worst, s) =>
+        (STATUS_RANK[s] ?? 0) < (STATUS_RANK[worst] ?? 0) ? s : worst
+      , 'completed');
+
+      const allAllocsComplete = act.allocs.length > 0 && act.allocs.every((al:any) => al.work_status === 'completed');
+      const hasWipAlloc       = act.allocs.some((al:any) => al.work_status === 'in_progress');
+
+      if (!jobActStatus.has(jobId)) jobActStatus.set(jobId, { allDone:true, anyWip:false, anyStarted:false });
+      const jst = jobActStatus.get(jobId)!;
+
+      if (worstStatus === 'completed' || allAllocsComplete) {
+        co.activities++; co.allAcres += act.area;
+        if (act.pruning) co.pruningAcres += act.area;
+        co.worth       += act.price;
+        co.mukkadamAmt += act.allocs.reduce((s:number,al:any)=>s+(Number(al.farmer_amount)||0),0);
+        farmerDone = true; jst.anyStarted = true;
+
+      } else if (worstStatus==='in_progress'||worstStatus==='partially_allocated'||worstStatus==='fully_allocated'||hasWipAlloc) {
+        ip.activities++; ip.allAcres += act.area;
+        if (act.pruning) ip.pruningAcres += act.area;
+        ip.worth       += act.price;
+        ip.mukkadamAmt += act.allocs.reduce((s:number,al:any)=>s+(Number(al.farmer_amount)||0),0);
+        farmerWip = true; jst.allDone = false; jst.anyWip = true; jst.anyStarted = true;
+
+      } else {
+        pe.activities++; pe.allAcres += act.area;
+        if (act.pruning) pe.pruningAcres += act.area;
+        pe.worth += act.price;
+        jst.allDone = false;
+      }
+
+      // ov acres
+      ov.allAcres += act.area;
+      if (act.pruning) ov.pruningAcres += act.area;
+    }
+
+    // Job counts
+    let jDone=0, jWip=0, jPend=0;
+    for (const [, jst] of jobActStatus.entries()) {
+      if (jst.allDone && jst.anyStarted) jDone++;
+      else if (jst.anyWip || jst.anyStarted) jWip++;
+      else jPend++;
+    }
+    co.jobs += jDone; ip.jobs += jWip; pe.jobs += jPend;
+
+    if (farmerDone || farmerWip) co.farmers++;
+    if (farmerWip)               ip.farmers++;
+    if (!farmerDone && !farmerWip && farmerJobsSeen.size > 0) pe.farmers++;
+  }
+
+  return { overview:ov, completed:co, inProgress:ip, pending:pe };
+}
+
+const FUNNEL_TH: React.CSSProperties = {
+  padding:'8px 14px', fontSize:10, fontWeight:700,
+  textTransform:'uppercase', letterSpacing:'.7px', color:S.stone400,
+  textAlign:'center', whiteSpace:'nowrap',
+  borderBottom:`1px solid ${S.stone100}`,
+  position:'sticky', top:0, zIndex:2,
+};
+const FUNNEL_TD: React.CSSProperties = {
+  padding:'10px 14px', fontSize:12, fontWeight:600,
+  textAlign:'center', whiteSpace:'nowrap',
+  color:S.stone800, borderBottom:`1px solid ${S.stone100}`,
+};
+
+type FunnelColDef = { h:string; v:string; money?:boolean };
+function FunnelBandRow({ pk, icon, title, cols }: { pk: keyof typeof FUNNEL_PALETTE; icon:string; title:string; cols:FunnelColDef[] }) {
+  const p = FUNNEL_PALETTE[pk];
+  return (
+    <>
+      <tr>
+        <td colSpan={cols.length+1} style={{ padding:'6px 16px', background:p.mid, borderLeft:`4px solid ${p.accent}`, borderTop:`2px solid ${p.border}`, borderBottom:`1px solid ${p.border}` }}>
+          <span style={{ fontSize:11, fontWeight:800, color:p.accent, letterSpacing:'.3px' }}>{icon}&nbsp;&nbsp;{title}</span>
+        </td>
+      </tr>
+      <tr>
+        <th style={{ ...FUNNEL_TH, width:8, background:p.light, borderLeft:`4px solid ${p.accent}` }} />
+        {cols.map((c,i) => (
+          <th key={i} style={{ ...FUNNEL_TH, background:p.light, color:c.money?p.accent:S.stone400, fontWeight:c.money?800:700 }}>{c.h}</th>
+        ))}
+      </tr>
+      <tr>
+        <td style={{ background:'#fff', borderLeft:`4px solid ${p.accent}`, borderBottom:`1px solid ${S.stone100}`, padding:0 }} />
+        {cols.map((c,i) => (
+          <td key={i} style={{ ...FUNNEL_TD, background:'#fff', color:c.money?p.accent:S.stone800, fontSize:c.money?13:12, fontWeight:c.money?800:600 }}>{c.v}</td>
+        ))}
+      </tr>
+    </>
+  );
+}
+
+function TenderFunnelStats({ farmers, summary }: { farmers: any[]; summary: any }) {
+  const [collapsed, setCollapsed] = React.useState(false);
+  const { overview:ov, completed:co, inProgress:ip, pending:pe } = React.useMemo(() => computeFunnelStats(farmers), [farmers]);
+
+  // Overview row: jobs/activities/acres from backend summary; pruning computed from farmer data
+  const ovCols: FunnelColDef[] = [
+    { h:'Farmers',                v:fmtNumF(summary?.total_farmers      ?? 0)         },
+    { h:'Jobs',                   v:fmtNumF(summary?.total_tender_jobs  ?? 0)         },
+    { h:'Activities',             v:fmtNumF(summary?.total_activities   ?? 0)         },
+    { h:'Acres (Pruning / 1st)', v:fmtAcresF(ov.pruningAcres)                        },
+    { h:'Acres (All Activities)',v:fmtAcresF(summary?.total_acres       ?? 0)         },
+    { h:'Booking Value',          v:fmtRupeeF(summary?.total_booking_value ?? 0), money:true },
+    { h:'Collected Amount',       v:fmtRupeeF(summary?.total_advance_paid  ?? 0), money:true },
+    { h:'Balance Due',            v:fmtRupeeF(summary?.total_balance       ?? 0), money:true },
+  ];
+  // Chip pills also from summary
+  const chipFarmers = summary?.total_farmers     ?? 0;
+  const chipJobs    = summary?.total_tender_jobs ?? 0;
+  const chipValue   = summary?.total_booking_value ?? 0;
+  const coCols: FunnelColDef[] = [
+    { h:'Farmers (attended)',       v:fmtNumF(co.farmers)         },
+    { h:'Jobs Completed',           v:fmtNumF(co.jobs)            },
+    { h:'Activities Completed',     v:fmtNumF(co.activities)      },
+    { h:'Acres (Pruning / 1st)',    v:fmtAcresF(co.pruningAcres)  },
+    { h:'Acres (All) Completed',    v:fmtAcresF(co.allAcres)      },
+    { h:'Worth of Work',            v:fmtRupeeF(co.worth),        money:true },
+    { h:'Mukadam Paid',             v:fmtRupeeF(co.mukkadamAmt),  money:true },
+    { h:'Transport Spend',          v:'—' },
+  ];
+  const ipCols: FunnelColDef[] = [
+    { h:'Farmers (ongoing)',           v:fmtNumF(ip.farmers)         },
+    { h:'Jobs (In Progress)',          v:fmtNumF(ip.jobs)            },
+    { h:'Activities (In Progress)',    v:fmtNumF(ip.activities)      },
+    { h:'Acres (Pruning / 1st)',       v:fmtAcresF(ip.pruningAcres)  },
+    { h:'Acres (All) In Progress',     v:fmtAcresF(ip.allAcres)      },
+    { h:'Worth of Work (In Progress)', v:fmtRupeeF(ip.worth),        money:true },
+    { h:'Mukadam Payable',             v:fmtRupeeF(ip.mukkadamAmt),  money:true },
+    { h:'',                            v:'—' },
+  ];
+  const peCols: FunnelColDef[] = [
+    { h:'Farmers (unattended)',     v:fmtNumF(pe.farmers)         },
+    { h:'Jobs (Yet to Start)',      v:fmtNumF(pe.jobs)            },
+    { h:'Activities Yet to Start',  v:fmtNumF(pe.activities)      },
+    { h:'Acres (Pruning / 1st)',    v:fmtAcresF(pe.pruningAcres)  },
+    { h:'Acres (All) Pending',      v:fmtAcresF(pe.allAcres)      },
+    { h:'Worth of Work Pending',    v:fmtRupeeF(pe.worth),        money:true },
+    { h:'Mukadam Earnings Pending', v:fmtRupeeF(pe.mukkadamAmt),  money:true },
+    { h:'',                         v:'—' },
+  ];
+
+  return (
+    <div style={{ padding:'0 24px 20px 24px' }}>
+      <div style={{ background:'#fff', borderRadius:18, boxShadow:S.shadowCard, overflow:'hidden', border:`1.5px solid ${S.stone200}` }}>
+        {/* Title bar */}
+        <div onClick={()=>setCollapsed(c=>!c)} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'11px 20px', background:'linear-gradient(180deg,#fafaf9 0%,#f7f6f4 100%)', borderBottom:`2px solid ${S.stone200}`, cursor:'pointer', userSelect:'none' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <span style={{ fontSize:14 }}>📊</span>
+            <span style={{ fontSize:12, fontWeight:700, textTransform:'uppercase', letterSpacing:'.8px', color:S.stone400 }}>Tender Funnel</span>
+            {[
+              { label:`${fmtNumF(chipFarmers)} Farmers`, ...FUNNEL_PALETTE.overview  },
+              { label:`${fmtNumF(chipJobs)} Jobs`,       ...FUNNEL_PALETTE.inProgress },
+              { label:fmtRupeeF(chipValue),              ...FUNNEL_PALETTE.completed  },
+            ].map((chip,i)=>(
+              <span key={i} style={{ fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:999, background:chip.mid, color:chip.accent, border:`1px solid ${chip.border}` }}>{chip.label}</span>
+            ))}
+          </div>
+          <span style={{ width:22, height:22, borderRadius:6, border:`1px solid ${S.stone200}`, background:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, color:S.stone400, transform:collapsed?'rotate(-90deg)':'none', transition:'transform 200ms' }}>▾</span>
+        </div>
+
+        {/* Table */}
+        {!collapsed && (
+          <div style={{ overflowX:'auto' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', tableLayout:'auto' }}>
+              <tbody>
+                {/* OVERVIEW */}
+                <tr>
+                  <td colSpan={ovCols.length+1} style={{ padding:'6px 16px', background:FUNNEL_PALETTE.overview.mid, borderLeft:`4px solid ${FUNNEL_PALETTE.overview.accent}`, borderBottom:`1px solid ${FUNNEL_PALETTE.overview.border}` }}>
+                    <span style={{ fontSize:11, fontWeight:800, color:FUNNEL_PALETTE.overview.accent, letterSpacing:'.3px' }}>📋&nbsp;&nbsp;Overview — All Farmers</span>
+                  </td>
+                </tr>
+                <tr>
+                  <th style={{ ...FUNNEL_TH, width:8, background:FUNNEL_PALETTE.overview.light, borderLeft:`4px solid ${FUNNEL_PALETTE.overview.accent}` }} />
+                  {ovCols.map((c,i)=>(<th key={i} style={{ ...FUNNEL_TH, background:FUNNEL_PALETTE.overview.light, color:c.money?FUNNEL_PALETTE.overview.accent:S.stone400, fontWeight:c.money?800:700 }}>{c.h}</th>))}
+                </tr>
+                <tr>
+                  <td style={{ background:'#fff', borderLeft:`4px solid ${FUNNEL_PALETTE.overview.accent}`, borderBottom:`1px solid ${S.stone100}`, padding:0 }} />
+                  {ovCols.map((c,i)=>(<td key={i} style={{ ...FUNNEL_TD, background:'#fff', color:c.money?FUNNEL_PALETTE.overview.accent:S.stone800, fontSize:c.money?13:12, fontWeight:c.money?800:600 }}>{c.v}</td>))}
+                </tr>
+
+                <tr><td colSpan={99} style={{ height:8, background:S.stone50 }} /></tr>
+                <FunnelBandRow pk="completed"  icon="✅" title="As of Today — Completed"     cols={coCols} />
+                <tr><td colSpan={99} style={{ height:8, background:S.stone50 }} /></tr>
+                <FunnelBandRow pk="inProgress" icon="🔄" title="In Progress / Allocated"     cols={ipCols} />
+                <tr><td colSpan={99} style={{ height:8, background:S.stone50 }} /></tr>
+                <FunnelBandRow pk="pending"    icon="⏳" title="Pending — Yet to Start"      cols={peCols} />
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface FarmerActivityFiltersProps {
   activeFilters: string[];
@@ -6042,6 +6341,9 @@ allJobs={insightDayJobs}
   ) : (
     // ── ALL OTHER SUBTABS: existing table ──
     <>
+      {/* ── Tender Funnel Stats ── */}
+      <TenderFunnelStats farmers={subTabFilteredFarmers} summary={displaySummary ?? data?.summary} />
+
       {/* ── Activity Status Filter ── */}
       <div style={{ padding: '0 24px 16px 24px' }}>
         <FarmerActivityFilters
