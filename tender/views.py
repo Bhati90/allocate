@@ -885,9 +885,76 @@ def payment_overview(request):
                 'webhook_status':    None,
             })
 
+    # ── 4b. Partial farmers — some plots done but not all ────────────────
+    # Collect all farmer+activity combos that have SOME completed area
+    # but are below the expected total (so they didn't make it into farmer_list)
+    for (farmer_id, act_name), g in completed_groups.items():
+        expected  = expected_area_map.get((farmer_id, act_name), 0)
+        completed = float(g['total_area'])
+
+        # Skip if already fully done (already in farmer_list) or no area at all
+        if expected <= 0 or completed <= 0:
+            continue
+        if completed >= expected - AREA_TOLERANCE:
+            continue  # fully done — already captured above
+
+        # This farmer has partial completion
+        # Count how many unique plots are done vs expected
+        completed_plots = len(g['plots'])  # plots that have a completed allocation
+        # Total plots = expected_area / avg_plot_area (rough) — use job query instead
+        total_plots_qs = JobActivity.objects.filter(
+            job__farmer__farmer_id=farmer_id,
+            activity__name=act_name,
+            total_area__gt=0,
+        ).count()
+        total_plots = max(total_plots_qs, completed_plots)
+        pending_plots = max(0, total_plots - completed_plots)
+
+        amount = float(
+            (g['total_area'] * Decimal(str(g['rate']))).quantize(Decimal('0.01'))
+        )
+
+        # Expected full amount
+        full_amount = float(
+            (Decimal(str(expected)) * Decimal(str(g['rate']))).quantize(Decimal('0.01'))
+        )
+        pending_amount = round(full_amount - amount, 2)
+
+        farmer_list.append({
+            'farmer_id':        farmer_id,
+            'farmer_name':      g['farmer_name'],
+            'phone':            g['phone'],
+            'cluster_id':       g['cluster_id'],
+            'cluster_name':     g['cluster_name'],
+            'activity':         act_name,
+            'rate':             g['rate'],
+            'plots':            sorted(g['plots']),
+            'n_plots':          total_plots,
+            'completed_plots':  completed_plots,
+            'total_plots':      total_plots,
+            'pending_plots':    pending_plots,
+            'acres':            completed,
+            'amount':           amount,
+            'completed_amount': amount,
+            'job_value':        full_amount,
+            'pending_amount':   pending_amount,
+            'mukkadam':         g['mukkadam'],
+            'job_id':           g['job_id'],
+            'completed_date':   str(g['latest_date']) if g['latest_date'] else None,
+            'status':           'partial',
+            'bill_status':      None,
+            'expected_payment': None,
+            'days_since_billed': None,
+            'billed_date':      None,
+            'balance_due':      0,
+            'sent_by':          None,
+            'webhook_status':   None,
+        })
+
     # ── 5. Pipeline counts ────────────────────────────────────────────────
     ready_list    = [f for f in farmer_list if f['status'] == 'ready_to_bill']
     billed_list   = [f for f in farmer_list if f['status'] == 'billed']
+    partial_list  = [f for f in farmer_list if f['status'] == 'partial']
     overdue_list  = [f for f in farmer_list if f['expected_payment'] == 'overdue']
     thisweek_list = [f for f in farmer_list if f['expected_payment'] == 'this_week']
     nextweek_list = [f for f in farmer_list if f['expected_payment'] == 'next_week']
@@ -985,6 +1052,10 @@ def payment_overview(request):
                 'count':  len(ready_list),
                 'amount': sum(f['amount'] for f in ready_list),
                 'plots':  sum(f['n_plots'] for f in ready_list),
+            },
+            'partial': {
+                'count':  len(partial_list),
+                'amount': sum(f['completed_amount'] for f in partial_list),
             },
             'bills_sent': {
                 'count':  len(billed_list),
@@ -2354,6 +2425,7 @@ def activity_dashboard(request):
                 'allocation_status':  a.allocation_status,
                 'scheduled_date':     str(a.scheduled_date) if a.scheduled_date else None,
                 'days_until':         days_until,
+                'sales_date': str(a.sales_date) if a.sales_date else None,
                 'total_area':         float(a.total_area),
                 'allocated_area':     float(a.allocated_area),
                 'remaining_area':     float(a.remaining_area),
@@ -2425,6 +2497,7 @@ def activity_dashboard(request):
                 'activity_id':       a.id,
                 'scheduled_date':    str(a.scheduled_date) if a.scheduled_date else None,
                 'total_area':        float(a.total_area),
+                'sales_date': str(a.sales_date) if a.sales_date else None,
                 'allocated_area':    float(a.allocated_area),
                 'remaining_area':    float(a.remaining_area),
                 'allocation_status': a.allocation_status,
@@ -6862,11 +6935,18 @@ from django.db.models import Prefetch, Sum
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def tender_dashboard(request):
+    from datetime import date, timedelta
+    
     cluster_id     = request.query_params.get('cluster_id')
     cluster_id_int = int(cluster_id) if cluster_id else None
     selected_date  = request.query_params.get('date')
+    
+    # ── NEW: Activity-based filters ──────────────────────────────────
+    activity_filters = request.query_params.getlist('activity_filters')  # Can be multiple
+    # Possible values: completed, in_progress, due_today, due_tomorrow, 
+    #                  overdue_3plus, overdue_4_6, overdue_7_10
 
-    # ============ MUKKADAMS ============delete
+    # ============ MUKKADAMS ============
     mukkadams_qs = Mukkadam.objects.all().prefetch_related(
         'clusters',
         'cluster_assignments__cluster',
@@ -6915,6 +6995,27 @@ def tender_dashboard(request):
     )
 
     last_alloc_map: dict = {a.mukkadam_id: a for a in last_allocs}
+
+    # ── Batch TODAY's job per mukkadam (if selected_date is today) ────────
+    today_alloc_map: dict = {}
+    from datetime import date as _date
+    _today_str = str(_date.today())
+    _lookup_date = selected_date if selected_date else _today_str
+    today_allocs = Allocation.objects.filter(
+        mukkadam__in=mukkadams_qs,
+        allocated_date=_lookup_date,
+    ).select_related(
+        'mukkadam',
+        'job_activity__activity',
+        'job_activity__plot',
+        'job_activity__job__farmer',
+        'cluster',
+    ).order_by('mukkadam_id', '-id')
+
+    for ta in today_allocs:
+        mid = ta.mukkadam_id
+        if mid not in today_alloc_map:   # keep first (latest) per mukkadam
+            today_alloc_map[mid] = ta
 
     mukkadams_data = []
     for m in mukkadams_qs:
@@ -6977,18 +7078,40 @@ def tender_dashboard(request):
         if last_alloc:
             plot   = last_alloc.job_activity.plot   if last_alloc.job_activity else None
             farmer = last_alloc.job_activity.job.farmer if (last_alloc.job_activity and last_alloc.job_activity.job) else None
+            # activity from job_activity relation
+            last_act = last_alloc.job_activity.activity if last_alloc.job_activity and hasattr(last_alloc.job_activity, 'activity') else None
             last_location = {
                 'date':           str(last_alloc.allocated_date) if last_alloc.allocated_date else None,
                 'farmer_name':    farmer.farmer_name if farmer else None,
-          # Get location from last_alloc's cluster (most accurate work location)
-        'farmer_village':  last_alloc.cluster.village  if last_alloc.cluster else None,
-        'farmer_taluka':   last_alloc.cluster.taluka   if last_alloc.cluster else None,
-        'farmer_district': last_alloc.cluster.district if last_alloc.cluster else None,
+                # Farmer location from cluster (most accurate work location)
+                'farmer_village':  last_alloc.cluster.village  if last_alloc.cluster else None,
+                'farmer_taluka':   last_alloc.cluster.taluka   if last_alloc.cluster else None,
+                'farmer_district': last_alloc.cluster.district if last_alloc.cluster else None,
                 'plot_name':      plot.name       if plot else None,
                 'plot_code':      plot.plot_code  if plot else None,
                 'cluster_name':   last_alloc.cluster.name if last_alloc.cluster else None,
                 'village':        getattr(plot, 'village', None) if plot else None,
                 'taluka':         getattr(plot, 'taluka',  None) if plot else None,
+                'activity_name':  last_act.name if last_act else None,  # NEW
+            }
+
+        # ── Build today_job ───────────────────────────────────────────────
+        today_alloc = today_alloc_map.get(m.mukkadam_id)
+        today_job = None
+        if today_alloc:
+            ta_ja     = today_alloc.job_activity
+            ta_plot   = ta_ja.plot   if ta_ja else None
+            ta_farmer = ta_ja.job.farmer if (ta_ja and ta_ja.job) else None
+            ta_act    = ta_ja.activity   if ta_ja and hasattr(ta_ja, 'activity') else None
+            today_job = {
+                'date':             str(today_alloc.allocated_date),
+                'farmer_name':      ta_farmer.farmer_name if ta_farmer else None,
+                'farmer_village':   today_alloc.cluster.village  if today_alloc.cluster else None,
+                'farmer_taluka':    today_alloc.cluster.taluka   if today_alloc.cluster else None,
+                'farmer_district':  today_alloc.cluster.district if today_alloc.cluster else None,
+                'plot_code':        ta_plot.plot_code if ta_plot else None,
+                'cluster_name':     today_alloc.cluster.name if today_alloc.cluster else None,
+                'activity_name':    ta_act.name if ta_act else None,
             }
 
         mukkadams_data.append({
@@ -6996,7 +7119,8 @@ def tender_dashboard(request):
             'name':             m.mukkadam_name,
             'mobile':           m.mobile_numbers,
             'crew_size':        m.crew_size,
-            'last_location': last_location,
+            'last_location':    last_location,
+            'today_job':        today_job,  # NEW
             'max_crew_capacity': m.max_crew_capacity,
             'location': {
                 'state':    m.state,
@@ -7041,7 +7165,14 @@ def tender_dashboard(request):
             queryset=Job.objects.filter(booking_type='tender').prefetch_related(
                 Prefetch(
                     'activities',
-                    queryset=JobActivity.objects.select_related('activity', 'plot')
+                    queryset=JobActivity.objects.select_related('activity', 'plot').prefetch_related(
+                        Prefetch(
+                            'allocations',
+                            queryset=Allocation.objects.filter(
+                                status__in=['scheduled', 'in_progress', 'completed']
+                            ).select_related('mukkadam')
+                        )
+                    )
                 ),
                 'booking__payments'
             )
@@ -7050,6 +7181,65 @@ def tender_dashboard(request):
 
     if cluster_id:
         farmers_qs = farmers_qs.filter(clusters__id=cluster_id)
+
+    # ── NEW: Apply activity filters ──────────────────────────────────
+    if activity_filters:
+        from django.db.models import Q
+        today = date.today()
+        
+        filter_q = Q()
+        
+        for filter_type in activity_filters:
+            if filter_type == 'completed':
+                # Farmers with at least one completed activity
+                filter_q |= Q(
+                    jobs__activities__allocation_status='completed'
+                )
+            
+            elif filter_type == 'in_progress':
+                # Farmers with at least one activity that has in_progress allocations
+                filter_q |= Q(
+                    jobs__activities__allocations__work_status='in_progress'
+                )
+            
+            elif filter_type == 'due_today':
+                filter_q |= Q(
+                    jobs__activities__scheduled_date=today
+                )
+            
+            elif filter_type == 'due_tomorrow':
+                filter_q |= Q(
+                    jobs__activities__scheduled_date=today + timedelta(days=1)
+                )
+            
+            elif filter_type == 'overdue_3plus':
+                # 3 or more days overdue
+                cutoff_date = today - timedelta(days=3)
+                filter_q |= Q(
+                    jobs__activities__scheduled_date__lte=cutoff_date,
+                    jobs__activities__allocation_status__in=['not_allocated', 'partially_allocated']
+                )
+            
+            elif filter_type == 'overdue_4_6':
+                # 4-6 days overdue
+                start_date = today - timedelta(days=6)
+                end_date = today - timedelta(days=4)
+                filter_q |= Q(
+                    jobs__activities__scheduled_date__range=(start_date, end_date),
+                    jobs__activities__allocation_status__in=['not_allocated', 'partially_allocated']
+                )
+            
+            elif filter_type == 'overdue_7_10':
+                # 7-10 days overdue
+                start_date = today - timedelta(days=10)
+                end_date = today - timedelta(days=7)
+                filter_q |= Q(
+                    jobs__activities__scheduled_date__range=(start_date, end_date),
+                    jobs__activities__allocation_status__in=['not_allocated', 'partially_allocated']
+                )
+        
+        if filter_q:
+            farmers_qs = farmers_qs.filter(filter_q).distinct()
 
     farmers_data = []
     for farmer in farmers_qs:
@@ -7108,7 +7298,7 @@ def tender_dashboard(request):
                                 'scheduled_date':   str(a.scheduled_date) if a.scheduled_date else None,
                                 'total_price':      float(a.total_price),
                                 'allocation_status': a.allocation_status,
-                                # ✅ NEW: Include allocation details
+                                # ✅ Include allocation details
                                 'allocations': [
                                     {
                                         'allocation_id':    alloc.id,
@@ -7119,9 +7309,7 @@ def tender_dashboard(request):
                                         'work_status':      alloc.work_status,
                                         'farmer_amount':    float(alloc.farmer_amount),
                                     }
-                                    for alloc in a.allocations.filter(
-                                        status__in=['scheduled', 'in_progress', 'completed']
-                                    ).select_related('mukkadam')
+                                    for alloc in a.allocations.all()
                                 ],
                             }
                             for a in j.activities.all()
@@ -7238,8 +7426,6 @@ def tender_dashboard(request):
         'farmers':   farmers_data,
     })
 
-
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def mukkadam_payout_summary(request):
@@ -7320,10 +7506,16 @@ def mukkadam_payout_summary(request):
         mukkadam_map[mid]['total_payout'] += amount
         mukkadam_map[mid]['total_jobs']   += 1
 
+        # farmer_amount = area × farmer_rate (what farmer owes for this work)
+        farmer_rate   = float(al.farmer_rate or 0)
+        farmer_amount = round(area * farmer_rate, 2)
+
         mukkadam_map[mid]['jobs'].append({
             'allocation_id':   al.id,
             'allocated_date':  str(al.allocated_date),
+            'sales_date':      str(ja.sales_date) if ja and ja.sales_date else None,
             'job_id':          ja.job.job_id      if ja and ja.job  else None,
+            'farmer_id':       str(farmer.farmer_id) if farmer       else None,   # NEW
             'farmer_name':     farmer.farmer_name if farmer          else None,
             'farmer_phone':    farmer.phone_number if farmer         else None,
             'activity_name':   act.name            if act            else None,
@@ -7333,6 +7525,7 @@ def mukkadam_payout_summary(request):
             'area':            area,
             'rate':            rate,
             'amount':          round(amount, 2),
+            'farmer_amount':   farmer_amount,                                      # NEW
             'payment_status':  al.payment_status,
             'work_status':     al.work_status,
             'actual_area_done': float(al.actual_area_done) if al.actual_area_done else None,

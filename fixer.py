@@ -11,7 +11,7 @@ from tender.models import JobActivity
 post_save.disconnect(sender=JobActivity)
 pre_save.disconnect(sender=JobActivity)
 
-filepath = r'C:\Users\bhati\New folder (5)\worktender\allocate\job_activity.json'
+filepath = r'C:\Users\bhati\New folder (5)\worktender\allocate\jobActvitity23_03.json'
 
 with open(filepath, 'r', encoding='utf-8') as f:
     raw = f.read()

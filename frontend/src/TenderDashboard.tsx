@@ -147,13 +147,27 @@ interface Mukkadam {
   reference_image_url: string;
   efficiency: number;
   last_location?: {
-    date:         string | null;
-    farmer_name:  string | null;
-    plot_name:    string | null;
-    plot_code:    string | null;
-    cluster_name: string | null;
-    village:      string | null;
-    taluka:       string | null;
+    date:              string | null;
+    farmer_name:       string | null;
+    farmer_village?:   string | null;
+    farmer_taluka?:    string | null;
+    farmer_district?:  string | null;
+    plot_name:         string | null;
+    plot_code:         string | null;
+    cluster_name:      string | null;
+    village:           string | null;
+    taluka:            string | null;
+    activity_name?:    string | null;
+  } | null;
+  today_job?: {
+    date:              string | null;
+    farmer_name:       string | null;
+    farmer_village?:   string | null;
+    farmer_taluka?:    string | null;
+    farmer_district?:  string | null;
+    plot_code:         string | null;
+    cluster_name:      string | null;
+    activity_name:     string | null;
   } | null;
   // In your TypeScript interfaces, update clusters:
 clusters: {
@@ -744,34 +758,26 @@ function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false, se
           {(m.activity_rates || m.activities || []).length}
         </td>
  
-        {/* Cluster pills */}
-        <td style={{ ...tdBase }}>
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-            {m.clusters.length === 0 ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: S.amber50, border: `1px solid ${S.amber100}`, color: S.amber700 }}>
-                ⚠ No Cluster
-              </span>
-            ) : m.clusters.map((c: any) => (
-              <span key={c.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: c.mukkadam_type === 'updown' ? '#fff7ed' : S.green50, color: c.mukkadam_type === 'updown' ? S.amber700 : S.green700, border: `1px solid ${c.mukkadam_type === 'updown' ? S.amber100 : S.green100}` }}>
-                {c.mukkadam_type === 'updown' ? '📅' : '🏠'} {c.name}
-                <MukkadamAddToCluster mukkadam={m} clusters={clusters} onSuccess={onSuccess} mode="edit" clusterToEdit={c} />
-                {isAdmin && (
-                  <button onClick={async e => {
-                    e.stopPropagation();
-                    if (!confirm(`Remove ${m.name} from "${c.name}"?`)) return;
-                    const token = localStorage.getItem('auth_token');
-                    await fetch(`${API_BASE_URL}/api/clusters/${c.id}/remove_mukkadam/`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${token}` }, body: JSON.stringify({ mukkadam_id: m.id }) });
-                    onSuccess();
-                  }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', opacity: .7, fontSize: 11, padding: '0 2px', lineHeight: 1 }}
-                    onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-                    onMouseLeave={e => (e.currentTarget.style.opacity = '.7')}
-                  >✕</button>
-                )}
-              </span>
-            ))}
-            <div onClick={e => { e.stopPropagation(); e.preventDefault(); }}>
-              <MukkadamAddToCluster mukkadam={m} clusters={clusters} onSuccess={onSuccess} mode="add" />
+        {/* Last Job Summary (replaces cluster pills in main row) */}
+        <td style={{ ...tdBase, color: S.stone600, maxWidth: 180 }}>
+          {m.today_job ? (
+            <div>
+              <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', fontWeight: 700, marginBottom: 4, display: 'inline-block' }}>⚡ Today</span>
+              <div style={{ fontSize: 12, fontWeight: 600, color: S.stone800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.today_job.farmer_name?.split(' ')[0]} · {m.today_job.activity_name}</div>
+              <div style={{ fontSize: 10, color: S.stone400 }}>{[m.today_job.farmer_village, m.today_job.farmer_district].filter(Boolean).join(', ') || m.today_job.cluster_name || '—'}</div>
             </div>
+          ) : m.last_location ? (
+            <div>
+              <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 999, background: S.stone100, color: S.stone500, fontWeight: 600, marginBottom: 4, display: 'inline-block' }}>Last</span>
+              <div style={{ fontSize: 12, fontWeight: 600, color: S.stone700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{m.last_location.farmer_name?.split(' ')[0]} · {m.last_location.activity_name || '—'}</div>
+              <div style={{ fontSize: 10, color: S.stone400 }}>{[m.last_location.farmer_village, m.last_location.farmer_district].filter(Boolean).join(', ') || m.last_location.cluster_name || '—'}</div>
+            </div>
+          ) : (
+            <span style={{ fontSize: 11, color: S.stone300 }}>No recent job</span>
+          )}
+          {/* Cluster add/edit hidden in main row, available in expand */}
+          <div style={{ display: 'none' }} onClick={e => { e.stopPropagation(); e.preventDefault(); }}>
+            <MukkadamAddToCluster mukkadam={m} clusters={clusters} onSuccess={onSuccess} mode="add" />
           </div>
         </td>
 
@@ -865,7 +871,21 @@ function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false, se
                 {[
                   { val: <><span style={{ color: S.violet600, fontWeight: 800 }}>{m.crew_size}</span><span style={{ fontSize: 12, color: S.stone400, fontWeight: 500 }}>/{m.max_crew_capacity}</span></>, lbl: 'Crew Size' },
                   { val: (m.activity_rates || m.activities || []).length, lbl: 'Activities' },
-                  { val: m.clusters.length > 0 ? m.clusters[0].name : <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: S.amber50, color: S.amber700, border: `1px solid ${S.amber100}` }}>No Cluster</span>, lbl: 'Cluster' },
+                  { val: m.clusters.length > 0
+                    ? <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'center' }}>
+                        {m.clusters.map((c: any) => (
+                          <span key={c.id} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: c.mukkadam_type === 'updown' ? '#fff7ed' : S.green50, color: c.mukkadam_type === 'updown' ? S.amber700 : S.green700, border: `1px solid ${c.mukkadam_type === 'updown' ? S.amber100 : S.green100}`, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            {c.mukkadam_type === 'updown' ? '📅' : '🏠'} {c.name}
+                            <span onClick={e => { e.stopPropagation(); }}><MukkadamAddToCluster mukkadam={m} clusters={clusters} onSuccess={onSuccess} mode="edit" clusterToEdit={c} /></span>
+                          </span>
+                        ))}
+                        <span onClick={e => e.stopPropagation()} style={{ marginTop: 2 }}><MukkadamAddToCluster mukkadam={m} clusters={clusters} onSuccess={onSuccess} mode="add" /></span>
+                      </div>
+                    : <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: S.amber50, color: S.amber700, border: `1px solid ${S.amber100}` }}>No Cluster</span>
+                        <span onClick={e => e.stopPropagation()}><MukkadamAddToCluster mukkadam={m} clusters={clusters} onSuccess={onSuccess} mode="add" /></span>
+                      </div>,
+                    lbl: 'Cluster' },
                   { val: <span style={{ color: S.green600 }}>₹{totalRate.toLocaleString('en-IN')}</span>, lbl: 'Total Rate/ac' },
                   { val: m.efficiency ?? '0.15', lbl: 'Avg ac/worker' },
                 ].map((s, i) => (
@@ -901,33 +921,119 @@ function MukkadamCard({ m, clusters, onSuccess, onCallClick, isAdmin = false, se
                   </table>
                 </div>
  
-                {/* Right: Location */}
-                <div style={{ padding: '16px 20px', borderLeft: `1px solid ${S.stone100}` }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8, borderBottom: `1px solid ${S.stone100}` }}>
-                    <span style={{ fontSize: 14 }}>📍</span> Location &amp; Availability
-                  </div>
-                  <div style={{ background: S.stone50, borderRadius: 10, padding: '10px 14px', border: `1px solid ${S.stone200}`, marginBottom: 14 }}>
-                    {[
-                      { k: 'Village', v: `${m.location?.village || '—'}, ${m.location?.taluka || '—'}` },
-                      { k: 'District', v: `${m.location?.district || '—'}, ${m.location?.state || '—'}` },
-                      { k: 'Status', v: <span style={{ color: S.green600 }}>● Available</span> },
-                    ].map((r, i) => (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0', borderTop: i > 0 ? `1px solid ${S.stone100}` : 'none' }}>
-                        <span style={{ color: S.stone500 }}>{r.k}</span>
-                        <span style={{ fontWeight: 600, color: S.stone800 }}>{r.v}</span>
-                      </div>
-                    ))}
-                  </div>
-                  {m.availability?.start_date && (
-                    <div style={{ fontSize: 11, color: S.stone500, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      📅 {m.availability.start_date} → {m.availability.end_date || '?'}
+                {/* Right: Last Job + Today's Job */}
+                <div style={{ padding: '16px 20px', borderLeft: `1px solid ${S.stone100}`, display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+                  {/* ── Last Job Location ── */}
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8, borderBottom: `1px solid ${S.stone100}` }}>
+                      <span style={{ fontSize: 14 }}>📍</span> Last Job Location
                     </div>
-                  )}
+                    {m.last_location ? (
+                      <div style={{ background: '#f0fdf4', borderRadius: 10, padding: '10px 14px', border: '1px solid #bbf7d0' }}>
+                        {/* Activity + Date */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: S.stone900 }}>
+                            {m.last_location.activity_name || 'Activity'}
+                          </span>
+                          {m.last_location.date && (
+                            <span style={{ fontSize: 11, color: S.stone400, background: '#fff', padding: '2px 8px', borderRadius: 6, border: `1px solid ${S.stone100}` }}>
+                              📅 {m.last_location.date.slice(5).replace('-', ' ')}
+                            </span>
+                          )}
+                        </div>
+                        {/* Farmer */}
+                        {m.last_location.farmer_name && (
+                          <div style={{ fontSize: 12, color: S.stone600, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 11 }}>👤</span>
+                            <span style={{ fontWeight: 600, color: S.stone800 }}>{m.last_location.farmer_name}</span>
+                            {m.last_location.plot_code && (
+                              <span style={{ fontFamily: S.mono, fontSize: 10, color: S.stone400 }}>#{m.last_location.plot_code}</span>
+                            )}
+                          </div>
+                        )}
+                        {/* Location: village, taluka, district */}
+                        <div style={{ fontSize: 11, color: S.stone500, display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span>📍</span>
+                          <span>
+                            {[
+                              m.last_location.farmer_village,
+                              m.last_location.farmer_taluka,
+                              m.last_location.farmer_district,
+                            ].filter(Boolean).join(', ') ||
+                            [m.last_location.village, m.last_location.taluka].filter(Boolean).join(', ') || '—'}
+                          </span>
+                        </div>
+                        {m.last_location.cluster_name && (
+                          <div style={{ marginTop: 6 }}>
+                            <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 999, background: S.green50, color: S.green700, border: `1px solid ${S.green100}`, fontWeight: 600 }}>
+                              📌 {m.last_location.cluster_name}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ background: S.stone50, borderRadius: 10, padding: '10px 14px', border: `1px solid ${S.stone200}`, fontSize: 12, color: S.stone400, textAlign: 'center' }}>
+                        No previous job recorded
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ── Today's Job ── */}
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8, borderBottom: `1px solid ${S.stone100}` }}>
+                      <span style={{ fontSize: 14 }}>⚡</span> Current Job Today
+                    </div>
+                    {m.today_job ? (
+                      <div style={{ background: '#eff6ff', borderRadius: 10, padding: '10px 14px', border: '1px solid #bfdbfe' }}>
+                        {/* Activity */}
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#1d4ed8', marginBottom: 6 }}>
+                          {m.today_job.activity_name}
+                        </div>
+                        {/* Farmer */}
+                        {m.today_job.farmer_name && (
+                          <div style={{ fontSize: 12, color: S.stone600, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 11 }}>👤</span>
+                            <span style={{ fontWeight: 600, color: S.stone800 }}>{m.today_job.farmer_name}</span>
+                            {m.today_job.plot_code && (
+                              <span style={{ fontFamily: S.mono, fontSize: 10, color: S.stone400 }}>#{m.today_job.plot_code}</span>
+                            )}
+                          </div>
+                        )}
+                        {/* Location */}
+                        <div style={{ fontSize: 11, color: S.stone500, display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span>📍</span>
+                          <span>
+                            {[
+                              m.today_job.farmer_village,
+                              m.today_job.farmer_taluka,
+                              m.today_job.farmer_district,
+                            ].filter(Boolean).join(', ') || '—'}
+                          </span>
+                        </div>
+                        {m.today_job.cluster_name && (
+                          <div style={{ marginTop: 6 }}>
+                            <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', fontWeight: 600 }}>
+                              📌 {m.today_job.cluster_name}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ background: S.stone50, borderRadius: 10, padding: '14px', border: `1px solid ${S.stone200}`, fontSize: 12, color: S.stone400, textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                        <span style={{ fontSize: 20 }}>😴</span>
+                        <span style={{ fontWeight: 600, color: S.stone500 }}>No job today</span>
+                        <span style={{ fontSize: 11 }}>No allocation found for today</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Rate card reference */}
                   {m.reference_image_url && (
                     <>
-                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, margin: '14px 0 8px', paddingTop: 12, borderTop: `1px solid ${S.stone100}` }}>🏷 Rate Card Reference</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.8px', color: S.stone400, paddingTop: 12, borderTop: `1px solid ${S.stone100}` }}>🏷 Rate Card Reference</div>
                       <img src={m.reference_image_url} alt="Rate card"
-                        style={{ borderRadius: 10, border: `1px solid ${S.stone200}`, width: '100%', maxHeight: 140, objectFit: 'cover', cursor: 'pointer' }}
+                        style={{ borderRadius: 10, border: `1px solid ${S.stone200}`, width: '100%', maxHeight: 120, objectFit: 'cover', cursor: 'pointer', marginTop: 6 }}
                         onClick={() => window.open(m.reference_image_url, '_blank')} />
                     </>
                   )}
@@ -1466,13 +1572,363 @@ interface Activity {
   allocation_status: string;
   allocations: Allocation[];  // ✅ NEW
 }
+
+
+const Si = {
+  brand: '#059669',
+  brandLight: '#d1fae5',
+  green50: '#f0fdf4',
+  green100: '#dcfce7',
+  green700: '#15803d',
+  amber50: '#fffbeb',
+  amber100: '#fef3c7',
+  amber600: '#d97706',
+  amber700: '#b45309',
+  sky50: '#f0f9ff',
+  sky100: '#e0f2fe',
+  sky600: '#0284c7',
+  sky700: '#0369a1',
+  red50: '#fef2f2',
+  red100: '#fee2e2',
+  red600: '#dc2626',
+  red700: '#b91c1c',
+  stone25: '#fafaf9',
+  stone50: '#fafaf9',
+  stone100: '#f5f5f4',
+  stone200: '#e7e5e4',
+  stone400: '#a8a29e',
+  stone500: '#78716c',
+  stone600: '#57534e',
+  stone700: '#44403c',
+  stone900: '#1c1917',
+  shadowSm: '0 1px 2px 0 rgb(0 0 0 / 0.05)',
+  shadowCard: '0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)',
+};
+
+interface FarmerActivityFiltersProps {
+  activeFilters: string[];
+  onFilterChange: (filters: string[]) => void;
+  counts?: {
+    completed?: number;
+    in_progress?: number;
+    due_today?: number;
+    due_tomorrow?: number;
+    overdue_3plus?: number;
+    overdue_4_6?: number;
+    overdue_7_10?: number;
+  };
+}
+
+const FILTER_OPTIONS = [
+  {
+    id: 'completed',
+    label: 'Completed',
+    icon: '✓',
+    color: S.green700,
+    bgColor: S.green50,
+    borderColor: S.green100,
+    description: 'At least one activity completed'
+  },
+  {
+    id: 'in_progress',
+    label: 'In Progress',
+    icon: '⟳',
+    color: S.sky700,
+    bgColor: S.sky50,
+    borderColor: S.sky100,
+    description: 'Activities currently being worked on'
+  },
+  {
+    id: 'due_today',
+    label: 'Due Today',
+    icon: '📅',
+    color: S.amber700,
+    bgColor: S.amber50,
+    borderColor: S.amber100,
+    description: 'Activities scheduled for today'
+  },
+  {
+    id: 'due_tomorrow',
+    label: 'Due Tomorrow',
+    icon: '📆',
+    color: S.amber600,
+    bgColor: S.amber50,
+    borderColor: S.amber100,
+    description: 'Activities scheduled for tomorrow'
+  },
+  {
+    id: 'overdue_3plus',
+    label: '3+ Days Overdue',
+    icon: '⚠',
+    color: S.red700,
+    bgColor: S.red50,
+    borderColor: S.red100,
+    description: 'Activities 3 or more days past scheduled date'
+  },
+  {
+    id: 'overdue_4_6',
+    label: '4-6 Days Overdue',
+    icon: '⚠⚠',
+    color: S.red700,
+    bgColor: S.red50,
+    borderColor: S.red100,
+    description: 'Activities 4-6 days past scheduled date'
+  },
+  {
+    id: 'overdue_7_10',
+    label: '7-10 Days Overdue',
+    icon: '🚨',
+    color: S.red700,
+    bgColor: S.red50,
+    borderColor: S.red100,
+    description: 'Activities 7-10 days past scheduled date'
+  },
+];
+
+export function FarmerActivityFilters({ activeFilters, onFilterChange, counts }: FarmerActivityFiltersProps) {
+  const toggleFilter = (filterId: string) => {
+    if (activeFilters.includes(filterId)) {
+      onFilterChange(activeFilters.filter(f => f !== filterId));
+    } else {
+      onFilterChange([...activeFilters, filterId]);
+    }
+  };
+
+  const clearAll = () => {
+    onFilterChange([]);
+  };
+
+  return (
+    <div style={{ 
+      background: '#fff', 
+      borderRadius: 14, 
+      padding: '16px 20px',
+      boxShadow: S.shadowCard,
+      marginBottom: 16,
+      border: `1px solid ${S.stone100}`
+    }}>
+      {/* Header */}
+      <div style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'space-between',
+        marginBottom: 12
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: S.stone900 }}>
+            Filter Farmers by Activity Status
+          </span>
+          {activeFilters.length > 0 && (
+            <span style={{ 
+              fontSize: 11, 
+              fontWeight: 700, 
+              padding: '2px 8px', 
+              borderRadius: 999,
+              background: S.brand,
+              color: '#fff'
+            }}>
+              {activeFilters.length}
+            </span>
+          )}
+        </div>
+        
+        {activeFilters.length > 0 && (
+          <button
+            onClick={clearAll}
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: S.stone500,
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '4px 8px',
+              borderRadius: 6,
+              transition: 'all 150ms'
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = S.stone50;
+              e.currentTarget.style.color = S.stone700;
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'none';
+              e.currentTarget.style.color = S.stone500;
+            }}
+          >
+            Clear all
+          </button>
+        )}
+      </div>
+
+      {/* Filter Checkboxes */}
+      <div style={{ 
+        display: 'grid', 
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: 8
+      }}>
+        {FILTER_OPTIONS.map(option => {
+          const isActive = activeFilters.includes(option.id);
+          const count = counts?.[option.id as keyof typeof counts];
+          
+          return (
+            <label
+              key={option.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 12px',
+                borderRadius: 10,
+                border: `1.5px solid ${isActive ? option.borderColor : S.stone200}`,
+                background: isActive ? option.bgColor : '#fff',
+                cursor: 'pointer',
+                transition: 'all 150ms',
+                userSelect: 'none'
+              }}
+              onMouseEnter={e => {
+                if (!isActive) {
+                  e.currentTarget.style.background = S.stone25;
+                  e.currentTarget.style.borderColor = S.stone300;
+                }
+              }}
+              onMouseLeave={e => {
+                if (!isActive) {
+                  e.currentTarget.style.background = '#fff';
+                  e.currentTarget.style.borderColor = S.stone200;
+                }
+              }}
+            >
+              {/* Custom Checkbox */}
+              <div style={{
+                position: 'relative',
+                width: 18,
+                height: 18,
+                borderRadius: 5,
+                border: `2px solid ${isActive ? option.color : S.stone300}`,
+                background: isActive ? option.color : '#fff',
+                flexShrink: 0,
+                transition: 'all 150ms',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                {isActive && (
+                  <span style={{ color: '#fff', fontSize: 12, fontWeight: 800 }}>✓</span>
+                )}
+                <input
+                  type="checkbox"
+                  checked={isActive}
+                  onChange={() => toggleFilter(option.id)}
+                  style={{
+                    position: 'absolute',
+                    opacity: 0,
+                    width: 0,
+                    height: 0
+                  }}
+                />
+              </div>
+
+              {/* Icon */}
+              <span style={{ fontSize: 14 }}>{option.icon}</span>
+
+              {/* Label & Count */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ 
+                  fontSize: 12, 
+                  fontWeight: 600, 
+                  color: isActive ? option.color : S.stone700,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}>
+                  {option.label}
+                </div>
+                {count !== undefined && count > 0 && (
+                  <div style={{ 
+                    fontSize: 10, 
+                    color: S.stone500,
+                    marginTop: 1
+                  }}>
+                    {count} farmer{count !== 1 ? 's' : ''}
+                  </div>
+                )}
+              </div>
+            </label>
+          );
+        })}
+      </div>
+
+      {/* Active Filters Summary */}
+      {activeFilters.length > 0 && (
+        <div style={{ 
+          marginTop: 12,
+          paddingTop: 12,
+          borderTop: `1px solid ${S.stone100}`,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6,
+          alignItems: 'center'
+        }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: S.stone500 }}>
+            Active filters:
+          </span>
+          {activeFilters.map(filterId => {
+            const option = FILTER_OPTIONS.find(o => o.id === filterId);
+            if (!option) return null;
+            
+            return (
+              <span
+                key={filterId}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '3px 8px 3px 6px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: option.bgColor,
+                  color: option.color,
+                  border: `1px solid ${option.borderColor}`
+                }}
+              >
+                <span style={{ fontSize: 10 }}>{option.icon}</span>
+                {option.label}
+                <button
+                  onClick={e => {
+                    e.preventDefault();
+                    toggleFilter(filterId);
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: option.color,
+                    padding: 0,
+                    marginLeft: 2,
+                    fontSize: 11,
+                    lineHeight: 1,
+                    fontWeight: 700
+                  }}
+                >
+                  ✕
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // FARMER CARD  — replace the whole existing FarmerCard function
 // ─────────────────────────────────────────────────────────────────────────────
 function FarmerCard({ farmer, clusters, onSuccess, isAdmin = false }: FarmerCardProps) {
   const [expanded, setExpanded]       = useState(false);
   const [expandedPlot, setExpandedPlot] = useState<number | null>(null);
- 
+ const [activeFilter, setActiveFilter] = useState('all');
   const av           = avColor(farmer.farmer_id);
   const inCluster    = countPlotsInCluster(farmer.plots_by_cluster);
   const prunDate     = getNearestPruningDate(farmer);
@@ -1483,6 +1939,7 @@ function FarmerCard({ farmer, clusters, onSuccess, isAdmin = false }: FarmerCard
     padding: '10px 14px', borderBottom: expanded ? 'none' : `1px solid ${S.stone100}`,
     verticalAlign: 'middle', fontSize: 12,
   };
+  
  
   return (
     <>
@@ -2187,7 +2644,7 @@ const [weekOffset, setWeekOffset] = useState(0); // 0 = current week, 7 = next, 
 const [jobNotes, setJobNotes]               = useState<Record<string, any[]>>({}); // jobId → notes[]
 const [notesLoading, setNotesLoading]       = useState(false);
 const [expandedMukkadam,       setExpandedMukkadam]       = useState<string | null>(null);
-const [completedView,          setCompletedView]           = useState<'activities' | 'mukkadams'>('activities');
+const [completedView,          setCompletedView]           = useState<'activities' | 'mukkadams' | 'farmers'>('activities');
 const [mukkadamPayouts,        setMukkadamPayouts]         = useState<any>(null);
 const [mukkadamPayoutsLoading, setMukkadamPayoutsLoading]  = useState(false);
 const fetchMukkadamPayouts = async () => {
@@ -2210,6 +2667,7 @@ const fetchMukkadamPayouts = async () => {
   
 // REPLACE WITH:
 const [farmerSubTab, setFarmerSubTab] = useState<'all' | 'full' | 'partial' | 'none' | 'new' | 'completed'>('all');
+const [farmerActivityFilters, setFarmerActivityFilters] = useState<string[]>([]);
    const navigate = useNavigate();
 
    const [isAdmin, setIsAdmin] = useState(false);
@@ -2733,21 +3191,100 @@ completed: filteredFarmers.filter((f: any) =>
 ).length,
 };
 
-// Updated subTabFilteredFarmers
-const subTabFilteredFarmers = filteredFarmers.filter((f: any) => {
-  if (farmerSubTab === 'all')     return true;
-  if (farmerSubTab === 'new')     return isNewFarmer(f);
-  if (farmerSubTab === 'completed') return (f.plots_by_cluster ?? []).some((g: any) =>
-  (g.plots ?? []).some((p: any) =>
-    (p.jobs ?? []).some((j: any) =>
-      (j.activities ?? []).some((a: any) =>
-        a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated'  // ← FIX
+// Helper: get all activities for a farmer flat
+const getAllActivities = (f: any): any[] => {
+  const acts: any[] = [];
+  (f.plots_by_cluster ?? []).forEach((g: any) =>
+    (g.plots ?? []).forEach((p: any) =>
+      (p.jobs ?? []).forEach((j: any) =>
+        (j.activities ?? []).forEach((a: any) => acts.push(a))
       )
     )
-  )
-);
+  );
+  return acts;
+};
 
-  return classifyFarmer(f) === farmerSubTab;
+// Helper: check if a farmer passes activity-status filters
+const matchesFarmerActivityFilters = (f: any, filters: string[]): boolean => {
+  if (filters.length === 0) return true;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+  const acts = getAllActivities(f);
+  return filters.some(filter => {
+    if (filter === 'completed')
+      return acts.some(a => a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated');
+    if (filter === 'in_progress')
+      return acts.some(a => a.allocation_status === 'in_progress' || a.allocation_status === 'partially_allocated');
+    if (filter === 'due_today')
+      return acts.some(a => {
+        if (!a.scheduled_date) return false;
+        const d = new Date(a.scheduled_date + 'T00:00:00'); d.setHours(0,0,0,0);
+        return d.getTime() === today.getTime() && (a.allocation_status !== 'completed' && a.allocation_status !== 'fully_allocated');
+      });
+    if (filter === 'due_tomorrow')
+      return acts.some(a => {
+        if (!a.scheduled_date) return false;
+        const d = new Date(a.scheduled_date + 'T00:00:00'); d.setHours(0,0,0,0);
+        return d.getTime() === tomorrow.getTime() && (a.allocation_status !== 'completed' && a.allocation_status !== 'fully_allocated');
+      });
+    if (filter === 'overdue_3plus')
+      return acts.some(a => {
+        if (!a.scheduled_date) return false;
+        if (a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated') return false;
+        const d = new Date(a.scheduled_date + 'T00:00:00'); d.setHours(0,0,0,0);
+        const diff = Math.floor((today.getTime() - d.getTime()) / 86400000);
+        return diff >= 3;
+      });
+    if (filter === 'overdue_4_6')
+      return acts.some(a => {
+        if (!a.scheduled_date) return false;
+        if (a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated') return false;
+        const d = new Date(a.scheduled_date + 'T00:00:00'); d.setHours(0,0,0,0);
+        const diff = Math.floor((today.getTime() - d.getTime()) / 86400000);
+        return diff >= 4 && diff <= 6;
+      });
+    if (filter === 'overdue_7_10')
+      return acts.some(a => {
+        if (!a.scheduled_date) return false;
+        if (a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated') return false;
+        const d = new Date(a.scheduled_date + 'T00:00:00'); d.setHours(0,0,0,0);
+        const diff = Math.floor((today.getTime() - d.getTime()) / 86400000);
+        return diff >= 7 && diff <= 10;
+      });
+    return false;
+  });
+};
+
+// Counts for farmer activity filter badges
+const farmerActivityFilterCounts = {
+  completed:    filteredFarmers.filter((f: any) => matchesFarmerActivityFilters(f, ['completed'])).length,
+  in_progress:  filteredFarmers.filter((f: any) => matchesFarmerActivityFilters(f, ['in_progress'])).length,
+  due_today:    filteredFarmers.filter((f: any) => matchesFarmerActivityFilters(f, ['due_today'])).length,
+  due_tomorrow: filteredFarmers.filter((f: any) => matchesFarmerActivityFilters(f, ['due_tomorrow'])).length,
+  overdue_3plus: filteredFarmers.filter((f: any) => matchesFarmerActivityFilters(f, ['overdue_3plus'])).length,
+  overdue_4_6:  filteredFarmers.filter((f: any) => matchesFarmerActivityFilters(f, ['overdue_4_6'])).length,
+  overdue_7_10: filteredFarmers.filter((f: any) => matchesFarmerActivityFilters(f, ['overdue_7_10'])).length,
+};
+
+// Updated subTabFilteredFarmers
+const subTabFilteredFarmers = filteredFarmers.filter((f: any) => {
+  if (farmerSubTab === 'new')       { if (!isNewFarmer(f)) return false; }
+  else if (farmerSubTab === 'completed') {
+    const hasCompleted = (f.plots_by_cluster ?? []).some((g: any) =>
+      (g.plots ?? []).some((p: any) =>
+        (p.jobs ?? []).some((j: any) =>
+          (j.activities ?? []).some((a: any) =>
+            a.allocation_status === 'completed' || a.allocation_status === 'fully_allocated'
+          )
+        )
+      )
+    );
+    if (!hasCompleted) return false;
+  }
+  else if (farmerSubTab !== 'all') {
+    if (classifyFarmer(f) !== farmerSubTab) return false;
+  }
+  return matchesFarmerActivityFilters(f, farmerActivityFilters);
 });
 
 const [expandedJobKey, setExpandedJobKey] = useState<string | null>(null);
@@ -4078,6 +4615,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
       // Filtered farmer list
       const filteredFarmers = allFarmers.filter((f: any) => {
         if (paymentFilter === 'ready_to_bill' && f.status !== 'ready_to_bill') return false;
+        if (paymentFilter === 'partial'    && f.status !== 'partial')            return false;
         if (paymentFilter === 'overdue'    && f.expected_payment !== 'overdue')    return false;
         if (paymentFilter === 'this_week'  && f.expected_payment !== 'this_week')  return false;
         if (paymentFilter === 'next_week'  && f.expected_payment !== 'next_week')  return false;
@@ -4103,6 +4641,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
 
       const FILTERS = [
         { key: 'ready_to_bill', label: '📝 Ready to Bill', color: '#ea580c', bg: '#fff7ed', border: '#fed7aa', count: pipe.ready_to_bill?.count ?? 0, amount: pipe.ready_to_bill?.amount ?? 0 },
+        { key: 'partial',       label: '⚡ Partial',         color: '#7c3aed', bg: '#faf5ff', border: '#e9d5ff', count: allFarmers.filter((f: any) => f.status === 'partial').length, amount: allFarmers.filter((f: any) => f.status === 'partial').reduce((s: number, f: any) => s + (f.job_value ?? f.amount ?? 0), 0) },
         { key: 'overdue',       label: '⚠️ Overdue',        color: '#dc2626', bg: '#fef2f2', border: '#fecaca', count: pipe.overdue?.count ?? 0,       amount: pipe.overdue?.amount ?? 0 },
         { key: 'this_week',     label: '📅 This Week',      color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0', count: (paymentData.farmer_list ?? []).filter((f:any) => f.expected_payment === 'this_week').length, amount: forecast.this_week?.amount ?? 0 },
         { key: 'next_week',     label: '📆 Next Week',      color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe', count: (paymentData.farmer_list ?? []).filter((f:any) => f.expected_payment === 'next_week').length, amount: forecast.next_week?.amount ?? 0 },
@@ -4234,9 +4773,17 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
             {/* Table */}
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'hidden' }}>
               {/* Header */}
-              <div style={{ display: 'grid', gridTemplateColumns: paymentFilter === 'ready_to_bill' ? 'minmax(180px,2fr) 60px 80px 110px 130px 130px 110px' : 'minmax(180px,2fr) minmax(150px,1.5fr) 90px 80px 110px 110px 110px', padding: '10px 16px', fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#fafaf8', borderBottom: '1px solid #e8e5de' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: paymentFilter === 'partial' ? 'minmax(200px,2fr) 100px 90px 100px 100px 100px' : paymentFilter === 'ready_to_bill' ? 'minmax(180px,2fr) 60px 80px 110px 130px 130px 110px' : 'minmax(180px,2fr) minmax(150px,1.5fr) 90px 80px 110px 110px 110px', padding: '10px 16px', fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#fafaf8', borderBottom: '1px solid #e8e5de' }}>
                 <div>Farmer</div>
-                {paymentFilter === 'ready_to_bill' ? (
+                {paymentFilter === 'partial' ? (
+                  <>
+                    <div style={{ textAlign: 'right' }}>Total Plots</div>
+                    <div style={{ textAlign: 'right' }}>Done</div>
+                    <div style={{ textAlign: 'right' }}>Pending</div>
+                    <div style={{ textAlign: 'right' }}>Done Amt</div>
+                    <div style={{ textAlign: 'right' }}>Pending Amt</div>
+                  </>
+                ) : paymentFilter === 'ready_to_bill' ? (
                   <>
                     <div style={{ textAlign: 'right' }}>Plots</div>
                     <div style={{ textAlign: 'right' }}>Acres</div>
@@ -4263,6 +4810,13 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
                 const key        = `${bill.farmer_id}__${bill.activity}`;
                 const isExpanded = expandedFarmerKey === key;
                 const isOverdue  = bill.expected_payment === 'overdue';
+                const isPartial  = bill.status === 'partial';
+                // Partial info: completed vs total plots
+                const completedPlots = bill.completed_plots ?? 0;
+                const totalPlots     = bill.total_plots ?? 0;
+                const pendingPlots   = totalPlots - completedPlots;
+                const completedAmt   = bill.completed_amount ?? 0;
+                const pendingAmt     = bill.job_value ? bill.job_value - completedAmt : 0;
                 const initials   = bill.farmer_name.split(' ').map((w: string) => w[0]).join('').slice(0, 2);
 
                 return (
@@ -4270,7 +4824,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
                     {/* Row */}
                     <div
                       onClick={() => handleExpandFarmer(bill)}
-                      style={{ display: 'grid', gridTemplateColumns: paymentFilter === 'ready_to_bill' ? 'minmax(180px,2fr) 60px 80px 110px 130px 130px 110px' : 'minmax(180px,2fr) minmax(150px,1.5fr) 90px 80px 110px 110px 110px', padding: '12px 16px', alignItems: 'center', cursor: 'pointer', background: isExpanded ? '#fff8f3' : isOverdue ? 'rgba(254,242,242,0.4)' : 'transparent', transition: 'background 0.15s' }}
+                      style={{ display: 'grid', gridTemplateColumns: paymentFilter === 'partial' ? 'minmax(200px,2fr) 100px 90px 100px 100px 100px' : paymentFilter === 'ready_to_bill' ? 'minmax(180px,2fr) 60px 80px 110px 130px 130px 110px' : 'minmax(180px,2fr) minmax(150px,1.5fr) 90px 80px 110px 110px 110px', padding: '12px 16px', alignItems: 'center', cursor: 'pointer', background: isExpanded ? '#fff8f3' : isPartial ? 'rgba(245,243,255,0.5)' : isOverdue ? 'rgba(254,242,242,0.4)' : 'transparent', transition: 'background 0.15s' }}
                       onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLDivElement).style.background = '#faf9f6'; }}
                       onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLDivElement).style.background = isOverdue ? 'rgba(254,242,242,0.4)' : 'transparent'; }}
                     >
@@ -4290,7 +4844,29 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
                         </div>
                       </div>
 
-                      {paymentFilter === 'ready_to_bill' ? (
+                      {paymentFilter === 'partial' ? (
+                        <>
+                          {/* Total Plots */}
+                          <div style={{ textAlign: 'right', fontWeight: 700, color: '#6b6b63' }}>{totalPlots || bill.n_plots || '—'}</div>
+                          {/* Done */}
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontWeight: 700, color: '#16a34a' }}>{completedPlots}</span>
+                          </div>
+                          {/* Pending */}
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontWeight: 700, color: '#dc2626' }}>{pendingPlots > 0 ? pendingPlots : totalPlots > 0 ? totalPlots - completedPlots : '—'}</span>
+                          </div>
+                          {/* Completed Amount */}
+                          <div style={{ textAlign: 'right', fontWeight: 700, color: '#16a34a' }}>
+                            {completedAmt > 0 ? fmtFull(completedAmt) : bill.amount ? fmtFull(bill.amount) : '—'}
+                          </div>
+                          {/* Pending Amount */}
+                          <div style={{ textAlign: 'right', fontWeight: 700, color: '#dc2626' }}>
+                            {pendingAmt > 0 ? fmtFull(pendingAmt) : '—'}
+                            <div style={{ fontSize: 9, fontWeight: 500, color: '#a3a398', marginTop: 1 }}>No bill yet</div>
+                          </div>
+                        </>
+                      ) : paymentFilter === 'ready_to_bill' ? (
                         <>
                           <div style={{ textAlign: 'right', color: '#6b6b63' }}>{bill.n_plots}</div>
                           <div style={{ textAlign: 'right', fontWeight: 600 }}>{bill.acres.toFixed(2)}</div>
@@ -4565,6 +5141,95 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
               </div>
             </div>
           </div>
+
+{/* ═══ SECTION 1b: Funnel Insight ═══ */}
+<div style={{ marginBottom: 24 }}>
+  <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, marginBottom: 12 }}>📊 Funnel Insight</div>
+  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+
+    {/* Completed */}
+    <div style={{ background: '#fff', borderRadius: 12, border: '2px solid #bbf7d0', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+      <div style={{ background: '#f0fdf4', borderBottom: '1px solid #bbf7d0', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 16 }}>✅</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#15803d' }}>Completed</span>
+        <span style={{ marginLeft: 'auto', fontSize: 18, fontWeight: 800, color: '#15803d' }}>
+          {kpi.completed_farmers ?? raw.reduce((s: number, c: any) => s + (c.completed_farmers ?? 0), 0)}
+        </span>
+        <span style={{ fontSize: 10, color: '#16a34a', fontWeight: 600 }}>farmers</span>
+      </div>
+      <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        {[
+          { label: 'Jobs Completed',      val: kpi.completed_jobs ?? raw.reduce((s: number, c: any) => s + (c.completed_jobs ?? 0), 0) },
+          { label: 'Activities Done',     val: kpi.completed_activities ?? raw.reduce((s: number, c: any) => s + (c.completed_activities ?? 0), 0) },
+          { label: 'Acres (1st Act)',      val: `${Number(kpi.allocated_area ?? 0).toFixed(1)} ac` },
+          { label: 'Total Acres Done',    val: `${Number(kpi.allocated_area ?? 0).toFixed(1)} ac` },
+          { label: 'Worth Completed',     val: `₹${((kpi.allocated_area ?? 0) * (kpi.avg_rate ?? 0)).toLocaleString('en-IN')}` },
+          { label: 'Mukadam Paid',        val: kpi.mukadam_paid != null ? `₹${Number(kpi.mukadam_paid).toLocaleString('en-IN')}` : '—' },
+        ].map((row, i) => (
+          <div key={i} style={{ background: '#f7fdf9', borderRadius: 8, padding: '8px 10px', border: '1px solid #d1fae5' }}>
+            <div style={{ fontSize: 10, color: '#6b6b63', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>{row.label}</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#15803d' }}>{row.val}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {/* In Progress */}
+    <div style={{ background: '#fff', borderRadius: 12, border: '2px solid #bae6fd', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+      <div style={{ background: '#f0f9ff', borderBottom: '1px solid #bae6fd', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 16 }}>⚡</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#0369a1' }}>In Progress</span>
+        <span style={{ marginLeft: 'auto', fontSize: 18, fontWeight: 800, color: '#0369a1' }}>
+          {kpi.inprogress_farmers ?? raw.reduce((s: number, c: any) => s + (c.inprogress_farmers ?? 0), 0)}
+        </span>
+        <span style={{ fontSize: 10, color: '#0284c7', fontWeight: 600 }}>farmers</span>
+      </div>
+      <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        {[
+          { label: 'Jobs In Progress',    val: kpi.inprogress_jobs ?? raw.reduce((s: number, c: any) => s + (c.inprogress_jobs ?? 0), 0) },
+          { label: 'Activities Active',   val: kpi.inprogress_activities ?? raw.reduce((s: number, c: any) => s + (c.inprogress_activities ?? 0), 0) },
+          { label: 'Acres (1st Act)',      val: `${Number(kpi.inprogress_area ?? 0).toFixed(1)} ac` },
+          { label: 'Total Acres Active',  val: `${Number(kpi.inprogress_area ?? 0).toFixed(1)} ac` },
+          { label: 'Worth In Progress',   val: `₹${((kpi.inprogress_area ?? 0) * (kpi.avg_rate ?? 0)).toLocaleString('en-IN')}` },
+          { label: 'Mukadam Payable',     val: kpi.mukadam_payable != null ? `₹${Number(kpi.mukadam_payable).toLocaleString('en-IN')}` : '—' },
+        ].map((row, i) => (
+          <div key={i} style={{ background: '#f0f9ff', borderRadius: 8, padding: '8px 10px', border: '1px solid #bae6fd' }}>
+            <div style={{ fontSize: 10, color: '#6b6b63', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>{row.label}</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#0369a1' }}>{row.val}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {/* Pending */}
+    <div style={{ background: '#fff', borderRadius: 12, border: '2px solid #fbcfe8', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+      <div style={{ background: '#fdf2f8', borderBottom: '1px solid #fbcfe8', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 16 }}>⏳</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#9d174d' }}>Pending</span>
+        <span style={{ marginLeft: 'auto', fontSize: 18, fontWeight: 800, color: '#9d174d' }}>
+          {kpi.pending_farmers ?? raw.reduce((s: number, c: any) => s + (c.pending_farmers ?? 0), 0)}
+        </span>
+        <span style={{ fontSize: 10, color: '#be185d', fontWeight: 600 }}>farmers</span>
+      </div>
+      <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        {[
+          { label: 'Jobs Yet to Start',   val: kpi.pending_jobs ?? raw.reduce((s: number, c: any) => s + (c.pending_jobs ?? 0), 0) },
+          { label: 'Activities Pending',  val: kpi.pending_activities ?? raw.reduce((s: number, c: any) => s + (c.pending_activities ?? 0), 0) },
+          { label: 'Acres (1st Act)',      val: `${Number(kpi.pending_area ?? 0).toFixed(1)} ac` },
+          { label: 'Total Acres Left',    val: `${Number(kpi.pending_area ?? 0).toFixed(1)} ac` },
+          { label: 'Worth Pending',       val: `₹${((kpi.pending_area ?? 0) * (kpi.avg_rate ?? 0)).toLocaleString('en-IN')}` },
+          { label: 'Mukadam Earnings',    val: kpi.mukadam_earnings_pending != null ? `₹${Number(kpi.mukadam_earnings_pending).toLocaleString('en-IN')}` : '—' },
+        ].map((row, i) => (
+          <div key={i} style={{ background: '#fdf2f8', borderRadius: 8, padding: '8px 10px', border: '1px solid #fbcfe8' }}>
+            <div style={{ fontSize: 10, color: '#6b6b63', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>{row.label}</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#9d174d' }}>{row.val}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+  </div>
+</div>
 
 {/* ═══ SECTION 2: Cluster Breakdown Table ═══ */}
 <div style={{ marginBottom: 24 }}>
@@ -5376,6 +6041,15 @@ allJobs={insightDayJobs}
     </div>
   ) : (
     // ── ALL OTHER SUBTABS: existing table ──
+    <>
+      {/* ── Activity Status Filter ── */}
+      <div style={{ padding: '0 24px 16px 24px' }}>
+        <FarmerActivityFilters
+          activeFilters={farmerActivityFilters}
+          onFilterChange={setFarmerActivityFilters}
+          counts={farmerActivityFilterCounts}
+        />
+      </div>
     <table style={{ width: '100%', background: '#fff', borderRadius: 18, boxShadow: S.shadowCard, overflow: 'hidden', borderCollapse: 'separate', borderSpacing: 0 }}>
       <thead>
         <tr>
@@ -5405,6 +6079,7 @@ allJobs={insightDayJobs}
         }
       </tbody>
     </table>
+    </>
   )
 ) : tab === 'jobs' ? (
           <>
@@ -5629,6 +6304,7 @@ if (actSubTab === 'completed') {
           {([
             { key: 'activities', label: '📋 By Activity' },
             { key: 'mukkadams',  label: '👷 By Mukkadam' },
+            { key: 'farmers',    label: '🌾 By Farmer' },
           ] as const).map(v => (
             <button key={v.key}
               onClick={() => {
@@ -5696,9 +6372,9 @@ if (actSubTab === 'completed') {
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                         <thead>
                           <tr>
-                            {['Date', 'Job #', 'Farmer', 'Activity', 'Plot', 'Cluster', 'Area', 'Rate', 'Amount', 'Farmer OK', 'Allocated By'].map((h, i) => (
-                              <th key={i} style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: S.stone400, padding: '8px 12px', textAlign: i > 5 ? 'right' : 'left', borderBottom: `1px solid ${S.stone100}`, background: S.stone25, whiteSpace: 'nowrap' }}>{h}</th>
-                            ))}
+                            {['Work Date', 'Sales Date', 'Job #', 'Farmer', 'Activity', 'Plot', 'Cluster', 'Area', 'Rate', 'Amount', 'Farmer OK', 'Allocated By'].map((h, i) => (
+  <th key={i} style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: S.stone400, padding: '8px 12px', textAlign: i > 6 ? 'right' : 'left', borderBottom: `1px solid ${S.stone100}`, background: S.stone25, whiteSpace: 'nowrap' }}>{h}</th>
+))}
                           </tr>
                         </thead>
                         <tbody>
@@ -5708,8 +6384,17 @@ if (actSubTab === 'completed') {
                               onMouseEnter={e => (e.currentTarget.style.background = '#faf5ff')}
                               onMouseLeave={e => (e.currentTarget.style.background = i % 2 === 0 ? '#fafaf8' : '#fff')}>
                               <td style={{ padding: '8px 12px', color: S.stone500, whiteSpace: 'nowrap' }}>{j.allocated_date?.slice(5).replace('-', ' ')}</td>
-                              <td style={{ padding: '8px 12px', fontFamily: S.mono, color: S.sky600 }}>#{j.job_id}</td>
-                              <td style={{ padding: '8px 12px', fontWeight: 600 }}>{j.farmer_name}</td>
+<td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+  {j.sales_date ? (
+    <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 6, background: '#fefce8', color: '#92400e', fontWeight: 600, border: '1px solid #fde68a' }}>
+      {j.sales_date.slice(5).replace('-', ' ')}
+    </span>
+  ) : (
+    <span style={{ fontSize: 11, color: S.stone400 }}>—</span>
+  )}
+</td>
+<td style={{ padding: '8px 12px', fontFamily: S.mono, color: S.sky600 }}>#{j.job_id}</td>
+<td style={{ padding: '8px 12px', fontWeight: 600 }}>{j.farmer_name}</td>
                               <td style={{ padding: '8px 12px', color: S.stone600 }}>{j.activity_name}</td>
                               <td style={{ padding: '8px 12px', fontFamily: S.mono, color: S.stone500, fontSize: 11 }}>{j.plot_code || j.plot_name || '—'}</td>
                               <td style={{ padding: '8px 12px', fontSize: 11, color: S.stone500 }}>{j.cluster_name || '—'}</td>
@@ -5734,7 +6419,7 @@ if (actSubTab === 'completed') {
                         </tbody>
                         <tfoot>
                           <tr style={{ borderTop: `2px solid ${S.stone200}`, background: '#faf5ff' }}>
-                            <td colSpan={6} style={{ padding: '8px 12px', fontWeight: 700 }}>Total</td>
+                            <td colSpan={7} style={{ padding: '8px 12px', fontWeight: 700 }}>Total</td>
                             <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{Number(mk.total_area).toFixed(2)} ac</td>
                             <td />
                             <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 800, color: '#7c3aed' }}>₹{Math.round(mk.total_payout).toLocaleString('en-IN')}</td>
@@ -5749,6 +6434,114 @@ if (actSubTab === 'completed') {
             })}
           </div>
         )
+      ) : completedView === 'farmers' ? (
+        // ── VIEW: By Farmer ──
+        (() => {
+          // Group all completed allocations by farmer
+          const farmerMap: Record<string, { farmer_name: string; jobs: any[] }> = {};
+          displayActivities.forEach((a: any) => {
+            (a.allocations ?? []).filter((al: any) => al.work_status === 'completed').forEach((al: any) => {
+              const fId = al.farmer_id ?? a.farmer_id ?? (a.farmer_name || 'unknown');
+              const fName = al.farmer_name ?? a.farmer_name ?? 'Unknown Farmer';
+              if (!farmerMap[fId]) farmerMap[fId] = { farmer_name: fName, jobs: [] };
+              farmerMap[fId].jobs.push({
+                ...al,
+                activity_name: a.activity_name,
+                plot_code:     a.plot_code ?? al.plot_code,
+                cluster_name:  a.cluster_name ?? al.cluster_name,
+                job_id:        a.job_id ?? al.job_id,
+                farmer_name:   fName,
+                mukkadam_name: al.mukkadam_name,
+              });
+            });
+          });
+
+          const farmerEntries = Object.entries(farmerMap).sort(([, a], [, b]) => b.jobs.length - a.jobs.length);
+
+          if (farmerEntries.length === 0) {
+            return <div style={{ textAlign: 'center', padding: '48px 0', color: S.stone400 }}>No completed activity data</div>;
+          }
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {farmerEntries.map(([farmerId, fd]) => {
+                const totalArea   = fd.jobs.reduce((s: number, j: any) => s + Number(j.allocated_area || j.actual_area_done || 0), 0);
+                const totalAmount = fd.jobs.reduce((s: number, j: any) => s + Number(j.farmer_amount || 0), 0);
+                const av = avColor(farmerId);
+                const isExpF = expandedMukkadam === ('farmer_' + farmerId);
+                return (
+                  <div key={farmerId} style={{ background: '#fff', borderRadius: 14, border: `1px solid ${S.stone200}`, overflow: 'hidden', boxShadow: S.shadowCard }}>
+                    {/* Header */}
+                    <div onClick={() => setExpandedMukkadam(isExpF ? null : ('farmer_' + farmerId))}
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 18px', cursor: 'pointer', background: isExpF ? '#f0fdf4' : '#fff', borderBottom: isExpF ? `1px solid ${S.stone200}` : 'none' }}>
+                      <div style={{ width: 38, height: 38, borderRadius: 10, background: av.bg, color: av.fg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, border: `1px solid ${S.stone100}` }}>
+                        {mkInitials(fd.farmer_name)}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: S.stone900 }}>🌾 {fd.farmer_name}</div>
+                        <div style={{ fontSize: 11, color: S.stone400, marginTop: 1 }}>{fd.jobs.length} completed allocation{fd.jobs.length !== 1 ? 's' : ''}</div>
+                      </div>
+                      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 16 }}>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700 }}>{totalArea.toFixed(2)} ac</div>
+                          <div style={{ fontSize: 10, color: S.stone400 }}>Work Done</div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: '#16a34a' }}>₹{Math.round(totalAmount).toLocaleString('en-IN')}</div>
+                          <div style={{ fontSize: 10, color: S.stone400 }}>Farmer Amount</div>
+                        </div>
+                        <div style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${isExpF ? S.brand : S.stone200}`, background: isExpF ? S.brand : '#fff', color: isExpF ? '#fff' : S.stone400, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, transform: isExpF ? 'rotate(180deg)' : 'none', transition: 'all 250ms' }}>▾</div>
+                      </div>
+                    </div>
+                    {/* Expanded allocations table */}
+                    {isExpF && (
+                      <div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                          <thead>
+                            <tr>
+                              {['Date', 'Activity', 'Plot', 'Cluster', 'Mukkadam', 'Area Done', 'Farmer Amount'].map((h, i) => (
+                                <th key={i} style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: S.stone400, padding: '8px 12px', textAlign: i > 4 ? 'right' : 'left', borderBottom: `1px solid ${S.stone100}`, background: S.stone25, whiteSpace: 'nowrap' }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fd.jobs.slice().sort((a: any, b: any) => (b.allocated_date ?? '').localeCompare(a.allocated_date ?? '')).map((j: any, i: number) => (
+                              <tr key={j.allocation_id ?? i}
+                                style={{ background: i % 2 === 0 ? '#fafaf8' : '#fff' }}
+                                onMouseEnter={e => (e.currentTarget.style.background = '#f0fdf4')}
+                                onMouseLeave={e => (e.currentTarget.style.background = i % 2 === 0 ? '#fafaf8' : '#fff')}>
+                                <td style={{ padding: '8px 12px', color: S.stone500, whiteSpace: 'nowrap' }}>
+                                  {j.allocated_date?.slice(5).replace('-', ' ') || '—'}
+                                </td>
+                                <td style={{ padding: '8px 12px', fontWeight: 600, color: S.stone800 }}>{j.activity_name || '—'}</td>
+                                <td style={{ padding: '8px 12px', fontFamily: S.mono, color: S.stone500, fontSize: 11 }}>{j.plot_code || '—'}</td>
+                                <td style={{ padding: '8px 12px', fontSize: 11, color: S.stone500 }}>{j.cluster_name || '—'}</td>
+                                <td style={{ padding: '8px 12px', color: S.stone600 }}>{j.mukkadam_name || '—'}</td>
+                                <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>
+                                  {Number(j.actual_area_done ?? j.allocated_area ?? 0).toFixed(2)} ac
+                                </td>
+                                <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: '#16a34a' }}>
+                                  ₹{Math.round(j.farmer_amount || 0).toLocaleString('en-IN')}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr style={{ borderTop: `2px solid ${S.stone200}`, background: '#f0fdf4' }}>
+                              <td colSpan={5} style={{ padding: '8px 12px', fontWeight: 700 }}>Total</td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>{totalArea.toFixed(2)} ac</td>
+                              <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 800, color: '#16a34a' }}>₹{Math.round(totalAmount).toLocaleString('en-IN')}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()
       ) : (
         // ── VIEW: Activities ──
         (() => {
@@ -5850,8 +6643,22 @@ if (actSubTab === 'data_issue') {
               <span style={{ fontSize: 11, color: '#6b7280' }}>🌿 {a.activity_name}</span>
               {a.plot_name && <span style={{ fontSize: 11, color: '#6b7280' }}>📍 {a.plot_name}</span>}
               {a.clusters?.[0]?.name && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', fontWeight: 600, border: '1px solid #bfdbfe' }}>🏘 {a.clusters[0].name}</span>}
-              {a.scheduled_date && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#fefce8', color: '#ca8a04', fontWeight: 600, border: '1px solid #fde68a' }}>📅 {a.scheduled_date.slice(5).replace('-', ' ')}</span>}
-              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+              {a.scheduled_date && (
+                <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#fefce8', color: '#ca8a04', fontWeight: 600, border: '1px solid #fde68a' }}>
+                  ✂️ {a.scheduled_date.slice(5).replace('-', ' ')}
+                </span>
+              )}
+              {a.sales_date && (
+                <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#f0fdf4', color: '#15803d', fontWeight: 600, border: '1px solid #bbf7d0' }}>
+                  📦 {a.sales_date.slice(5).replace('-', ' ')}
+                </span>
+              )}
+              {a.allocations?.[0]?.allocated_date && (
+                <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#1d4ed8', fontWeight: 600, border: '1px solid #bfdbfe' }}>
+                  👷 {a.allocations[0].allocated_date.slice(5).replace('-', ' ')}
+                  {a.allocations[0].mukkadam_name ? ` · ${a.allocations[0].mukkadam_name}` : ''}
+                </span>
+              )}<div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700,
                   background: a.allocation_status === 'pending' ? '#fef3c7' : '#f0fdf4',
                   color: a.allocation_status === 'pending' ? '#92400e' : '#16a34a',
@@ -6757,7 +7564,10 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
                 { h: 'Location' },
                 { h: 'Acres', ar: true },
                 { h: 'Scheduled' },
-                { h: 'Rate', ar: true },
+                { h: 'Sales Date' },   // 👈 add here
+{ h: 'Alloc Date' },  // 👈 add here
+{ h: 'Rate', ar: true },
+
                 { h: 'Cost', ar: true },
                 { h: 'Status' },
                 { h: 'Action', ac: true },
@@ -6778,7 +7588,11 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
   if (a.is_split && a.splits?.length > 0) {
     return a.splits.map((sp: any, si: number) => ({
       ...a,
-      activity_id:       `${a.activity_id}_part_${si}`,
+      // _display_id is used only for expand/collapse keying — never sent to API
+      _display_id:       `${a.activity_id}_part_${si}`,
+      // activity_id stays as the REAL DB integer from the split
+      activity_id:       sp.activity_id,
+      id:                sp.activity_id,
       total_area:        sp.total_area,
       remaining_area:    sp.remaining_area ?? sp.total_area,
       allocated_area:    sp.allocated_area ?? 0,
@@ -6796,7 +7610,7 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
   return [a];
 }).map((a: any) => {
               // console.log(acts[0])
-              const isExp       = expandedActJob === String(a.activity_id);
+              const isExp       = expandedActJob === String(a._display_id ?? a.activity_id);
               const isPending   = a.allocation_status === 'pending';
               const isCompleted = a.allocations?.some((al: any) => al.work_status === 'completed');
               const isUpcoming  = a.days_until !== null && a.days_until >= 0  && a.days_until <= 10;
@@ -6809,138 +7623,13 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
               const dotColor = isPending ? S.amber500 : isCompleted ? S.brand : S.sky600;
               const tdR: React.CSSProperties = { padding: '10px 14px', borderBottom: isExp ? 'none' : `1px solid ${S.stone100}`, verticalAlign: 'middle', fontSize: 12 };
 
-// if (actSubTab === 'data_issue') {
-//   // Build: jobId → { activity info + unresolved notes }
-//   const jobNoteMap: Record<string, { a: any; notes: any[] }> = {};
-//   (filteredBase ?? acts).forEach((a: any) => {
-//     const unresolved = (jobNotes[a.job_id] ?? []).filter((n: any) => !n.is_resolved);
-//     if (unresolved.length === 0) return;
-//     if (!jobNoteMap[a.job_id]) {
-//       jobNoteMap[a.job_id] = { a, notes: unresolved };
-//     } else {
-//       // merge notes — avoid duplicates
-//       const existing = new Set(jobNoteMap[a.job_id].notes.map((n: any) => n.id));
-//       unresolved.forEach((n: any) => { if (!existing.has(n.id)) jobNoteMap[a.job_id].notes.push(n); });
-//     }
-//   });
 
-//   const jobEntries = Object.values(jobNoteMap);
-
-//   if (jobEntries.length === 0) {
-//     return <div style={{ textAlign: 'center', padding: '64px 0', color: '#16a34a', fontSize: 14, fontWeight: 600 }}>✅ No open data issues!</div>;
-//   }
-
-//   const TAG_STYLES: Record<string, { bg: string; color: string; border: string; label: string }> = {
-//     urgent:         { bg: '#fef2f2', color: '#dc2626', border: '#fecaca',  label: '🔴 Urgent'     },
-//     important:      { bg: '#fff7ed', color: '#ea580c', border: '#fed7aa',  label: '⚠️ Important'  },
-//     mukkadam_issue: { bg: '#f0f9ff', color: '#0284c7', border: '#bae6fd',  label: '👷 Mukkadam'   },
-//     farmer_issue:   { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0',  label: '🌾 Farmer'     },
-//     sales:          { bg: '#faf5ff', color: '#7c3aed', border: '#e9d5ff',  label: '💼 Sales'      },
-//     operations:     { bg: '#f8fafc', color: '#475569', border: '#cbd5e1',  label: '⚙️ Ops'        },
-//     data_wrong:     { bg: '#fefce8', color: '#ca8a04', border: '#fde68a',  label: '📊 Data Wrong' },
-//     price_mismatch: { bg: '#fff1f2', color: '#be123c', border: '#fecdd3',  label: '💰 Price'      },
-//     team_charging:  { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe',  label: '⚡ Team'       },
-//   };
-
-//   return (
-//     <div style={{ marginBottom: 24 }}>
-
-//       {/* Header banner */}
-//       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, padding: '10px 16px', borderRadius: 10, background: '#fef3c7', border: '1px solid #fde68a' }}>
-//         <span style={{ fontSize: 16 }}>📌</span>
-//         <div>
-//           <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>Data Issues — Jobs with Unresolved Notes</div>
-//           <div style={{ fontSize: 11, color: '#6b7280' }}>{jobEntries.length} job{jobEntries.length !== 1 ? 's' : ''} need attention · {jobEntries.reduce((s, e) => s + e.notes.length, 0)} open notes</div>
-//         </div>
-//         {/* Resolve all button placeholder */}
-//       </div>
-
-//       {/* One card per job */}
-//       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-//         {jobEntries.map(({ a, notes }) => (
-//           <div key={a.job_id} style={{ background: '#fff', borderRadius: 14, border: '1.5px solid #fecaca', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-
-//             {/* Job header */}
-//             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: '#fef2f2', borderBottom: '1px solid #fecaca', flexWrap: 'wrap' }}>
-//               <span style={{ fontSize: 11, fontWeight: 700, color: '#dc2626', fontFamily: 'monospace' }}>Job #{a.job_id}</span>
-//               <span style={{ fontSize: 11, fontWeight: 600, color: '#374151' }}>👤 {a.farmer_name}</span>
-//               <span style={{ fontSize: 11, color: '#6b7280' }}>🌿 {a.activity_name}</span>
-//               {a.plot_name && <span style={{ fontSize: 11, color: '#6b7280' }}>📍 {a.plot_name}</span>}
-//               {a.clusters?.[0]?.name && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', fontWeight: 600, border: '1px solid #bfdbfe' }}>🏘 {a.clusters[0].name}</span>}
-//               {a.scheduled_date && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: '#fefce8', color: '#ca8a04', fontWeight: 600, border: '1px solid #fde68a' }}>📅 {a.scheduled_date.slice(5).replace('-', ' ')}</span>}
-
-//               {/* Status + area */}
-//               <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-//                 <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700,
-//                   background: a.allocation_status === 'pending' ? '#fef3c7' : '#f0fdf4',
-//                   color: a.allocation_status === 'pending' ? '#92400e' : '#16a34a',
-//                   border: `1px solid ${a.allocation_status === 'pending' ? '#fde68a' : '#bbf7d0'}` }}>
-//                   {a.allocation_status}
-//                 </span>
-//                 <span style={{ fontSize: 11, fontWeight: 700, color: '#374151' }}>{Number(a.total_area).toFixed(2)} ac</span>
-//                 <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#fef2f2', color: '#dc2626', fontWeight: 700, border: '1px solid #fecaca' }}>
-//                   {notes.length} open note{notes.length !== 1 ? 's' : ''}
-//                 </span>
-//                 {/* Quick action — add note */}
-//                 <button onClick={() => { setJobsNoteJobId(a.job_id); setJobsNoteJobLabel(`${a.activity_name} – ${a.farmer_name}`); }}
-//                   style={{ padding: '3px 10px', borderRadius: 7, fontSize: 10, fontWeight: 600, border: '1px solid #e9d5ff', background: '#f5f3ff', color: '#7c3aed', cursor: 'pointer', fontFamily: 'inherit' }}>
-//                   + Note
-//                 </button>
-//               </div>
-//             </div>
-
-//             {/* Notes */}
-//             <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-//               {notes.map((n: any) => (
-//                 <div key={n.id} style={{ borderRadius: 10, background: '#fff', border: '1px solid #fecaca', overflow: 'hidden' }}>
-
-//                   {/* Note header: mentions → tags → author/time */}
-//                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', background: '#fef2f2', borderBottom: '1px solid #fecaca', flexWrap: 'wrap' }}>
-//                     {(n.mentions ?? []).length > 0 && (
-//                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-//                         <span style={{ fontSize: 10, color: '#6b7280' }}>@</span>
-//                         {n.mentions.map((m: any) => (
-//                           <span key={m.id} style={{ fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 999, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe' }}>
-//                             {m.full_name || m.username}
-//                           </span>
-//                         ))}
-//                         <span style={{ width: 1, height: 12, background: '#e5e7eb', margin: '0 4px' }} />
-//                       </div>
-//                     )}
-//                     {(n.tags ?? []).map((tag: string) => {
-//                       const ts = TAG_STYLES[tag] ?? { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb', label: tag };
-//                       return <span key={tag} style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: ts.bg, color: ts.color, border: `1px solid ${ts.border}` }}>{ts.label}</span>;
-//                     })}
-//                     <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}>
-//                       <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontWeight: 700, color: '#fff' }}>
-//                         {(n.author?.full_name || n.author?.username || '?').slice(0, 1).toUpperCase()}
-//                       </div>
-//                       <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>{n.author?.full_name || n.author?.username}</span>
-//                       <span style={{ fontSize: 10, color: '#9ca3af' }}>
-//                         · {new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-//                         {' '}{new Date(n.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-//                       </span>
-//                     </div>
-//                   </div>
-
-//                   {/* Note text */}
-//                   <div style={{ padding: '8px 10px', fontSize: 13, color: '#111827', lineHeight: 1.6 }}>{n.text}</div>
-//                 </div>
-//               ))}
-//             </div>
-//           </div>
-//         ))}
-//       </div>
-//     </div>
-//   );
-// }
- 
               return (
                 <React.Fragment key={a.activity_id}>
                   <tr style={{ cursor: 'pointer', background: isExp ? S.brandLight : 'transparent', transition: 'background 150ms' }}
                     onMouseEnter={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = S.stone25; }}
                     onMouseLeave={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                    onClick={() => setExpandedActJob(isExp ? null : String(a.activity_id))}>
+                    onClick={() => setExpandedActJob(isExp ? null : String(a._display_id ?? a.activity_id))}>
  
                     {/* dot */}
                     <td style={{ ...tdR, paddingLeft: 20, width: 28 }}>
@@ -6963,6 +7652,18 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
                       {isOverdue && <div style={{ fontSize: 10, fontWeight: 700, color: overdueDays > 30 ? S.red600 : S.amber700, marginTop: 1 }}>{overdueDays}d overdue</div>}
                       {isUpcoming && <div style={{ fontSize: 10, fontWeight: 700, color: S.amber700, marginTop: 1 }}>In {a.days_until}d</div>}
                     </td>
+                    {/* sale date */}
+<td style={{ ...tdR, fontSize: 12, color: S.stone600 }}>
+  {a.sales_date ? a.sales_date.slice(5) : '—'}
+</td>
+
+{/* alloc date */}
+<td style={{ ...tdR, fontSize: 12, color: S.sky600, fontWeight: 600 }}>
+  {a.allocations?.[0]?.allocated_date
+    ? a.allocations[0].allocated_date.slice(5)
+    : <span style={{ color: S.stone300 }}>—</span>}
+</td>
+
                     {/* rate */}
                     <td style={{ ...tdR, textAlign: 'right', fontFamily: S.mono, fontSize: 11 }}>₹{Number(a.rate_per_acre).toLocaleString('en-IN')}/ac</td>
                     {/* cost */}
@@ -7078,7 +7779,7 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
 {/* Expanded detail */}
 {isExp && (
   <tr>
-    <td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${S.stone200}`, background: S.stone25 }}>
+    <td colSpan={13} style={{ padding: 0, borderBottom: `1px solid ${S.stone200}`, background: S.stone25 }}>
       <div style={{ padding: '16px 20px' }}>
 
         {actSubTab === 'data_issue' ? (
