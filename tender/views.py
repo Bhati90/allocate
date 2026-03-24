@@ -5556,7 +5556,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
         all_activities = list(
             JobActivity.objects.filter(
                 job=job_act.job,
-                plot=activity.plot, 
+                plot=job_act.plot, 
                 is_lost=False,
                 total_area__gt=0,   
             ).order_by('scheduled_date', 'id')
@@ -6123,7 +6123,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
             all_activities = list(
                 JobActivity.objects.filter(
                     job=job_activity.job,
-                    plot=activity.plot, 
+                    plot=job_activity.plot, 
                     total_area__gt=0,   
                     is_lost=False,
 
