@@ -2871,10 +2871,11 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 # Start from new_date_obj (the moved activity's new date).
                 reference_date = new_date_obj
 
+                current_seq_order = get_activity_sequence_order(activity)
+
                 for act in subsequent:
-                    # Skip activities that are BEFORE the original date —
-                    # they are predecessors and should not be touched.
-                    if act.scheduled_date and act.scheduled_date <= original_date:
+                    # Skip if this activity comes BEFORE current in phase sequence
+                    if get_activity_sequence_order(act) <= current_seq_order:
                         continue
 
                     # ── Already allocated / completed → stays fixed, reset reference anchor ──
@@ -5967,10 +5968,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         a.id,
                     ))
 
+                    current_seq_order = get_activity_sequence_order(job_act)
+
                     for act in subsequent:
-                        # Skip activities on or before the original date —
-                        # they are predecessors and must not be touched.
-                        if act.scheduled_date and act.scheduled_date <= original_date:
+                        if get_activity_sequence_order(act) <= current_seq_order:
                             continue
 
                         # ── Allocated / completed → stays fixed, reset reference anchor ──
