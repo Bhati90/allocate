@@ -2515,6 +2515,62 @@ def activity_dashboard(request):
 from rest_framework.decorators import api_view
 from datetime import datetime, timedelta
 
+
+# Add this constant at the top of your file (or in a constants.py)
+
+ACTIVITY_SEQUENCE_ORDER = {
+    # --- Phase 1: Initiation ---
+    "Pruning (छाटणी)": 10,
+    "Pruning (छाटणी) 1": 11,
+    "Pruning (छाटणी) 2": 12,
+    "Hand Pasting (पेस्टींग)": 13,
+    # --- Phase 2: Early Shoot Management ---
+    "Shoot Selection (विरळणी)": 20,
+    "Shoot Selection (विरळणी) 1": 21,
+    "Cordan Tying (ओलांढे बांधणे)": 22,
+    "Full Cordan Tying": 23,
+    "Full Cordan Tying (सरसकट ओलांढे बांधणे)": 24,
+    "Cordan Tying (सुटलेले ओलांढे बांधणे)": 25,
+    "Extra Leaf removal (पाने काढणे)": 26,
+    "Extra Leaf Removal (पाने काढणे) 1": 27,
+    "Extra Leaf Removal (पाने काढणे) 2": 28,
+    "(Extra) Early Leaf Removal - Scissor": 29,
+    # --- Phase 3: Primary Subcane & Cleaning ---
+    "1st Subcane (पहिली सबकेन)": 30,
+    "One Time Subcane (सबकेन)": 31,
+    "One Time Subcane (एकदाच सबकेन करणे) 1": 32,
+    "1st Lateral Removal (बगल काढणे)": 33,
+    "1st Lateral Removal (बगल काढणे) 1": 34,
+    "1st Round Extra Leaf removal": 35,
+    # --- Phase 4: Secondary Subcane & Cleaning ---
+    "2nd Subcane (दुसरी सबकेन)": 40,
+    "Subcane (सबकेन) 1": 41,
+    "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे)": 42,
+    "2nd Lateral Removal & Tendrils Removal (दुसरी बगल बाळी काढणे) 1": 43,
+    "2nd Laterals Removal & Tendrils Removal (दुसरी बगल बाळी काढणे) 1": 44,
+    "2nd Round Extra Leaf removal": 45,
+    # --- Phase 5: Tertiary Subcane & Maturation ---
+    "3rd Subcane (तिसरी सबकेन)": 50,
+    "Subcane (सबकेन) 2": 51,
+    "Subcane (सबकेन) 3": 52,
+    "3rd Round Extra Leaf removal": 53,
+    "Shenda Stopping (शेंडा स्टॉपिंग)": 54,
+    "Shenda Stopping (शेंडा स्टॉपिंग) 1": 55,
+    # --- Phase 6: Final Selection & Support ---
+    "Finger Thinning (बोटाळणी)": 60,
+    "Cane Selection (काडी निवड)": 61,
+    "Cane Tying with Clips (काढी बांधणे)": 62,
+    "Cane Tying with Clips (काढी बांधणे) 1": 63,
+    "Cane Tying with Clips (काडी बांधणे - क्लिप्स)": 64,
+    "Cane Tying with Strings/Thread": 65,
+    "Cane Tying with Strings/Thread (काडी बांधणे - सुतळी)": 66,
+    "Cane Tying with Strings/Thread (काडी बांधणे - सुतळी) 1": 67,
+}
+
+def get_activity_sequence_order(job_activity):
+    """Return the phase-based sequence order for sorting. Unknown activities go last."""
+    return ACTIVITY_SEQUENCE_ORDER.get(job_activity.activity.name, 999)
+
 @api_view(['GET'])
 def suggest_activity_date(request):
     """
@@ -2636,16 +2692,19 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 status=400,
             )
 
-        # ── Load all activities for this job in sequence order ───────────────────
-        # Do this BEFORE the atomic block so we can validate without holding locks.
         all_activities = list(
             JobActivity.objects.filter(
                 job=activity.job,
-                plot=activity.plot, 
-                total_area__gt=0,   
+                plot=activity.plot,
+                total_area__gt=0,
                 is_lost=False,
-            ).order_by('scheduled_date', 'id')
+            ).select_related('activity')
         )
+        all_activities.sort(key=lambda a: (
+            get_activity_sequence_order(a),
+            a.scheduled_date or date.min,
+            a.id,
+        ))
 
         # Find current activity's position in the sequence
         try:
@@ -2795,12 +2854,18 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 subsequent = list(
                     JobActivity.objects.filter(
                         job=activity.job,
+                        plot=activity.plot,
                         is_lost=False,
                     )
                     .exclude(id=activity.id)
                     .exclude(id=new_activity.id)
-                    .order_by('scheduled_date', 'id')
+                    .select_related('activity')
                 )
+                subsequent.sort(key=lambda a: (
+                    get_activity_sequence_order(a),
+                    a.scheduled_date or date.min,
+                    a.id,
+                ))
 
                 # reference_date = the last "anchor" date we cascaded from.
                 # Start from new_date_obj (the moved activity's new date).
@@ -2889,6 +2954,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             },
             status=200,
         )
+    
+    
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         activity = self.get_object()
@@ -4722,11 +4789,14 @@ class ClusterViewSet(viewsets.ModelViewSet):
             return Response({'error': 'mukkadam_id required'}, status=400)
 
         try:
-            assignment = ClusterMukkadamAssignment.objects.get(
+            assignment = ClusterMukkadamAssignment.objects.filter(
                 cluster=cluster,
                 mukkadam__mukkadam_id=mukkadam_id,
                 is_active=True,
-            )
+            ).order_by('id').last()  # gets the most recently created one
+
+            if not assignment:
+                return Response({'error': 'Assignment not found'}, status=404)
         except ClusterMukkadamAssignment.DoesNotExist:
             return Response({'error': 'Assignment not found'}, status=404)
 
@@ -5065,12 +5135,16 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 all_activities = list(
                     JobActivity.objects.filter(
                         job=job_activity.job,
-                        plot=job_activity.plot, 
-                        total_area__gt=0,   
+                        plot=job_activity.plot,
+                        total_area__gt=0,
                         is_lost=False,
-                    ).order_by('scheduled_date', 'id')
+                    ).select_related('activity')
                 )
-
+                all_activities.sort(key=lambda a: (
+                    get_activity_sequence_order(a),
+                    a.scheduled_date or date.min,
+                    a.id,
+                ))
                 try:
                     current_idx = next(i for i, a in enumerate(all_activities) if a.id == job_activity.id)
                 except StopIteration:
@@ -5327,6 +5401,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to create allocation: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+    
+    
     @action(detail=False, methods=['post'])
     def validate_allocation(self, request):
         """
@@ -5629,11 +5705,16 @@ class AllocationViewSet(viewsets.ModelViewSet):
         all_activities = list(
             JobActivity.objects.filter(
                 job=job_act.job,
-                plot=job_act.plot, 
+                plot=job_act.plot,
                 is_lost=False,
-                total_area__gt=0,   
-            ).order_by('scheduled_date', 'id')
+                total_area__gt=0,
+            ).select_related('activity')
         )
+        all_activities.sort(key=lambda a: (
+            get_activity_sequence_order(a),
+            a.scheduled_date or date.min,
+            a.id,
+        ))
 
         try:
             current_idx = next(i for i, a in enumerate(all_activities) if a.id == job_act.id)
@@ -5874,11 +5955,17 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     subsequent = list(
                         JobActivity.objects.filter(
                             job=job_act.job,
+                            plot=job_act.plot,
                             is_lost=False,
                         )
                         .exclude(id__in=exclude_ids)
-                        .order_by('scheduled_date', 'id')
+                        .select_related('activity')
                     )
+                    subsequent.sort(key=lambda a: (
+                        get_activity_sequence_order(a),
+                        a.scheduled_date or date.min,
+                        a.id,
+                    ))
 
                     for act in subsequent:
                         # Skip activities on or before the original date —
@@ -6196,12 +6283,16 @@ class AllocationViewSet(viewsets.ModelViewSet):
             all_activities = list(
                 JobActivity.objects.filter(
                     job=job_activity.job,
-                    plot=job_activity.plot, 
-                    total_area__gt=0,   
+                    plot=job_activity.plot,
+                    total_area__gt=0,
                     is_lost=False,
-
-                ).order_by('scheduled_date', 'id')
+                ).select_related('activity')
             )
+            all_activities.sort(key=lambda a: (
+                get_activity_sequence_order(a),
+                a.scheduled_date or date.min,
+                a.id,
+            ))
 
             try:
                 current_idx = next(i for i, a in enumerate(all_activities) if a.id == job_activity.id)
