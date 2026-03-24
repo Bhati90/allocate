@@ -5159,59 +5159,59 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 successors   = all_activities[current_idx + 1:]
 
                 # ── 6) Rule 1: Block if any unallocated predecessor exists ────────
-                for pred in predecessors:
-                    if pred.allocation_status == 'pending' and not pred.is_lost:
-                        return Response(
-                            {
-                                'error': (
-                                    f'Cannot allocate "{job_activity.activity.name}" — '
-                                    f'"{pred.activity.name}" (scheduled {pred.scheduled_date}) '
-                                    f'is not yet allocated or cancelled. '
-                                    f'Allocate or cancel it first.'
-                                )
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                # for pred in predecessors:
+                #     if pred.allocation_status == 'pending' and not pred.is_lost:
+                #         return Response(
+                #             {
+                #                 'error': (
+                #                     f'Cannot allocate "{job_activity.activity.name}" — '
+                #                     f'"{pred.activity.name}" (scheduled {pred.scheduled_date}) '
+                #                     f'is not yet allocated or cancelled. '
+                #                     f'Allocate or cancel it first.'
+                #                 )
+                #             },
+                #             status=status.HTTP_400_BAD_REQUEST,
+                #         )
 
                 # ── 7) Rule 4: Block if allocated_date before nearest alloc predecessor ──
-                nearest_alloc_pred = None
-                for pred in reversed(predecessors):
-                    if pred.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                        nearest_alloc_pred = pred
-                        break
+                # nearest_alloc_pred = None
+                # for pred in reversed(predecessors):
+                #     if pred.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+                #         nearest_alloc_pred = pred
+                #         break
 
-                if nearest_alloc_pred and allocated_date_obj <= nearest_alloc_pred.scheduled_date:
-                    return Response(
-                        {
-                            'error': (
-                                f'Allocated date {allocated_date_obj} is on or before '
-                                f'"{nearest_alloc_pred.activity.name}" '
-                                f'(allocated on {nearest_alloc_pred.scheduled_date}). '
-                                f'Move or cancel that allocation first.'
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                # if nearest_alloc_pred and allocated_date_obj <= nearest_alloc_pred.scheduled_date:
+                #     return Response(
+                #         {
+                #             'error': (
+                #                 f'Allocated date {allocated_date_obj} is on or before '
+                #                 f'"{nearest_alloc_pred.activity.name}" '
+                #                 f'(allocated on {nearest_alloc_pred.scheduled_date}). '
+                #                 f'Move or cancel that allocation first.'
+                #             )
+                #         },
+                #         status=status.HTTP_400_BAD_REQUEST,
+                #     )
 
                 # ── 8) Rule 4: Block if allocated_date after nearest alloc successor ──
-                nearest_alloc_succ = None
-                for succ in successors:
-                    if succ.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                        nearest_alloc_succ = succ
-                        break
+                # nearest_alloc_succ = None
+                # for succ in successors:
+                #     if succ.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+                #         nearest_alloc_succ = succ
+                #         break
 
-                if nearest_alloc_succ and allocated_date_obj >= nearest_alloc_succ.scheduled_date:
-                    return Response(
-                        {
-                            'error': (
-                                f'Allocated date {allocated_date_obj} is on or after '
-                                f'"{nearest_alloc_succ.activity.name}" '
-                                f'(allocated on {nearest_alloc_succ.scheduled_date}). '
-                                f'Move that allocation further first.'
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                # if nearest_alloc_succ and allocated_date_obj >= nearest_alloc_succ.scheduled_date:
+                #     return Response(
+                #         {
+                #             'error': (
+                #                 f'Allocated date {allocated_date_obj} is on or after '
+                #                 f'"{nearest_alloc_succ.activity.name}" '
+                #                 f'(allocated on {nearest_alloc_succ.scheduled_date}). '
+                #                 f'Move that allocation further first.'
+                #             )
+                #         },
+                #         status=status.HTTP_400_BAD_REQUEST,
+                #     )
 
                 # ── 9) Remaining-area guard ───────────────────────────────────────
                 remaining = (job_activity.total_area - job_activity.allocated_area).quantize(
