@@ -2599,6 +2599,120 @@ import logging
 logger = logging.getLogger(__name__)
 from .utils import get_effective_crew_size 
 from rest_framework.decorators import api_view
+
+def _build_gap_map_and_cascade(
+    subsequent_qs,          # queryset or list of activities to cascade
+    exclude_ids,            # set of IDs to skip (original + new split)
+    current_seq_order,      # get_activity_sequence_order of the moved activity
+    reference_date,         # starting anchor (new_date_obj / new_date)
+    reason_prefix,          # string for move_reason
+    request,
+):
+    """
+    Shared cascade logic for move, change_date, and delete_allocation.
+
+    Returns (shifted_activities, warnings).
+    """
+    from datetime import date, timedelta
+
+    # Sort the activities we'll actually walk
+    subsequent = [a for a in subsequent_qs if a.id not in exclude_ids]
+    subsequent.sort(key=lambda a: (
+        get_activity_sequence_order(a),
+        a.scheduled_date or date.min,
+        a.id,
+    ))
+
+    # Build gap_map from the FILTERED + SORTED list, not the full all_activities list.
+    # This ensures each gap is relative to the actual previous node in the cascade chain.
+    gap_map = {}
+    prev_act = None
+    for act in subsequent:
+        if get_activity_sequence_order(act) <= current_seq_order:
+            prev_act = act  # track predecessors so first eligible successor gets right gap
+            continue
+        if prev_act is None:
+            gap_map[act.id] = act.original_gap_days or 0
+        elif act.original_gap_days is not None:
+            gap_map[act.id] = act.original_gap_days
+        elif act.scheduled_date and prev_act.scheduled_date:
+            gap_map[act.id] = (act.scheduled_date - prev_act.scheduled_date).days
+        else:
+            gap_map[act.id] = 0
+        prev_act = act
+
+    shifted_activities = []
+    warnings = []
+
+    for act in subsequent:
+        if get_activity_sequence_order(act) <= current_seq_order:
+            continue
+
+        # Allocated / completed → stays fixed, reset reference anchor
+        if act.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+            reference_date = act.scheduled_date
+            warnings.append({
+                'activity_id':   act.id,
+                'activity_name': act.activity.name,
+                'old_date':      str(act.scheduled_date),
+                'new_date':      str(act.scheduled_date),
+                'message':       f'Skipped — already {act.allocation_status}. '
+                                 f'Becomes new reference anchor ({act.scheduled_date}).',
+            })
+            continue
+
+        # Manually moved → skip, but still advance reference so chain stays correct
+        if act.is_manually_moved:
+            # BUG FIX: advance reference_date even for skipped nodes
+            if act.scheduled_date:
+                reference_date = act.scheduled_date
+            warnings.append({
+                'activity_id':   act.id,
+                'activity_name': act.activity.name,
+                'old_date':      str(act.scheduled_date),
+                'new_date':      str(act.scheduled_date),
+                'message':       'Skipped — manually moved (reference advanced)',
+            })
+            continue
+
+        # Zero area → skip (do NOT advance reference — this node has no date anchor)
+        if not act.total_area or act.total_area <= 0:
+            warnings.append({
+                'activity_id':   act.id,
+                'activity_name': act.activity.name,
+                'old_date':      str(act.scheduled_date),
+                'new_date':      str(act.scheduled_date),
+                'message':       'Skipped — zero area',
+            })
+            continue
+
+        # Unallocated → recalculate
+        gap          = gap_map.get(act.id, 0)
+        old_date     = act.scheduled_date
+        new_act_date = reference_date + timedelta(days=gap)
+
+        act.scheduled_date = new_act_date
+        act.move_reason    = f'{reason_prefix} (cascade)'
+        if request.user and request.user.is_authenticated:
+            act.last_moved_by = request.user
+            act.last_moved_at = timezone.now()
+        act.save(update_fields=[
+            'scheduled_date', 'move_reason',
+            'last_moved_by', 'last_moved_at',
+        ])
+
+        reference_date = new_act_date  # advance anchor
+
+        shifted_activities.append({
+            'activity_id':   act.id,
+            'activity_name': act.activity.name,
+            'old_date':      str(old_date),
+            'new_date':      str(new_act_date),
+            'gap_used':      gap,
+            'status':        act.allocation_status,
+        })
+
+    return shifted_activities, warnings
 # =============================================================================
 # MUKKADAM VIEWSET
 # =============================================================================
@@ -2956,7 +3070,6 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             },
             status=200,
         )
-    
     
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
@@ -6509,7 +6622,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
-
 
 
 from rest_framework.decorators import api_view
