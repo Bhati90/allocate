@@ -3726,7 +3726,11 @@ const displaySummary = useMemo(() => {
   })(),
 };
 }, [data, farmerSubTab, subTabFilteredFarmers, tab]);
-
+// ── Add these state variables near your other payment states ──
+const [bulkGenerating, setBulkGenerating]   = React.useState(false);
+const [bulkModalOpen, setBulkModalOpen]     = React.useState(false);
+const [bulkProgress, setBulkProgress]       = React.useState<{ done: number; total: number; current: string; errors: string[] }>({ done: 0, total: 0, current: '', errors: [] });
+const [bulkDone, setBulkDone]               = React.useState(false);
 
 
 useEffect(() => {
@@ -4018,7 +4022,6 @@ const [paymentSubTab, setPaymentSubTab]           = useState<'farmer' | 'mukkada
 const [mukkadamPayData, setMukkadamPayData]       = useState<any>(null);
 const [mukkadamPayLoading, setMukkadamPayLoading] = useState(false);
 const [mukkadamClusterId, setMukkadamClusterId]   = useState<number | null>(null);
-
 
 useEffect(() => {
   if (tab !== 'payment' || paymentSubTab !== 'mukkadam') return;
@@ -4911,22 +4914,264 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
       };
       const fmtFull = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 
-      // Filtered farmer list
-      const filteredFarmers = allFarmers.filter((f: any) => {
-        if (paymentFilter === 'ready_to_bill' && f.status !== 'ready_to_bill') return false;
-        if (paymentFilter === 'partial'    && f.status !== 'partial')            return false;
-        if (paymentFilter === 'overdue'    && f.expected_payment !== 'overdue')    return false;
-        if (paymentFilter === 'this_week'  && f.expected_payment !== 'this_week')  return false;
-        if (paymentFilter === 'next_week'  && f.expected_payment !== 'next_week')  return false;
-        if (paymentFilter === 'all_billed' && f.status !== 'billed') return false;
-        if (paymentClusterFilter  !== 'all' && String(f.cluster_id) !== paymentClusterFilter)  return false;
-        if (paymentActivityFilter !== 'all' && f.activity !== paymentActivityFilter) return false;
-        return true;
+      // ── 1. filteredFarmers ──────────────────────────────────────────
+const filteredFarmers = allFarmers.filter((f: any) => {
+  if (paymentFilter === 'ready_to_bill' && f.status !== 'ready_to_bill') return false;
+  if (paymentFilter === 'partial'    && f.status !== 'partial')            return false;
+  if (paymentFilter === 'overdue'    && f.expected_payment !== 'overdue')    return false;
+  if (paymentFilter === 'this_week'  && f.expected_payment !== 'this_week')  return false;
+  if (paymentFilter === 'next_week'  && f.expected_payment !== 'next_week')  return false;
+  if (paymentFilter === 'all_billed' && f.status !== 'billed') return false;
+  if (paymentClusterFilter  !== 'all' && String(f.cluster_id) !== paymentClusterFilter)  return false;
+  if (paymentActivityFilter !== 'all' && f.activity !== paymentActivityFilter) return false;
+  return true;
+});
+
+const readyFarmers = allFarmers.filter((f: any) => f.status === 'ready_to_bill');
+const uniqueReadyFarmerIds = [...new Set(readyFarmers.map((f: any) => String(f.farmer_id)))];
+const uniqueReadyFarmers = uniqueReadyFarmerIds.map(id => readyFarmers.find((f: any) => String(f.farmer_id) === id)!);
+
+// ── 3. handleBulkGenerate ───────────────────────────────────────
+const handleBulkGenerate = async () => {
+  // ── Deduplicate by farmer_id ────────────────────────────────────
+  const farmerMap = new Map<string, any>();
+  readyFarmers.forEach((f: any) => {
+    if (!farmerMap.has(String(f.farmer_id))) {
+      farmerMap.set(String(f.farmer_id), f);
+    }
+  });
+  const uniqueFarmers = Array.from(farmerMap.values());
+
+  setBulkGenerating(true);
+  setBulkProgress({ done: 0, total: uniqueFarmers.length, current: '', errors: [] });
+
+  for (let i = 0; i < uniqueFarmers.length; i++) {
+    const bill = uniqueFarmers[i];
+    setBulkProgress(p => ({ ...p, current: bill.farmer_name }));
+
+    try {
+      const token = localStorage.getItem('auth_token');
+
+      // ── Step 1: Fetch full farmer billing data ──────────────────
+      const res = await fetch(
+        `${API_BASE_URL}/api/cluster/${bill.cluster_id}/payment-dashboard/`,
+        { headers: { Authorization: `Token ${token}` } }
+      );
+      if (!res.ok) throw new Error(`Failed to fetch: HTTP ${res.status}`);
+      const farmerData = await res.json();
+
+      // ── Step 2: Find this farmer ────────────────────────────────
+      const farmer = (farmerData.farmers ?? []).find(
+        (f: any) => String(f.farmer_id) === String(bill.farmer_id)
+      );
+      if (!farmer) throw new Error(`${bill.farmer_name} not found in cluster data`);
+
+      const jobs: any[] = farmer.jobs ?? [];
+
+      // ── Step 3: Rebuild activity groups ────────────────────────
+      const flat: any[] = [];
+      jobs.forEach((job: any) => {
+        (job.activities ?? []).forEach((act: any) => {
+          flat.push({ ...act, job_id: job.job_id, mukkadam_name: job.mukkadam_name });
+        });
       });
 
-      const uniqueClusters  = [...new Set(allFarmers.map((f: any) => ({id: String(f.cluster_id), name: f.cluster_name})).map(c => JSON.stringify(c)))].map(s => JSON.parse(s));
-      const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
+      const actMap = new Map<string, any>();
+      flat.forEach((act: any) => {
+        if (!actMap.has(act.activity_name)) {
+          actMap.set(act.activity_name, {
+            activityName: act.activity_name,
+            plots: [], totalPlots: 0, donePlots: 0,
+            totalBillable: 0, totalArea: 0, rate: act.rate_per_acre,
+          });
+        }
+        const group = actMap.get(act.activity_name)!;
 
+        const alreadyExists = group.plots.some(
+          (p: any) => p.plotName === act.plot_name && p.plotCode === act.plot_code
+        );
+        if (alreadyExists) return;
+
+        const tArea = Number(act.total_area ?? 0);
+        const aArea = Number(act.allocated_area ?? 0);
+        const rate  = Number(act.rate_per_acre ?? 0);
+        if (tArea <= 0) return;
+
+        const allocs = act.allocations ?? [];
+        const completedAllocArea = allocs
+          .filter((a: any) => a.work_status === 'completed')
+          .reduce((s: number, a: any) =>
+            s + Number(a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0), 0);
+        const allAllocsCompleted =
+          allocs.length > 0 && allocs.every((a: any) => a.work_status === 'completed');
+        const isDone =
+          allAllocsCompleted ||
+          (tArea > 0 && completedAllocArea >= tArea - 0.05) ||
+          act.allocation_status === 'completed';
+
+        const latestAlloc = allocs
+          .filter((a: any) => a.work_status === 'completed')
+          .sort((a: any, b: any) =>
+            (b.allocated_date ?? '').localeCompare(a.allocated_date ?? ''))[0];
+        const doneDate =
+          latestAlloc?.allocated_date ??
+          allocs[0]?.allocated_date ??
+          act.scheduled_date ?? null;
+        const mukkadamName = act.mukkadam_name || allocs[0]?.mukkadam_name || '—';
+
+        group.plots.push({
+          plotName:      act.plot_name,
+          plotCode:      act.plot_code,
+          jobId:         act.job_id,
+          displayArea:   tArea > 0 ? tArea : aArea,
+          rate,
+          isDone,
+          billableAmount: Number(act.billable_amount ?? 0),
+          doneDate,
+          mukkadam: mukkadamName,
+        });
+        group.totalPlots++;
+        if (isDone) group.donePlots++;
+        group.totalBillable += Number(act.billable_amount ?? 0);
+        group.totalArea     += tArea > 0 ? tArea : aArea;
+      });
+
+      actMap.forEach((g: any) => {
+        g.allDone = g.totalPlots > 0 && g.donePlots === g.totalPlots;
+      });
+
+      // ── Step 4: Get ALL unsent ready groups for this farmer ─────
+      const billSentMap = jobs[0]?.bill_sent_map ?? {};
+      const unsentGroups = Array.from(actMap.values())
+        .filter((g: any) => g.allDone && !billSentMap[g.activityName]);
+
+      if (unsentGroups.length === 0) {
+        // All activities already billed — skip
+        setBulkProgress(p => ({ ...p, done: p.done + 1 }));
+        continue;
+      }
+
+      // ── Step 5: Payment context ─────────────────────────────────
+      const allPayments: any[] = jobs.flatMap((j: any) => j.payment_history ?? []);
+      const totalPaid = jobs.reduce((s: number, j: any) => s + (j.summary?.total_paid ?? 0), 0);
+
+      // Credit = money collected but not yet applied to any sent bill
+      const alreadyBilledAmount = Object.values(billSentMap).reduce(
+        (sum: number, log: any) => sum + (Number((log as any).total_billed) || 0), 0
+      );
+      // Use `let` — we consume credit as each activity bill is sent
+      let remainingCredit = Math.max(0, totalPaid - alreadyBilledAmount);
+
+      console.log(`[Bulk] ${farmer.farmer_name} | totalPaid: ${totalPaid} | alreadyBilled: ${alreadyBilledAmount} | credit: ${remainingCredit} | activities: ${unsentGroups.map((g: any) => g.activityName).join(', ')}`);
+
+      // ── Step 6: Send each unsent activity group ─────────────────
+      for (const group of unsentGroups) {
+        const billableNow     = group.totalBillable;
+        const creditForThisBill = remainingCredit;           // credit available NOW
+        const balanceDue      = billableNow - creditForThisBill;
+
+        const ownerJobId = group.plots[0]?.jobId ?? jobs[0]?.job_id ?? '';
+        const ownerJob   = jobs.find((j: any) => j.job_id === ownerJobId) ?? jobs[0];
+        const allPlots   = [
+          ...new Set(group.plots.map((p: any) => p.plotName || p.plotCode))
+        ].join(', ');
+        const mukkadamFromPlot =
+          group.plots.find((p: any) => p.mukkadam && p.mukkadam !== '—')?.mukkadam ?? '';
+
+        const payload = {
+          timestamp:     new Date().toISOString(),
+          activity_name: group.activityName,
+          farmer: {
+            id:    String(farmer.farmer_id),
+            name:  farmer.farmer_name,
+            phone: farmer.mobile_number || '',
+          },
+          job: {
+            id:   String(ownerJobId),
+            crop: ownerJob?.crop_name ?? '',
+            plot: allPlots,
+          },
+          mukkadam: {
+            name:   mukkadamFromPlot || ownerJob?.mukkadam_name || '',
+            mobile: ownerJob?.mukkadam_mobile || '',
+          },
+          work_done: group.plots.map((p: any) => ({
+            activity:      group.activityName,
+            plot_name:     p.plotName || p.plotCode,
+            date:          p.doneDate ?? '',
+            acres_done:    Number(p.displayArea),
+            rate_per_acre: Number(p.rate),
+            amount:        Math.round(p.billableAmount),
+          })),
+          payment_history: allPayments.map((p: any) => ({
+            date:   p.date,
+            amount: Number(p.amount),
+            mode:   p.mode,
+            notes:  p.notes || '',
+          })),
+          bill_summary: {
+            total_billed:       Math.round(billableNow),
+            total_already_paid: Math.round(creditForThisBill),
+            balance_due_now:    Math.round(Math.max(0, balanceDue)),
+            why_this_bill: [
+              `${group.activityName}`,
+              `${group.totalPlots} plot${group.totalPlots !== 1 ? 's' : ''}: ${allPlots}`,
+              `${group.totalArea.toFixed(2)} ac × ₹${group.rate.toLocaleString('en-IN')}/ac`,
+              `= ₹${Math.round(billableNow).toLocaleString('en-IN')}`,
+              creditForThisBill > 0
+                ? `Already collected: ₹${Math.round(creditForThisBill).toLocaleString('en-IN')}`
+                : null,
+              balanceDue > 0.01
+                ? `Balance due: ₹${Math.round(balanceDue).toLocaleString('en-IN')}`
+                : 'Balance: Clear',
+            ].filter(Boolean).join(' | '),
+          },
+        };
+
+        console.log(
+          `[Bulk] ${farmer.farmer_name} → ${group.activityName} | bill: ₹${Math.round(billableNow)} | credit: ₹${Math.round(creditForThisBill)} | balance: ₹${Math.round(Math.max(0, balanceDue))}`,
+          payload
+        );
+
+        const sendRes = await fetch(`${API_BASE_URL}/api/farmer-bill/send-webhook/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type':  'application/json',
+            'Authorization': `Token ${token}`,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!sendRes.ok) {
+          const err = await sendRes.json().catch(() => ({}));
+          throw new Error(err?.error ?? `HTTP ${sendRes.status}`);
+        }
+
+        // ── Consume credit: deduct this bill from remaining credit ──
+        // Next activity for same farmer gets only leftover credit
+        remainingCredit = Math.max(0, remainingCredit - billableNow);
+
+        await new Promise(r => setTimeout(r, 300));
+      }
+
+    } catch (e: any) {
+      setBulkProgress(p => ({
+        ...p,
+        errors: [...p.errors, `${bill.farmer_name}: ${e?.message ?? 'Failed'}`],
+      }));
+    }
+
+    setBulkProgress(p => ({ ...p, done: p.done + 1 }));
+    if (i < uniqueFarmers.length - 1) await new Promise(r => setTimeout(r, 500));
+  }
+
+  setBulkGenerating(false);
+  setBulkDone(true);
+};
+
+// ── 4. Rest of IIFE (uniqueClusters, sortedClusters, FILTERS, return) ──
+const uniqueClusters  = [...new Set(allFarmers.map((f: any) => ({id: String(f.cluster_id), name: f.cluster_name})).map(c => JSON.stringify(c)))].map(s => JSON.parse(s));
+const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
       const sortedClusters = [...clusterBilling].sort((a: any, b: any) => {
         if (paymentClusterSort === 'due')       return b.due - a.due;
         if (paymentClusterSort === 'collected') return b.collected - a.collected;
@@ -5068,9 +5313,122 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
               )}
               <span style={{ marginLeft: 'auto', fontSize: 12, color: '#a3a398' }}>{filteredFarmers.length} farmers</span>
             </div>
+ {bulkModalOpen && (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(2px)' }}>
+        <div style={{ background: '#fff', borderRadius: 18, padding: '32px 36px', width: 480, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.18)', border: '1.5px solid #fed7aa' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+            <div style={{ width: 42, height: 42, borderRadius: 12, background: '#fff7ed', border: '1.5px solid #fed7aa', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>📋</div>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#1a1a1a' }}>Bulk Generate Bills</div>
+              {/* ✅ uses readyFarmers */}
+              <div style={{ fontSize: 12, color: '#a3a398', marginTop: 2 }}>
+                {bulkDone ? 'Generation complete' : `${readyFarmers.length} farmers ready to bill`}
+              </div>
+            </div>
+          </div>
 
-            {/* Table */}
-            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'hidden' }}>
+          {!bulkGenerating && !bulkDone && (
+            <>
+              <div style={{ background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', padding: '14px 16px', marginBottom: 20 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#ea580c', marginBottom: 8 }}>Bills will be generated for:</div>
+                <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {/* ✅ uses readyFarmers */}
+                  {readyFarmers.map((f: any, i: number) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: '1px solid #fde8c8' }}>
+                      <span style={{ fontWeight: 600, color: '#1a1a1a' }}>{f.farmer_name}</span>
+                      <div style={{ display: 'flex', gap: 10, color: '#6b6b63' }}>
+                        <span>{f.cluster_name}</span>
+                        <span style={{ fontWeight: 700, color: '#ea580c' }}>₹{Math.round(f.amount ?? 0).toLocaleString('en-IN')}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setBulkModalOpen(false)}
+                  style={{ flex: 1, padding: '11px', borderRadius: 10, border: '1px solid #e8e5de', background: '#fff', fontSize: 13, fontWeight: 600, color: '#6b6b63', cursor: 'pointer', fontFamily: 'inherit' }}>
+                  Cancel
+                </button>
+                <button onClick={handleBulkGenerate}
+                  style={{ flex: 2, padding: '11px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#ea580c,#c2410c)', fontSize: 13, fontWeight: 700, color: '#fff', cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 2px 10px rgba(234,88,12,0.35)' }}>
+                  ✓ Confirm & Generate All
+                </button>
+              </div>
+            </>
+          )}
+
+          {bulkGenerating && !bulkDone && (
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6b6b63', marginBottom: 6 }}>
+                  <span>Generating bills…</span>
+                  <span style={{ fontWeight: 700, color: '#ea580c' }}>{bulkProgress.done} / {bulkProgress.total}</span>
+                </div>
+                <div style={{ height: 8, borderRadius: 999, background: '#f0ede7', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', borderRadius: 999, background: 'linear-gradient(90deg,#ea580c,#f97316)', width: `${bulkProgress.total > 0 ? (bulkProgress.done / bulkProgress.total) * 100 : 0}%`, transition: 'width 0.3s ease' }} />
+                </div>
+              </div>
+              {bulkProgress.current && (
+                <div style={{ fontSize: 12, color: '#6b6b63', marginBottom: 12 }}>
+                  📤 Sending: <strong style={{ color: '#1a1a1a' }}>{bulkProgress.current}</strong>
+                </div>
+              )}
+              {bulkProgress.errors.length > 0 && (
+                <div style={{ background: '#fef2f2', borderRadius: 8, padding: '8px 12px', textAlign: 'left', fontSize: 11, color: '#dc2626', maxHeight: 80, overflowY: 'auto' }}>
+                  {bulkProgress.errors.map((e, i) => <div key={i}>⚠ {e}</div>)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {bulkDone && (
+            <>
+              <div style={{ textAlign: 'center', marginBottom: 20 }}>
+                <div style={{ fontSize: 40, marginBottom: 8 }}>{bulkProgress.errors.length === 0 ? '✅' : '⚠️'}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1a1a', marginBottom: 4 }}>
+                  {bulkProgress.errors.length === 0
+                    ? `All ${bulkProgress.total} bills generated!`
+                    : `${bulkProgress.done - bulkProgress.errors.length} of ${bulkProgress.total} succeeded`}
+                </div>
+                {bulkProgress.errors.length > 0 && (
+                  <div style={{ background: '#fef2f2', borderRadius: 8, padding: '8px 12px', fontSize: 11, color: '#dc2626', textAlign: 'left', marginTop: 10, maxHeight: 100, overflowY: 'auto' }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Failed:</div>
+                    {bulkProgress.errors.map((e, i) => <div key={i}>⚠ {e}</div>)}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => { setBulkModalOpen(false); setBulkDone(false); setBulkProgress({ done: 0, total: 0, current: '', errors: [] }); }}
+                style={{ width: '100%', padding: '11px', borderRadius: 10, border: 'none', background: '#1a1a1a', fontSize: 13, fontWeight: 700, color: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}>
+                Close
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    )}
+
+    {/* ── Bulk banner — only on ready_to_bill tab ── */}
+    {/* ✅ uses readyFarmers */}
+    {paymentFilter === 'ready_to_bill' && readyFarmers.length > 0 && (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, padding: '10px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa' }}>
+        <div style={{ fontSize: 12, color: '#92400e' }}>
+          <strong style={{ color: '#ea580c' }}>{readyFarmers.length} farmers</strong> ready · Total{' '}
+          <strong style={{ color: '#ea580c' }}>
+            ₹{Math.round(readyFarmers.reduce((s: number, f: any) => s + (f.amount ?? 0), 0)).toLocaleString('en-IN')}
+          </strong>
+        </div>
+        <button
+          onClick={() => { setBulkDone(false); setBulkProgress({ done: 0, total: 0, current: '', errors: [] }); setBulkModalOpen(true); }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 20px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#ea580c,#c2410c)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 2px 8px rgba(234,88,12,.3)' }}>
+          <span>📋</span> Bulk Generate Bills
+        </button>
+      </div>
+    )}
+
+{/* Table */}
+<div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e5de', overflow: 'hidden' }}>
+ 
               {/* Header */}
               <div style={{ display: 'grid', gridTemplateColumns: paymentFilter === 'partial' ? 'minmax(200px,2fr) 100px 90px 100px 100px 100px' : paymentFilter === 'ready_to_bill' ? 'minmax(180px,2fr) 60px 80px 110px 130px 130px 110px' : 'minmax(180px,2fr) minmax(150px,1.5fr) 90px 80px 110px 110px 110px', padding: '10px 16px', fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.05em', background: '#fafaf8', borderBottom: '1px solid #e8e5de' }}>
                 <div>Farmer</div>
