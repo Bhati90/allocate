@@ -75,6 +75,7 @@ interface PayHist {
 
 interface ActivityGroup {
   activityName: string;
+  jobId: string;
   plots: Array<{
     plotName: string;
     plotCode: string;
@@ -145,10 +146,12 @@ export function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
 
   const map = new Map<string, ActivityGroup>();
 
-  flat.forEach(act => {
-    if (!map.has(act.activity_name)) {
-      map.set(act.activity_name, {
+flat.forEach(act => {
+    const mapKey = `${act.job_id}__${act.activity_name}`;
+    if (!map.has(mapKey)) {
+      map.set(mapKey, {
         activityName: act.activity_name,
+        jobId:        act.job_id,
         plots: [],
         totalPlots: 0,
         donePlots: 0,
@@ -156,12 +159,11 @@ export function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
         totalBillable: 0,
         totalArea: 0,
         totalConfirmed: 0,
-  totalEstimate: 0,
+        totalEstimate: 0,
         rate: act.rate_per_acre,
       });
     }
-    const group = map.get(act.activity_name)!;
-
+    const group = map.get(mapKey)!;
     // Skip duplicate plot+activity
     const alreadyExists = group.plots.some(
       p => p.plotName === act.plot_name && p.plotCode === act.plot_code
@@ -781,14 +783,16 @@ interface BillLog {
   balance_due: number;
   full_payload: any;
 }
-// ─── Main Page ────────────────────────────────────────────────────────────────
 export default function FarmerBillingPage({ 
   clusterId: propClusterId,
   embeddedFarmerId,
+  embeddedJobId,
 }: { 
   clusterId?: number;
   embeddedFarmerId?: string;
+  embeddedJobId?: string;
 }) {
+
   const [searchParams] = useSearchParams();
 
   // Use prop if provided, else fall back to URL param
@@ -1063,7 +1067,9 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
         {!selectedFarmer ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 14 }}>Select a farmer</div>
         ) : (() => {
-          const jobs         = selectedFarmer.jobs ?? [];
+          const jobs = (selectedFarmer.jobs ?? []).filter(j =>
+            !embeddedJobId || String(j.job_id) === String(embeddedJobId)
+          );
           const groups       = groupActivitiesByName(jobs);
           const readyGroups  = groups.filter(g => g.allDone);
           // ── Use API summary — matches PaymentDashboard exactly ──────────
@@ -1243,10 +1249,10 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
                       {/* Bill status bar */}
                       <div style={{ padding: '14px 22px', borderTop: '1px solid #eef0f4', display: 'flex', alignItems: 'center', gap: 14 }}>
                         {group.allDone ? (() => {
-  // Check if bill already sent for this activity
-  const billLog = jobs
-    .flatMap(j => Object.entries(j.bill_sent_map ?? {}))
-    .find(([actName]) => actName === group.activityName)?.[1];
+  // Scope to this group's specific job only
+  const groupJob    = jobs.find(j => j.job_id === group.jobId) ?? jobs[0];
+  const billSentMap = groupJob?.bill_sent_map ?? {};
+  const billLog     = billSentMap[group.activityName];
 
   return billLog ? (
     // ── Already sent ──
@@ -1262,19 +1268,23 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
           {billLog.balance_due > 0.01 ? `₹${Math.round(billLog.balance_due).toLocaleString('en-IN')} due` : '✓ Clear'}
         </b>
       </span>
-<button
-  onClick={() => setViewBillModal({ 
-    group, 
-    log: billLog,
-    jobs,
-    allPayments,
-    totalPaid,
-    farmer: selectedFarmer,
-  })}
-  style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: '1px solid #c5d9f0', cursor: 'pointer', background: '#e8f0fe', color: '#2471a3' }}
->
-  📋 View Bill
-</button>
+      <button
+        onClick={() => {
+          const jobPayments  = groupJob?.payment_history ?? [];
+          const jobTotalPaid = groupJob?.summary?.total_paid ?? 0;
+          setViewBillModal({
+            group,
+            log:         billLog,
+            jobs:        [groupJob],
+            allPayments: jobPayments,
+            totalPaid:   jobTotalPaid,
+            farmer:      selectedFarmer,
+          });
+        }}
+        style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: '1px solid #c5d9f0', cursor: 'pointer', background: '#e8f0fe', color: '#2471a3' }}
+      >
+        📋 View Bill
+      </button>
     </>
   ) : (
     // ── Ready to send ──
@@ -1289,25 +1299,20 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
       </span>
       <button
         onClick={() => {
-  // totalPaid = all money collected from farmer
-  // totalBilled = all money already billed in previous activities
-  // creditAvailable = what hasn't been applied yet
-  const totalBilledSoFar = jobs.reduce((s, j) => s + (j.summary?.total_billable_so_far ?? 0), 0);
-
-    // bill_sent_map is the same object on every job (farmer-level)
-// so just read it from the first job to avoid double-counting
-const billSentMap = jobs[0]?.bill_sent_map ?? {};
-const alreadyBilledAmount = Object.values(billSentMap).reduce(
-  (sum: number, log: any) => sum + (Number(log.total_billed) || 0),
-  0
-);
-const creditAvailable = Math.max(0, totalPaid - alreadyBilledAmount);
-  console.log('bill_sent_map entries:', jobs.flatMap(j => Object.entries(j.bill_sent_map ?? {})));
-console.log('totalPaid:', totalPaid);
-console.log('alreadyBilledAmount:', alreadyBilledAmount);
-console.log('creditAvailable:', creditAvailable);
-  setBillModal({ farmer: selectedFarmer, jobs, group, allPayments, totalPaid: creditAvailable });
-}}
+          const jobPayments  = groupJob?.payment_history ?? [];
+          const jobTotalPaid = groupJob?.summary?.total_paid ?? 0;
+          const alreadyBilledAmount = Object.values(billSentMap).reduce(
+            (sum: number, log: any) => sum + (Number(log.total_billed) || 0), 0
+          );
+          const creditAvailable = Math.max(0, jobTotalPaid - alreadyBilledAmount);
+          setBillModal({
+            farmer:      selectedFarmer,
+            jobs:        [groupJob],
+            group,
+            allPayments: jobPayments,
+            totalPaid:   creditAvailable,
+          });
+        }}
         style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: balanceDue > 0.01 ? '#1a1a2e' : '#27ae60', color: '#fff' }}
       >
         ✉️ Generate Bill

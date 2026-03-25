@@ -5547,19 +5547,27 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
                             </div>
 
                             {/* Summary bar */}
+                            {(() => {
+                              const scopedJobs = bill.job_id
+                                ? (expandedFarmerData.jobs ?? []).filter((j: any) => String(j.job_id) === String(bill.job_id))
+                                : (expandedFarmerData.jobs ?? []);
+                              const summaryItems = [
+                                { label: 'Job Value',       val: fmtFull(scopedJobs.reduce((s: number, j: any) => s + (j.total_job_amount ?? 0), 0)), color: '#1a1a1a' },
+                                { label: 'Total Billed',    val: fmtFull(scopedJobs.reduce((s: number, j: any) => s + (j.summary?.total_billable_so_far ?? 0), 0)), color: '#2563eb' },
+                                { label: 'Total Collected', val: fmtFull(scopedJobs.reduce((s: number, j: any) => s + (j.summary?.total_paid ?? 0), 0)), color: '#16a34a' },
+                                { label: 'Balance Due',     val: (() => { const due = scopedJobs.reduce((s: number, j: any) => s + (j.summary?.balance_due ?? 0), 0); return due > 0.01 ? fmtFull(due) : '✓ Clear'; })(), color: (() => { const due = scopedJobs.reduce((s: number, j: any) => s + (j.summary?.balance_due ?? 0), 0); return due > 0.01 ? '#dc2626' : '#16a34a'; })() },
+                              ];
+                              return (
                             <div style={{ display: 'flex', borderRadius: 10, overflow: 'hidden', border: '1px solid #e8e5de', marginBottom: 16 }}>
-                              {[
-                                { label: 'Total Job Value', val: fmtFull(expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.total_job_amount ?? 0), 0) ?? 0), color: '#1a1a1a' },
-                                { label: 'Total Billed',    val: fmtFull(expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.summary?.total_billable_so_far ?? 0), 0) ?? 0), color: '#2563eb' },
-                                { label: 'Total Collected', val: fmtFull(expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.summary?.total_paid ?? 0), 0) ?? 0), color: '#16a34a' },
-                                { label: 'Balance Due',     val: (() => { const due = expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.summary?.balance_due ?? 0), 0) ?? 0; return due > 0.01 ? fmtFull(due) : '✓ Clear'; })(), color: (() => { const due = expandedFarmerData.jobs?.reduce((s: number, j: any) => s + (j.summary?.balance_due ?? 0), 0) ?? 0; return due > 0.01 ? '#dc2626' : '#16a34a'; })() },
-                              ].map((item, idx) => (
+                              {summaryItems.map((item, idx) => (
                                 <div key={idx} style={{ flex: 1, padding: '12px 16px', borderLeft: idx > 0 ? '1px solid #e8e5de' : 'none' }}>
                                   <div style={{ fontSize: 10, fontWeight: 600, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>{item.label}</div>
                                   <div style={{ fontSize: 18, fontWeight: 800, color: item.color }}>{item.val}</div>
                                 </div>
                               ))}
                             </div>
+                              );
+                            })()}
 
                             {/* Activity cards — reuse FarmerBillingPage logic inline */}
                             <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>
@@ -5567,7 +5575,7 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
                             </div>
                             {/* Render the same FarmerBillingPage embedded */}
                             <div style={{ height: 500, overflow: 'hidden', margin: '0 -20px', borderTop: '1px solid #f0ede7' }}>
-                              <FarmerBillingPage clusterId={bill.cluster_id} embeddedFarmerId={String(bill.farmer_id)} />
+                              <FarmerBillingPage clusterId={bill.cluster_id} embeddedFarmerId={String(bill.farmer_id)} embeddedJobId={String(bill.job_id ?? '')} />
                             </div>
                           </div>
                         ) : (

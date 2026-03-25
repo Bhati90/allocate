@@ -8023,15 +8023,17 @@ def cluster_payment_dashboard(request, cluster_id):
     all_bill_logs = FarmerBillWebhookLog.objects.filter(
         cluster_id=cluster_id
     ).order_by('-sent_at').values(
-        'farmer_id', 'activity_name', 'sent_at', 'sent_by_name',
+        'farmer_id', 'job_id', 'activity_name', 'sent_at', 'sent_by_name',
         'webhook_status', 'total_billed', 'total_paid', 'balance_due', 'full_payload'
     )
     bill_log_map = defaultdict(dict)
     for log in all_bill_logs:
         fid     = str(log['farmer_id'] or '')
+        job_id  = str(log['job_id'] or '')          # ← scope by job_id
         act_key = log['activity_name'] or ''
-        if act_key and act_key not in bill_log_map[fid]:
-            bill_log_map[fid][act_key] = {
+        map_key = f"{fid}__{job_id}"                # ← key is farmer+job
+        if act_key and act_key not in bill_log_map[map_key]:
+            bill_log_map[map_key][act_key] = {
                 'sent':           True,
                 'sent_at':        log['sent_at'].isoformat() if log['sent_at'] else None,
                 'sent_by':        log['sent_by_name'] or '—',
@@ -8157,12 +8159,13 @@ def cluster_payment_dashboard(request, cluster_id):
         if not jobs:
             continue
 
-        farmer_bill_sent_map = bill_log_map.get(str(farmer.farmer_id), {})
-
+        
         job_rows = []
 
         for job in jobs:
-            # Use prefetched booking
+            # ── Per-job bill_sent_map — scoped to this farmer+job ────────
+            job_map_key = f"{str(farmer.farmer_id)}__{str(job.job_id)}"
+            farmer_bill_sent_map = bill_log_map.get(job_map_key, {})
             try:
                 booking = job.booking
             except JobBooking.DoesNotExist:
