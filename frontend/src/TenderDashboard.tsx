@@ -5040,119 +5040,128 @@ const handleBulkGenerate = async () => {
         g.allDone = g.totalPlots > 0 && g.donePlots === g.totalPlots;
       });
 
-      // ── Step 4: Get ALL unsent ready groups for this farmer ─────
-      const billSentMap = jobs[0]?.bill_sent_map ?? {};
-      const unsentGroups = Array.from(actMap.values())
-        .filter((g: any) => g.allDone && !billSentMap[g.activityName]);
+      // ── Step 4: Get ALL unsent ready groups ─────────────────────────
+const billSentMap = jobs[0]?.bill_sent_map ?? {};
 
-      if (unsentGroups.length === 0) {
-        // All activities already billed — skip
-        setBulkProgress(p => ({ ...p, done: p.done + 1 }));
-        continue;
-      }
+// Debug — remove after confirming
+console.log(`[Bulk] ${farmer.farmer_name} billSentMap keys:`, Object.keys(billSentMap));
+console.log(`[Bulk] ${farmer.farmer_name} actMap groups:`, 
+  Array.from(actMap.values()).map((g: any) => ({ 
+    name: g.activityName, allDone: g.allDone, 
+    totalPlots: g.totalPlots, donePlots: g.donePlots 
+  }))
+);
 
-      // ── Step 5: Payment context ─────────────────────────────────
-      const allPayments: any[] = jobs.flatMap((j: any) => j.payment_history ?? []);
-      const totalPaid = jobs.reduce((s: number, j: any) => s + (j.summary?.total_paid ?? 0), 0);
+const unsentGroups = Array.from(actMap.values())
+  .filter((g: any) => g.allDone && !billSentMap[g.activityName]);
 
-      // Credit = money collected but not yet applied to any sent bill
-      const alreadyBilledAmount = Object.values(billSentMap).reduce(
-        (sum: number, log: any) => sum + (Number((log as any).total_billed) || 0), 0
-      );
-      // Use `let` — we consume credit as each activity bill is sent
-      let remainingCredit = Math.max(0, totalPaid - alreadyBilledAmount);
+console.log(`[Bulk] ${farmer.farmer_name} unsentGroups:`, unsentGroups.map((g: any) => g.activityName));
 
-      console.log(`[Bulk] ${farmer.farmer_name} | totalPaid: ${totalPaid} | alreadyBilled: ${alreadyBilledAmount} | credit: ${remainingCredit} | activities: ${unsentGroups.map((g: any) => g.activityName).join(', ')}`);
+// ── Step 5: Skip if nothing to send ─────────────────────────────
+if (unsentGroups.length === 0) {
+  setBulkProgress(p => ({ ...p, done: p.done + 1, current: '' }));
+  if (i < uniqueFarmers.length - 1) await new Promise(r => setTimeout(r, 200));
+  continue;  // this continue is fine — it's in the outer for loop
+}
 
-      // ── Step 6: Send each unsent activity group ─────────────────
-      for (const group of unsentGroups) {
-        const billableNow     = group.totalBillable;
-        const creditForThisBill = remainingCredit;           // credit available NOW
-        const balanceDue      = billableNow - creditForThisBill;
+// ── Step 6: Payment context ──────────────────────────────────────
+const allPayments: any[] = jobs.flatMap((j: any) => j.payment_history ?? []);
+const totalPaid = jobs.reduce((s: number, j: any) => s + (j.summary?.total_paid ?? 0), 0);
+const alreadyBilledAmount = Object.values(billSentMap).reduce(
+  (sum: number, log: any) => sum + (Number((log as any).total_billed) || 0), 0
+);
+let remainingCredit = Math.max(0, totalPaid - alreadyBilledAmount);
 
-        const ownerJobId = group.plots[0]?.jobId ?? jobs[0]?.job_id ?? '';
-        const ownerJob   = jobs.find((j: any) => j.job_id === ownerJobId) ?? jobs[0];
-        const allPlots   = [
-          ...new Set(group.plots.map((p: any) => p.plotName || p.plotCode))
-        ].join(', ');
-        const mukkadamFromPlot =
-          group.plots.find((p: any) => p.mukkadam && p.mukkadam !== '—')?.mukkadam ?? '';
+// ── Step 7: Send each unsent group ──────────────────────────────
+for (let gi = 0; gi < unsentGroups.length; gi++) {
+  const group = unsentGroups[gi];
+  const billableNow       = group.totalBillable;
+  const creditForThisBill = remainingCredit;
+  const balanceDue        = billableNow - creditForThisBill;
 
-        const payload = {
-          timestamp:     new Date().toISOString(),
-          activity_name: group.activityName,
-          farmer: {
-            id:    String(farmer.farmer_id),
-            name:  farmer.farmer_name,
-            phone: farmer.mobile_number || '',
-          },
-          job: {
-            id:   String(ownerJobId),
-            crop: ownerJob?.crop_name ?? '',
-            plot: allPlots,
-          },
-          mukkadam: {
-            name:   mukkadamFromPlot || ownerJob?.mukkadam_name || '',
-            mobile: ownerJob?.mukkadam_mobile || '',
-          },
-          work_done: group.plots.map((p: any) => ({
-            activity:      group.activityName,
-            plot_name:     p.plotName || p.plotCode,
-            date:          p.doneDate ?? '',
-            acres_done:    Number(p.displayArea),
-            rate_per_acre: Number(p.rate),
-            amount:        Math.round(p.billableAmount),
-          })),
-          payment_history: allPayments.map((p: any) => ({
-            date:   p.date,
-            amount: Number(p.amount),
-            mode:   p.mode,
-            notes:  p.notes || '',
-          })),
-          bill_summary: {
-            total_billed:       Math.round(billableNow),
-            total_already_paid: Math.round(creditForThisBill),
-            balance_due_now:    Math.round(Math.max(0, balanceDue)),
-            why_this_bill: [
-              `${group.activityName}`,
-              `${group.totalPlots} plot${group.totalPlots !== 1 ? 's' : ''}: ${allPlots}`,
-              `${group.totalArea.toFixed(2)} ac × ₹${group.rate.toLocaleString('en-IN')}/ac`,
-              `= ₹${Math.round(billableNow).toLocaleString('en-IN')}`,
-              creditForThisBill > 0
-                ? `Already collected: ₹${Math.round(creditForThisBill).toLocaleString('en-IN')}`
-                : null,
-              balanceDue > 0.01
-                ? `Balance due: ₹${Math.round(balanceDue).toLocaleString('en-IN')}`
-                : 'Balance: Clear',
-            ].filter(Boolean).join(' | '),
-          },
-        };
+  const ownerJobId = group.plots[0]?.jobId ?? jobs[0]?.job_id ?? '';
+  const ownerJob   = jobs.find((j: any) => j.job_id === ownerJobId) ?? jobs[0];
+  const allPlots   = [...new Set(group.plots.map((p: any) => p.plotName || p.plotCode))].join(', ');
+  const mukkadamFromPlot =
+    group.plots.find((p: any) => p.mukkadam && p.mukkadam !== '—')?.mukkadam ?? '';
 
-        console.log(
-          `[Bulk] ${farmer.farmer_name} → ${group.activityName} | bill: ₹${Math.round(billableNow)} | credit: ₹${Math.round(creditForThisBill)} | balance: ₹${Math.round(Math.max(0, balanceDue))}`,
-          payload
-        );
+  const payload = {
+    timestamp:     new Date().toISOString(),
+    activity_name: group.activityName,
+    farmer: {
+      id:    String(farmer.farmer_id),
+      name:  farmer.farmer_name,
+      phone: farmer.mobile_number || '',
+    },
+    job: {
+      id:   String(ownerJobId),
+      crop: ownerJob?.crop_name ?? '',
+      plot: allPlots,
+    },
+    mukkadam: {
+      name:   mukkadamFromPlot || ownerJob?.mukkadam_name || '',
+      mobile: ownerJob?.mukkadam_mobile || '',
+    },
+    work_done: group.plots.map((p: any) => ({
+      activity:      group.activityName,
+      plot_name:     p.plotName || p.plotCode,
+      date:          p.doneDate ?? '',
+      acres_done:    Number(p.displayArea),
+      rate_per_acre: Number(p.rate),
+      amount:        Math.round(p.billableAmount),
+    })),
+    payment_history: allPayments.map((p: any) => ({
+      date:   p.date,
+      amount: Number(p.amount),
+      mode:   p.mode,
+      notes:  p.notes || '',
+    })),
+    bill_summary: {
+      total_billed:       Math.round(billableNow),
+      total_already_paid: Math.round(creditForThisBill),
+      balance_due_now:    Math.round(Math.max(0, balanceDue)),
+      why_this_bill: [
+        `${group.activityName}`,
+        `${group.totalPlots} plot${group.totalPlots !== 1 ? 's' : ''}: ${allPlots}`,
+        `${group.totalArea.toFixed(2)} ac × ₹${group.rate.toLocaleString('en-IN')}/ac`,
+        `= ₹${Math.round(billableNow).toLocaleString('en-IN')}`,
+        creditForThisBill > 0
+          ? `Already collected: ₹${Math.round(creditForThisBill).toLocaleString('en-IN')}`
+          : null,
+        balanceDue > 0.01
+          ? `Balance due: ₹${Math.round(balanceDue).toLocaleString('en-IN')}`
+          : 'Balance: Clear',
+      ].filter(Boolean).join(' | '),
+    },
+  };
 
-        const sendRes = await fetch(`${API_BASE_URL}/api/farmer-bill/send-webhook/`, {
-          method: 'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            'Authorization': `Token ${token}`,
-          },
-          body: JSON.stringify(payload),
-        });
+  console.log(
+    `[Bulk SENDING] ${farmer.farmer_name} → ${group.activityName}`,
+    `bill: ₹${Math.round(billableNow)} credit: ₹${Math.round(creditForThisBill)} balance: ₹${Math.round(Math.max(0, balanceDue))}`
+  );
 
-        if (!sendRes.ok) {
-          const err = await sendRes.json().catch(() => ({}));
-          throw new Error(err?.error ?? `HTTP ${sendRes.status}`);
-        }
+  const sendRes = await fetch(`${API_BASE_URL}/api/farmer-bill/send-webhook/`, {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Token ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
 
-        // ── Consume credit: deduct this bill from remaining credit ──
-        // Next activity for same farmer gets only leftover credit
-        remainingCredit = Math.max(0, remainingCredit - billableNow);
+  if (!sendRes.ok) {
+    const err = await sendRes.json().catch(() => ({}));
+    throw new Error(err?.error ?? `HTTP ${sendRes.status}`);
+  }
 
-        await new Promise(r => setTimeout(r, 300));
-      }
+  const sendResult = await sendRes.json();
+  console.log(`[Bulk SENT] ${farmer.farmer_name} → ${group.activityName}`, sendResult);
+
+  // Consume credit for next activity
+  remainingCredit = Math.max(0, remainingCredit - billableNow);
+
+  if (gi < unsentGroups.length - 1) await new Promise(r => setTimeout(r, 300));
+}
 
     } catch (e: any) {
       setBulkProgress(p => ({
