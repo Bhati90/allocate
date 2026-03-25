@@ -120,7 +120,7 @@ function avatarColor(id: string) {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
-function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
+export function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
   const flat: Array<Activity & { job_id: string; mukkadam_name: string }> = [];
   jobs.forEach(job => {
     (job.activities ?? []).forEach(act => {
@@ -310,6 +310,8 @@ function ActivityBillModal({
   onClose: () => void; onSent: () => void;
 }) {
   const billableNow = group.totalBillable;
+  const [sendResult, setSendResult] = useState<{ success: boolean; detail?: string } | null>(null);
+
   const balanceDue  = billableNow - totalPaid;
   const [sending, setSending] = useState(false);
   const [sent, setSent]       = useState(false);
@@ -788,7 +790,6 @@ export default function FarmerBillingPage({
   embeddedFarmerId?: string;
 }) {
   const [searchParams] = useSearchParams();
-const [sendResult, setSendResult] = useState<{ success: boolean; detail?: string } | null>(null);
 
   // Use prop if provided, else fall back to URL param
   const clusterId = propClusterId ?? searchParams.get('cluster');

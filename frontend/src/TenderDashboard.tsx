@@ -2,6 +2,8 @@
 
 // pages/TenderDashboard.tsx
 import React, { useCallback, useEffect,useMemo,useRef, useState } from "react";
+// import { groupActivitiesByName } from './FarmerBillingPage';
+import { groupActivitiesByName } from "./components/FarmerBillPage";
 import axios from "axios";
 import {Pencil,Pen,Check,X,
   Users, Briefcase, ChevronDown, ChevronUp,
@@ -3129,7 +3131,7 @@ const fetchInsightDayData = async (date: Date, clusterId: number) => {
 const [tab, setTab] = useState<'command' | 'calendar' | 'global' | 'mukkadams' | 'farmers' | 'jobs' | 'payment' | 'plan'>(() => {
   const saved = localStorage.getItem('tenderDashTab');
   const valid = ['command', 'calendar', 'global', 'mukkadams', 'farmers', 'jobs', 'payment', 'plan'];
-  return (valid.includes(saved ?? '') ? saved : 'command') as any;
+  return (valid.includes(saved ?? '') ? saved : 'jobs') as any;
 });
 // Command Center state
 const [cmdClusters, setCmdClusters]         = useState<Cluster[]>([]);
@@ -3747,30 +3749,35 @@ useEffect(() => {
 }, [tab]);
 
 
-const handleExpandFarmer = async (farmer: any) => {
-  const key = `${farmer.farmer_id}__${farmer.activity}`;
+const handleExpandFarmer = async (bill: any) => {
+  const key = `${bill.farmer_id}__${bill.job_id ?? ''}__${bill.activity}`;  // ← match new key
+
   if (expandedFarmerKey === key) {
     setExpandedFarmerKey(null);
     setExpandedFarmerData(null);
     return;
   }
+
   setExpandedFarmerKey(key);
   setExpandedFarmerData(null);
-  if (!farmer.cluster_id) return;
   setExpandedFarmerLoading(true);
-  const token = localStorage.getItem('auth_token');
+
   try {
+    const token = localStorage.getItem('auth_token');
     const res = await fetch(
-      `${API_BASE_URL}/api/cluster/${farmer.cluster_id}/payment-dashboard/`,
+      `${API_BASE_URL}/api/cluster/${bill.cluster_id}/payment-dashboard/`,
       { headers: { Authorization: `Token ${token}` } }
     );
-    const d = await res.json();
-    const farmerDetail = (d.farmers ?? []).find(
-      (f: any) => String(f.farmer_id) === String(farmer.farmer_id)
+    const data = await res.json();
+    const farmer = (data.farmers ?? []).find(
+      (f: any) => String(f.farmer_id) === String(bill.farmer_id)
     );
-    setExpandedFarmerData(farmerDetail ?? null);
-  } catch (e) { console.error(e); }
-  finally { setExpandedFarmerLoading(false); }
+    setExpandedFarmerData(farmer ?? null);
+  } catch (e) {
+    setExpandedFarmerData(null);
+  } finally {
+    setExpandedFarmerLoading(false);
+  }
 };
 
 const handleConfirmAllocate = async () => {
@@ -4231,7 +4238,7 @@ const mild = overdue.filter(a => { const d = diffDays(a) ?? 0; return d >= -7 &&
   return {
     mild,
     onTimeRate,
-    overdueNow:   overdue.length,   critical,   severe,
+    overdueNow:   actCounts.overdue,   critical,   severe,
     overdueAcres:  Math.round(overdueAcres * 10) / 10,
   due0_3Acres:   Math.round(due0_3Acres  * 10) / 10,
   due3_10Acres:  Math.round(due3_10Acres * 10) / 10,
@@ -4267,7 +4274,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
         {/* Tab group */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: S.stone100, borderRadius: 14, padding: 3, border: `1px solid ${S.stone200}` }}>
           {([
-            { key: 'command',   icon: '🏠', label: 'Command',   count: cmdClusters.length },
+            { key: 'command',   icon: '🏠', label: 'Command', },
   { key: 'payment',  icon: '💰', label: 'Payment' },
   { key: 'global',   icon: '', label: 'Plan' },
 { key: 'mukkadams', icon: '👥', label: 'Mukkadams', count: (data?.mukkadams || []).filter((m: any) => !m.manual_status || m.manual_status === 'active').length },
@@ -4364,7 +4371,7 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
           { key: 'completed',     label: '✅ Completed',     count: actCounts.completed     },
           // Find your Jobs sub-pills array and add:
 { key: 'overdue',     label: '🔥 Overdue',      count: actCounts.overdue     },
-{ key: 'data_issue',  label: '📋 Data Issues',   count: actCounts.data_issue  },
+{ key: 'data_issue',  label: '📋 Notes',   count: actCounts.data_issue  },
         ] as const).map(t => {
           const active = actSubTab === t.key;
           return (
@@ -4929,239 +4936,152 @@ const filteredFarmers = allFarmers.filter((f: any) => {
 
 const readyFarmers = allFarmers.filter((f: any) => f.status === 'ready_to_bill');
 const uniqueReadyFarmerIds = [...new Set(readyFarmers.map((f: any) => String(f.farmer_id)))];
-const uniqueReadyFarmers = uniqueReadyFarmerIds.map(id => readyFarmers.find((f: any) => String(f.farmer_id) === id)!);
+// ── Deduplicate by farmer+job combo (not just farmer) ──
+const uniqueReadyKeys = [...new Set(readyFarmers.map((f: any) => `${f.farmer_id}__${f.job_id ?? ''}`))];
+const uniqueReadyFarmers = uniqueReadyKeys.map(key =>
+  readyFarmers.find((f: any) => `${f.farmer_id}__${f.job_id ?? ''}` === key)!
+);
 
-// ── 3. handleBulkGenerate ───────────────────────────────────────
 const handleBulkGenerate = async () => {
-  // ── Deduplicate by farmer_id ────────────────────────────────────
-  const farmerMap = new Map<string, any>();
-  readyFarmers.forEach((f: any) => {
-    if (!farmerMap.has(String(f.farmer_id))) {
-      farmerMap.set(String(f.farmer_id), f);
-    }
-  });
-  const uniqueFarmers = Array.from(farmerMap.values());
-
   setBulkGenerating(true);
-  setBulkProgress({ done: 0, total: uniqueFarmers.length, current: '', errors: [] });
+  setBulkProgress({ done: 0, total: uniqueReadyFarmers.length, current: '', errors: [] });
 
-  for (let i = 0; i < uniqueFarmers.length; i++) {
-    const bill = uniqueFarmers[i];
+  for (let i = 0; i < uniqueReadyFarmers.length; i++) {
+    const bill = uniqueReadyFarmers[i];
     setBulkProgress(p => ({ ...p, current: bill.farmer_name }));
 
     try {
       const token = localStorage.getItem('auth_token');
 
-      // ── Step 1: Fetch full farmer billing data ──────────────────
       const res = await fetch(
         `${API_BASE_URL}/api/cluster/${bill.cluster_id}/payment-dashboard/`,
         { headers: { Authorization: `Token ${token}` } }
       );
-      if (!res.ok) throw new Error(`Failed to fetch: HTTP ${res.status}`);
-      const farmerData = await res.json();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const clusterData = await res.json();
 
-      // ── Step 2: Find this farmer ────────────────────────────────
-      const farmer = (farmerData.farmers ?? []).find(
+      const farmer = (clusterData.farmers ?? []).find(
         (f: any) => String(f.farmer_id) === String(bill.farmer_id)
       );
-      if (!farmer) throw new Error(`${bill.farmer_name} not found in cluster data`);
+      if (!farmer) throw new Error(`${bill.farmer_name} not found`);
 
-      const jobs: any[] = farmer.jobs ?? [];
+      const allFarmerJobs: any[] = farmer.jobs ?? [];
 
-      // ── Step 3: Rebuild activity groups ────────────────────────
-      const flat: any[] = [];
-      jobs.forEach((job: any) => {
-        (job.activities ?? []).forEach((act: any) => {
-          flat.push({ ...act, job_id: job.job_id, mukkadam_name: job.mukkadam_name });
+      // ── Only the specific job this bill entry refers to ──────────────
+      const jobs: any[] = bill.job_id
+        ? allFarmerJobs.filter((j: any) => String(j.job_id) === String(bill.job_id))
+        : allFarmerJobs;
+
+      if (jobs.length === 0) {
+        setBulkProgress(p => ({ ...p, done: p.done + 1 }));
+        if (i < uniqueReadyFarmers.length - 1) await new Promise(r => setTimeout(r, 200));
+        continue;
+      }
+
+      // ── groupActivitiesByName only sees this job's activities ────────
+      const groups = groupActivitiesByName(jobs);
+
+      // ── bill_sent_map is per-job, read from THIS job ─────────────────
+      const billSentMap = jobs[0]?.bill_sent_map ?? {};
+
+      const unsentGroups = groups.filter(
+        (g: any) => g.allDone && !billSentMap[g.activityName]
+      );
+
+      if (unsentGroups.length === 0) {
+        setBulkProgress(p => ({ ...p, done: p.done + 1 }));
+        if (i < uniqueReadyFarmers.length - 1) await new Promise(r => setTimeout(r, 200));
+        continue;
+      }
+
+      // ── Credit — scoped to this job's payments only ──────────────────
+      const allPayments: any[] = jobs.flatMap((j: any) => j.payment_history ?? []);
+      const totalPaid = jobs.reduce((s: number, j: any) => s + (j.summary?.total_paid ?? 0), 0);
+      const alreadyBilledAmount = Object.values(billSentMap).reduce(
+        (sum: number, log: any) => sum + (Number(log.total_billed) || 0), 0
+      );
+      let remainingCredit = Math.max(0, totalPaid - alreadyBilledAmount);
+
+      // ── Send each unsent group ───────────────────────────────────────
+      for (let gi = 0; gi < unsentGroups.length; gi++) {
+        const group = unsentGroups[gi];
+        const billableNow       = group.totalBillable;
+        const creditForThisBill = remainingCredit;
+        const balanceDue        = billableNow - creditForThisBill;
+
+        const ownerJobId = group.plots[0]?.jobId ?? jobs[0]?.job_id ?? '';
+        const ownerJob   = jobs.find((j: any) => j.job_id === ownerJobId) ?? jobs[0];
+        const allPlots   = [...new Set(group.plots.map((p: any) => p.plotName || p.plotCode))].join(', ');
+        const mukkadamFromPlot =
+          group.plots.find((p: any) => p.mukkadam && p.mukkadam !== '—')?.mukkadam ?? '';
+
+        const payload = {
+          timestamp:     new Date().toISOString(),
+          activity_name: group.activityName,
+          farmer: {
+            id:    String(farmer.farmer_id),
+            name:  farmer.farmer_name,
+            phone: farmer.mobile_number || '',
+          },
+          job: {
+            id:   String(ownerJobId),
+            crop: ownerJob?.crop_name ?? '',
+            plot: allPlots,
+          },
+          mukkadam: {
+            name:   mukkadamFromPlot || ownerJob?.mukkadam_name || '',
+            mobile: ownerJob?.mukkadam_mobile || '',
+          },
+          work_done: group.plots.map((p: any) => ({
+            activity:      group.activityName,
+            plot_name:     p.plotName || p.plotCode,
+            date:          p.doneDate ?? '',
+            acres_done:    Number(p.displayArea),
+            rate_per_acre: Number(p.rate),
+            amount:        Math.round(p.billableAmount),
+          })),
+          payment_history: allPayments.map((p: any) => ({
+            date:   p.date,
+            amount: Number(p.amount),
+            mode:   p.mode,
+            notes:  p.notes || '',
+          })),
+          bill_summary: {
+            total_billed:       Math.round(billableNow),
+            total_already_paid: Math.round(creditForThisBill),
+            balance_due_now:    Math.round(Math.max(0, balanceDue)),
+            why_this_bill: [
+              `${group.activityName}`,
+              `${group.totalPlots} plot${group.totalPlots !== 1 ? 's' : ''}: ${allPlots}`,
+              `${group.totalArea.toFixed(2)} ac × ₹${group.rate.toLocaleString('en-IN')}/ac`,
+              `= ₹${Math.round(billableNow).toLocaleString('en-IN')}`,
+              creditForThisBill > 0
+                ? `Already collected: ₹${Math.round(creditForThisBill).toLocaleString('en-IN')}`
+                : null,
+              balanceDue > 0.01
+                ? `Balance due: ₹${Math.round(balanceDue).toLocaleString('en-IN')}`
+                : 'Balance: Clear',
+            ].filter(Boolean).join(' | '),
+          },
+        };
+
+        const sendRes = await fetch(`${API_BASE_URL}/api/farmer-bill/send-webhook/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization:  `Token ${token}`,
+          },
+          body: JSON.stringify(payload),
         });
-      });
 
-      const actMap = new Map<string, any>();
-      flat.forEach((act: any) => {
-        if (!actMap.has(act.activity_name)) {
-          actMap.set(act.activity_name, {
-            activityName: act.activity_name,
-            plots: [], totalPlots: 0, donePlots: 0,
-            totalBillable: 0, totalArea: 0, rate: act.rate_per_acre,
-          });
+        if (!sendRes.ok) {
+          const err = await sendRes.json().catch(() => ({}));
+          throw new Error(err?.error ?? `HTTP ${sendRes.status}`);
         }
-        const group = actMap.get(act.activity_name)!;
 
-        const alreadyExists = group.plots.some(
-          (p: any) => p.plotName === act.plot_name && p.plotCode === act.plot_code
-        );
-        if (alreadyExists) return;
-
-        const tArea = Number(act.total_area ?? 0);
-        const aArea = Number(act.allocated_area ?? 0);
-        const rate  = Number(act.rate_per_acre ?? 0);
-        if (tArea <= 0) return;
-
-        const allocs = act.allocations ?? [];
-        const completedAllocArea = allocs
-          .filter((a: any) => a.work_status === 'completed')
-          .reduce((s: number, a: any) =>
-            s + Number(a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0), 0);
-        const allAllocsCompleted =
-          allocs.length > 0 && allocs.every((a: any) => a.work_status === 'completed');
-        const isDone =
-          allAllocsCompleted ||
-          (tArea > 0 && completedAllocArea >= tArea - 0.05) ||
-          act.allocation_status === 'completed';
-
-        const latestAlloc = allocs
-          .filter((a: any) => a.work_status === 'completed')
-          .sort((a: any, b: any) =>
-            (b.allocated_date ?? '').localeCompare(a.allocated_date ?? ''))[0];
-        const doneDate =
-          latestAlloc?.allocated_date ??
-          allocs[0]?.allocated_date ??
-          act.scheduled_date ?? null;
-        const mukkadamName = act.mukkadam_name || allocs[0]?.mukkadam_name || '—';
-
-        group.plots.push({
-          plotName:      act.plot_name,
-          plotCode:      act.plot_code,
-          jobId:         act.job_id,
-          displayArea:   tArea > 0 ? tArea : aArea,
-          rate,
-          isDone,
-          billableAmount: Number(act.billable_amount ?? 0),
-          doneDate,
-          mukkadam: mukkadamName,
-        });
-        group.totalPlots++;
-        if (isDone) group.donePlots++;
-        group.totalBillable += Number(act.billable_amount ?? 0);
-        group.totalArea     += tArea > 0 ? tArea : aArea;
-      });
-
-      actMap.forEach((g: any) => {
-        g.allDone = g.totalPlots > 0 && g.donePlots === g.totalPlots;
-      });
-
-      // ── Step 4: Get ALL unsent ready groups ─────────────────────────
-const billSentMap = jobs[0]?.bill_sent_map ?? {};
-
-// Debug — remove after confirming
-console.log(`[Bulk] ${farmer.farmer_name} billSentMap keys:`, Object.keys(billSentMap));
-console.log(`[Bulk] ${farmer.farmer_name} actMap groups:`, 
-  Array.from(actMap.values()).map((g: any) => ({ 
-    name: g.activityName, allDone: g.allDone, 
-    totalPlots: g.totalPlots, donePlots: g.donePlots 
-  }))
-);
-
-const unsentGroups = Array.from(actMap.values())
-  .filter((g: any) => g.allDone && !billSentMap[g.activityName]);
-
-console.log(`[Bulk] ${farmer.farmer_name} unsentGroups:`, unsentGroups.map((g: any) => g.activityName));
-
-// ── Step 5: Skip if nothing to send ─────────────────────────────
-if (unsentGroups.length === 0) {
-  setBulkProgress(p => ({ ...p, done: p.done + 1, current: '' }));
-  if (i < uniqueFarmers.length - 1) await new Promise(r => setTimeout(r, 200));
-  continue;  // this continue is fine — it's in the outer for loop
-}
-
-// ── Step 6: Payment context ──────────────────────────────────────
-const allPayments: any[] = jobs.flatMap((j: any) => j.payment_history ?? []);
-const totalPaid = jobs.reduce((s: number, j: any) => s + (j.summary?.total_paid ?? 0), 0);
-const alreadyBilledAmount = Object.values(billSentMap).reduce(
-  (sum: number, log: any) => sum + (Number((log as any).total_billed) || 0), 0
-);
-let remainingCredit = Math.max(0, totalPaid - alreadyBilledAmount);
-
-// ── Step 7: Send each unsent group ──────────────────────────────
-for (let gi = 0; gi < unsentGroups.length; gi++) {
-  const group = unsentGroups[gi];
-  const billableNow       = group.totalBillable;
-  const creditForThisBill = remainingCredit;
-  const balanceDue        = billableNow - creditForThisBill;
-
-  const ownerJobId = group.plots[0]?.jobId ?? jobs[0]?.job_id ?? '';
-  const ownerJob   = jobs.find((j: any) => j.job_id === ownerJobId) ?? jobs[0];
-  const allPlots   = [...new Set(group.plots.map((p: any) => p.plotName || p.plotCode))].join(', ');
-  const mukkadamFromPlot =
-    group.plots.find((p: any) => p.mukkadam && p.mukkadam !== '—')?.mukkadam ?? '';
-
-  const payload = {
-    timestamp:     new Date().toISOString(),
-    activity_name: group.activityName,
-    farmer: {
-      id:    String(farmer.farmer_id),
-      name:  farmer.farmer_name,
-      phone: farmer.mobile_number || '',
-    },
-    job: {
-      id:   String(ownerJobId),
-      crop: ownerJob?.crop_name ?? '',
-      plot: allPlots,
-    },
-    mukkadam: {
-      name:   mukkadamFromPlot || ownerJob?.mukkadam_name || '',
-      mobile: ownerJob?.mukkadam_mobile || '',
-    },
-    work_done: group.plots.map((p: any) => ({
-      activity:      group.activityName,
-      plot_name:     p.plotName || p.plotCode,
-      date:          p.doneDate ?? '',
-      acres_done:    Number(p.displayArea),
-      rate_per_acre: Number(p.rate),
-      amount:        Math.round(p.billableAmount),
-    })),
-    payment_history: allPayments.map((p: any) => ({
-      date:   p.date,
-      amount: Number(p.amount),
-      mode:   p.mode,
-      notes:  p.notes || '',
-    })),
-    bill_summary: {
-      total_billed:       Math.round(billableNow),
-      total_already_paid: Math.round(creditForThisBill),
-      balance_due_now:    Math.round(Math.max(0, balanceDue)),
-      why_this_bill: [
-        `${group.activityName}`,
-        `${group.totalPlots} plot${group.totalPlots !== 1 ? 's' : ''}: ${allPlots}`,
-        `${group.totalArea.toFixed(2)} ac × ₹${group.rate.toLocaleString('en-IN')}/ac`,
-        `= ₹${Math.round(billableNow).toLocaleString('en-IN')}`,
-        creditForThisBill > 0
-          ? `Already collected: ₹${Math.round(creditForThisBill).toLocaleString('en-IN')}`
-          : null,
-        balanceDue > 0.01
-          ? `Balance due: ₹${Math.round(balanceDue).toLocaleString('en-IN')}`
-          : 'Balance: Clear',
-      ].filter(Boolean).join(' | '),
-    },
-  };
-
-  console.log(
-    `[Bulk SENDING] ${farmer.farmer_name} → ${group.activityName}`,
-    `bill: ₹${Math.round(billableNow)} credit: ₹${Math.round(creditForThisBill)} balance: ₹${Math.round(Math.max(0, balanceDue))}`
-  );
-
-  const sendRes = await fetch(`${API_BASE_URL}/api/farmer-bill/send-webhook/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Token ${token}`,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!sendRes.ok) {
-    const err = await sendRes.json().catch(() => ({}));
-    throw new Error(err?.error ?? `HTTP ${sendRes.status}`);
-  }
-
-  const sendResult = await sendRes.json();
-  console.log(`[Bulk SENT] ${farmer.farmer_name} → ${group.activityName}`, sendResult);
-
-  // Consume credit for next activity
-  remainingCredit = Math.max(0, remainingCredit - billableNow);
-
-  if (gi < unsentGroups.length - 1) await new Promise(r => setTimeout(r, 300));
-}
+        remainingCredit = Math.max(0, remainingCredit - billableNow);
+        if (gi < unsentGroups.length - 1) await new Promise(r => setTimeout(r, 300));
+      }
 
     } catch (e: any) {
       setBulkProgress(p => ({
@@ -5171,7 +5091,7 @@ for (let gi = 0; gi < unsentGroups.length; gi++) {
     }
 
     setBulkProgress(p => ({ ...p, done: p.done + 1 }));
-    if (i < uniqueFarmers.length - 1) await new Promise(r => setTimeout(r, 500));
+    if (i < uniqueReadyFarmers.length - 1) await new Promise(r => setTimeout(r, 500));
   }
 
   setBulkGenerating(false);
@@ -5473,7 +5393,7 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
               {filteredFarmers.length === 0 ? (
                 <div style={{ padding: '40px 16px', textAlign: 'center', color: '#a3a398', fontSize: 13 }}>No records in this view</div>
               ) : filteredFarmers.map((bill: any, i: number) => {
-                const key        = `${bill.farmer_id}__${bill.activity}`;
+                const key = `${bill.farmer_id}__${bill.job_id ?? ''}__${bill.activity}`;
                 const isExpanded = expandedFarmerKey === key;
                 const isOverdue  = bill.expected_payment === 'overdue';
                 const isPartial  = bill.status === 'partial';
@@ -5495,20 +5415,52 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
                       onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLDivElement).style.background = isOverdue ? 'rgba(254,242,242,0.4)' : 'transparent'; }}
                     >
                       {/* Farmer cell */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, background: isOverdue ? '#fef2f2' : paymentFilter === 'ready_to_bill' ? '#fff7ed' : '#eff6ff', border: `1.5px solid ${isOverdue ? '#fecaca' : paymentFilter === 'ready_to_bill' ? '#fed7aa' : '#bfdbfe'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: isOverdue ? '#dc2626' : paymentFilter === 'ready_to_bill' ? '#ea580c' : '#2563eb' }}>
-                          {initials}
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: isExpanded ? '#ea580c' : '#1a1a1a', display: 'flex', alignItems: 'center', gap: 4 }}>
-                            {bill.farmer_name}
-                            <span style={{ fontSize: 10, color: '#ea580c' }}>{isExpanded ? '▲' : '▼'}</span>
-                          </div>
-                          <div style={{ fontSize: 11, color: '#a3a398' }}>
-                            {bill.cluster_name}{paymentFilter === 'ready_to_bill' ? ` · ${bill.activity}` : ` · ${bill.n_plots} plots · ${bill.acres.toFixed(2)} ac`}
-                          </div>
-                        </div>
-                      </div>
+                      {/* Farmer cell */}
+<div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+  <div style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, background: isOverdue ? '#fef2f2' : paymentFilter === 'ready_to_bill' ? '#fff7ed' : '#eff6ff', border: `1.5px solid ${isOverdue ? '#fecaca' : paymentFilter === 'ready_to_bill' ? '#fed7aa' : '#bfdbfe'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: isOverdue ? '#dc2626' : paymentFilter === 'ready_to_bill' ? '#ea580c' : '#2563eb' }}>
+    {initials}
+  </div>
+  <div>
+    <div style={{ fontSize: 13, fontWeight: 600, color: isExpanded ? '#ea580c' : '#1a1a1a', display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      {bill.farmer_name}
+      <span style={{ fontSize: 10, color: '#ea580c' }}>{isExpanded ? '▲' : '▼'}</span>
+
+      {/* ── Booking type tag ── */}
+      {bill.booking_type === 'ondemand' && (
+        <span style={{
+          fontSize: 9, fontWeight: 700, padding: '1px 6px',
+          borderRadius: 999, background: '#eff6ff', color: '#2563eb',
+          border: '1px solid #bfdbfe', letterSpacing: '0.3px',
+        }}>
+          On Demand
+        </span>
+      )}
+      {bill.booking_type === 'tender' && (
+        <span style={{
+          fontSize: 9, fontWeight: 700, padding: '1px 6px',
+          borderRadius: 999, background: '#fff7ed', color: '#ea580c',
+          border: '1px solid #fed7aa', letterSpacing: '0.3px',
+        }}>
+          Tender
+        </span>
+      )}
+
+      {/* ── Job ID badge — shows when same farmer has multiple jobs ── */}
+      {bill.job_id && (
+        <span style={{
+          fontSize: 9, fontWeight: 600, padding: '1px 6px',
+          borderRadius: 999, background: '#f5f4ef', color: '#6b6b63',
+          border: '1px solid #e8e5de', fontFamily: 'monospace',
+        }}>
+          #{bill.job_id}
+        </span>
+      )}
+    </div>
+    <div style={{ fontSize: 11, color: '#a3a398' }}>
+      {bill.cluster_name}{paymentFilter === 'ready_to_bill' ? ` · ${bill.activity}` : ` · ${bill.n_plots} plots · ${bill.acres.toFixed(2)} ac`}
+    </div>
+  </div>
+</div>
 
                       {paymentFilter === 'partial' ? (
                         <>

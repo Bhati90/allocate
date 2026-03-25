@@ -689,7 +689,6 @@ def mukkadam_timeline(request):
         'mukkadams':   result,
     })
 
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def payment_overview(request):
@@ -698,21 +697,20 @@ def payment_overview(request):
     from collections import defaultdict
     from django.db.models import Sum
 
-    today        = date.today()
-    week_ago     = today - timedelta(days=7)
+    today    = date.today()
+    week_ago = today - timedelta(days=7)
 
     # ── 1. All sent bill logs ─────────────────────────────────────────────
     sent_logs = FarmerBillWebhookLog.objects.all().order_by('-sent_at')
 
-    # Latest log per farmer+activity
+    # Latest log per farmer+job+activity
     latest_map = {}
     for log in sent_logs:
-        key = (str(log.farmer_id), log.activity_name or '')
+        key = (str(log.farmer_id), str(log.job_id or ''), log.activity_name or '')
         if key not in latest_map:
             latest_map[key] = log
 
-    # ── 2. Expected total area per farmer+activity ────────────────────────
-    # This is the "all plots done" check — mirrors frontend allDone logic
+    # ── 2. Expected total area per farmer+job+activity ────────────────────
     expected_area_rows = JobActivity.objects.filter(
         total_area__gt=0,
     ).select_related(
@@ -720,6 +718,7 @@ def payment_overview(request):
         'activity',
     ).values(
         'job__farmer__farmer_id',
+        'job_id',               # FK column on JobActivity
         'activity__name',
     ).annotate(
         total_expected=Sum('total_area')
@@ -729,10 +728,10 @@ def payment_overview(request):
     for row in expected_area_rows:
         key = (
             str(row['job__farmer__farmer_id']),
+            str(row['job_id']),
             row['activity__name'],
         )
-        existing = expected_area_map.get(key, 0)
-        expected_area_map[key] = existing + float(row['total_expected'] or 0)
+        expected_area_map[key] = expected_area_map.get(key, 0) + float(row['total_expected'] or 0)
 
     # ── 3. All completed allocations ──────────────────────────────────────
     cluster_allocs = Allocation.objects.filter(
@@ -752,6 +751,7 @@ def payment_overview(request):
         'job_activity__rate_per_acre',
         'job_activity__plot__name',
         'job_activity__job__job_id',
+        'job_activity__job__booking_type',
         'cluster__id',
         'cluster__name',
         'mukkadam__mukkadam_name',
@@ -759,13 +759,14 @@ def payment_overview(request):
         'allocated_date',
     )
 
-    # Group by farmer+activity
+    # Group by (farmer_id, job_id, act_name)
     completed_groups = defaultdict(lambda: {
         'farmer_id':    None,
         'farmer_name':  None,
         'phone':        None,
         'activity':     None,
         'rate':         0,
+        'booking_type': None,
         'cluster_id':   None,
         'cluster_name': None,
         'mukkadam':     None,
@@ -777,8 +778,9 @@ def payment_overview(request):
 
     for row in cluster_allocs:
         farmer_id = str(row['job_activity__job__farmer__farmer_id'])
+        job_id    = str(row['job_activity__job__job_id'])
         act_name  = row['job_activity__activity__name']
-        key       = (farmer_id, act_name)
+        key       = (farmer_id, job_id, act_name)
         g         = completed_groups[key]
 
         g['farmer_id']    = farmer_id
@@ -786,6 +788,7 @@ def payment_overview(request):
         g['phone']        = row['job_activity__job__farmer__phone_number'] or ''
         g['activity']     = act_name
         g['rate']         = float(row['job_activity__rate_per_acre'] or 0)
+        g['booking_type'] = row['job_activity__job__booking_type'] or 'tender'
         g['cluster_id']   = row['cluster__id']
         g['cluster_name'] = row['cluster__name'] or '—'
         g['mukkadam']     = row['mukkadam__mukkadam_name'] or '—'
@@ -800,15 +803,15 @@ def payment_overview(request):
         if d and (not g['latest_date'] or d > g['latest_date']):
             g['latest_date'] = d
 
-    # ── 4. Build farmer list — only fully done combos ────────────────────
+    # ── 4. Build farmer list — only fully done combos ─────────────────────
     AREA_TOLERANCE = 0.05
     farmer_list = []
 
-    for (farmer_id, act_name), g in completed_groups.items():
-        expected  = expected_area_map.get((farmer_id, act_name), 0)
+    for (farmer_id, job_id, act_name), g in completed_groups.items():
+        expected  = expected_area_map.get((farmer_id, str(g['job_id']), act_name), 0)
         completed = float(g['total_area'])
 
-        # Skip if not all plots done (mirrors frontend allDone logic)
+        # Skip if not all plots done
         if expected > 0 and completed < expected - AREA_TOLERANCE:
             continue
 
@@ -819,7 +822,7 @@ def payment_overview(request):
         plots   = sorted(g['plots'])
         n_plots = len(plots)
         acres   = float(g['total_area'])
-        log     = latest_map.get((farmer_id, act_name))
+        log     = latest_map.get((farmer_id, str(g['job_id']), act_name))
 
         if log:
             balance  = float(log.balance_due or 0)
@@ -843,6 +846,7 @@ def payment_overview(request):
                 'cluster_name':      g['cluster_name'],
                 'activity':          act_name,
                 'rate':              g['rate'],
+                'booking_type':      g['booking_type'],
                 'plots':             plots,
                 'n_plots':           n_plots,
                 'acres':             acres,
@@ -868,6 +872,7 @@ def payment_overview(request):
                 'cluster_name':      g['cluster_name'],
                 'activity':          act_name,
                 'rate':              g['rate'],
+                'booking_type':      g['booking_type'],
                 'plots':             plots,
                 'n_plots':           n_plots,
                 'acres':             acres,
@@ -885,39 +890,30 @@ def payment_overview(request):
                 'webhook_status':    None,
             })
 
-    # ── 4b. Partial farmers — some plots done but not all ────────────────
-    # Collect all farmer+activity combos that have SOME completed area
-    # but are below the expected total (so they didn't make it into farmer_list)
-    for (farmer_id, act_name), g in completed_groups.items():
-        expected  = expected_area_map.get((farmer_id, act_name), 0)
+    # ── 4b. Partial farmers ───────────────────────────────────────────────
+    for (farmer_id, job_id, act_name), g in completed_groups.items():
+        expected  = expected_area_map.get((farmer_id, str(g['job_id']), act_name), 0)
         completed = float(g['total_area'])
 
-        # Skip if already fully done (already in farmer_list) or no area at all
         if expected <= 0 or completed <= 0:
             continue
         if completed >= expected - AREA_TOLERANCE:
             continue  # fully done — already captured above
 
-        # This farmer has partial completion
-        # Count how many unique plots are done vs expected
-        completed_plots = len(g['plots'])  # plots that have a completed allocation
-        # Total plots = expected_area / avg_plot_area (rough) — use job query instead
-        total_plots_qs = JobActivity.objects.filter(
+        completed_plots = len(g['plots'])
+        total_plots_qs  = JobActivity.objects.filter(
             job__farmer__farmer_id=farmer_id,
+            job__job_id=g['job_id'],
             activity__name=act_name,
             total_area__gt=0,
         ).count()
-        total_plots = max(total_plots_qs, completed_plots)
+        total_plots   = max(total_plots_qs, completed_plots)
         pending_plots = max(0, total_plots - completed_plots)
 
         amount = float(
             (g['total_area'] * Decimal(str(g['rate']))).quantize(Decimal('0.01'))
         )
-
-        # Expected full amount
-        full_amount = float(
-            (Decimal(str(expected)) * Decimal(str(g['rate']))).quantize(Decimal('0.01'))
-        )
+        full_amount    = float((Decimal(str(expected)) * Decimal(str(g['rate']))).quantize(Decimal('0.01')))
         pending_amount = round(full_amount - amount, 2)
 
         farmer_list.append({
@@ -928,6 +924,7 @@ def payment_overview(request):
             'cluster_name':     g['cluster_name'],
             'activity':         act_name,
             'rate':             g['rate'],
+            'booking_type':     g['booking_type'],
             'plots':            sorted(g['plots']),
             'n_plots':          total_plots,
             'completed_plots':  completed_plots,
@@ -959,7 +956,7 @@ def payment_overview(request):
     thisweek_list = [f for f in farmer_list if f['expected_payment'] == 'this_week']
     nextweek_list = [f for f in farmer_list if f['expected_payment'] == 'next_week']
 
-    # ── 6. Recent payments (last 15) ──────────────────────────────────────
+    # ── 6. Recent payments (last 30 days) ─────────────────────────────────
     recent_payments_qs = FarmerPayment.objects.filter(
         paid_status=True,
         paid_at__date__gte=today - timedelta(days=30),
@@ -1055,7 +1052,7 @@ def payment_overview(request):
             },
             'partial': {
                 'count':  len(partial_list),
-                'amount': sum(f['completed_amount'] for f in partial_list),
+                'amount': sum(f.get('completed_amount', 0) for f in partial_list),
             },
             'bills_sent': {
                 'count':  len(billed_list),
@@ -1079,7 +1076,6 @@ def payment_overview(request):
         'recent_payments': recent_payments,
         'cluster_billing': cluster_billing,
     })
-
 @api_view(['DELETE'])
 def reset_cluster_activity_rate(request, cluster_id, activity_id):
     """
@@ -2276,7 +2272,7 @@ def activity_dashboard(request):
     last10        = request.query_params.get('last10')
 
     qs = JobActivity.objects.filter(
-        job__booking_type='tender',
+        job__booking_type__in=['tender', 'ondemand'],  
         total_area__gt=0,
         is_lost=False,
     ).select_related(
@@ -2437,6 +2433,7 @@ def activity_dashboard(request):
                 # Job
                 'job_id':             job.job_id,
                 'job_status':         job.status,
+                'booking_type':       job.booking_type,  
                 'booking_id':         job.booking.booking_id if job.booking else None, 
                 'crop_name':          job.crop_name,
                 'variety':            getattr(job, 'variety', ''),
@@ -7258,7 +7255,7 @@ def tender_dashboard(request):
         ),
         Prefetch(
             'jobs',
-            queryset=Job.objects.filter(booking_type='tender').prefetch_related(
+            queryset=Job.objects.filter(booking_type__in=['tender', 'ondemand']).prefetch_related(
                 Prefetch(
                     'activities',
                     queryset=JobActivity.objects.select_related('activity', 'plot').prefetch_related(
@@ -7379,9 +7376,10 @@ def tender_dashboard(request):
                 },
                 'jobs': [
                     {
-                        'job_id':   j.job_id,
-                        'status':   j.status,
-                        'priority': j.priority,
+                        'job_id':        j.job_id,
+                        'status':        j.status,
+                        'priority':      j.priority,
+                        'booking_type':  j.booking_type,   # ← ADD THIS
                         'scheduled_date':          str(j.scheduled_date) if j.scheduled_date else None,
                         'total_activities_amount': float(j.total_activities_amount),
                         'activities': [
@@ -7468,8 +7466,9 @@ def tender_dashboard(request):
 
     activity_qs = JobActivity.objects.filter(
         job__booking_type='tender',
+        is_lost=False,  
         total_area__gt=0,
-        plot__isnull=False,
+       
     )
     if cluster_id_int:
         activity_qs = activity_qs.filter(
@@ -8059,9 +8058,9 @@ def cluster_payment_dashboard(request, cluster_id):
 
     # 5. Jobs prefetch
     jobs_qs = Job.objects.filter(
-        activities__plot__clusters__id=cluster_id,
-        booking_type='tender',
-    ).distinct().select_related('plot', 'farmer').prefetch_related(
+    activities__plot__clusters__id=cluster_id,
+    booking_type__in=['tender', 'ondemand'],
+).distinct().select_related('plot', 'farmer').prefetch_related(
         Prefetch('activities', queryset=activities_qs),
         Prefetch('booking', queryset=JobBooking.objects.prefetch_related(
             Prefetch('payments', queryset=payments_qs)
@@ -8355,6 +8354,7 @@ def cluster_payment_dashboard(request, cluster_id):
 
             job_rows.append({
                 'job_id':              job.job_id,
+                'booking_type':        job.booking_type, 
                 'crop_name':           job.crop_name,
                 'variety':             getattr(job, 'variety', ''),
                 'plot_name':           activities[0].plot.name if activities and activities[0].plot else '—',
