@@ -649,7 +649,7 @@ class ClusterSeasonDataView(View):
             except Exception:
                 pay_label = 'Yet to Pay'
 
-            # NEW: serialise allocation info for this JobActivity
+            # NEW: serialise allocations for this JobActivity
             allocations_payload = []
             completed_allocations = []
 
@@ -662,7 +662,7 @@ class ClusterSeasonDataView(View):
                     'allocatedDate': a.allocated_date.isoformat() if a.allocated_date else None,
                     'allocatedArea': float(a.allocated_area or 0),
                     'allocatedWorkers': a.allocated_workers,
-                    'workStatus': a.work_status,  # completed / in_progress / work_not_started
+                    'workStatus': a.work_status,
                 }
                 allocations_payload.append(item)
                 if a.work_status == 'completed':
@@ -683,14 +683,13 @@ class ClusterSeasonDataView(View):
                 'workers': workers,
                 'productivity': prod,
                 'paymentStatus': pay_label,
-                'status': status,                  # pending/allocated/in_progress/completed
+                'status': status,
                 'allocationStatus': ja.allocation_status,
                 'isStrict': ja.is_strict,
-
-                # NEW FIELDS
-                'allocations': allocations_payload,            # all team allocations
-                'completedAllocations': completed_allocations, # subset with workStatus == 'completed'
-                'isCompleted': bool(completed_allocations),    # quick flag for UI
+                # NEW
+                'allocations': allocations_payload,
+                'completedAllocations': completed_allocations,
+                'isCompleted': bool(completed_allocations),
             })
             all_dates.append(ja.scheduled_date)
         season_start = min(all_dates)
@@ -822,7 +821,6 @@ class ClusterSeasonDataView(View):
         } for r in records]
 
         # ── 8. allActivities (flat — for farmer details table) ────────
-        # ── 8. allActivities (flat — for farmer details table) ────────
         all_activities_flat = [{
             'jaId': r['jaId'],
             'jobId': r['jobId'],
@@ -839,6 +837,10 @@ class ClusterSeasonDataView(View):
             'status': r['status'],
             'allocationStatus': r['allocationStatus'],
             'isStrict': r['isStrict'],
+            # NEW
+            'allocations': r['allocations'],
+            'completedAllocations': r['completedAllocations'],
+            'isCompleted': r['isCompleted'],
         } for r in records]
         return JsonResponse({
             'seasonSummary':  season_summary,
