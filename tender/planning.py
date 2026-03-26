@@ -630,10 +630,10 @@ class ClusterSeasonDataView(View):
         all_dates = []
 
         for ja in activities:
-            prod  = _productivity(cluster, ja.activity)
+            prod = _productivity(cluster, ja.activity)
             workers = _workers_needed(ja.total_area, prod)
-            allocs  = list(ja.allocations.all())
-            status  = _activity_status(allocs)
+            allocs = list(ja.allocations.all())
+            status = _activity_status(allocs)
 
             # Village: use Farmer.location; fall back to cluster name
             village = (ja.job.farmer.location or '').strip() or cluster.name
@@ -641,7 +641,7 @@ class ClusterSeasonDataView(View):
             # Payment status
             try:
                 pay_status = ja.job.booking.status  # UNPAID/PARTIALLY_PAID/PAID
-                pay_label  = {
+                pay_label = {
                     'UNPAID': 'Yet to Pay',
                     'PARTIALLY_PAID': 'Partial',
                     'PAID': 'Paid',
@@ -649,27 +649,50 @@ class ClusterSeasonDataView(View):
             except Exception:
                 pay_label = 'Yet to Pay'
 
+            # NEW: serialise allocation info for this JobActivity
+            allocations_payload = []
+            completed_allocations = []
+
+            for a in allocs:
+                item = {
+                    'id': a.id,
+                    'mukkadamId': a.mukkadam_id,
+                    'mukkadamName': getattr(a.mukkadam, 'mukkadam_name', ''),
+                    'mukkadamMobile': getattr(a.mukkadam, 'mobile_numbers', ''),
+                    'allocatedDate': a.allocated_date.isoformat() if a.allocated_date else None,
+                    'allocatedArea': float(a.allocated_area or 0),
+                    'allocatedWorkers': a.allocated_workers,
+                    'workStatus': a.work_status,  # completed / in_progress / work_not_started
+                }
+                allocations_payload.append(item)
+                if a.work_status == 'completed':
+                    completed_allocations.append(item)
+
             records.append({
-                'jaId':         ja.pk,
-                'jobId':        ja.job.job_id,
-                'plotId':       ja.plot.plot_code if ja.plot and ja.plot.plot_code else str(ja.plot_id or ja.pk),
-                'plotName':     ja.plot.name if ja.plot else f'Plot-{ja.pk}',
-                'farmer':       ja.job.farmer.farmer_name,
-                'contact':      ja.job.farmer.phone_number or '',
-                'village':      village,
-                'variety':      ja.job.variety or ja.job.crop_name or '',
-                'acre':         float(ja.total_area),
-                'activity':     ja.activity.name,
-                'date':         ja.scheduled_date.isoformat(),
-                'workers':      workers,
+                'jaId': ja.pk,
+                'jobId': ja.job.job_id,
+                'plotId': ja.plot.plot_code if ja.plot and ja.plot.plot_code else str(ja.plot_id or ja.pk),
+                'plotName': ja.plot.name if ja.plot else f'Plot-{ja.pk}',
+                'farmer': ja.job.farmer.farmer_name,
+                'contact': ja.job.farmer.phone_number or '',
+                'village': village,
+                'variety': ja.job.variety or ja.job.crop_name or '',
+                'acre': float(ja.total_area),
+                'activity': ja.activity.name,
+                'date': ja.scheduled_date.isoformat(),
+                'workers': workers,
                 'productivity': prod,
                 'paymentStatus': pay_label,
-                'status':       status,
+                'status': status,                  # pending/allocated/in_progress/completed
                 'allocationStatus': ja.allocation_status,
-                'isStrict':     ja.is_strict,
+                'isStrict': ja.is_strict,
+
+                # NEW FIELDS
+                'allocations': allocations_payload,            # all team allocations
+                'completedAllocations': completed_allocations, # subset with workStatus == 'completed'
+                'isCompleted': bool(completed_allocations),    # quick flag for UI
             })
             all_dates.append(ja.scheduled_date)
-
         season_start = min(all_dates)
         season_end   = max(all_dates)
 
@@ -799,24 +822,24 @@ class ClusterSeasonDataView(View):
         } for r in records]
 
         # ── 8. allActivities (flat — for farmer details table) ────────
+        # ── 8. allActivities (flat — for farmer details table) ────────
         all_activities_flat = [{
-            'jaId':           r['jaId'],
-            'jobId':          r['jobId'],
-            'plotId':         r['plotId'],
-            'plotName':       r['plotName'],
-            'farmer':         r['farmer'],
-            'village':        r['village'],
-            'variety':        r['variety'],
-            'acre':           r['acre'],
-            'activity':       r['activity'],
-            'date':           r['date'],
-            'workers':        r['workers'],
-            'paymentStatus':  r['paymentStatus'],
-            'status':         r['status'],
+            'jaId': r['jaId'],
+            'jobId': r['jobId'],
+            'plotId': r['plotId'],
+            'plotName': r['plotName'],
+            'farmer': r['farmer'],
+            'village': r['village'],
+            'variety': r['variety'],
+            'acre': r['acre'],
+            'activity': r['activity'],
+            'date': r['date'],
+            'workers': r['workers'],
+            'paymentStatus': r['paymentStatus'],
+            'status': r['status'],
             'allocationStatus': r['allocationStatus'],
-            'isStrict':       r['isStrict'],
+            'isStrict': r['isStrict'],
         } for r in records]
-
         return JsonResponse({
             'seasonSummary':  season_summary,
             'dailyDemand':    daily_demand,

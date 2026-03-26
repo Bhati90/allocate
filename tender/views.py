@@ -7243,6 +7243,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
     #         },
     #         status=status.HTTP_200_OK,
     #     )
+   
+   
     @action(detail=True, methods=['delete'])
     def delete_allocation(self, request, pk=None):
         """
