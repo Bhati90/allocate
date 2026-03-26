@@ -23,6 +23,8 @@ from .views import (
 from .webhook import booking_webhook,run_mukkadam_sync,send_farmer_bill_to_webhook,farmer_payment_webhook,sync_webhook
 from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history,mukkadam_earnings
 # Create router
+from . import planning as v
+ 
 from django.views.decorators.csrf import csrf_exempt
 from .insight import ClusterInsightsView,GlobalInsightsView,GlobalDayInsightsView
 router = DefaultRouter()
@@ -134,6 +136,30 @@ path('api/insights/', cluster_insights, name='cluster_insights'),
 path('api/reschedule-activities/', reschedule_activities_view, name='reschedule-activities'),
 path('api/farmer-bill/send-webhook/', send_farmer_bill_to_webhook),
 path('api/allocations/<int:allocation_id>/mark_complete/', mark_allocation_complete),
+
+
+
+path('clustersp/',
+         v.ClusterListView.as_view(),
+         name='planning-cluster-list'),
+ 
+    # Full season data — the main endpoint planning_app.js calls
+    path('clustersp/<int:cluster_id>/season-data/',
+         v.ClusterSeasonDataView.as_view(),
+         name='planning-season-data'),
+ 
+    # Mukkadam supply per cluster (Teams tab)
+    path('clustersp/<int:cluster_id>/supply/',
+         v.ClusterSupplyView.as_view(),
+         name='planning-supply'),
+ 
+    # Completion KPI stats
+    path('clustersp/<int:cluster_id>/completion-stats/',
+         v.ClusterCompletionStatsView.as_view(),
+         name='planning-completion-stats'),
+
+path('clustersp/<int:cluster_id>/data/', v.ClusterDataView.as_view()),
+path('clustersp/<int:cluster_id>/optimised-data/', v.ClusterOptimisedDataView.as_view()),
 
 path('api/activity-dashboard/', activity_dashboard, name='activity-dashboard'),
 

@@ -30,9 +30,10 @@ const fmt = (n: number) =>
 // ── Sub-tabs ───────────────────────────────────────────────────────
 type SubTab = 'overview' | 'weekly' | 'clusters' | 'heatmap' | 'farmers';
 
-export default function SalesPerformance() {
+export default function SalesPerformance({ onKpisReady }: { onKpisReady?: (kpis: any) => void }) {
   const [data, setData]       = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  
   const [subTab, setSubTab]   = useState<SubTab>('overview');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo]     = useState('');
@@ -62,6 +63,7 @@ export default function SalesPerformance() {
       });
       const d = await res.json();
       setData(d);
+      if (onKpisReady && d?.kpis) onKpisReady(d.kpis);
     } catch (e) {
       console.error(e);
     } finally {

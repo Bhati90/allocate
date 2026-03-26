@@ -386,8 +386,10 @@ function ActivityBillModal({
         // bill_summary — stored as total_billed/total_paid/balance_due
         bill_summary: {
           total_billed:       Math.round(billableNow),
-          total_already_paid: Math.round(totalPaid),
-          balance_due_now:    Math.round(balanceDue),
+          // total_already_paid: Math.round(totalPaid),
+          // balance_due_now:    Math.round(balanceDue),
+          total_already_paid: 0,                        // ← was creditForThisBill
+    balance_due_now:    Math.round(billableNow), 
           why_this_bill: [
             `${group.activityName}`,
             `${group.totalPlots} plot${group.totalPlots !== 1 ? 's' : ''}: ${allPlots}`,
@@ -730,8 +732,10 @@ function ViewBillModal({
           {/* Balance — use live log values, not snapshot payload */}
 {(() => {
   const liveBilled  = Number(log.total_billed  ?? bill.total_billed  ?? 0);
-  const livePaid    = Number(log.total_paid    ?? bill.total_already_paid ?? 0);
-  const liveBalance = Number(log.balance_due   ?? bill.balance_due_now   ?? 0);
+  // const livePaid    = Number(log.total_paid    ?? bill.total_already_paid ?? 0);
+  // const liveBalance = Number(log.balance_due   ?? bill.balance_due_now   ?? 0);
+  const livePaid    = 0;           // ← ignore log.total_paid
+const liveBalance = liveBilled;  // ← just show full billed amount
   return (
     <div style={{ background: '#f8f9fb', borderRadius: 10, padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '6px 0' }}>
@@ -1310,7 +1314,8 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
             jobs:        [groupJob],
             group,
             allPayments: jobPayments,
-            totalPaid:   creditAvailable,
+            // totalPaid:   creditAvailable,
+            totalPaid: 0,
           });
         }}
         style={{ padding: '8px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: balanceDue > 0.01 ? '#1a1a2e' : '#27ae60', color: '#fff' }}
