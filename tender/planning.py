@@ -868,11 +868,583 @@ def _empty_response(cluster):
         'plots': [], 'allActivities': [], 'labourCalendar': [],
     }
 
+def _resolve_available_dates(asgn):
+    """
+    Returns a list of ISO date strings for which an updown mukkadam is available.
+    Handles both 'range' mode (expands to daily list) and 'specific' mode (returns as-is).
+    """
+    from datetime import date, timedelta
 
-# ════════════════════════════════════════════════════════════════════
-# VIEW 3 — Mukkadam supply for a cluster (for Teams tab)
-# GET /api/planning/clusters/<cluster_id>/supply/
-# ════════════════════════════════════════════════════════════════════
+    if asgn.updown_mode == 'specific':
+        return [str(d) for d in (asgn.updown_specific_dates or [])]
+
+    if asgn.updown_mode == 'range':
+        start = asgn.updown_from_date
+        end   = asgn.updown_to_date
+        if not start or not end:
+            return []
+        dates = []
+        cur = start
+        while cur <= end:
+            dates.append(cur.isoformat())
+            cur += timedelta(days=1)
+        return dates
+
+    return []
+
+
+# planning_api_views.py  ─  GET /tender/clustersp/<cluster_id>/overview/
+
+import math
+from collections import defaultdict
+from django.http import JsonResponse
+from django.views import View
+from django.db.models import Prefetch, Sum, Q
+from tender.models import (
+    Cluster, Job, JobActivity, Allocation,
+    JobBooking, FarmerPayment, MukkadamPayment,
+    ClusterMukkadamAssignment,
+)
+
+
+class ClusterOverviewView(View):
+    """
+    Returns the 4-section overview card shown in index.html:
+      - overview     (all farmers)
+      - completed    (as of today)
+      - in_progress  (allocated / in progress)
+      - pending      (yet to start)
+    """
+
+    def get(self, request, cluster_id):
+        try:
+            cluster = Cluster.objects.get(pk=cluster_id)
+        except Cluster.DoesNotExist:
+            return JsonResponse({'error': 'not found'}, status=404)
+
+        # ── 1. Fetch all valid JobActivities for this cluster ──────────
+        activities_qs = (
+            JobActivity.objects
+            .filter(
+                job__clusters=cluster,
+                is_lost=False,
+                total_area__gt=0,
+                scheduled_date__isnull=False,
+            )
+            .select_related('job', 'job__farmer', 'job__booking', 'activity', 'plot')
+            .prefetch_related(
+                Prefetch(
+                    'allocations',
+                    queryset=Allocation.objects.only(
+                        'job_activity_id', 'work_status',
+                        'mukkadam_amount', 'allocated_area',
+                        'mukkadam_id',
+                    )
+                )
+            )
+            .order_by('job_id', 'scheduled_date')
+        )
+
+        activities = list(activities_qs)
+
+        if not activities:
+            return JsonResponse(_empty_overview())
+
+        # ── 2. Build per-job structures ────────────────────────────────
+        # job_id → {
+        #   farmer_id, farmer_name,
+        #   first_activity_area (pruning/1st),
+        #   total_area,
+        #   booking_value, collected, balance,
+        #   activity_statuses: set of activity-level statuses
+        #   job_status: 'completed' | 'in_progress' | 'pending'
+        #   mukadam_paid (sum of mukkadam_amount on completed allocs)
+        # }
+
+        job_map = {}         # job_id → job meta
+        first_seen = {}      # job_id → True/False (first activity processed)
+
+        for ja in activities:
+            jid = ja.job_id
+            if jid not in job_map:
+                job = ja.job
+                # booking
+                try:
+                    booking_value = float(job.booking.total_amount or 0)
+                    collected = float(job.booking.advance_paid or 0)
+                    balance = float(job.booking.balance or 0)
+                except Exception:
+                    booking_value = collected = balance = 0.0
+
+                job_map[jid] = {
+                    'farmer_id':          job.farmer_id,
+                    'farmer_name':        job.farmer.farmer_name,
+                    'first_area':         0.0,   # pruning / 1st activity
+                    'total_area':         0.0,
+                    'booking_value':      booking_value,
+                    'collected':          collected,
+                    'balance':            balance,
+                    'act_statuses':       [],   # one entry per activity
+                    'mukadam_paid':       0.0,
+                }
+                first_seen[jid] = False
+
+            entry = job_map[jid]
+            area = float(ja.total_area)
+            entry['total_area'] += area
+
+            # first activity = pruning/1st (activities ordered by scheduled_date)
+            if not first_seen[jid]:
+                entry['first_area'] += area
+                first_seen[jid] = True
+
+            # activity-level status
+            allocs = list(ja.allocations.all())
+            ws = {a.work_status for a in allocs}
+            if 'completed' in ws:
+                act_status = 'completed'
+                # sum mukkadam payable for completed allocs
+                entry['mukadam_paid'] += sum(
+                    float(a.mukkadam_amount) for a in allocs
+                    if a.work_status == 'completed'
+                )
+            elif 'in_progress' in ws:
+                act_status = 'in_progress'
+            elif allocs:
+                act_status = 'allocated'
+            else:
+                act_status = 'pending'
+
+            entry['act_statuses'].append(act_status)
+
+        # ── 3. Classify each job ───────────────────────────────────────
+        for jid, entry in job_map.items():
+            statuses = set(entry['act_statuses'])
+            if all(s == 'completed' for s in entry['act_statuses']):
+                entry['job_status'] = 'completed'
+            elif statuses & {'completed', 'in_progress', 'allocated'}:
+                entry['job_status'] = 'in_progress'
+            else:
+                entry['job_status'] = 'pending'
+
+        jobs = list(job_map.values())
+
+        # ── 4. Per-farmer bucketing ────────────────────────────────────
+        # A farmer is "completed" only if ALL their jobs are completed.
+        # "in_progress" if any job is in_progress.
+        # "pending" otherwise.
+
+        farmer_jobs = defaultdict(list)
+        for entry in jobs:
+            farmer_jobs[entry['farmer_id']].append(entry)
+
+        farmer_buckets = {}   # farmer_id → 'completed' | 'in_progress' | 'pending'
+        for fid, fentries in farmer_jobs.items():
+            job_statuses = {e['job_status'] for e in fentries}
+            if all(s == 'completed' for s in [e['job_status'] for e in fentries]):
+                farmer_buckets[fid] = 'completed'
+            elif job_statuses & {'in_progress'}:
+                farmer_buckets[fid] = 'in_progress'
+            else:
+                farmer_buckets[fid] = 'pending'
+
+        # ── 5. Aggregate each section ──────────────────────────────────
+        def _agg(entries):
+            farmer_ids = {e['farmer_id'] for e in entries}
+            job_ids    = set()  # only for distinct job count
+            acts_total = 0
+            first_area = 0.0
+            total_area = 0.0
+            booking_value = 0.0
+            collected  = 0.0
+            balance    = 0.0
+            mukadam_paid = 0.0
+
+            seen_jobs = set()
+            for e in entries:
+                jid = e.get('_jid')  # need to pass this — see below
+                acts_total += len(e['act_statuses'])
+                first_area += e['first_area']
+                total_area += e['total_area']
+                booking_value += e['booking_value']
+                collected  += e['collected']
+                balance    += e['balance']
+                mukadam_paid += e['mukadam_paid']
+
+            return {
+                'farmers':       len(farmer_ids),
+                'jobs':          len(entries),
+                'activities':    acts_total,
+                'acres_first':   round(first_area, 1),
+                'acres_all':     round(total_area, 1),
+                'booking_value': round(booking_value, 2),
+                'collected':     round(collected, 2),
+                'balance_due':   round(balance, 2),
+                'mukadam_paid':  round(mukadam_paid, 2),
+            }
+
+        # Re-attach job_id to entries for counting
+        job_entries_by_status = defaultdict(list)
+        for jid, entry in job_map.items():
+            entry['_jid'] = jid
+            job_entries_by_status[entry['job_status']].append(entry)
+
+        completed_entries   = job_entries_by_status['completed']
+        in_progress_entries = job_entries_by_status['in_progress']
+        pending_entries     = job_entries_by_status['pending']
+        all_entries         = jobs
+
+        # Attach _jid to all_entries too
+        for e in all_entries:
+            pass  # already set above
+
+        # For the "completed" section: only activities that are completed
+        # For "in_progress": only activities that are allocated/in_progress
+        # For "pending": activities with no allocation
+
+        def _count_activities_by_type(entries, target_statuses):
+            return sum(
+                sum(1 for s in e['act_statuses'] if s in target_statuses)
+                for e in entries
+            )
+
+        # ── 6. Completed section specifics ────────────────────────────
+        comp_farmers = {e['farmer_id'] for e in completed_entries}
+        comp_acts    = _count_activities_by_type(
+            completed_entries, {'completed'}
+        )
+        comp_first_area = sum(e['first_area'] for e in completed_entries)
+        comp_all_area   = sum(e['total_area'] for e in completed_entries)
+        comp_worth      = sum(
+            sum(float(a.mukkadam_amount) for a in ja.allocations.all()
+                if a.work_status == 'completed')
+            for ja in activities
+            if ja.job_id in {e['_jid'] for e in completed_entries}
+        )
+
+        # Simpler: just use pre-aggregated mukadam_paid
+        comp_mukadam_paid = sum(e['mukadam_paid'] for e in completed_entries)
+
+        # ── 7. In-progress section ────────────────────────────────────
+        ip_farmers = {e['farmer_id'] for e in in_progress_entries}
+        ip_acts    = _count_activities_by_type(
+            in_progress_entries, {'allocated', 'in_progress', 'completed'}
+        )
+        ip_first_area = sum(e['first_area'] for e in in_progress_entries)
+        ip_all_area   = sum(e['total_area'] for e in in_progress_entries)
+        ip_mukadam    = sum(e['mukadam_paid'] for e in in_progress_entries)
+
+        # ── 8. Pending section ────────────────────────────────────────
+        pend_farmers = {e['farmer_id'] for e in pending_entries}
+        pend_acts    = _count_activities_by_type(
+            pending_entries, {'pending'}
+        )
+        pend_first_area = sum(e['first_area'] for e in pending_entries)
+        pend_all_area   = sum(e['total_area'] for e in pending_entries)
+
+        # ── 9. Overview totals ────────────────────────────────────────
+        all_farmers     = set(farmer_jobs.keys())
+        all_jobs_count  = len(job_map)
+        all_acts_count  = sum(len(e['act_statuses']) for e in jobs)
+        all_first_area  = sum(e['first_area'] for e in jobs)
+        all_total_area  = sum(e['total_area'] for e in jobs)
+        all_booking     = sum(e['booking_value'] for e in jobs)
+        all_collected   = sum(e['collected'] for e in jobs)
+        all_balance     = sum(e['balance'] for e in jobs)
+
+        return JsonResponse({
+            'overview': {
+                'farmers':       len(all_farmers),
+                'jobs':          all_jobs_count,
+                'activities':    all_acts_count,
+                'acres_first':   round(all_first_area, 1),
+                'acres_all':     round(all_total_area, 1),
+                'booking_value': round(all_booking, 2),
+                'collected':     round(all_collected, 2),
+                'balance_due':   round(all_balance, 2),
+            },
+            'completed': {
+                'farmers':      len(comp_farmers),
+                'jobs':         len(completed_entries),
+                'activities':   comp_acts,
+                'acres_first':  round(comp_first_area, 1),
+                'acres_all':    round(comp_all_area, 1),
+                'worth_of_work': round(comp_mukadam_paid, 2),
+                'mukadam_paid': round(comp_mukadam_paid, 2),
+                'transport':    None,
+            },
+            'in_progress': {
+                'farmers':      len(ip_farmers),
+                'jobs':         len(in_progress_entries),
+                'activities':   ip_acts,
+                'acres_first':  round(ip_first_area, 1),
+                'acres_all':    round(ip_all_area, 1),
+                'worth_of_work': round(ip_mukadam, 2),
+                'mukadam_payable': round(ip_mukadam, 2),
+            },
+            'pending': {
+                'farmers':      len(pend_farmers),
+                'jobs':         len(pending_entries),
+                'activities':   pend_acts,
+                'acres_first':  round(pend_first_area, 1),
+                'acres_all':    round(pend_all_area, 1),
+                'worth_pending': 0,
+                'mukadam_earnings_pending': 0,
+            },
+        })
+
+
+
+# GET /tender/clustersp/overview/
+from collections import defaultdict                          # ✅ FIX 1: was missing, crashed at runtime
+from django.http import JsonResponse
+from django.views import View
+from django.db.models import Prefetch
+from tender.models import JobActivity, Allocation
+
+
+def _empty_overview():                                       # ✅ FIX 2: was called but never defined
+    empty = {
+        'jobs': 0, 'activities': 0, 'farmers': 0,
+        'acres_first': 0.0, 'acres_all': 0.0,
+        'booking_value': 0.0, 'collected': 0.0,
+        'balance_due': 0.0, 'mukadam_paid': 0.0,
+        'worth_of_work': 0.0,
+    }
+    return {
+        'overview':     {**empty},
+        'completed':    {**empty, 'transport': 0.0},
+        'in_progress':  {**empty, 'mukadam_payable': 0.0},
+        'pending':      {**empty, 'worth_pending': 0.0, 'mukadam_earnings_pending': 0.0},
+    }
+
+from decimal import Decimal
+from collections import defaultdict
+from django.http import JsonResponse
+from django.views import View
+from django.db.models import Sum, Q, Value, DecimalField
+from django.db.models.functions import Coalesce
+
+from tender.models import Farmer, Job, JobActivity, Allocation
+
+
+def dec(v):
+    return float(v or 0)
+
+from decimal import Decimal
+from collections import defaultdict
+from django.http import JsonResponse
+from django.views import View
+from django.db.models import Sum, Value, DecimalField
+from django.db.models.functions import Coalesce
+
+from tender.models import Farmer, Job, JobActivity, Allocation
+
+
+def dec(v):
+    return float(v or 0)
+
+
+def is_pruning(name):
+    """Match: Pruning (छाटणी), Pruning (छाटणी) 1, Pruning (छाटणी) 2, Pruning (छाटणी) 3"""
+    n = (name or '').lower().strip()
+    return 'pruning' in n or 'छाटणी' in n
+
+
+class GlobalOverviewView(View):
+    def get(self, request):
+
+        # ── VALID ACTIVITIES ─────────────────────────────────
+        valid_jas = (
+            JobActivity.objects
+            .filter(total_area__gt=0, is_lost=False)
+            .select_related('activity', 'job', 'job__farmer')
+            .prefetch_related('allocations')
+        )
+
+        jas_list = list(valid_jas)
+
+        if not jas_list:
+            empty = {
+                'farmers': 0, 'jobs': 0, 'activities': 0,
+                'acres_pruning': 0.0, 'acres_all': 0.0,
+                'worth_of_work': 0.0, 'mukkadam_paid': 0.0,
+            }
+            return JsonResponse({
+                'overview': {**empty, 'booking_value': 0, 'collected': 0, 'balance_due': 0},
+                'completed': {**empty, 'transport_spend': 0},
+                'in_progress': {**empty, 'mukkadam_payable': 0},
+                'pending': {**empty, 'worth_pending': 0, 'mukkadam_earnings_pending': 0},
+            })
+
+        # ── BUCKETS ──────────────────────────────────────────
+        co = {'activities': 0, 'pruning_acres': 0.0, 'all_acres': 0.0, 'worth': 0.0, 'mukkadam_amt': 0.0}
+        ip = {'activities': 0, 'pruning_acres': 0.0, 'all_acres': 0.0, 'worth': 0.0, 'mukkadam_amt': 0.0}
+        pe = {'activities': 0, 'pruning_acres': 0.0, 'all_acres': 0.0, 'worth': 0.0, 'mukkadam_amt': 0.0}
+
+        ov_pruning_acres = 0.0
+        ov_all_acres = 0.0
+
+        # job_id -> list of activity classifications
+        job_act_classes = defaultdict(list)
+        # job_id -> farmer_id
+        job_farmer = {}
+
+        # Dedup: job_id | plot_id | activity_name
+        seen_keys = set()
+
+        for ja in jas_list:
+            area = float(ja.total_area or 0)
+            if area <= 0:
+                continue
+
+            key = f"{ja.job_id}|{ja.plot_id}|{ja.activity.name}"
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            allocs = list(ja.allocations.all())
+            price = float(ja.total_price or 0)
+            pruning = is_pruning(ja.activity.name)
+            status_val = ja.allocation_status or 'pending'
+
+            # ── Overview totals ──────────────────────────────
+            ov_all_acres += area
+            if pruning:
+                ov_pruning_acres += area
+
+            # ── Classify activity ────────────────────────────
+            # Completed = fully_allocated + ALL allocations work_status='completed'
+            all_allocs_complete = (
+                len(allocs) > 0 and
+                all(a.work_status == 'completed' for a in allocs)
+            )
+            has_wip_alloc = any(a.work_status == 'in_progress' for a in allocs)
+
+            if status_val == 'fully_allocated' and all_allocs_complete:
+                act_class = 'completed'
+            elif status_val in ('fully_allocated', 'partially_allocated', 'in_progress') or has_wip_alloc:
+                act_class = 'in_progress'
+            else:
+                act_class = 'pending'
+
+            # ── Money ────────────────────────────────────────
+            # Worth = total_price (farmer rate × area) from JobActivity
+            # Mukkadam = sum of farmer_amount from completed allocations
+            completed_alloc_amt = sum(
+                float(a.farmer_amount or 0) for a in allocs if a.work_status == 'completed'
+            )
+
+            # ── Fill bucket ──────────────────────────────────
+            bucket = co if act_class == 'completed' else ip if act_class == 'in_progress' else pe
+
+            bucket['activities'] += 1
+            bucket['all_acres'] += area
+            if pruning:
+                bucket['pruning_acres'] += area
+            bucket['worth'] += price
+            bucket['mukkadam_amt'] += completed_alloc_amt
+
+            # ── Track for job/farmer classification ──────────
+            job_act_classes[ja.job_id].append(act_class)
+            job_farmer[ja.job_id] = ja.job.farmer_id
+
+        # ── CLASSIFY JOBS ────────────────────────────────────
+        # Job completed = ALL its valid activities (area>0) are completed
+        # Job in_progress = any activity is completed or in_progress but not ALL completed
+        # Job pending = all activities are pending
+        co_jobs = set()
+        ip_jobs = set()
+        pe_jobs = set()
+
+        farmer_done = set()
+        farmer_wip = set()
+        farmer_seen = set()
+
+        for job_id, classes in job_act_classes.items():
+            farmer_id = job_farmer[job_id]
+            farmer_seen.add(farmer_id)
+
+            all_done = all(c == 'completed' for c in classes)
+            any_started = any(c in ('completed', 'in_progress') for c in classes)
+            all_pending = all(c == 'pending' for c in classes)
+
+            if all_done:
+                co_jobs.add(job_id)
+                farmer_done.add(farmer_id)
+            elif any_started:
+                ip_jobs.add(job_id)
+                farmer_wip.add(farmer_id)
+            else:
+                pe_jobs.add(job_id)
+
+        # ── CLASSIFY FARMERS ─────────────────────────────────
+        # Has both done & wip → completed (attended)
+        # Only wip → in_progress
+        # Only done (no wip) → completed
+        # Neither → pending
+        co_farmers = set()
+        ip_farmers = set()
+        pe_farmers = set()
+
+        for fid in farmer_seen:
+            if fid in farmer_done and fid in farmer_wip:
+                co_farmers.add(fid)
+            elif fid in farmer_wip:
+                ip_farmers.add(fid)
+            elif fid in farmer_done:
+                co_farmers.add(fid)
+            else:
+                pe_farmers.add(fid)
+
+        # ── BOOKING DATA ────────────────────────────────────
+        booking_data = Job.objects.aggregate(
+            booking_value=Coalesce(Sum('booking__total_amount'), Value(Decimal('0.0')), output_field=DecimalField()),
+            collected=Coalesce(Sum('booking__advance_paid'), Value(Decimal('0.0')), output_field=DecimalField()),
+            balance_due=Coalesce(Sum('booking__balance'), Value(Decimal('0.0')), output_field=DecimalField()),
+        )
+
+        # ── RESPONSE ─────────────────────────────────────────
+        return JsonResponse({
+    "overview": {
+        "farmers": Farmer.objects.count(),
+        "jobs": Job.objects.count(),
+        "activities": len(seen_keys),
+        "acres_first": round(ov_pruning_acres, 1),       # was acres_pruning
+        "acres_all": round(ov_all_acres, 1),
+        "booking_value": dec(booking_data["booking_value"]),
+        "collected": dec(booking_data["collected"]),
+        "balance_due": dec(booking_data["balance_due"]),
+    },
+    "completed": {
+        "farmers": len(co_farmers),
+        "jobs": len(co_jobs),
+        "activities": co['activities'],
+        "acres_first": round(co['pruning_acres'], 1),     # was acres_pruning
+        "acres_all": round(co['all_acres'], 1),
+        "worth_of_work": round(co['worth'], 2),
+        "mukadam_paid": round(co['mukkadam_amt'], 2),      # was mukkadam_paid
+        "transport": 0.0,                                   # was transport_spend
+    },
+    "in_progress": {
+        "farmers": len(ip_farmers),
+        "jobs": len(ip_jobs),
+        "activities": ip['activities'],
+        "acres_first": round(ip['pruning_acres'], 1),     # was acres_pruning
+        "acres_all": round(ip['all_acres'], 1),
+        "worth_of_work": round(ip['worth'], 2),
+        "mukadam_payable": round(ip['mukkadam_amt'], 2),   # was mukkadam_payable
+    },
+    "pending": {
+        "farmers": len(pe_farmers),
+        "jobs": len(pe_jobs),
+        "activities": pe['activities'],
+        "acres_first": round(pe['pruning_acres'], 1),     # was acres_pruning
+        "acres_all": round(pe['all_acres'], 1),
+        "worth_pending": round(pe['worth'], 2),
+        "mukadam_earnings_pending": round(pe['mukkadam_amt'], 2),
+    }
+})
 class ClusterSupplyView(View):
     def get(self, request, cluster_id):
         try:
@@ -903,6 +1475,7 @@ class ClusterSupplyView(View):
                 'weeklyAmount':  float(asgn.weekly_amount or 0),
                 'efficiency':    float(m.efficiency or DEFAULT_PRODUCTIVITY),
                 'workMode':      m.work_mode or '',
+                'availableDates': _resolve_available_dates(asgn) if asgn.mukkadam_type == 'updown' else None,
             })
 
         return JsonResponse({

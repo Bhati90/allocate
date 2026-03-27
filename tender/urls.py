@@ -138,11 +138,11 @@ path('api/farmer-bill/send-webhook/', send_farmer_bill_to_webhook),
 path('api/allocations/<int:allocation_id>/mark_complete/', mark_allocation_complete),
 
 
-
+path('clustersp/overview/', v.GlobalOverviewView.as_view()),
 path('clustersp/',
          v.ClusterListView.as_view(),
          name='planning-cluster-list'),
- 
+ path('clustersp/<int:cluster_id>/overview/', v.ClusterOverviewView.as_view()),
     # Full season data — the main endpoint planning_app.js calls
     path('clustersp/<int:cluster_id>/season-data/',
          v.ClusterSeasonDataView.as_view(),
