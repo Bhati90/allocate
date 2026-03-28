@@ -213,10 +213,12 @@ class JobActivitySerializer(serializers.ModelSerializer):
             'original_scheduled_date', 'moved_to_date', 'subtotal',
             'allocation_status', 'is_fully_allocated', 'is_manually_edited',
             'is_lost', 'lost_reason', 'moved_from_activity', 'move_reason',
-            'location',
+            'location','job',
             'allocations',  # ← ADD
         ]
         read_only_fields = ['remaining_area', 'allocation_status', 'is_fully_allocated']
+
+
 class FarmerPaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = FarmerPayment

@@ -1,5 +1,3 @@
-
-
 // pages/TenderDashboard.tsx
 import React, { useCallback, useEffect,useMemo,useRef, useState } from "react";
 // import { groupActivitiesByName } from './FarmerBillingPage';
@@ -3794,10 +3792,9 @@ const handleExpandFarmer = async (bill: any) => {
 const handleConfirmAllocate = async () => {
   if (!allocHalfDay) return;
   const { act, job, mukkadam, rate, availableWorkers, remainingArea, isoDate, jobSlotsUsed } = allocHalfDay;
-  const slotsUsed  = jobSlotsUsed ?? 0;
-  const isLastSlot = slotsUsed >= 2;
-  const isMidSlot  = slotsUsed === 1;
-  const allowsMoreJobsToSend = isLastSlot ? false : isMidSlot ? true : allocAllowsMore;
+  const slotsUsed = jobSlotsUsed ?? 0;
+  // No slot restriction — same team can be allocated unlimited times per day.
+  const allowsMoreJobsToSend = true;
 
   // Resolve cluster_id from activity's farmer_clusters, then plot clusters, then filter
   const resolvedClusterId =
@@ -3838,11 +3835,7 @@ const handleConfirmAllocate = async () => {
 
     if (res.ok) {
       const slotLabel = ['1st', '2nd', '3rd'][slotsUsed] ?? `${slotsUsed + 1}th`;
-      toast.success(
-        allowsMoreJobsToSend
-          ? `✅ Allocated to ${mukkadam.mukkadam_name} (⅓ day – ${slotLabel} job)`
-          : `✅ Allocated to ${mukkadam.mukkadam_name} (${slotLabel} job – day complete)`,
-      );
+      toast.success(`✅ Allocated to ${mukkadam.mukkadam_name} (${slotLabel} job today)`);
       setAllocHalfDay(null);
       setAllocDialog(null);
       setAllocAllowsMore(false);
@@ -4117,9 +4110,8 @@ const handleJobsConfirmAllocation = async () => {
   if (!jobsHalfDayDialog) return;
   const { act, mukkadam, rate, availableWorkers, remainingArea, jobSlotsUsed, targetDate } = jobsHalfDayDialog;
   const slotsUsed = jobSlotsUsed ?? 0;
-  const isLastSlot = slotsUsed >= 2;
-  const isMidSlot  = slotsUsed === 1;
-  const allowsMoreJobsToSend = isLastSlot ? false : isMidSlot ? true : jobsAllowsMoreJobs;
+  // No slot restriction — same team can be allocated unlimited times per day.
+  const allowsMoreJobsToSend = true;
 
   const token = localStorage.getItem('auth_token');
   const cid = clusterFilter || clusterId;
@@ -4144,11 +4136,7 @@ const handleJobsConfirmAllocation = async () => {
     const d = await res.json();
     if (res.ok) {
       const slotLabel = ['1st', '2nd', '3rd'][slotsUsed] ?? `${slotsUsed + 1}th`;
-      toast.success(
-        allowsMoreJobsToSend
-          ? `✅ Allocated to ${mukkadam.mukkadam_name} (⅓ day – ${slotLabel} job)`
-          : `✅ Allocated to ${mukkadam.mukkadam_name} (${slotLabel} job – day complete)`,
-      );
+      toast.success(`✅ Allocated to ${mukkadam.mukkadam_name} (${slotLabel} job today)`);
       setJobsHalfDayDialog(null);
       setJobsAllowsMoreJobs(false);
       setJobsCapacityDate(null); // invalidate cache so next click re-fetches
@@ -7770,44 +7758,18 @@ if (actSubTab === 'data_issue') {
               ))}
             </div>
 
-            {/* ⅓ day slot banner — same logic as DayDetailModal */}
-            {(() => {
-              const slotsUsed = allocHalfDay.jobSlotsUsed ?? 0;
-              if (slotsUsed >= 2) return (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
-                  <span style={{ fontSize: 16, flexShrink: 0 }}>⅓</span>
-                  <div>
-                    <div style={{ margin: 0, fontWeight: 700, fontSize: 12, color: '#0369a1' }}>3rd job — full day used</div>
-                    <div style={{ margin: '3px 0 0', fontSize: 11, color: '#0284c7', lineHeight: 1.5 }}>
-                      {allocHalfDay.mukkadam.mukkadam_name} already has 2 jobs today. This final ⅓ completes their day.
-                    </div>
+            {/* additional-job info banner */}
+            {(allocHalfDay.jobSlotsUsed ?? 0) >= 1 && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
+                <span style={{ fontSize: 16, flexShrink: 0 }}>ℹ️</span>
+                <div>
+                  <div style={{ margin: 0, fontWeight: 700, fontSize: 12, color: '#0369a1' }}>Additional job today</div>
+                  <div style={{ margin: '3px 0 0', fontSize: 11, color: '#0284c7', lineHeight: 1.5 }}>
+                    {allocHalfDay.mukkadam.mukkadam_name} already has {allocHalfDay.jobSlotsUsed} job(s) today. Workers remain available for further allocations.
                   </div>
                 </div>
-              );
-              if (slotsUsed === 1) return (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
-                  <span style={{ fontSize: 16, flexShrink: 0 }}>⅓</span>
-                  <div>
-                    <div style={{ margin: 0, fontWeight: 700, fontSize: 12, color: '#0369a1' }}>2nd job — 1 slot remaining</div>
-                    <div style={{ margin: '3px 0 0', fontSize: 11, color: '#0284c7', lineHeight: 1.5 }}>
-                      {allocHalfDay.mukkadam.mukkadam_name} has 1 job today. After this, 1 more ⅓-day slot remains.
-                    </div>
-                  </div>
-                </div>
-              );
-              return (
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, cursor: 'pointer', border: `2px solid ${allocAllowsMore ? '#10b981' : S.stone200}`, background: allocAllowsMore ? '#f0fdf4' : '#fff', marginBottom: 16, transition: 'all 150ms' }}>
-                  <input type="checkbox" checked={allocAllowsMore} onChange={e => setAllocAllowsMore(e.target.checked)}
-                    style={{ marginTop: 2, accentColor: '#10b981', width: 16, height: 16, flexShrink: 0 }} />
-                  <div>
-                    <div style={{ margin: 0, fontWeight: 700, fontSize: 12, color: '#065f46' }}>⅓ Can do more jobs today</div>
-                    <div style={{ margin: '3px 0 0', fontSize: 11, color: '#6b7280', lineHeight: 1.5 }}>
-                      Runs in 1 of 3 slots — workers stay available for up to 2 more ⅓-day jobs. Count will <strong>not</strong> be deducted from daily capacity.
-                    </div>
-                  </div>
-                </label>
-              );
-            })()}
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => { setAllocHalfDay(null); setAllocAllowsMore(false); }}
@@ -7816,7 +7778,7 @@ if (actSubTab === 'data_issue') {
               </button>
               <button onClick={handleConfirmAllocate}
                 style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: allocAllowsMore ? '#10b981' : '#2563eb', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', transition: 'background 150ms' }}>
-                {allocAllowsMore ? '⅓ Allocate' : 'Allocate'}
+                {allocAllowsMore ? 'Allocate' : 'Allocate'}
               </button>
             </div>
           </div>
@@ -7921,43 +7883,18 @@ if (actSubTab === 'data_issue') {
                 </div>
               ))}
             </div>
-            {(() => {
-              const slotsUsed = jobsHalfDayDialog.jobSlotsUsed ?? 0;
-              if (slotsUsed >= 2) return (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
-                  <span style={{ fontSize: 16, flexShrink: 0 }}>⅓</span>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 12, color: '#0369a1' }}>3rd job — full day used</div>
-                    <div style={{ fontSize: 11, color: '#0284c7', lineHeight: 1.5, marginTop: 3 }}>
-                      {jobsHalfDayDialog.mukkadam.mukkadam_name} already has 2 jobs today. This completes their day.
-                    </div>
+            {/* additional-job info banner */}
+            {(jobsHalfDayDialog.jobSlotsUsed ?? 0) >= 1 && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
+                <span style={{ fontSize: 16, flexShrink: 0 }}>ℹ️</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 12, color: '#0369a1' }}>Additional job today</div>
+                  <div style={{ fontSize: 11, color: '#0284c7', lineHeight: 1.5, marginTop: 3 }}>
+                    {jobsHalfDayDialog.mukkadam.mukkadam_name} already has {jobsHalfDayDialog.jobSlotsUsed} job(s) today. Workers remain available for further allocations.
                   </div>
                 </div>
-              );
-              if (slotsUsed === 1) return (
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: 16 }}>
-                  <span style={{ fontSize: 16, flexShrink: 0 }}>⅓</span>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 12, color: '#0369a1' }}>2nd job — 1 slot remaining</div>
-                    <div style={{ fontSize: 11, color: '#0284c7', lineHeight: 1.5, marginTop: 3 }}>
-                      {jobsHalfDayDialog.mukkadam.mukkadam_name} has 1 job today. 1 more slot after this.
-                    </div>
-                  </div>
-                </div>
-              );
-              return (
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: 10, cursor: 'pointer', border: `2px solid ${jobsAllowsMoreJobs ? '#10b981' : '#e5e7eb'}`, background: jobsAllowsMoreJobs ? '#f0fdf4' : '#fff', marginBottom: 16, transition: 'all 150ms' }}>
-                  <input type="checkbox" checked={jobsAllowsMoreJobs} onChange={e => setJobsAllowsMoreJobs(e.target.checked)}
-                    style={{ marginTop: 2, accentColor: '#10b981', width: 16, height: 16, flexShrink: 0 }} />
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 12, color: '#065f46' }}>⅓ Can do more jobs today</div>
-                    <div style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.5, marginTop: 3 }}>
-                      1 of 3 slots — workers stay available for 2 more ⅓-day jobs. Count <strong>not</strong> deducted from capacity.
-                    </div>
-                  </div>
-                </label>
-              );
-            })()}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => { setJobsHalfDayDialog(null); setJobsAllowsMoreJobs(false); }}
                 style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', color: '#374151', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
@@ -7965,7 +7902,7 @@ if (actSubTab === 'data_issue') {
               </button>
               <button onClick={handleJobsConfirmAllocation}
                 style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: jobsAllowsMoreJobs ? '#10b981' : '#2563eb', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                {jobsAllowsMoreJobs ? '⅓ Allocate' : 'Allocate'}
+                {jobsAllowsMoreJobs ? 'Allocate' : 'Allocate'}
               </button>
             </div>
           </div>

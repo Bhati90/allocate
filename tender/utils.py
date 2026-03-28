@@ -549,12 +549,276 @@ def get_mukkadam_availability(mukkadam_id, date, exclude_allocation_id=None):
         'remaining_capacity': remaining,
     }
 
-from .models import ClusterMukkadamAssignment
+# from .models import ClusterMukkadamAssignment
+# def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers,
+#                        skip_strict_check=False, cluster_id=None,
+#                        exclude_allocation_id=None):
+
+#     area = Decimal(str(area))
+#     workers = int(workers)
+
+#     if isinstance(date, str):
+#         date = date_type.fromisoformat(str(date))
+
+#     try:
+#         job_activity = JobActivity.objects.get(id=job_activity_id)
+#         mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
+#     except (JobActivity.DoesNotExist, Mukkadam.DoesNotExist):
+#         return False, "Job activity or mukkadam not found", {}
+
+#     warnings = {}
+
+#     # ── UPDOWN CHECK ──────────────────────────────────────────────────────────
+#     check_date_str = str(date)
+#     # ── UPDOWN CHECK ──────────────────────────────────────────────────────────
+#     if cluster_id:
+#         assignments = ClusterMukkadamAssignment.objects.filter(
+#             mukkadam=mukkadam,
+#             cluster_id=cluster_id,
+#             is_active=True,
+#         )
+        
+#         # If ANY assignment covers this date, they're available
+#         updown_assignments = [a for a in assignments if a.mukkadam_type == 'updown']
+        
+#         if updown_assignments:
+#             available = False
+#             for assignment in updown_assignments:
+#                 if assignment.updown_mode == 'range':
+#                     if assignment.updown_from_date and assignment.updown_to_date:
+#                         if assignment.updown_from_date <= date <= assignment.updown_to_date:
+#                             available = True
+#                             break
+#                 elif assignment.updown_mode == 'specific':
+#                     if check_date_str in (assignment.updown_specific_dates or []):
+#                         available = True
+#                         break
+            
+#             if not available:
+#                 return (
+#                     False,
+#                     f"{mukkadam.mukkadam_name} is not available on {check_date_str} in this cluster",
+#                     {},
+#                 )
+#     # ── REMAINING AREA CHECK ──────────────────────────────────────────────────
+#     if not skip_strict_check and area > job_activity.remaining_area:
+#         return False, f"Area exceeds remaining: {job_activity.remaining_area} acres still not allocated", {}
+
+#     # ── GET CREW SIZE & LEAVES ────────────────────────────────────────────────
+#     eff_crew = get_effective_crew_size(mukkadam, date)
+#     if eff_crew == 0:
+#         return False, f"Mukkadam not available on {date} (holiday or zero crew)", {}
+
+#     # ── HALF-DAY COMBINED CAPACITY CHECK ─────────────────────────────────────
+#     # Get any existing half-day allocations for this mukkadam on this date.
+#     # These don't block the day but their *needed* workers must combine
+#     # with this new job's workers to stay within crew_size.
+#     # ── HALF-DAY COMBINED CAPACITY CHECK ─────────────────────────────────────
+#     half_day_allocs = Allocation.objects.filter(
+#         mukkadam=mukkadam,
+#         allocated_date=date,
+#         allows_second_job=True,
+#         status__in=['scheduled', 'in_progress'],
+#     )
+#     if exclude_allocation_id:
+#         half_day_allocs = half_day_allocs.exclude(pk=exclude_allocation_id)
+
+#     if half_day_allocs.exists():
+#         # ── Calculate NEEDED workers for each half-day job (not allocated_workers) ──
+#         # "needed" = ceil(area / productivity), capped at crew_size
+#         half_day_needed_total = 0
+#         for hd_alloc in half_day_allocs:
+#             try:
+#                 hd_rate = hd_alloc.mukkadam.activity_rates.get(
+#                     activity=hd_alloc.job_activity.activity,
+#                     is_active=True,
+#                 )
+#                 hd_productivity = float(hd_rate.productivity_per_worker)
+#                 if hd_productivity > 0:
+#                     hd_needed = math.ceil(float(hd_alloc.job_activity.total_area) / hd_productivity)
+#                 else:
+#                     hd_needed = hd_alloc.allocated_workers  # fallback
+#             except Exception:
+#                 hd_needed = hd_alloc.allocated_workers  # fallback
+
+#             half_day_needed_total += hd_needed
+
+#         # "needed" for THIS job
+#         try:
+#             this_rate = mukkadam.activity_rates.get(
+#                 activity=job_activity.activity,
+#                 is_active=True,
+#             )
+#             this_productivity = float(this_rate.productivity_per_worker)
+#             this_needed = math.ceil(float(area) / this_productivity) if this_productivity > 0 else workers
+#         except Exception:
+#             this_needed = workers  # fallback
+
+#         on_leave = Leave.objects.filter(
+#             leave_type='mukkadam',
+#             mukkadam=mukkadam,
+#             date=date,
+#             is_active=True,
+#         ).aggregate(total=models.Sum('crew_on_leave'))['total'] or 0
+
+#         available_crew = eff_crew - on_leave
+#         combined_needed = half_day_needed_total + this_needed
+#         available_crew = available_crew * 3.20
+
+#         if combined_needed > available_crew:
+#             return (
+#                 False,
+#                 f"Combined workers exceed crew capacity: "
+#                 f"{half_day_needed_total} needed (½ day job) + {this_needed} needed (this job) "
+#                 f"= {combined_needed} > {available_crew} available workers.",
+#                 warnings,
+#             )
+
+#         # Also block if a full-day allocation already exists
+#         normal_used_count = Allocation.objects.filter(
+#             mukkadam=mukkadam,
+#             allocated_date=date,
+#             allows_second_job=False,
+#             status__in=['scheduled', 'in_progress'],
+#         ).exclude(pk=exclude_allocation_id or 0).aggregate(
+#             total=models.Sum('allocated_workers')
+#         )['total'] or 0
+
+#         if normal_used_count > 0:
+#             return (
+#                 False,
+#                 f"{mukkadam.mukkadam_name} already has a full-day allocation today.",
+#                 warnings,
+#             )
+
+#         warnings['half_day_split'] = {
+#             'severity': 'info',
+#             'message': (
+#                 f"2nd job for {mukkadam.mukkadam_name} today. "
+#                 f"Day split: {half_day_needed_total}w (1st job) + {this_needed}w (this job) "
+#                 f"= {combined_needed}/{available_crew} workers used."
+#             ),
+#         }
+
+#     else:
+#         # ── Standard capacity check (no half-day allocs) ──────────────────────
+#         normal_workers_sum = Allocation.objects.filter(
+#             mukkadam=mukkadam,
+#             allocated_date=date,
+#             allows_second_job=False,
+#             status__in=['scheduled', 'in_progress'],
+#         ).exclude(pk=exclude_allocation_id or 0).aggregate(
+#             total=models.Sum('allocated_workers')
+#         )['total'] or 0
+
+#         on_leave = Leave.objects.filter(
+#             leave_type='mukkadam',
+#             mukkadam=mukkadam,
+#             date=date,
+#             is_active=True,
+#         ).aggregate(total=models.Sum('crew_on_leave'))['total'] or 0
+
+#         remaining_capacity = max(eff_crew - on_leave - normal_workers_sum, 0)
+#         if workers > remaining_capacity:
+#             return (
+#                 False,
+#                 f"Workers capacity exceeded: {remaining_capacity} workers available, "
+#                 f"{workers} requested.",
+#                 warnings,
+#             )
+#     # ── PRODUCTIVITY CHECK ────────────────────────────────────────────────────
+#     try:
+#         mukkadam_rate = mukkadam.activity_rates.get(
+#             activity=job_activity.activity,
+#             is_active=True,
+#         )
+#         productivity = Decimal(str(mukkadam_rate.productivity_per_worker))
+#         max_capacity = workers * productivity
+#         max_capacity = max_capacity*3
+
+#         if area > max_capacity:
+#             suggested_area = float(max_capacity)
+#             required_workers = int(float(area) / float(productivity)) if productivity > 0 else workers
+#             required_productivity = float(area) / workers if workers > 0 else float(productivity)
+
+#             warnings['productivity_warning'] = {
+#                 'severity': 'error',
+#                 'message': f"Team cannot complete {area} acres in 1 day!",
+#                 'details': {
+#                     'workers': workers,
+#                     'productivity_per_worker': f"{productivity} acres/worker/day",
+#                     'max_capacity': f"{max_capacity} acres/day",
+#                     'requested': f"{area} acres",
+#                     'deficit': f"{area - max_capacity} acres short",
+#                 },
+#                 'suggestions': [
+#                     {
+#                         'option': 'reduce_area',
+#                         'description': f"Allocate only {suggested_area:.2f} acres",
+#                         'allocation': {'area': suggested_area, 'workers': workers, 'will_complete': True},
+#                     },
+#                     {
+#                         'option': 'add_workers',
+#                         'description': f"Increase workers to {required_workers}",
+#                         'allocation': {'area': area, 'workers': required_workers, 'will_complete': True,
+#                                        'note': f"Need {required_workers - workers} more workers"},
+#                     },
+#                     {
+#                         'option': 'update_productivity',
+#                         'description': f"Update productivity to {required_productivity:.3f} acres/worker/day",
+#                         'allocation': {'area': area, 'workers': workers,
+#                                        'new_productivity': required_productivity, 'will_complete': True},
+#                     },
+#                     {
+#                         'option': 'split_days',
+#                         'description': f"Split: {suggested_area:.2f} ac today + {float(area) - suggested_area:.2f} ac tomorrow",
+#                         'allocations': [
+#                             {'date': str(date), 'area': suggested_area, 'workers': workers},
+#                             {'date': 'next_day', 'area': float(area) - suggested_area, 'workers': workers},
+#                         ],
+#                     },
+#                 ],
+#             }
+#             return False, "Productivity set higher than real", warnings
+
+#         elif area > (max_capacity * Decimal('0.9')):
+#             warnings['productivity_warning'] = {
+#                 'severity': 'warning',
+#                 'message': f"Team will be at {(area / max_capacity) * 100:.1f}% capacity",
+#                 'details': {
+#                     'workers': workers,
+#                     'productivity_per_worker': f"{productivity} acres/worker/day",
+#                     'max_capacity': f"{max_capacity} acres/day",
+#                     'requested': f"{area} acres",
+#                     'utilization': f"{(area / max_capacity) * 100:.1f}%",
+#                 },
+#                 'note': "Near-maximum capacity",
+#             }
+
+#     except mukkadam.activity_rates.model.DoesNotExist:
+#         warnings['no_rate_card'] = {
+#             'severity': 'warning',
+#             'message': "No productivity data for this mukkadam-activity combination",
+#             'note': "Proceeding without productivity validation",
+#         }
+
+#     # ── STRICT ACTIVITY CHECK ─────────────────────────────────────────────────
+#     if job_activity.activity.is_strict and not skip_strict_check:
+#         scheduled_date = job_activity.scheduled_date
+#         if scheduled_date and str(scheduled_date) != str(date):
+#             if float(job_activity.allocated_area) == 0:
+#                 return (
+#                     False,
+#                     f"Strict activity must start on its scheduled date: {scheduled_date}",
+#                     warnings,
+#                 )
+
+#     return True, "OK", warnings
 def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers,
                        skip_strict_check=False, cluster_id=None,
                        exclude_allocation_id=None):
 
-    area = Decimal(str(area))
+    area    = Decimal(str(area))
     workers = int(workers)
 
     if isinstance(date, str):
@@ -562,259 +826,21 @@ def check_can_allocate(job_activity_id, mukkadam_id, date, area, workers,
 
     try:
         job_activity = JobActivity.objects.get(id=job_activity_id)
-        mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
+        mukkadam     = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
     except (JobActivity.DoesNotExist, Mukkadam.DoesNotExist):
         return False, "Job activity or mukkadam not found", {}
 
     warnings = {}
 
-    # ── UPDOWN CHECK ──────────────────────────────────────────────────────────
-    check_date_str = str(date)
-    # ── UPDOWN CHECK ──────────────────────────────────────────────────────────
-    if cluster_id:
-        assignments = ClusterMukkadamAssignment.objects.filter(
-            mukkadam=mukkadam,
-            cluster_id=cluster_id,
-            is_active=True,
-        )
-        
-        # If ANY assignment covers this date, they're available
-        updown_assignments = [a for a in assignments if a.mukkadam_type == 'updown']
-        
-        if updown_assignments:
-            available = False
-            for assignment in updown_assignments:
-                if assignment.updown_mode == 'range':
-                    if assignment.updown_from_date and assignment.updown_to_date:
-                        if assignment.updown_from_date <= date <= assignment.updown_to_date:
-                            available = True
-                            break
-                elif assignment.updown_mode == 'specific':
-                    if check_date_str in (assignment.updown_specific_dates or []):
-                        available = True
-                        break
-            
-            if not available:
-                return (
-                    False,
-                    f"{mukkadam.mukkadam_name} is not available on {check_date_str} in this cluster",
-                    {},
-                )
-    # ── REMAINING AREA CHECK ──────────────────────────────────────────────────
+    # ── REMAINING AREA CHECK (keep only this hard block) ─────────────────────
     if not skip_strict_check and area > job_activity.remaining_area:
         return False, f"Area exceeds remaining: {job_activity.remaining_area} acres still not allocated", {}
 
-    # ── GET CREW SIZE & LEAVES ────────────────────────────────────────────────
-    eff_crew = get_effective_crew_size(mukkadam, date)
-    if eff_crew == 0:
-        return False, f"Mukkadam not available on {date} (holiday or zero crew)", {}
-
-    # ── HALF-DAY COMBINED CAPACITY CHECK ─────────────────────────────────────
-    # Get any existing half-day allocations for this mukkadam on this date.
-    # These don't block the day but their *needed* workers must combine
-    # with this new job's workers to stay within crew_size.
-    # ── HALF-DAY COMBINED CAPACITY CHECK ─────────────────────────────────────
-    half_day_allocs = Allocation.objects.filter(
-        mukkadam=mukkadam,
-        allocated_date=date,
-        allows_second_job=True,
-        status__in=['scheduled', 'in_progress'],
-    )
-    if exclude_allocation_id:
-        half_day_allocs = half_day_allocs.exclude(pk=exclude_allocation_id)
-
-    if half_day_allocs.exists():
-        # ── Calculate NEEDED workers for each half-day job (not allocated_workers) ──
-        # "needed" = ceil(area / productivity), capped at crew_size
-        half_day_needed_total = 0
-        for hd_alloc in half_day_allocs:
-            try:
-                hd_rate = hd_alloc.mukkadam.activity_rates.get(
-                    activity=hd_alloc.job_activity.activity,
-                    is_active=True,
-                )
-                hd_productivity = float(hd_rate.productivity_per_worker)
-                if hd_productivity > 0:
-                    hd_needed = math.ceil(float(hd_alloc.job_activity.total_area) / hd_productivity)
-                else:
-                    hd_needed = hd_alloc.allocated_workers  # fallback
-            except Exception:
-                hd_needed = hd_alloc.allocated_workers  # fallback
-
-            half_day_needed_total += hd_needed
-
-        # "needed" for THIS job
-        try:
-            this_rate = mukkadam.activity_rates.get(
-                activity=job_activity.activity,
-                is_active=True,
-            )
-            this_productivity = float(this_rate.productivity_per_worker)
-            this_needed = math.ceil(float(area) / this_productivity) if this_productivity > 0 else workers
-        except Exception:
-            this_needed = workers  # fallback
-
-        on_leave = Leave.objects.filter(
-            leave_type='mukkadam',
-            mukkadam=mukkadam,
-            date=date,
-            is_active=True,
-        ).aggregate(total=models.Sum('crew_on_leave'))['total'] or 0
-
-        available_crew = eff_crew - on_leave
-        combined_needed = half_day_needed_total + this_needed
-        available_crew = available_crew * 3.20
-
-        if combined_needed > available_crew:
-            return (
-                False,
-                f"Combined workers exceed crew capacity: "
-                f"{half_day_needed_total} needed (½ day job) + {this_needed} needed (this job) "
-                f"= {combined_needed} > {available_crew} available workers.",
-                warnings,
-            )
-
-        # Also block if a full-day allocation already exists
-        normal_used_count = Allocation.objects.filter(
-            mukkadam=mukkadam,
-            allocated_date=date,
-            allows_second_job=False,
-            status__in=['scheduled', 'in_progress'],
-        ).exclude(pk=exclude_allocation_id or 0).aggregate(
-            total=models.Sum('allocated_workers')
-        )['total'] or 0
-
-        if normal_used_count > 0:
-            return (
-                False,
-                f"{mukkadam.mukkadam_name} already has a full-day allocation today.",
-                warnings,
-            )
-
-        warnings['half_day_split'] = {
-            'severity': 'info',
-            'message': (
-                f"2nd job for {mukkadam.mukkadam_name} today. "
-                f"Day split: {half_day_needed_total}w (1st job) + {this_needed}w (this job) "
-                f"= {combined_needed}/{available_crew} workers used."
-            ),
-        }
-
-    else:
-        # ── Standard capacity check (no half-day allocs) ──────────────────────
-        normal_workers_sum = Allocation.objects.filter(
-            mukkadam=mukkadam,
-            allocated_date=date,
-            allows_second_job=False,
-            status__in=['scheduled', 'in_progress'],
-        ).exclude(pk=exclude_allocation_id or 0).aggregate(
-            total=models.Sum('allocated_workers')
-        )['total'] or 0
-
-        on_leave = Leave.objects.filter(
-            leave_type='mukkadam',
-            mukkadam=mukkadam,
-            date=date,
-            is_active=True,
-        ).aggregate(total=models.Sum('crew_on_leave'))['total'] or 0
-
-        remaining_capacity = max(eff_crew - on_leave - normal_workers_sum, 0)
-        if workers > remaining_capacity:
-            return (
-                False,
-                f"Workers capacity exceeded: {remaining_capacity} workers available, "
-                f"{workers} requested.",
-                warnings,
-            )
-    # ── PRODUCTIVITY CHECK ────────────────────────────────────────────────────
-    try:
-        mukkadam_rate = mukkadam.activity_rates.get(
-            activity=job_activity.activity,
-            is_active=True,
-        )
-        productivity = Decimal(str(mukkadam_rate.productivity_per_worker))
-        max_capacity = workers * productivity
-        max_capacity = max_capacity*3
-
-        if area > max_capacity:
-            suggested_area = float(max_capacity)
-            required_workers = int(float(area) / float(productivity)) if productivity > 0 else workers
-            required_productivity = float(area) / workers if workers > 0 else float(productivity)
-
-            warnings['productivity_warning'] = {
-                'severity': 'error',
-                'message': f"Team cannot complete {area} acres in 1 day!",
-                'details': {
-                    'workers': workers,
-                    'productivity_per_worker': f"{productivity} acres/worker/day",
-                    'max_capacity': f"{max_capacity} acres/day",
-                    'requested': f"{area} acres",
-                    'deficit': f"{area - max_capacity} acres short",
-                },
-                'suggestions': [
-                    {
-                        'option': 'reduce_area',
-                        'description': f"Allocate only {suggested_area:.2f} acres",
-                        'allocation': {'area': suggested_area, 'workers': workers, 'will_complete': True},
-                    },
-                    {
-                        'option': 'add_workers',
-                        'description': f"Increase workers to {required_workers}",
-                        'allocation': {'area': area, 'workers': required_workers, 'will_complete': True,
-                                       'note': f"Need {required_workers - workers} more workers"},
-                    },
-                    {
-                        'option': 'update_productivity',
-                        'description': f"Update productivity to {required_productivity:.3f} acres/worker/day",
-                        'allocation': {'area': area, 'workers': workers,
-                                       'new_productivity': required_productivity, 'will_complete': True},
-                    },
-                    {
-                        'option': 'split_days',
-                        'description': f"Split: {suggested_area:.2f} ac today + {float(area) - suggested_area:.2f} ac tomorrow",
-                        'allocations': [
-                            {'date': str(date), 'area': suggested_area, 'workers': workers},
-                            {'date': 'next_day', 'area': float(area) - suggested_area, 'workers': workers},
-                        ],
-                    },
-                ],
-            }
-            return False, "Productivity set higher than real", warnings
-
-        elif area > (max_capacity * Decimal('0.9')):
-            warnings['productivity_warning'] = {
-                'severity': 'warning',
-                'message': f"Team will be at {(area / max_capacity) * 100:.1f}% capacity",
-                'details': {
-                    'workers': workers,
-                    'productivity_per_worker': f"{productivity} acres/worker/day",
-                    'max_capacity': f"{max_capacity} acres/day",
-                    'requested': f"{area} acres",
-                    'utilization': f"{(area / max_capacity) * 100:.1f}%",
-                },
-                'note': "Near-maximum capacity",
-            }
-
-    except mukkadam.activity_rates.model.DoesNotExist:
-        warnings['no_rate_card'] = {
-            'severity': 'warning',
-            'message': "No productivity data for this mukkadam-activity combination",
-            'note': "Proceeding without productivity validation",
-        }
-
-    # ── STRICT ACTIVITY CHECK ─────────────────────────────────────────────────
-    if job_activity.activity.is_strict and not skip_strict_check:
-        scheduled_date = job_activity.scheduled_date
-        if scheduled_date and str(scheduled_date) != str(date):
-            if float(job_activity.allocated_area) == 0:
-                return (
-                    False,
-                    f"Strict activity must start on its scheduled date: {scheduled_date}",
-                    warnings,
-                )
+    # ✅ Everything else — capacity, productivity, availability, crew — ALLOWED
+    # No updown check, no crew reduction, no productivity block, no half-day block
+    # Same mukkadam can be allocated multiple times on same day
 
     return True, "OK", warnings
-
 # ============================================================================
 # SCHEDULING UTILITIES
 # ============================================================================

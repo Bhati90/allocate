@@ -1218,19 +1218,10 @@ const handleConfirmThirdDay = async () => {
   const { act, mukkadam, rate, availableWorkers, remainingArea, jobSlotsUsed } = halfDayDialog;
 
   const slotsUsed = jobSlotsUsed ?? 0;
-  // If this is the 2nd or 3rd job, no more slots after — force allows_more_jobs=false.
-  // If this is the 1st job, respect the checkbox.
-  const isLastSlot = slotsUsed >= 2;          // 3rd job fills the day
-  const isMidSlot  = slotsUsed === 1;         // 2nd job, 1 left → always allows more
-  
-  // What we send to the backend:
-  //   allows_second_job: true  → worker still has slots (deduct nothing from capacity)
-  //   allows_second_job: false → worker is fully used (deduct from capacity)
-  const allowsMoreJobsToSend = isLastSlot
-    ? false                // 3rd job: day is full
-    : isMidSlot
-      ? true               // 2nd job: 1 slot still left, always keep available
-      : allowsMoreJobs;    // 1st job: user chose
+
+  // No slot restriction — same team can be allocated unlimited times per day.
+  // Always send allows_second_job: true so workers are never deducted from capacity.
+  const allowsMoreJobsToSend = true;
 
   const token = localStorage.getItem('auth_token');
   try {
@@ -1646,12 +1637,7 @@ return (
     {a.activity_name}
   </span>
 
-  {/* mukkadam-level ½‑day indicator: show on ALL jobs of this mukkadam today */}
-  {mukkadamHasHalfDay && (
-    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200">
-      1/3 day
-    </span>
-  )}
+  {/* mukkadam-level multi-job indicator removed — no slot restriction */}
 
   {a.is_carry_forward && (
     <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-[10px] font-bold rounded-full">
@@ -2054,82 +2040,25 @@ return (
         ))}
       </div>
 
-      {/* ── ⅓-day slot banner ─────────────────────────────────────────── */}
-      {(() => {
-        const slotsUsed = halfDayDialog.jobSlotsUsed ?? 0; // 0, 1, or 2
-        const slotsLeft = 3 - slotsUsed;                   // slots remaining AFTER this job
-
-        // 3rd job — full day now used, no more slots
-        if (slotsUsed >= 2) {
-          return (
-            <div style={{
-              display: 'flex', alignItems: 'flex-start', gap: '10px',
-              padding: '12px', borderRadius: '10px',
-              border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: '16px',
-            }}>
-              <span style={{ fontSize: '1rem', flexShrink: 0 }}>⅓</span>
-              <div>
-                <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#0369a1' }}>
-                  3rd job — full day used
-                </p>
-                <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#0284c7', lineHeight: 1.5 }}>
-                  {halfDayDialog.mukkadam.mukkadam_name} already has 2 jobs today.
-                  This final ⅓ completes their day — no more slots after this.
-                </p>
-              </div>
-            </div>
-          );
-        }
-
-        // 2nd job — 1 slot left after this
-        if (slotsUsed === 1) {
-          return (
-            <div style={{
-              display: 'flex', alignItems: 'flex-start', gap: '10px',
-              padding: '12px', borderRadius: '10px',
-              border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: '16px',
-            }}>
-              <span style={{ fontSize: '1rem', flexShrink: 0 }}>⅓</span>
-              <div>
-                <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#0369a1' }}>
-                  2nd job — 1 slot remaining
-                </p>
-                <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#0284c7', lineHeight: 1.5 }}>
-                  {halfDayDialog.mukkadam.mukkadam_name} already has 1 job today.
-                  After this they can still take 1 more ⅓-day job.
-                </p>
-              </div>
-            </div>
-          );
-        }
-
-        // 1st job — show the "can do more" checkbox
-        return (
-          <label style={{
-            display: 'flex', alignItems: 'flex-start', gap: '10px',
-            padding: '12px', borderRadius: '10px', cursor: 'pointer',
-            border: allowsMoreJobs ? '2px solid #10b981' : '2px solid #e5e7eb',
-            background: allowsMoreJobs ? '#f0fdf4' : '#fff',
-            marginBottom: '16px', transition: 'all 0.15s',
-          }}>
-            <input
-              type="checkbox"
-              checked={allowsMoreJobs}
-              onChange={e => setAllowsMoreJobs(e.target.checked)}
-              style={{ marginTop: '2px', accentColor: '#10b981', width: '16px', height: '16px', flexShrink: 0 }}
-            />
-            <div>
-              <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#065f46' }}>
-                ⅓ Can do more jobs today
-              </p>
-              <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#6b7280', lineHeight: 1.5 }}>
-                This job runs in 1 of 3 slots — workers stay available for up to 2 more ⅓-day jobs.
-                Worker count will <strong>not</strong> be deducted from daily capacity.
-              </p>
-            </div>
-          </label>
-        );
-      })()}
+      {/* ── multi-job info banner ──────────────────────────────────────── */}
+      {(halfDayDialog.jobSlotsUsed ?? 0) >= 1 && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: '10px',
+          padding: '12px', borderRadius: '10px',
+          border: '2px solid #0ea5e9', background: '#f0f9ff', marginBottom: '16px',
+        }}>
+          <span style={{ fontSize: '1rem', flexShrink: 0 }}>ℹ️</span>
+          <div>
+            <p style={{ margin: 0, fontWeight: 700, fontSize: '0.82rem', color: '#0369a1' }}>
+              Additional job today
+            </p>
+            <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#0284c7', lineHeight: 1.5 }}>
+              {halfDayDialog.mukkadam.mukkadam_name} already has {halfDayDialog.jobSlotsUsed} job(s) today.
+              Workers will remain available for further allocations.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Buttons */}
       <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>

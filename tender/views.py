@@ -5598,7 +5598,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
         except ValueError:
             return Response({'error': 'Invalid allocated_date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # ── 1) Business validation (productivity, availability etc.) ──────────────
+        # ── 1) Business validation — only check remaining area ───────────────────
         can_allocate, message, warnings = check_can_allocate(
             job_activity_id,
             mukkadam_id,
@@ -5610,12 +5610,14 @@ class AllocationViewSet(viewsets.ModelViewSet):
         )
 
         if not can_allocate:
-            productivity_warning = warnings.get('productivity_warning', {})
-            if not (force and productivity_warning.get('severity') == 'error'):
+            # ✅ Only hard-block on remaining area error — ignore all else
+            if 'exceeds remaining' in message:
                 return Response(
                     {'error': message, 'warnings': warnings},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # All other "errors" become warnings only — don't block
+            warnings['soft_warning'] = message
 
         try:
             with transaction.atomic():

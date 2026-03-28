@@ -149,7 +149,7 @@ path('clustersp/',
          v.ClusterSeasonDataView.as_view(),
          name='planning-season-data'),
  
-    # Mukkadam supply per cluster (Teams tab)
+    # Mukkadam supply per cluster (Teams tab)add
     path('clustersp/<int:cluster_id>/supply/',
          v.ClusterSupplyView.as_view(),
          name='planning-supply'),
