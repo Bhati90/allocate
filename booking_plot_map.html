@@ -1,325 +1,194 @@
-
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Booking Plot Map — Field Analysis</title>
+  <title>Narayangaon Cluster — Plot Map & Allocations</title>
 
-  <!-- Leaflet CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <!-- Leaflet.draw CSS -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
 
   <style>
     :root {
-      --bg: #0f1117;
+      --bg:      #0f1117;
       --surface: #1a1d27;
-      --card: #22263a;
-      --border: #2e3347;
-      --accent: #4f8ef7;
+      --card:    #22263a;
+      --border:  #2e3347;
+      --accent:  #4f8ef7;
       --accent2: #34d399;
-      --warn: #f59e0b;
-      --danger: #ef4444;
-      --text: #e2e8f0;
-      --muted: #94a3b8;
+      --warn:    #f59e0b;
+      --danger:  #ef4444;
+      --purple:  #a78bfa;
+      --text:    #e2e8f0;
+      --muted:   #94a3b8;
     }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden;}
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    /* ── TOP BAR ── */
+    #topbar{display:flex;align-items:center;justify-content:space-between;padding:9px 16px;background:var(--surface);border-bottom:1px solid var(--border);gap:10px;flex-wrap:wrap;}
+    #topbar h1{font-size:14px;font-weight:700;color:var(--accent);white-space:nowrap;}
+    #topbar .controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+    .badge{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:3px 9px;font-size:11px;color:var(--muted);}
+    .badge span{color:var(--accent);font-weight:700;}
+    button.ctrl-btn{background:var(--accent);border:none;color:#fff;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;transition:opacity .15s;}
+    button.ctrl-btn:hover{opacity:.82;}
+    button.ctrl-btn.secondary{background:var(--card);border:1px solid var(--border);color:var(--text);}
+    button.ctrl-btn.danger{background:var(--danger);}
+    button.ctrl-btn.green{background:#059669;}
 
-    body {
-      font-family: 'Inter', system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+    /* ── MAIN LAYOUT ── */
+    #main{display:flex;flex:1;overflow:hidden;}
 
-    /* ─── TOP BAR ─── */
-    #topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 10px 18px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      gap: 12px;
-      flex-wrap: wrap;
-    }
+    /* ── SIDEBAR ── */
+    #sidebar{width:330px;min-width:270px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;}
+    #sidebar-header{padding:10px 13px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
 
-    #topbar h1 {
-      font-size: 15px;
-      font-weight: 700;
-      color: var(--accent);
-      white-space: nowrap;
-    }
+    /* ── TABS ── */
+    #tab-bar{display:flex;border-bottom:1px solid var(--border);}
+    .tab{flex:1;padding:8px 4px;font-size:11px;font-weight:600;text-align:center;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:all .15s;}
+    .tab.active{color:var(--accent);border-bottom-color:var(--accent);}
 
-    #topbar .controls {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
+    /* ── SEARCH / FILTER ROW ── */
+    .filter-row{display:flex;gap:6px;padding:8px 8px 6px;}
+    .filter-row input,.filter-row select{flex:1;padding:6px 8px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;outline:none;}
 
-    .badge {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 4px 10px;
-      font-size: 12px;
-      color: var(--muted);
-    }
+    /* ── BOOKING LIST / FARMER LIST ── */
+    #booking-list,#farmer-list{flex:1;overflow-y:auto;padding:0 7px 8px;}
 
-    .badge span { color: var(--accent); font-weight: 700; }
+    /* ── BOOKING CARDS (original tab) ── */
+    .booking-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:6px;cursor:pointer;transition:border-color .15s,background .15s;position:relative;}
+    .booking-card:hover{border-color:var(--accent);}
+    .booking-card.selected{border-color:var(--accent2);background:#1c2f28;}
+    .booking-card.no-coords{opacity:.55;cursor:default;}
+    .booking-card .card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;}
+    .booking-card .farmer{font-size:12px;font-weight:600;}
+    .booking-card .meta{font-size:11px;color:var(--muted);line-height:1.6;}
+    .booking-card .meta b{color:var(--text);}
+    .pill{font-size:10px;font-weight:700;padding:2px 7px;border-radius:99px;}
+    .pill-BOOKED{background:#1e3a5f;color:#60a5fa;}
+    .pill-PARTIAL{background:#3b2a0a;color:#fbbf24;}
+    .pill-PAID{background:#064e3b;color:#34d399;}
+    .pill-CANCELLED{background:#3b0a0a;color:#f87171;}
+    .no-coords-tag{font-size:9px;background:#3b3010;color:#fcd34d;padding:1px 5px;border-radius:4px;margin-left:4px;}
 
-    button.ctrl-btn {
-      background: var(--accent);
-      border: none;
-      color: #fff;
-      border-radius: 6px;
-      padding: 6px 14px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity .15s;
-    }
+    /* ── FARMER CARDS (alloc tab) ── */
+    .farmer-card{background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;overflow:hidden;}
+    .farmer-card-header{padding:9px 11px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;transition:background .15s;}
+    .farmer-card-header:hover{background:#2a2f45;}
+    .farmer-card-header.highlighted{border-left:3px solid var(--accent2);}
+    .farmer-card-header .fname{font-size:12px;font-weight:600;}
+    .farmer-card-header .fmeta{font-size:10px;color:var(--muted);margin-top:2px;}
+    .farmer-card-body{display:none;border-top:1px solid var(--border);}
+    .farmer-card-body.open{display:block;}
 
-    button.ctrl-btn:hover { opacity: .85; }
-    button.ctrl-btn.secondary {
-      background: var(--card);
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
+    /* ── PLOT ROWS ── */
+    .plot-row{padding:8px 11px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;}
+    .plot-row:last-child{border-bottom:none;}
+    .plot-row:hover{background:#1e2235;}
+    .plot-row.map-focused{background:#1a2a3a;border-left:3px solid var(--accent);}
+    .plot-row-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
+    .plot-name{font-size:11px;font-weight:600;color:var(--text);}
+    .plot-area{font-size:10px;color:var(--muted);}
 
-    button.ctrl-btn.danger {
-      background: var(--danger);
-    }
+    /* ── ACTIVITY CHIPS ── */
+    .activity-list{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:5px;}
+    .act-chip{font-size:9px;padding:2px 6px;border-radius:4px;font-weight:600;white-space:nowrap;}
+    .act-pending{background:#1e3a5f;color:#93c5fd;}
+    .act-partially_allocated{background:#3b2a0a;color:#fbbf24;}
+    .act-fully_allocated{background:#1a3a2a;color:#34d399;}
+    .act-completed{background:#064e3b;color:#6ee7b7;}
+    .act-in_progress{background:#2d1a45;color:#c4b5fd;}
 
-    /* ─── MAIN LAYOUT ─── */
-    #main {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
-    }
+    /* ── ALLOC ACTION ROW ── */
+    .plot-action-row{display:flex;gap:5px;margin-top:5px;}
+    .plot-action-row button{font-size:10px;padding:3px 9px;border-radius:5px;border:none;cursor:pointer;font-weight:600;}
+    .btn-allocate{background:#1e40af;color:#bfdbfe;}
+    .btn-allocate:hover{background:#2563eb;}
+    .btn-move{background:#3b2a0a;color:#fbbf24;}
+    .btn-move:hover{background:#78350f;}
+    .btn-view{background:var(--border);color:var(--text);}
+    .btn-view:hover{background:#3a3f58;}
 
-    /* ─── SIDEBAR ─── */
-    #sidebar {
-      width: 320px;
-      min-width: 260px;
-      background: var(--surface);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+    /* ── DISTANCE PANEL ── */
+    #dist-panel{border-top:1px solid var(--border);padding:10px 12px;background:var(--surface);}
+    #dist-panel h3{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:7px;}
+    #dist-table{font-size:11px;width:100%;border-collapse:collapse;}
+    #dist-table th{text-align:left;color:var(--muted);font-weight:600;padding:3px 5px;border-bottom:1px solid var(--border);}
+    #dist-table td{padding:4px 5px;border-bottom:1px solid var(--border);vertical-align:top;}
+    #dist-table .dist-val{color:var(--accent);font-weight:700;}
+    #dist-placeholder{font-size:11px;color:var(--muted);}
 
-    #sidebar-header {
-      padding: 12px 14px;
-      font-size: 11px;
-      font-weight: 700;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: .08em;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
+    /* ── DISTANCE PLOT SELECTOR LIST ── */
+    #dist-plot-list{flex:1;overflow-y:auto;padding:0 7px 4px;}
+    .dist-plot-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;margin-bottom:4px;cursor:pointer;background:var(--card);border:1px solid var(--border);transition:border-color .15s,background .15s;}
+    .dist-plot-row:hover{border-color:var(--accent);}
+    .dist-plot-row.selected{border-color:var(--accent2);background:#1c2f28;}
+    .dist-plot-row.no-coords{opacity:.45;cursor:default;}
+    .dist-chk{width:14px;height:14px;border-radius:3px;border:2px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:9px;transition:all .15s;}
+    .dist-plot-row.selected .dist-chk{background:var(--accent2);border-color:var(--accent2);color:#000;}
+    .dist-plot-info{flex:1;min-width:0;}
+    .dist-plot-name{font-size:11px;font-weight:600;color:var(--text);}
+    .dist-plot-meta{font-size:10px;color:var(--muted);}
+    #dist-results{border-top:1px solid var(--border);padding:8px 10px;flex-shrink:0;}
+    #dist-results h4{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;}
 
-    #search-box {
-      margin: 10px;
-      padding: 7px 10px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: 12px;
-      width: calc(100% - 20px);
-      outline: none;
-    }
+    /* ── MAP ── */
+    #map{flex:1;background:#0d1117;}
+    .leaflet-popup-content-wrapper{background:var(--card)!important;color:var(--text)!important;border:1px solid var(--border)!important;border-radius:8px!important;box-shadow:0 4px 20px rgba(0,0,0,.5)!important;}
+    .leaflet-popup-tip{background:var(--card)!important;}
+    .leaflet-popup-content{font-size:12px;line-height:1.7;}
+    .leaflet-popup-content b{color:var(--accent);}
 
-    #booking-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 0 8px 10px;
-    }
+    /* ── MODAL ── */
+    #modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:2000;display:none;align-items:center;justify-content:center;}
+    #modal-overlay.open{display:flex;}
+    #modal{background:var(--surface);border:1px solid var(--border);border-radius:12px;width:460px;max-width:95vw;max-height:85vh;overflow-y:auto;padding:20px 22px;}
+    #modal h2{font-size:14px;font-weight:700;color:var(--accent);margin-bottom:14px;}
+    .form-row{margin-bottom:12px;}
+    .form-row label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:600;}
+    .form-row input,.form-row select,.form-row textarea{width:100%;padding:7px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;outline:none;}
+    .form-row textarea{height:60px;resize:vertical;}
+    .modal-footer{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;border-top:1px solid var(--border);padding-top:14px;}
+    .modal-error{background:#3b0a0a;border:1px solid var(--danger);border-radius:6px;padding:8px 10px;font-size:11px;color:#fca5a5;margin-bottom:10px;display:none;}
+    .modal-success{background:#064e3b;border:1px solid #34d399;border-radius:6px;padding:8px 10px;font-size:11px;color:#6ee7b7;margin-bottom:10px;display:none;}
 
-    .booking-card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      margin-bottom: 7px;
-      cursor: pointer;
-      transition: border-color .15s, background .15s;
-      position: relative;
-    }
+    /* ── LOADING ── */
+    #loader{position:fixed;inset:0;background:rgba(10,12,20,.88);display:flex;align-items:center;justify-content:center;z-index:9999;font-size:14px;color:var(--accent);flex-direction:column;gap:12px;}
+    .spinner{width:30px;height:30px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+    #loader-msg{font-size:12px;color:var(--muted);}
 
-    .booking-card:hover { border-color: var(--accent); }
-    .booking-card.selected { border-color: var(--accent2); background: #1c2f28; }
-    .booking-card.no-coords { opacity: 0.55; cursor: default; }
+    /* ── LEGEND ── */
+    #legend{position:absolute;bottom:26px;right:10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 13px;z-index:900;font-size:11px;line-height:2;}
+    .legend-dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;}
 
-    .booking-card .card-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 4px;
-    }
+    /* ── ALLOC STATUS DOT on map legend ── */
+    #alloc-legend{position:absolute;bottom:26px;left:10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:9px 13px;z-index:900;font-size:10px;line-height:2;display:none;}
+    #alloc-legend.show{display:block;}
 
-    .booking-card .farmer { font-size: 13px; font-weight: 600; }
-    .booking-card .pill {
-      font-size: 10px;
-      font-weight: 700;
-      padding: 2px 7px;
-      border-radius: 99px;
-    }
-    .pill-BOOKED   { background: #1e3a5f; color: #60a5fa; }
-    .pill-PARTIAL  { background: #3b2a0a; color: #fbbf24; }
-    .pill-PAID     { background: #064e3b; color: #34d399; }
-    .pill-CANCELLED{ background: #3b0a0a; color: #f87171; }
-
-    .booking-card .meta {
-      font-size: 11px;
-      color: var(--muted);
-      line-height: 1.6;
-    }
-
-    .booking-card .meta b { color: var(--text); }
-
-    .no-coords-tag {
-      font-size: 9px;
-      background: #3b3010;
-      color: #fcd34d;
-      padding: 1px 5px;
-      border-radius: 4px;
-      margin-left: 4px;
-    }
-
-    /* ─── DISTANCE PANEL ─── */
-    #dist-panel {
-      border-top: 1px solid var(--border);
-      padding: 12px 14px;
-      background: var(--surface);
-    }
-
-    #dist-panel h3 {
-      font-size: 11px;
-      font-weight: 700;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: .08em;
-      margin-bottom: 8px;
-    }
-
-    #dist-table {
-      font-size: 11px;
-      width: 100%;
-      border-collapse: collapse;
-    }
-
-    #dist-table th {
-      text-align: left;
-      color: var(--muted);
-      font-weight: 600;
-      padding: 3px 5px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    #dist-table td {
-      padding: 4px 5px;
-      border-bottom: 1px solid var(--border);
-      vertical-align: top;
-    }
-
-    #dist-table .dist-val { color: var(--accent); font-weight: 700; }
-    #dist-placeholder { font-size: 12px; color: var(--muted); }
-
-    /* ─── MAP ─── */
-    #map {
-      flex: 1;
-      background: #0d1117;
-    }
-
-    /* Leaflet dark overrides */
-    .leaflet-popup-content-wrapper {
-      background: var(--card) !important;
-      color: var(--text) !important;
-      border: 1px solid var(--border) !important;
-      border-radius: 8px !important;
-      box-shadow: 0 4px 20px rgba(0,0,0,.5) !important;
-    }
-    .leaflet-popup-tip { background: var(--card) !important; }
-    .leaflet-popup-content { font-size: 12px; line-height: 1.7; }
-    .leaflet-popup-content b { color: var(--accent); }
-
-    /* ─── LOADING OVERLAY ─── */
-    #loader {
-      position: fixed; inset: 0;
-      background: rgba(10,12,20,.85);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 9999;
-      font-size: 14px;
-      color: var(--accent);
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    .spinner {
-      width: 32px; height: 32px;
-      border: 3px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin .7s linear infinite;
-    }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ─── LEGEND ─── */
-    #legend {
-      position: absolute;
-      bottom: 28px; right: 10px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 14px;
-      z-index: 900;
-      font-size: 11px;
-      line-height: 2;
-    }
-
-    .legend-dot {
-      display: inline-block;
-      width: 10px; height: 10px;
-      border-radius: 2px;
-      margin-right: 6px;
-    }
-
-    /* ─── SCROLLBAR ─── */
-    ::-webkit-scrollbar { width: 5px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9px; }
+    ::-webkit-scrollbar{width:4px;}
+    ::-webkit-scrollbar-thumb{background:var(--border);border-radius:9px;}
   </style>
 </head>
 <body>
 
-<!-- Loading -->
 <div id="loader">
   <div class="spinner"></div>
-  <span>Loading booking plots…</span>
+  <span>Loading Nanegaon,Nashik cluster data…</span>
+  <span id="loader-msg">Fetching farmers & plots…</span>
 </div>
 
 <!-- Top Bar -->
 <div id="topbar">
-  <h1>📍 Booking Plot Map</h1>
+  <h1>🌾 Nanegaon,Nashik — Plot Map & Allocations</h1>
   <div class="controls">
-    <div class="badge">Date: <span>16-03-2026 → Today</span></div>
-    <div class="badge">Agent: <span>#17</span></div>
+    <div class="badge">Cluster: <span id="stat-cluster">—</span></div>
+    <div class="badge">Farmers: <span id="stat-farmers">0</span></div>
     <div class="badge">Plots: <span id="stat-total">0</span></div>
     <div class="badge">With Coords: <span id="stat-coords">0</span></div>
-    <button class="ctrl-btn secondary" onclick="clearSelection()">✕ Clear Selection</button>
+    <div class="badge">Pending Jobs: <span id="stat-pending">0</span></div>
+    <button class="ctrl-btn secondary" onclick="clearSelection()">✕ Clear Sel.</button>
     <button class="ctrl-btn" onclick="fitAll()">⊞ Fit All</button>
   </div>
 </div>
@@ -330,35 +199,69 @@
   <!-- Sidebar -->
   <div id="sidebar">
     <div id="sidebar-header">
-      Bookings
-      <span id="sel-count" style="color:var(--accent2);font-size:12px;"></span>
+      Narayangaon Farmers
+      <span id="sel-count" style="color:var(--accent2);font-size:11px;"></span>
     </div>
-    <input id="search-box" placeholder="Search farmer, plot ID, crop…" oninput="filterCards(this.value)"/>
-    <div id="booking-list"></div>
 
-    <!-- Distance panel -->
-    <div id="dist-panel">
-      <h3>📐 Distance Analysis</h3>
-      <div id="dist-placeholder">Select 2+ plots with coordinates to measure distances.</div>
-      <table id="dist-table" style="display:none;">
-        <thead>
-          <tr>
-            <th>From</th>
-            <th>To</th>
-            <th>Distance</th>
-          </tr>
-        </thead>
-        <tbody id="dist-tbody"></tbody>
-      </table>
+    <!-- Tabs -->
+    <div id="tab-bar">
+      <div class="tab active" id="tab-booking" onclick="switchTab('booking')">📋 Bookings</div>
+      <div class="tab" id="tab-alloc" onclick="switchTab('alloc')">⚙️ Allocations</div>
+      <div class="tab" id="tab-dist" onclick="switchTab('dist')">📐 Distance</div>
+    </div>
+
+    <!-- Search row -->
+    <div class="filter-row">
+      <input id="search-box" placeholder="Search farmer, plot, activity…" oninput="onSearch(this.value)"/>
+    </div>
+
+    <!-- Booking tab -->
+    <div id="pane-booking" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+      <div id="booking-list" style="flex:1;overflow-y:auto;padding:0 7px 8px;"></div>
+    </div>
+
+    <!-- Allocation tab -->
+    <div id="pane-alloc" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+      <div class="filter-row" style="padding-top:0;">
+        <select id="alloc-status-filter" onchange="renderFarmerList()">
+          <option value="">All statuses</option>
+          <option value="pending">Pending</option>
+          <option value="partially_allocated">Partial</option>
+          <option value="fully_allocated">Fully Allocated</option>
+          <option value="completed">Completed</option>
+        </select>
+      </div>
+      <div id="farmer-list" style="flex:1;overflow-y:auto;padding:0 7px 8px;"></div>
+    </div>
+
+    <!-- Distance tab -->
+    <div id="pane-dist" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+      <p style="font-size:11px;color:var(--muted);padding:8px 12px 6px;flex-shrink:0;">Click a plot below <b style="color:var(--text)">or on the map</b> to select it. Select 2+ to measure distances.</p>
+      <!-- Selectable plot list -->
+      <div id="dist-plot-list"></div>
+      <!-- Distance results -->
+      <div id="dist-results">
+        <h4>📐 Distances</h4>
+        <div id="dist-placeholder">Select 2+ plots with coordinates.</div>
+        <table id="dist-table" style="display:none;font-size:11px;width:100%;border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="text-align:left;color:var(--muted);padding:3px 5px;border-bottom:1px solid var(--border);">From</th>
+              <th style="text-align:left;color:var(--muted);padding:3px 5px;border-bottom:1px solid var(--border);">To</th>
+              <th style="text-align:left;color:var(--muted);padding:3px 5px;border-bottom:1px solid var(--border);">Dist.</th>
+            </tr>
+          </thead>
+          <tbody id="dist-tbody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
   <!-- Map -->
   <div id="map"></div>
-
 </div>
 
-<!-- Legend -->
+<!-- Legend (booking) -->
 <div id="legend">
   <div><span class="legend-dot" style="background:#3b82f6"></span>Booked</div>
   <div><span class="legend-dot" style="background:#f59e0b"></span>Partial</div>
@@ -367,169 +270,705 @@
   <div><span class="legend-dot" style="background:#a78bfa"></span>Selected</div>
 </div>
 
+<!-- Alloc legend -->
+<div id="alloc-legend">
+  <b style="color:var(--muted);">Job Status</b><br>
+  <div><span class="legend-dot" style="background:#3b82f6"></span>Pending</div>
+  <div><span class="legend-dot" style="background:#f59e0b"></span>Partial Alloc</div>
+  <div><span class="legend-dot" style="background:#22c55e"></span>Fully Alloc</div>
+  <div><span class="legend-dot" style="background:#6ee7b7"></span>Completed</div>
+  <div><span class="legend-dot" style="background:#94a3b8"></span>No Jobs</div>
+  <div><span class="legend-dot" style="background:#a78bfa"></span>Selected</div>
+</div>
+
+<!-- ── ALLOCATE / MOVE MODAL ── -->
+<div id="modal-overlay">
+  <div id="modal">
+    <h2 id="modal-title">Allocate Activity</h2>
+    <div class="modal-error" id="modal-error"></div>
+    <div class="modal-success" id="modal-success"></div>
+
+    <!-- hidden state -->
+    <input type="hidden" id="m-job-activity-id"/>
+    <input type="hidden" id="m-allocation-id"/>
+    <input type="hidden" id="m-mode"/> <!-- 'allocate' | 'move' -->
+    <input type="hidden" id="m-cluster-id"/>
+
+    <div class="form-row" id="m-row-activity">
+      <label>Activity</label>
+      <input id="m-activity-name" readonly style="opacity:.7;"/>
+    </div>
+    <div class="form-row" id="m-row-plot">
+      <label>Plot / Farmer</label>
+      <input id="m-plot-info" readonly style="opacity:.7;"/>
+    </div>
+    <div class="form-row" id="m-row-mukkadam">
+      <label>Mukkadam *</label>
+      <select id="m-mukkadam">
+        <option value="">— select mukkadam —</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Date *</label>
+      <input type="date" id="m-date"/>
+    </div>
+    <div class="form-row" id="m-row-area">
+      <label>Allocated Area (acres) *</label>
+      <input type="number" id="m-area" step="0.01" min="0.01"/>
+    </div>
+    <div class="form-row" id="m-row-workers">
+      <label>Workers</label>
+      <input type="number" id="m-workers" min="1" value="10"/>
+    </div>
+    <div class="form-row" id="m-row-reason" style="display:none;">
+      <label>Reason for move *</label>
+      <textarea id="m-reason" placeholder="Why are you moving this allocation?"></textarea>
+    </div>
+    <div class="form-row" id="m-row-farmer-rate">
+      <label>Farmer Rate (₹/acre)</label>
+      <input type="number" id="m-farmer-rate" step="0.01"/>
+    </div>
+    <div class="form-row" id="m-row-mukkadam-rate">
+      <label>Mukkadam Rate (₹/acre)</label>
+      <input type="number" id="m-mukkadam-rate" step="0.01"/>
+    </div>
+
+    <div class="modal-footer">
+      <button class="ctrl-btn secondary" onclick="closeModal()">Cancel</button>
+      <button class="ctrl-btn" id="modal-submit-btn" onclick="submitModal()">Submit</button>
+    </div>
+  </div>
+</div>
+
 <!-- Scripts -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 
 <script>
-// ─── MAP INIT ───────────────────────────────────────────────────────
-const map = L.map("map", { zoomControl: true }).setView([20.0, 74.0], 8);
+const BASE = 'http://localhost:8002';
+// const BASE = 'http://tender.bharatintelligence.ai'
 
+// ── SET YOUR TOKEN HERE ───────────────────────────────────────────────────
+const AUTH_TOKEN = '86c2310266badffabcd3fb21256e15921ce3105d';
+
+// ── FETCH HELPER — adds Authorization header to every call ────────────────
+async function apiFetch(url, options = {}) {
+  const resp = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Token ' + AUTH_TOKEN,
+      ...(options.headers || {}),
+    },
+    credentials: 'include',
+  });
+  const text = await resp.text();
+  if (text.trim().startsWith('<')) {
+    console.error('HTML response from:', url, resp.status);
+    throw new Error(resp.status + ' — Server returned HTML (bad token or wrong URL): ' + url);
+  }
+  let json;
+  try { json = JSON.parse(text); }
+  catch(e) { throw new Error('Invalid JSON from ' + url + ': ' + text.substring(0, 120)); }
+  if (!resp.ok) {
+    const msg = json.error || json.detail || (json.non_field_errors && json.non_field_errors[0]) || JSON.stringify(json).substring(0, 200);
+    throw new Error(resp.status + ' — ' + msg);
+  }
+  return json;
+}
+
+// ── STATE ─────────────────────────────────────────────────────────────────
+const map = L.map("map", { zoomControl: true }).setView([19.4, 73.95], 10);
 L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-  attribution: "© OpenStreetMap © CARTO",
-  subdomains: "abcd", maxZoom: 20,
+  attribution: "© OpenStreetMap © CARTO", subdomains: "abcd", maxZoom: 20,
 }).addTo(map);
 
-// ─── STATE ──────────────────────────────────────────────────────────
-let allFeatures   = [];        // raw GeoJSON features from API
-let layerMap      = {};        // bookingKey → L.layer
-let selectedKeys  = new Set(); // currently selected plot keys
-let cardMap       = {};        // bookingKey → DOM card element
+let allFeatures   = [];   // booking GeoJSON features
+let layerMap      = {};   // plotKey → L.layer
+let selectedKeys  = new Set();
+let cardMap       = {};   // bookingKey → DOM card
+let farmerData    = [];   // [{farmer_id, farmer_name, plots:[{...}]}]
+let jobActivities = {};   // plot_id → [job_activity]
+let allocations   = {};   // job_activity_id → [allocation]
+let mukkadamList  = [];   // [{mukkadam_id, mukkadam_name}]
+let clusterID     = null;
+let currentTab    = 'booking';
+// keyed by plot.id for alloc tab
+let plotLayerMap  = {};   // plot_id → L.layer (alloc mode)
 
-const STATUS_COLORS = {
-  BOOKED:    "#3b82f6",
-  PARTIAL:   "#f59e0b",
-  PAID:      "#22c55e",
-  CANCELLED: "#ef4444",
+const BOOKING_COLORS = { BOOKED:'#3b82f6', PARTIAL:'#f59e0b', PAID:'#22c55e', CANCELLED:'#ef4444' };
+const ALLOC_COLORS   = {
+  pending:              '#3b82f6',
+  partially_allocated:  '#f59e0b',
+  fully_allocated:      '#22c55e',
+  completed:            '#6ee7b7',
+  none:                 '#475569',
 };
 
-function bookingKey(f) {
-  return `${f.properties.booking_id}_${f.properties.plot_id}_${f.properties.activity_name}`;
-}
-
-// ─── FETCH & RENDER ─────────────────────────────────────────────────
-// fetch("{% url 'booking_plots_api' %}")
-fetch("https://ops.bharatintelligence.ai/ops/bookings/map/api/")
-  .then(r => r.json())
-  .then(data => {
-    allFeatures = data.features || [];
-    document.getElementById("loader").style.display = "none";
-    renderAll(allFeatures);
-    updateStats();
-  })
-  .catch(e => {
-    document.getElementById("loader").innerHTML =
-      `<span style="color:#ef4444">Failed to load data. Check console.</span>`;
-    console.error(e);
-  });
-
-function statusColor(status) {
-  return STATUS_COLORS[status] || "#94a3b8";
-}
-
+// ── HELPERS ───────────────────────────────────────────────────────────────
+function setLoader(msg) { document.getElementById('loader-msg').textContent = msg; }
 function centroidOf(geom) {
   if (!geom) return null;
-  try {
-    const c = turf.centroid({ type: "Feature", geometry: geom });
-    return c.geometry.coordinates; // [lng, lat]
-  } catch { return null; }
+  try { return turf.centroid({type:'Feature',geometry:geom}).geometry.coordinates; }
+  catch { return null; }
 }
+function haversineKm(c1, c2) {
+  const R=6371, dLat=(c2[1]-c1[1])*Math.PI/180, dLng=(c2[0]-c1[0])*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(c1[1]*Math.PI/180)*Math.cos(c2[1]*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+function bookingKey(f) { return `${f.properties.booking_id}_${f.properties.plot_id}`; }
 
-function renderAll(features) {
-  // Clear old layers
+async function init() {
+  try {
+    // 1. Find Nanegaon,Nashik cluster
+    setLoader('Finding Nanegaon,Nashik cluster…');
+    const clustersResp = await apiFetch(`${BASE}/tender/api/clusters/`, {credentials:'include'});
+    const clusters = clustersResp.results || clustersResp;
+    const cluster = clusters.find(c =>
+      c.name.toLowerCase().includes('nanegaon') ||
+      c.name.toLowerCase().includes('nashik')
+    );
+    if (!cluster) {
+      const names = (clusters||[]).map(c => c.name).join(' | ');
+      throw new Error(`Cluster not found. Clusters in DB: ${names || 'none returned'}`);
+    }
+    clusterID = cluster.id;
+    document.getElementById('stat-cluster').textContent = cluster.name;
+
+    // 2. Booking map — fetch from local tender API (avoids CORS on prod booking endpoint)
+    setLoader('Loading booking map data…');
+    const bookingData = await apiFetch(`${BASE}/tender/api/bookings/map/api/?cluster_id=${clusterID}`).catch(async () => {
+      console.warn('Booking map API unavailable, will build from plot data');
+      return { features: [] };
+    });
+    allFeatures = bookingData.features || [];
+
+    // 3. Farmers in cluster
+    setLoader('Loading farmers…');
+    const farmersResp = await apiFetch(`${BASE}/tender/api/farmers/?cluster_id=${clusterID}&page_size=500`, {credentials:'include'});
+    const farmers = farmersResp.results || farmersResp;
+    const clusterFarmerIds = new Set(farmers.map(f => String(f.farmer_id)));
+
+    // Filter booking features to only narayangaon farmers
+    allFeatures = allFeatures.filter(f => clusterFarmerIds.has(String(f.properties.farmer_id)));
+
+    // 4. Plots in cluster  ★ MOVED UP — must be before the fallback that references `plots`
+    setLoader('Loading plots…');
+    const plotsResp = await apiFetch(`${BASE}/tender/api/plots/?cluster_id=${clusterID}&page_size=1000`, {credentials:'include'});
+    const plots = plotsResp.results || plotsResp;
+
+    // If booking map returned nothing, build synthetic features from ALL plots
+    if (allFeatures.length === 0) {
+      console.warn('No booking features — building from plot data (all plots, with or without geometry)');
+      allFeatures = plots.map(p => {
+          const farmer = farmers.find(f => String(f.farmer_id) === String(p.farmer_id || p.farmer));
+          // Try every possible geometry field
+          let geom = null;
+          if (p.boundary) {
+            try { geom = typeof p.boundary === 'string' ? JSON.parse(p.boundary) : p.boundary; } catch(e) {}
+          } else if (p.geometry) {
+            try { geom = typeof p.geometry === 'string' ? JSON.parse(p.geometry) : p.geometry; } catch(e) {}
+          } else if (p.centroid_lat) {
+            geom = { type:'Point', coordinates:[parseFloat(p.centroid_lng), parseFloat(p.centroid_lat)] };
+          }
+          return {
+            type: 'Feature',
+            geometry: geom,   // null = no coords — still shows in list as "No Coords"
+            properties: {
+              farmer_id:     p.farmer_id || p.farmer,
+              farmer_name:   farmer?.farmer_name || p.farmer_name || '—',
+              plot_id:       p.id,
+              booking_id:    p.id,
+              booking_status:'BOOKED',
+              crop:          p.crop || '—',
+              variety:       p.variety || '',
+              area_acres:    p.area_acres || 0,
+              advance_paid:  0,
+              balance:       0,
+              total_activities_amount: 0,
+              activity_count: 0,
+              activity_names: [],
+              booking_date:  '',
+              location:      farmer?.location || p.location || '',
+            }
+          };
+        });
+    }
+
+    // 5. Job activities for cluster
+    setLoader('Loading job activities…');
+    const jaResp = await apiFetch(`${BASE}/tender/api/job-activities/?cluster_id=${clusterID}&page_size=2000`, {credentials:'include'}).catch(()=>({results:[]}));
+    const jaList = jaResp.results || jaResp || [];
+    jobActivities = {};
+    jaList.forEach(ja => {
+      const pid = ja.plot ? String(ja.plot) : null;
+      if (!pid) return;
+      if (!jobActivities[pid]) jobActivities[pid] = [];
+      jobActivities[pid].push(ja);
+    });
+
+    // 6. Allocations
+    setLoader('Loading allocations…');
+    const allocResp = await apiFetch(`${BASE}/tender/api/allocations/?cluster_id=${clusterID}&page_size=2000`, {credentials:'include'}).catch(()=>({results:[]}));
+    const allocList = allocResp.results || allocResp || [];
+    allocations = {};
+    allocList.forEach(a => {
+      const jaid = String(a.job_activity);
+      if (!allocations[jaid]) allocations[jaid] = [];
+      allocations[jaid].push(a);
+    });
+
+    // 7. Mukkadams in cluster
+    setLoader('Loading mukkadams…');
+    const mukkResp = await apiFetch(`${BASE}/tender/api/mukkadams/?cluster_id=${clusterID}&page_size=500`, {credentials:'include'}).catch(()=>({results:[]}));
+    mukkadamList = mukkResp.results || mukkResp || [];
+
+    // Build farmerData: merge farmers + their plots + job activities
+    farmerData = farmers.map(f => {
+      const fPlots = plots.filter(p => String(p.farmer_id) === String(f.farmer_id) ||
+                                       String(p.farmer)    === String(f.farmer_id));
+      return { ...f, plots: fPlots };
+    }).filter(f => f.plots.length > 0 || true);
+
+    // Stats
+    document.getElementById('stat-farmers').textContent = farmers.length;
+    document.getElementById('stat-total').textContent   = allFeatures.length;
+    document.getElementById('stat-coords').textContent  = allFeatures.filter(f=>f.geometry).length;
+    const pendingCount = jaList.filter(ja => ja.allocation_status === 'pending').length;
+    document.getElementById('stat-pending').textContent = pendingCount;
+
+    document.getElementById('loader').style.display = 'none';
+
+    // Render
+    renderBookingMap();
+    renderFarmerList();
+
+  } catch(e) {
+    document.getElementById('loader').innerHTML =
+      `<span style="color:#ef4444">❌ ${e.message}</span><br><small style="color:var(--muted)">${e.stack||''}</small>`;
+    console.error(e);
+  }
+}
+// ── BOOKING MAP (original functionality) ─────────────────────────────────
+function renderBookingMap() {
   Object.values(layerMap).forEach(l => map.removeLayer(l));
-  layerMap = {};
-  cardMap  = {};
-  document.getElementById("booking-list").innerHTML = "";
+  layerMap = {}; cardMap = {};
+  document.getElementById('booking-list').innerHTML = '';
 
-  features.forEach(f => {
-    const p   = f.properties;
-    const key = bookingKey(f);
-    const col = statusColor(p.booking_status);
+  allFeatures.forEach(f => {
+    const p = f.properties, key = bookingKey(f);
+    const col = BOOKING_COLORS[p.booking_status] || '#94a3b8';
 
-    // ── MAP LAYER ──
     if (f.geometry) {
       const layer = L.geoJSON(f, {
-        style: { color: col, fillColor: col, fillOpacity: 0.35, weight: 2 },
+        style: { color:col, fillColor:col, fillOpacity:0.35, weight:2 }
       }).addTo(map);
-
-      layer.on("click", () => toggleSelect(key));
-      layer.bindPopup(buildPopup(p));
+      layer.on('click', () => toggleSelect(key));
+      layer.bindPopup(buildBookingPopup(p));
       layerMap[key] = layer;
     }
 
-    // ── SIDEBAR CARD ──
-    const card = document.createElement("div");
-    card.className = "booking-card" + (f.geometry ? "" : " no-coords");
+    const card = document.createElement('div');
+    card.className = 'booking-card' + (f.geometry ? '' : ' no-coords');
     card.dataset.key = key;
-    card.dataset.search = [
-      p.farmer_name, p.farmer_id, p.plot_id, p.crop, p.variety,
-      p.activity_name, p.location
-    ].join(" ").toLowerCase();
-
+    card.dataset.search = [p.farmer_name, p.farmer_id, p.plot_id, p.crop, p.variety, (p.activity_names||[]).join(' '), p.location].join(' ').toLowerCase();
+    const actDisplay = (p.activity_names && p.activity_names.length)
+      ? `${p.activity_count||p.activity_names.length} acts — ${p.activity_names[0]}${p.activity_names.length>1?' +'+( p.activity_names.length-1):''}`
+      : (p.activity_name || '—');
     card.innerHTML = `
       <div class="card-top">
         <span class="farmer">${p.farmer_name}</span>
         <span class="pill pill-${p.booking_status}">${p.booking_status}</span>
       </div>
       <div class="meta">
-        <b>Plot:</b> ${p.plot_id || "—"}
-        ${!f.geometry ? '<span class="no-coords-tag">No Coords</span>' : ""}
-        &nbsp;|&nbsp; <b>Crop:</b> ${p.crop || "—"}<br>
-        <b>Activity:</b> ${p.activity_name}<br>
-        <b>Acres:</b> ${p.acres} &nbsp;|&nbsp;
-        <b>Advance:</b> ₹${Number(p.advance_paid).toLocaleString("en-IN")}<br>
-        <b>Date:</b> ${p.booking_date}
+        <b>Plot:</b> ${p.plot_id||'—'} ${!f.geometry?'<span class="no-coords-tag">No Coords</span>':''}
+        &nbsp;|&nbsp; <b>Crop:</b> ${p.crop||'—'}<br>
+        <b>Activities:</b> ${actDisplay}<br>
+        <b>Total:</b> ₹${Number(p.total_activities_amount||0).toLocaleString('en-IN')} &nbsp;|&nbsp;
+        <b>Advance:</b> ₹${Number(p.advance_paid||0).toLocaleString('en-IN')}<br>
+        <b>Date:</b> ${p.booking_date||'—'}
       </div>`;
-
-    if (f.geometry) {
-      card.addEventListener("click", () => toggleSelect(key));
-    }
-
-    document.getElementById("booking-list").appendChild(card);
+    if (f.geometry) card.addEventListener('click', () => toggleSelect(key));
+    document.getElementById('booking-list').appendChild(card);
     cardMap[key] = card;
   });
 
   fitAll();
 }
 
-function buildPopup(p) {
-  const actList = (p.activity_names || [p.activity_name])
-    .map(a => `<li>${a}</li>`).join("");
-  return `
-    <b>${p.farmer_name}</b><br>
-    <b>Plot:</b> ${p.plot_id || "—"} &nbsp;|&nbsp; <b>Crop:</b> ${p.crop} (${p.variety})<br>
-    <b>Activities (${p.activity_count}):</b><ul style="margin:4px 0 4px 14px">${actList}</ul>
-    <b>Total:</b> ₹${Number(p.total_activities_amount).toLocaleString("en-IN")}<br>
-    <b>Advance:</b> ₹${Number(p.advance_paid).toLocaleString("en-IN")} &nbsp;|&nbsp;
-    <b>Balance:</b> ₹${Number(p.balance).toLocaleString("en-IN")}<br>
-    <b>Status:</b> ${p.booking_status} &nbsp;|&nbsp; <b>Date:</b> ${p.booking_date}<br>
-    <b>Location:</b> ${p.location}
-  `;
+function buildBookingPopup(p) {
+  const acts = (p.activity_names && p.activity_names.length) ? p.activity_names : (p.activity_name ? [p.activity_name] : ['—']);
+  const actList = acts.map(a=>`<li>${a}</li>`).join('');
+  return `<b>${p.farmer_name}</b><br>
+    <b>Plot:</b> ${p.plot_id||'—'} | <b>Crop:</b> ${p.crop||'—'} (${p.variety||'—'})<br>
+    <b>Activities (${p.activity_count||acts.length}):</b><ul style="margin:4px 0 4px 14px">${actList}</ul>
+    <b>Total:</b> ₹${Number(p.total_activities_amount||0).toLocaleString('en-IN')}<br>
+    <b>Advance:</b> ₹${Number(p.advance_paid||0).toLocaleString('en-IN')} | <b>Balance:</b> ₹${Number(p.balance||0).toLocaleString('en-IN')}<br>
+    <b>Status:</b> ${p.booking_status} | <b>Date:</b> ${p.booking_date||'—'}`;
 }
 
-// ─── SELECTION ──────────────────────────────────────────────────────
-function toggleSelect(key) {
+// ── FARMER / ALLOCATION LIST ──────────────────────────────────────────────
+function renderFarmerList() {
+  const statusFilter = document.getElementById('alloc-status-filter').value;
+  const q = document.getElementById('search-box').value.toLowerCase();
+  const container = document.getElementById('farmer-list');
+  container.innerHTML = '';
+
+  // Also render alloc map layers
+  renderAllocMap();
+
+  farmerData.forEach(farmer => {
+    // search filter
+    if (q && !farmer.farmer_name.toLowerCase().includes(q) &&
+             !String(farmer.farmer_id).includes(q)) {
+      // check if any plot/activity matches
+      const anyPlotMatch = farmer.plots.some(pl =>
+        pl.name.toLowerCase().includes(q) ||
+        (jobActivities[String(pl.id)] || []).some(ja => ja.activity_name && ja.activity_name.toLowerCase().includes(q))
+      );
+      if (!anyPlotMatch) return;
+    }
+
+    // status filter — check if farmer has any matching plot/activity
+    let visiblePlots = farmer.plots;
+    if (statusFilter) {
+      visiblePlots = farmer.plots.filter(pl => {
+        const acts = jobActivities[String(pl.id)] || [];
+        return acts.some(ja => ja.allocation_status === statusFilter);
+      });
+      if (visiblePlots.length === 0) return;
+    }
+
+    const card = document.createElement('div');
+    card.className = 'farmer-card';
+    card.id = `fc-${farmer.farmer_id}`;
+
+    const plotCount = farmer.plots.length;
+    const pendingActs = farmer.plots.reduce((sum, pl) =>
+      sum + (jobActivities[String(pl.id)] || []).filter(ja => ja.allocation_status === 'pending').length, 0);
+
+    card.innerHTML = `
+      <div class="farmer-card-header" onclick="toggleFarmerCard('${farmer.farmer_id}')">
+        <div>
+          <div class="fname">${farmer.farmer_name}</div>
+          <div class="fmeta">ID: ${farmer.farmer_id} &nbsp;|&nbsp; ${plotCount} plot${plotCount!==1?'s':''} &nbsp;|&nbsp;
+            ${pendingActs > 0 ? `<span style="color:#f59e0b">${pendingActs} pending</span>` : '<span style="color:#34d399">all assigned</span>'}
+          </div>
+        </div>
+        <span style="color:var(--muted);font-size:12px;" id="fc-arrow-${farmer.farmer_id}">▶</span>
+      </div>
+      <div class="farmer-card-body" id="fc-body-${farmer.farmer_id}"></div>`;
+
+    container.appendChild(card);
+
+    // Render plots inside (lazy — will fill on expand)
+    const body = card.querySelector(`#fc-body-${farmer.farmer_id}`);
+    body._rendered = false;
+    body._farmer = farmer;
+    body._visiblePlots = visiblePlots;
+  });
+}
+
+function toggleFarmerCard(farmerId) {
+  const body  = document.getElementById(`fc-body-${farmerId}`);
+  const arrow = document.getElementById(`fc-arrow-${farmerId}`);
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open');
+  arrow.textContent = isOpen ? '▶' : '▼';
+  if (!isOpen && !body._rendered) {
+    renderFarmerPlots(body, body._farmer, body._visiblePlots);
+    body._rendered = true;
+  }
+}
+
+function renderFarmerPlots(container, farmer, plots) {
+  if (!plots || plots.length === 0) {
+    container.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:var(--muted);">No plots found for this farmer.</div>';
+    return;
+  }
+
+  plots.forEach(pl => {
+    const acts = jobActivities[String(pl.id)] || [];
+    const plotStatus = getPlotAllocStatus(acts);
+
+    const row = document.createElement('div');
+    row.className = 'plot-row';
+    row.id = `pr-${pl.id}`;
+
+    // Activity chips
+    const chips = acts.map(ja => {
+      const s = ja.allocation_status || 'pending';
+      const mukkName = getMukkadamForActivity(ja.id);
+      return `<span class="act-chip act-${s}" title="${ja.activity_name}\n${mukkName ? 'Mukkadam: '+mukkName : ''}">
+        ${ja.activity_name ? ja.activity_name.substring(0,18) : '—'}
+        <span style="opacity:.7;font-size:8px;">${ja.allocated_area||0}/${ja.total_area||0}ac</span>
+      </span>`;
+    }).join('');
+
+    // Action buttons
+    const pendingActs = acts.filter(ja => ja.allocation_status === 'pending' || ja.allocation_status === 'partially_allocated');
+    const allocatedActs = acts.filter(ja => ja.allocation_status === 'fully_allocated' || ja.allocation_status === 'partially_allocated');
+    let actionBtns = '';
+    if (pendingActs.length > 0) {
+      actionBtns += pendingActs.map(ja =>
+        `<button class="btn-allocate" onclick="openAllocModal(${ja.id}, '${escHtml(ja.activity_name)}', ${pl.id}, '${escHtml(pl.name)}', '${escHtml(farmer.farmer_name)}', ${ja.rate_per_acre||0}, ${ja.mukkadam_rate||0}, ${ja.total_area||0})">
+          ＋ Allocate: ${(ja.activity_name||'').substring(0,12)}
+        </button>`
+      ).join('');
+    }
+    if (allocatedActs.length > 0) {
+      allocatedActs.forEach(ja => {
+        const allocs = allocations[String(ja.id)] || [];
+        allocs.filter(a => a.work_status !== 'completed').forEach(a => {
+          actionBtns += `<button class="btn-move" onclick="openMoveModal(${a.id}, ${ja.id}, '${escHtml(ja.activity_name)}', ${pl.id}, '${escHtml(pl.name)}', '${escHtml(farmer.farmer_name)}')">
+            ↔ Move: ${(ja.activity_name||'').substring(0,12)}
+          </button>`;
+        });
+      });
+    }
+
+    row.innerHTML = `
+      <div class="plot-row-top">
+        <span class="plot-name" onclick="focusPlotOnMap(${pl.id})" title="Click to zoom to plot">
+          📌 ${pl.name} <span style="color:var(--muted);font-size:9px;">#${pl.plot_code||pl.id}</span>
+        </span>
+        <span class="plot-area">${pl.area_acres} ac</span>
+      </div>
+      <div class="activity-list">${chips || '<span style="font-size:10px;color:var(--muted)">No jobs</span>'}</div>
+      ${actionBtns ? `<div class="plot-action-row">${actionBtns}</div>` : ''}`;
+
+    container.appendChild(row);
+  });
+}
+
+function escHtml(s) { return String(s||'').replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
+
+function getMukkadamForActivity(jaId) {
+  const allocs = allocations[String(jaId)] || [];
+  const a = allocs.find(x => x.work_status !== 'completed');
+  if (!a) return null;
+  return a.mukkadam_name || a.mukkadam || null;
+}
+
+function getPlotAllocStatus(acts) {
+  if (!acts.length) return 'none';
+  if (acts.every(a => a.allocation_status === 'completed')) return 'completed';
+  if (acts.every(a => a.allocation_status === 'fully_allocated' || a.allocation_status === 'completed')) return 'fully_allocated';
+  if (acts.some(a => a.allocation_status === 'partially_allocated' || a.allocation_status === 'fully_allocated')) return 'partially_allocated';
+  return 'pending';
+}
+
+// ── ALLOC TAB MAP RENDERING ───────────────────────────────────────────────
+function renderAllocMap() {
+  if (currentTab !== 'alloc') return;
+
+  // Remove booking layers, show alloc layers
+  Object.values(layerMap).forEach(l => map.removeLayer(l));
+  Object.values(plotLayerMap).forEach(l => map.removeLayer(l));
+  plotLayerMap = {};
+
+  allFeatures.forEach(f => {
+    if (!f.geometry) return;
+    const plotId = String(f.properties.plot_id);
+    const acts = jobActivities[plotId] || [];
+    const status = getPlotAllocStatus(acts);
+    const col = ALLOC_COLORS[status] || ALLOC_COLORS.none;
+
+    const layer = L.geoJSON(f, {
+      style: { color:col, fillColor:col, fillOpacity:0.42, weight:2.5 }
+    }).addTo(map);
+
+    layer.bindPopup(buildAllocPopup(f.properties, acts));
+    layer.on('click', () => {
+      // also select for distance
+      const key = bookingKey(f);
+      toggleSelect(key, layer);
+      // scroll to farmer card
+      highlightFarmerCard(f.properties.farmer_id);
+    });
+
+    plotLayerMap[plotId] = layer;
+    // also register in layerMap for distance selection
+    layerMap[bookingKey(f)] = layer;
+  });
+
+  document.getElementById('alloc-legend').classList.add('show');
+  document.getElementById('legend').style.display = 'none';
+}
+
+function buildAllocPopup(p, acts) {
+  const actRows = acts.map(ja => {
+    const s = ja.allocation_status || 'pending';
+    const col = {pending:'#93c5fd',partially_allocated:'#fbbf24',fully_allocated:'#34d399',completed:'#6ee7b7',in_progress:'#c4b5fd'}[s]||'#94a3b8';
+    const allocs = allocations[String(ja.id)] || [];
+    const mukkName = allocs.map(a=>a.mukkadam_name||a.mukkadam||'').filter(Boolean).join(', ') || '—';
+    return `<tr>
+      <td>${ja.activity_name||'—'}</td>
+      <td style="color:${col}">${s.replace('_',' ')}</td>
+      <td>${ja.allocated_area||0}/${ja.total_area||0} ac</td>
+      <td style="color:var(--muted)">${mukkName}</td>
+    </tr>`;
+  }).join('');
+  return `<b>${p.farmer_name}</b> — Plot ${p.plot_id||'—'}<br>
+    ${acts.length ? `<table style="font-size:10px;border-collapse:collapse;margin-top:4px">
+      <tr><th style="color:var(--muted);padding:2px 5px">Activity</th><th>Status</th><th>Area</th><th>Mukkadam</th></tr>
+      ${actRows}
+    </table>` : '<span style="color:var(--muted)">No job activities</span>'}`;
+}
+
+function highlightFarmerCard(farmerId) {
+  // expand that card
+  const body = document.getElementById(`fc-body-${farmerId}`);
+  if (!body) return;
+  if (!body.classList.contains('open')) {
+    toggleFarmerCard(farmerId);
+  }
+  const cardEl = document.getElementById(`fc-${farmerId}`);
+  if (cardEl) cardEl.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function focusPlotOnMap(plotId) {
+  const layer = plotLayerMap[String(plotId)];
+  if (layer) {
+    map.fitBounds(layer.getBounds().pad(0.2));
+    layer.openPopup();
+  } else {
+    // try booking layer
+    const feat = allFeatures.find(f => String(f.properties.plot_id) === String(plotId));
+    if (feat) {
+      const key = bookingKey(feat);
+      const bl = layerMap[key];
+      if (bl) { map.fitBounds(bl.getBounds().pad(0.2)); bl.openPopup(); }
+    }
+  }
+}
+
+// ── DISTANCE TAB — PLOT SELECTOR LIST ────────────────────────────────────
+function renderDistList() {
+  const container = document.getElementById('dist-plot-list');
+  container.innerHTML = '';
+
+  if (!allFeatures.length) {
+    container.innerHTML = '<p style="font-size:11px;color:var(--muted);padding:4px 8px;">No plots loaded yet.</p>';
+    return;
+  }
+
+  // Show plots with coords first, then no-coords at bottom
+  const withGeom = allFeatures.filter(f => f.geometry);
+  const noGeom   = allFeatures.filter(f => !f.geometry);
+
+  [...withGeom, ...noGeom].forEach(f => {
+    const p   = f.properties;
+    const key = bookingKey(f);
+    const isSel   = selectedKeys.has(key);
+    const hasGeom = !!f.geometry;
+    const col = BOOKING_COLORS[p.booking_status] || '#94a3b8';
+    const actCount = p.activity_count || (p.activity_names && p.activity_names.length) || 0;
+
+    const row = document.createElement('div');
+    row.className = 'dist-plot-row' + (isSel ? ' selected' : '') + (!hasGeom ? ' no-coords' : '');
+    row.id = `dpr-${key}`;
+    row.innerHTML = `
+      <div class="dist-chk">${isSel ? '✓' : ''}</div>
+      <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${col};flex-shrink:0;margin-top:2px;"></span>
+      <div class="dist-plot-info">
+        <div class="dist-plot-name">${p.farmer_name}
+          <span style="color:var(--muted);font-weight:400;font-size:10px;"> · Plot ${p.plot_id||'—'}</span>
+          ${!hasGeom ? '<span class="no-coords-tag">No Coords</span>' : ''}
+        </div>
+        <div class="dist-plot-meta">${p.crop||'—'}${p.variety?' · '+p.variety:''} &nbsp;|&nbsp; ${actCount} act${actCount!==1?'s':''} &nbsp;|&nbsp; ${p.booking_status}</div>
+      </div>`;
+
+    if (hasGeom) {
+      row.addEventListener('click', () => {
+        toggleSelect(key);
+        const layer = layerMap[key];
+        if (layer) map.fitBounds(layer.getBounds().pad(0.3));
+      });
+    }
+    container.appendChild(row);
+  });
+}
+
+function updateDistListSelection() {
+  allFeatures.forEach(f => {
+    const key = bookingKey(f);
+    const row = document.getElementById(`dpr-${key}`);
+    if (!row) return;
+    const isSel = selectedKeys.has(key);
+    row.classList.toggle('selected', isSel);
+    const chk = row.querySelector('.dist-chk');
+    if (chk) chk.textContent = isSel ? '✓' : '';
+  });
+}
+
+// ── TAB SWITCHING ─────────────────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  ['booking','alloc','dist'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('active', t===tab);
+    document.getElementById(`pane-${t}`).style.display = t===tab ? 'flex' : 'none';
+  });
+
+  if (tab === 'booking') {
+    // restore booking layers
+    Object.values(plotLayerMap).forEach(l => map.removeLayer(l));
+    plotLayerMap = {};
+    Object.values(layerMap).forEach(l => map.addTo ? null : null);
+    renderBookingMap();
+    document.getElementById('alloc-legend').classList.remove('show');
+    document.getElementById('legend').style.display = '';
+  } else if (tab === 'alloc') {
+    renderAllocMap();
+  } else if (tab === 'dist') {
+    renderDistList();
+    document.getElementById('alloc-legend').classList.remove('show');
+    document.getElementById('legend').style.display = '';
+  }
+}
+
+// ── SELECTION (distance) ──────────────────────────────────────────────────
+function toggleSelect(key, layerOverride) {
+  const layer = layerOverride || layerMap[key];
   if (selectedKeys.has(key)) {
     selectedKeys.delete(key);
-    applyLayerStyle(key, false);
-    if (cardMap[key]) cardMap[key].classList.remove("selected");
+    if (layer) {
+      const f = allFeatures.find(x => bookingKey(x) === key);
+      const isAlloc = currentTab === 'alloc';
+      if (isAlloc) {
+        const acts = jobActivities[String(f?.properties?.plot_id)] || [];
+        const status = getPlotAllocStatus(acts);
+        const col = ALLOC_COLORS[status] || ALLOC_COLORS.none;
+        layer.setStyle({ color:col, fillColor:col, fillOpacity:0.42, weight:2.5 });
+      } else {
+        const col = BOOKING_COLORS[f?.properties?.booking_status] || '#94a3b8';
+        layer.setStyle({ color:col, fillColor:col, fillOpacity:0.35, weight:2 });
+      }
+    }
+    if (cardMap[key]) cardMap[key].classList.remove('selected');
   } else {
     selectedKeys.add(key);
-    applyLayerStyle(key, true);
-    if (cardMap[key]) cardMap[key].classList.add("selected");
+    if (layer) layer.setStyle({ color:'#a78bfa', fillColor:'#a78bfa', fillOpacity:0.55, weight:3 });
+    if (cardMap[key]) cardMap[key].classList.add('selected');
   }
   updateSelCount();
   updateDistances();
-}
-
-function applyLayerStyle(key, selected) {
-  const layer = layerMap[key];
-  if (!layer) return;
-  const f = allFeatures.find(x => bookingKey(x) === key);
-  if (selected) {
-    layer.setStyle({ color: "#a78bfa", fillColor: "#a78bfa", fillOpacity: 0.55, weight: 3 });
-  } else {
-    const col = statusColor(f ? f.properties.booking_status : "BOOKED");
-    layer.setStyle({ color: col, fillColor: col, fillOpacity: 0.35, weight: 2 });
-  }
+  updateDistListSelection();
 }
 
 function clearSelection() {
   [...selectedKeys].forEach(key => {
-    applyLayerStyle(key, false);
-    if (cardMap[key]) cardMap[key].classList.remove("selected");
+    const layer = layerMap[key];
+    if (layer) {
+      const f = allFeatures.find(x => bookingKey(x) === key);
+      const col = currentTab === 'alloc'
+        ? ALLOC_COLORS[getPlotAllocStatus(jobActivities[String(f?.properties?.plot_id)]||[])]
+        : BOOKING_COLORS[f?.properties?.booking_status] || '#94a3b8';
+      layer.setStyle({ color:col, fillColor:col, fillOpacity:0.35, weight:2 });
+    }
+    if (cardMap[key]) cardMap[key].classList.remove('selected');
   });
   selectedKeys.clear();
   updateSelCount();
@@ -537,101 +976,246 @@ function clearSelection() {
 }
 
 function updateSelCount() {
-  const el = document.getElementById("sel-count");
-  el.textContent = selectedKeys.size ? `${selectedKeys.size} selected` : "";
+  const el = document.getElementById('sel-count');
+  el.textContent = selectedKeys.size ? `${selectedKeys.size} selected` : '';
 }
 
-// ─── DISTANCE ANALYSIS ──────────────────────────────────────────────
-function haversineKm(c1, c2) {
-  // c1, c2 = [lng, lat]
-  const R = 6371;
-  const dLat = (c2[1] - c1[1]) * Math.PI / 180;
-  const dLng = (c2[0] - c1[0]) * Math.PI / 180;
-  const a = Math.sin(dLat/2)**2 +
-            Math.cos(c1[1]*Math.PI/180) * Math.cos(c2[1]*Math.PI/180) *
-            Math.sin(dLng/2)**2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-}
-
+// ── DISTANCE ANALYSIS ─────────────────────────────────────────────────────
 function updateDistances() {
-  const tbody = document.getElementById("dist-tbody");
-  const table = document.getElementById("dist-table");
-  const placeholder = document.getElementById("dist-placeholder");
-  tbody.innerHTML = "";
-
+  const tbody = document.getElementById('dist-tbody');
+  const table = document.getElementById('dist-table');
+  const ph    = document.getElementById('dist-placeholder');
+  tbody.innerHTML = '';
   const selWithGeom = [...selectedKeys].filter(k => layerMap[k]);
 
   if (selWithGeom.length < 2) {
-    table.style.display = "none";
-    placeholder.style.display = "block";
-    placeholder.textContent = selWithGeom.length === 1
-      ? "Select one more plot to measure distance."
-      : "Select 2+ plots with coordinates to measure distances.";
+    table.style.display = 'none';
+    ph.style.display = 'block';
+    ph.textContent = selWithGeom.length === 1
+      ? 'Select one more plot to measure distance.'
+      : 'Select 2+ plots with coordinates to measure distances.';
+    if (window._distLines) window._distLines.forEach(l => map.removeLayer(l));
+    window._distLines = [];
     return;
   }
 
-  table.style.display = "";
-  placeholder.style.display = "none";
-
-  // Remove old distance lines
+  table.style.display = '';
+  ph.style.display = 'none';
   if (window._distLines) window._distLines.forEach(l => map.removeLayer(l));
   window._distLines = [];
 
   for (let i = 0; i < selWithGeom.length; i++) {
-    for (let j = i + 1; j < selWithGeom.length; j++) {
+    for (let j = i+1; j < selWithGeom.length; j++) {
       const kA = selWithGeom[i], kB = selWithGeom[j];
-      const fA = allFeatures.find(x => bookingKey(x) === kA);
-      const fB = allFeatures.find(x => bookingKey(x) === kB);
+      const fA = allFeatures.find(x=>bookingKey(x)===kA);
+      const fB = allFeatures.find(x=>bookingKey(x)===kB);
       if (!fA?.geometry || !fB?.geometry) continue;
-
-      const cA = centroidOf(fA.geometry);
-      const cB = centroidOf(fB.geometry);
+      const cA = centroidOf(fA.geometry), cB = centroidOf(fB.geometry);
       if (!cA || !cB) continue;
-
       const km  = haversineKm(cA, cB);
-      const lbl = km < 1 ? `${(km * 1000).toFixed(0)} m` : `${km.toFixed(2)} km`;
-
-      // Draw dashed line between centroids
-      const line = L.polyline([[cA[1], cA[0]], [cB[1], cB[0]]], {
-        color: "#a78bfa", dashArray: "6 4", weight: 2, opacity: 0.8
-      }).addTo(map);
-      line.bindTooltip(lbl, { permanent: true, className: "dist-tooltip", direction: "center" });
+      const lbl = km<1 ? `${(km*1000).toFixed(0)} m` : `${km.toFixed(2)} km`;
+      const line = L.polyline([[cA[1],cA[0]],[cB[1],cB[0]]],{color:'#a78bfa',dashArray:'6 4',weight:2,opacity:.8}).addTo(map);
+      line.bindTooltip(lbl, {permanent:true,direction:'center'});
       window._distLines.push(line);
-
-      const nameA = fA.properties.farmer_name + " / " + (fA.properties.plot_id || "?");
-      const nameB = fB.properties.farmer_name + " / " + (fB.properties.plot_id || "?");
-
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${nameA}</td>
-        <td>${nameB}</td>
-        <td class="dist-val">${lbl}</td>`;
+      const nameA = `${fA.properties.farmer_name} / ${fA.properties.plot_id||'?'}`;
+      const nameB = `${fB.properties.farmer_name} / ${fB.properties.plot_id||'?'}`;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td style="padding:4px 5px;border-bottom:1px solid var(--border)">${nameA}</td>
+        <td style="padding:4px 5px;border-bottom:1px solid var(--border)">${nameB}</td>
+        <td class="dist-val" style="padding:4px 5px;border-bottom:1px solid var(--border);color:var(--accent);font-weight:700">${lbl}</td>`;
       tbody.appendChild(tr);
     }
   }
 }
 
-// ─── SEARCH / FILTER ────────────────────────────────────────────────
-function filterCards(q) {
-  q = q.toLowerCase();
-  Object.entries(cardMap).forEach(([key, card]) => {
-    const match = !q || card.dataset.search.includes(q);
-    card.style.display = match ? "" : "none";
+// ── SEARCH / FILTER ───────────────────────────────────────────────────────
+function onSearch(q) {
+  if (currentTab === 'booking') {
+    q = q.toLowerCase();
+    Object.entries(cardMap).forEach(([key, card]) => {
+      card.style.display = (!q || card.dataset.search.includes(q)) ? '' : 'none';
+    });
+  } else if (currentTab === 'alloc') {
+    renderFarmerList();
+  }
+}
+
+// ── FIT ALL ───────────────────────────────────────────────────────────────
+function fitAll() {
+  const layers = [...Object.values(layerMap), ...Object.values(plotLayerMap)];
+  if (!layers.length) return;
+  try {
+    const group = L.featureGroup(layers);
+    map.fitBounds(group.getBounds().pad(0.1));
+  } catch(e) {}
+}
+
+// ── ALLOCATE MODAL ────────────────────────────────────────────────────────
+function openAllocModal(jaId, actName, plotId, plotName, farmerName, farmerRate, mukkRate, totalArea) {
+  document.getElementById('m-mode').value           = 'allocate';
+  document.getElementById('m-job-activity-id').value = jaId;
+  document.getElementById('m-allocation-id').value   = '';
+  document.getElementById('m-cluster-id').value       = clusterID;
+  document.getElementById('modal-title').textContent  = '➕ Allocate Activity';
+  document.getElementById('m-activity-name').value    = actName;
+  document.getElementById('m-plot-info').value         = `${plotName} — ${farmerName}`;
+  document.getElementById('m-area').value              = totalArea || '';
+  document.getElementById('m-area').max                = totalArea || 999;
+  document.getElementById('m-farmer-rate').value       = farmerRate || '';
+  document.getElementById('m-mukkadam-rate').value     = mukkRate || '';
+  document.getElementById('m-date').value              = new Date().toISOString().split('T')[0];
+  document.getElementById('m-row-reason').style.display = 'none';
+  document.getElementById('m-row-mukkadam').style.display = '';
+  document.getElementById('m-row-area').style.display    = '';
+  document.getElementById('m-row-workers').style.display = '';
+  clearModalMessages();
+  populateMukkadamDropdown();
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function openMoveModal(allocId, jaId, actName, plotId, plotName, farmerName) {
+  document.getElementById('m-mode').value             = 'move';
+  document.getElementById('m-allocation-id').value    = allocId;
+  document.getElementById('m-job-activity-id').value  = jaId;
+  document.getElementById('m-cluster-id').value        = clusterID;
+  document.getElementById('modal-title').textContent   = '↔ Move / Reassign Allocation';
+  document.getElementById('m-activity-name').value     = actName;
+  document.getElementById('m-plot-info').value          = `${plotName} — ${farmerName}`;
+  document.getElementById('m-date').value               = new Date().toISOString().split('T')[0];
+  document.getElementById('m-row-reason').style.display    = '';
+  document.getElementById('m-row-mukkadam').style.display  = '';
+  document.getElementById('m-row-area').style.display      = '';
+  document.getElementById('m-row-workers').style.display   = '';
+  clearModalMessages();
+  populateMukkadamDropdown();
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function populateMukkadamDropdown() {
+  const sel = document.getElementById('m-mukkadam');
+  sel.innerHTML = '<option value="">— select mukkadam —</option>';
+  mukkadamList.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m.mukkadam_id;
+    opt.textContent = m.mukkadam_name;
+    sel.appendChild(opt);
   });
 }
 
-// ─── UTILITY ────────────────────────────────────────────────────────
-function fitAll() {
-  const layers = Object.values(layerMap);
-  if (!layers.length) return;
-  const group = L.featureGroup(layers);
-  map.fitBounds(group.getBounds().pad(0.1));
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
 }
 
-function updateStats() {
-  document.getElementById("stat-total").textContent  = allFeatures.length;
-  document.getElementById("stat-coords").textContent = allFeatures.filter(f => f.geometry).length;
+function clearModalMessages() {
+  document.getElementById('modal-error').style.display   = 'none';
+  document.getElementById('modal-success').style.display = 'none';
 }
+
+async function submitModal() {
+  clearModalMessages();
+  const mode       = document.getElementById('m-mode').value;
+  const jaId       = document.getElementById('m-job-activity-id').value;
+  const allocId    = document.getElementById('m-allocation-id').value;
+  const clusterId  = document.getElementById('m-cluster-id').value;
+  const mukkadamId = document.getElementById('m-mukkadam').value;
+  const date       = document.getElementById('m-date').value;
+  const area       = document.getElementById('m-area').value;
+  const workers    = document.getElementById('m-workers').value;
+  const reason     = document.getElementById('m-reason').value;
+  const farmerRate = document.getElementById('m-farmer-rate').value;
+  const mukkRate   = document.getElementById('m-mukkadam-rate').value;
+
+  if (!mukkadamId) return showModalError('Please select a mukkadam.');
+  if (!date)       return showModalError('Please enter a date.');
+
+  const btn = document.getElementById('modal-submit-btn');
+  btn.textContent = 'Saving…'; btn.disabled = true;
+
+  try {
+    let url, body;
+
+    if (mode === 'allocate') {
+      if (!area || parseFloat(area) <= 0) {
+        btn.textContent = 'Submit'; btn.disabled = false;
+        return showModalError('Area must be > 0.');
+      }
+      url  = `${BASE}/tender/api/allocations/create_allocation/`;
+      body = {
+        job_activity_id:   parseInt(jaId),
+        mukkadam_id:       mukkadamId,
+        allocated_date:    date,
+        cluster_id:        parseInt(clusterId),
+        allocated_area:    parseFloat(area),
+        allocated_workers: parseInt(workers) || 10,
+        farmer_rate:       parseFloat(farmerRate) || 0,
+        mukkadam_rate:     parseFloat(mukkRate) || 0,
+        force:             false,
+      };
+    } else {
+      if (!reason.trim()) {
+        btn.textContent = 'Submit'; btn.disabled = false;
+        return showModalError('Reason is required for move.');
+      }
+      url  = `${BASE}/tender/api/allocations/${allocId}/change_date/`;
+      body = {
+        allocated_date: date,
+        mukkadam_id:    mukkadamId,
+        reason:         reason,
+        ...(area ? { allocated_area: parseFloat(area) } : {}),
+      };
+    }
+
+    // apiFetch returns parsed JSON directly; throws on non-2xx
+    await apiFetch(url, { method: 'POST', body: JSON.stringify(body) });
+
+    showModalSuccess(mode === 'allocate'
+      ? '✅ Allocation created successfully!'
+      : '✅ Allocation moved successfully!');
+
+    setTimeout(async () => {
+      await refreshAllocations();
+      closeModal();
+      if (currentTab === 'alloc') {
+        renderFarmerList();
+        renderAllocMap();
+      }
+    }, 1200);
+
+  } catch(e) {
+    // apiFetch throws with status + message; show it clearly
+    showModalError(e.message || 'Unknown error');
+  } finally {
+    btn.textContent = 'Submit'; btn.disabled = false;
+  }
+}
+
+async function refreshAllocations() {
+  const allocResp = await apiFetch(`${BASE}/tender/api/allocations/?cluster_id=${clusterID}&page_size=2000`, {credentials:'include'}).catch(()=>({results:[]}));
+  const allocList = allocResp.results || allocResp || [];
+  allocations = {};
+  allocList.forEach(a => {
+    const jaid = String(a.job_activity);
+    if (!allocations[jaid]) allocations[jaid] = [];
+    allocations[jaid].push(a);
+  });
+}
+
+function showModalError(msg) {
+  const el = document.getElementById('modal-error');
+  el.textContent = msg; el.style.display = 'block';
+}
+function showModalSuccess(msg) {
+  const el = document.getElementById('modal-success');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+// ── CLOSE MODAL ON OVERLAY CLICK ─────────────────────────────────────────
+document.getElementById('modal-overlay').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// ── START ─────────────────────────────────────────────────────────────────
+init();
 </script>
 </body>
 </html>

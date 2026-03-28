@@ -3486,6 +3486,16 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             'activity':   activity.activity.name,
         }, status=200)
 
+
+# views.py
+import requests
+from django.http import JsonResponse
+
+def booking_map_proxy(request):
+    resp = requests.get('https://ops.bharatintelligence.ai/ops/bookings/map/api/')
+    return JsonResponse(resp.json())
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def mukkadam_misc_no_job(request, mukkadam_id):

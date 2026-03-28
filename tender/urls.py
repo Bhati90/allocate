@@ -6,7 +6,7 @@ from .views import (
     ActivityCatalogViewSet,
     ClusterViewSet,mukkadam_timeline,
     JobActivityViewSet,mukkadam_settlement_detail,raise_mukkadam_payment,
-    JobViewSet,MakeCallViews,send_farmer_otp,verify_farmer_otp,
+    JobViewSet,MakeCallViews,send_farmer_otp,verify_farmer_otp,booking_map_proxy,
     LeaveViewSet,ExtraWorkerViewSet,send_start_otp,verify_start_otp,submit_day_end_report,verify_end_otp,resolve_dispute,
     MukkadamViewSet,cluster_payment_dashboard,get_payment_proof_presign,save_payment_proof,
     AllocationViewSet,FarmerViewSet,mukkadam_all_settlements,mukkadam_misc_cost_delete,mukkadam_misc_costs,
@@ -136,7 +136,8 @@ path('api/insights/', cluster_insights, name='cluster_insights'),
 path('api/reschedule-activities/', reschedule_activities_view, name='reschedule-activities'),
 path('api/farmer-bill/send-webhook/', send_farmer_bill_to_webhook),
 path('api/allocations/<int:allocation_id>/mark_complete/', mark_allocation_complete),
-
+# urls.py
+path('api/bookings/map/api/', booking_map_proxy),
 
 path('clustersp/overview/', v.GlobalOverviewView.as_view()),
 path('clustersp/',

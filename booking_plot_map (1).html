@@ -1,0 +1,636 @@
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Booking Plot Map — Field Analysis</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <!-- Leaflet.draw CSS -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --card: #22263a;
+      --border: #2e3347;
+      --accent: #4f8ef7;
+      --accent2: #34d399;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ─── TOP BAR ─── */
+    #topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 18px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    #topbar h1 {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+
+    #topbar .controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .badge span { color: var(--accent); font-weight: 700; }
+
+    button.ctrl-btn {
+      background: var(--accent);
+      border: none;
+      color: #fff;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+
+    button.ctrl-btn:hover { opacity: .85; }
+    button.ctrl-btn.secondary {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    button.ctrl-btn.danger {
+      background: var(--danger);
+    }
+
+    /* ─── MAIN LAYOUT ─── */
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ─── SIDEBAR ─── */
+    #sidebar {
+      width: 320px;
+      min-width: 260px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #sidebar-header {
+      padding: 12px 14px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #search-box {
+      margin: 10px;
+      padding: 7px 10px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 12px;
+      width: calc(100% - 20px);
+      outline: none;
+    }
+
+    #booking-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 8px 10px;
+    }
+
+    .booking-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 7px;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      position: relative;
+    }
+
+    .booking-card:hover { border-color: var(--accent); }
+    .booking-card.selected { border-color: var(--accent2); background: #1c2f28; }
+    .booking-card.no-coords { opacity: 0.55; cursor: default; }
+
+    .booking-card .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .booking-card .farmer { font-size: 13px; font-weight: 600; }
+    .booking-card .pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 99px;
+    }
+    .pill-BOOKED   { background: #1e3a5f; color: #60a5fa; }
+    .pill-PARTIAL  { background: #3b2a0a; color: #fbbf24; }
+    .pill-PAID     { background: #064e3b; color: #34d399; }
+    .pill-CANCELLED{ background: #3b0a0a; color: #f87171; }
+
+    .booking-card .meta {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .booking-card .meta b { color: var(--text); }
+
+    .no-coords-tag {
+      font-size: 9px;
+      background: #3b3010;
+      color: #fcd34d;
+      padding: 1px 5px;
+      border-radius: 4px;
+      margin-left: 4px;
+    }
+
+    /* ─── DISTANCE PANEL ─── */
+    #dist-panel {
+      border-top: 1px solid var(--border);
+      padding: 12px 14px;
+      background: var(--surface);
+    }
+
+    #dist-panel h3 {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 8px;
+    }
+
+    #dist-table {
+      font-size: 11px;
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    #dist-table th {
+      text-align: left;
+      color: var(--muted);
+      font-weight: 600;
+      padding: 3px 5px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #dist-table td {
+      padding: 4px 5px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    #dist-table .dist-val { color: var(--accent); font-weight: 700; }
+    #dist-placeholder { font-size: 12px; color: var(--muted); }
+
+    /* ─── MAP ─── */
+    #map {
+      flex: 1;
+      background: #0d1117;
+    }
+
+    /* Leaflet dark overrides */
+    .leaflet-popup-content-wrapper {
+      background: var(--card) !important;
+      color: var(--text) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 8px !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,.5) !important;
+    }
+    .leaflet-popup-tip { background: var(--card) !important; }
+    .leaflet-popup-content { font-size: 12px; line-height: 1.7; }
+    .leaflet-popup-content b { color: var(--accent); }
+
+    /* ─── LOADING OVERLAY ─── */
+    #loader {
+      position: fixed; inset: 0;
+      background: rgba(10,12,20,.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      font-size: 14px;
+      color: var(--accent);
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ─── LEGEND ─── */
+    #legend {
+      position: absolute;
+      bottom: 28px; right: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      z-index: 900;
+      font-size: 11px;
+      line-height: 2;
+    }
+
+    .legend-dot {
+      display: inline-block;
+      width: 10px; height: 10px;
+      border-radius: 2px;
+      margin-right: 6px;
+    }
+
+    /* ─── SCROLLBAR ─── */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 9px; }
+  </style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loader">
+  <div class="spinner"></div>
+  <span>Loading booking plots…</span>
+</div>
+
+<!-- Top Bar -->
+<div id="topbar">
+  <h1>📍 Booking Plot Map</h1>
+  <div class="controls">
+    <div class="badge">Date: <span>16-03-2026 → Today</span></div>
+    <div class="badge">Agent: <span>#17</span></div>
+    <div class="badge">Plots: <span id="stat-total">0</span></div>
+    <div class="badge">With Coords: <span id="stat-coords">0</span></div>
+    <button class="ctrl-btn secondary" onclick="clearSelection()">✕ Clear Selection</button>
+    <button class="ctrl-btn" onclick="fitAll()">⊞ Fit All</button>
+  </div>
+</div>
+
+<!-- Main -->
+<div id="main">
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="sidebar-header">
+      Bookings
+      <span id="sel-count" style="color:var(--accent2);font-size:12px;"></span>
+    </div>
+    <input id="search-box" placeholder="Search farmer, plot ID, crop…" oninput="filterCards(this.value)"/>
+    <div id="booking-list"></div>
+
+    <!-- Distance panel -->
+    <div id="dist-panel">
+      <h3>📐 Distance Analysis</h3>
+      <div id="dist-placeholder">Select 2+ plots with coordinates to measure distances.</div>
+      <table id="dist-table" style="display:none;">
+        <thead>
+          <tr>
+            <th>From</th>
+            <th>To</th>
+            <th>Distance</th>
+          </tr>
+        </thead>
+        <tbody id="dist-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+</div>
+
+<!-- Legend -->
+<div id="legend">
+  <div><span class="legend-dot" style="background:#3b82f6"></span>Booked</div>
+  <div><span class="legend-dot" style="background:#f59e0b"></span>Partial</div>
+  <div><span class="legend-dot" style="background:#22c55e"></span>Paid</div>
+  <div><span class="legend-dot" style="background:#ef4444"></span>Cancelled</div>
+  <div><span class="legend-dot" style="background:#a78bfa"></span>Selected</div>
+</div>
+
+<!-- Scripts -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+<script>
+// ─── MAP INIT ───────────────────────────────────────────────────────
+const map = L.map("map", { zoomControl: true }).setView([20.0, 74.0], 8);
+
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+  attribution: "© OpenStreetMap © CARTO",
+  subdomains: "abcd", maxZoom: 20,
+}).addTo(map);
+
+// ─── STATE ──────────────────────────────────────────────────────────
+let allFeatures   = [];        // raw GeoJSON features from API
+let layerMap      = {};        // bookingKey → L.layer
+let selectedKeys  = new Set(); // currently selected plot keys
+let cardMap       = {};        // bookingKey → DOM card element
+
+const STATUS_COLORS = {
+  BOOKED:    "#3b82f6",
+  PARTIAL:   "#f59e0b",
+  PAID:      "#22c55e",
+  CANCELLED: "#ef4444",
+};
+
+function bookingKey(f) {
+  return `${f.properties.booking_id}_${f.properties.plot_id}_${f.properties.activity_name}`;
+}
+
+// ─── FETCH & RENDER ─────────────────────────────────────────────────
+fetch("{% url 'booking_plots_api' %}")
+  .then(r => r.json())
+  .then(data => {
+    allFeatures = data.features || [];
+    document.getElementById("loader").style.display = "none";
+    renderAll(allFeatures);
+    updateStats();
+  })
+  .catch(e => {
+    document.getElementById("loader").innerHTML =
+      `<span style="color:#ef4444">Failed to load data. Check console.</span>`;
+    console.error(e);
+  });
+
+function statusColor(status) {
+  return STATUS_COLORS[status] || "#94a3b8";
+}
+
+function centroidOf(geom) {
+  if (!geom) return null;
+  try {
+    const c = turf.centroid({ type: "Feature", geometry: geom });
+    return c.geometry.coordinates; // [lng, lat]
+  } catch { return null; }
+}
+
+function renderAll(features) {
+  // Clear old layers
+  Object.values(layerMap).forEach(l => map.removeLayer(l));
+  layerMap = {};
+  cardMap  = {};
+  document.getElementById("booking-list").innerHTML = "";
+
+  features.forEach(f => {
+    const p   = f.properties;
+    const key = bookingKey(f);
+    const col = statusColor(p.booking_status);
+
+    // ── MAP LAYER ──
+    if (f.geometry) {
+      const layer = L.geoJSON(f, {
+        style: { color: col, fillColor: col, fillOpacity: 0.35, weight: 2 },
+      }).addTo(map);
+
+      layer.on("click", () => toggleSelect(key));
+      layer.bindPopup(buildPopup(p));
+      layerMap[key] = layer;
+    }
+
+    // ── SIDEBAR CARD ──
+    const card = document.createElement("div");
+    card.className = "booking-card" + (f.geometry ? "" : " no-coords");
+    card.dataset.key = key;
+    card.dataset.search = [
+      p.farmer_name, p.farmer_id, p.plot_id, p.crop, p.variety,
+      p.activity_name, p.location
+    ].join(" ").toLowerCase();
+
+    card.innerHTML = `
+      <div class="card-top">
+        <span class="farmer">${p.farmer_name}</span>
+        <span class="pill pill-${p.booking_status}">${p.booking_status}</span>
+      </div>
+      <div class="meta">
+        <b>Plot:</b> ${p.plot_id || "—"}
+        ${!f.geometry ? '<span class="no-coords-tag">No Coords</span>' : ""}
+        &nbsp;|&nbsp; <b>Crop:</b> ${p.crop || "—"}<br>
+        <b>Activity:</b> ${p.activity_name}<br>
+        <b>Acres:</b> ${p.acres} &nbsp;|&nbsp;
+        <b>Advance:</b> ₹${Number(p.advance_paid).toLocaleString("en-IN")}<br>
+        <b>Date:</b> ${p.booking_date}
+      </div>`;
+
+    if (f.geometry) {
+      card.addEventListener("click", () => toggleSelect(key));
+    }
+
+    document.getElementById("booking-list").appendChild(card);
+    cardMap[key] = card;
+  });
+
+  fitAll();
+}
+
+function buildPopup(p) {
+  const actList = (p.activity_names || [p.activity_name])
+    .map(a => `<li>${a}</li>`).join("");
+  return `
+    <b>${p.farmer_name}</b><br>
+    <b>Plot:</b> ${p.plot_id || "—"} &nbsp;|&nbsp; <b>Crop:</b> ${p.crop} (${p.variety})<br>
+    <b>Activities (${p.activity_count}):</b><ul style="margin:4px 0 4px 14px">${actList}</ul>
+    <b>Total:</b> ₹${Number(p.total_activities_amount).toLocaleString("en-IN")}<br>
+    <b>Advance:</b> ₹${Number(p.advance_paid).toLocaleString("en-IN")} &nbsp;|&nbsp;
+    <b>Balance:</b> ₹${Number(p.balance).toLocaleString("en-IN")}<br>
+    <b>Status:</b> ${p.booking_status} &nbsp;|&nbsp; <b>Date:</b> ${p.booking_date}<br>
+    <b>Location:</b> ${p.location}
+  `;
+}
+
+// ─── SELECTION ──────────────────────────────────────────────────────
+function toggleSelect(key) {
+  if (selectedKeys.has(key)) {
+    selectedKeys.delete(key);
+    applyLayerStyle(key, false);
+    if (cardMap[key]) cardMap[key].classList.remove("selected");
+  } else {
+    selectedKeys.add(key);
+    applyLayerStyle(key, true);
+    if (cardMap[key]) cardMap[key].classList.add("selected");
+  }
+  updateSelCount();
+  updateDistances();
+}
+
+function applyLayerStyle(key, selected) {
+  const layer = layerMap[key];
+  if (!layer) return;
+  const f = allFeatures.find(x => bookingKey(x) === key);
+  if (selected) {
+    layer.setStyle({ color: "#a78bfa", fillColor: "#a78bfa", fillOpacity: 0.55, weight: 3 });
+  } else {
+    const col = statusColor(f ? f.properties.booking_status : "BOOKED");
+    layer.setStyle({ color: col, fillColor: col, fillOpacity: 0.35, weight: 2 });
+  }
+}
+
+function clearSelection() {
+  [...selectedKeys].forEach(key => {
+    applyLayerStyle(key, false);
+    if (cardMap[key]) cardMap[key].classList.remove("selected");
+  });
+  selectedKeys.clear();
+  updateSelCount();
+  updateDistances();
+}
+
+function updateSelCount() {
+  const el = document.getElementById("sel-count");
+  el.textContent = selectedKeys.size ? `${selectedKeys.size} selected` : "";
+}
+
+// ─── DISTANCE ANALYSIS ──────────────────────────────────────────────
+function haversineKm(c1, c2) {
+  // c1, c2 = [lng, lat]
+  const R = 6371;
+  const dLat = (c2[1] - c1[1]) * Math.PI / 180;
+  const dLng = (c2[0] - c1[0]) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 +
+            Math.cos(c1[1]*Math.PI/180) * Math.cos(c2[1]*Math.PI/180) *
+            Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function updateDistances() {
+  const tbody = document.getElementById("dist-tbody");
+  const table = document.getElementById("dist-table");
+  const placeholder = document.getElementById("dist-placeholder");
+  tbody.innerHTML = "";
+
+  const selWithGeom = [...selectedKeys].filter(k => layerMap[k]);
+
+  if (selWithGeom.length < 2) {
+    table.style.display = "none";
+    placeholder.style.display = "block";
+    placeholder.textContent = selWithGeom.length === 1
+      ? "Select one more plot to measure distance."
+      : "Select 2+ plots with coordinates to measure distances.";
+    return;
+  }
+
+  table.style.display = "";
+  placeholder.style.display = "none";
+
+  // Remove old distance lines
+  if (window._distLines) window._distLines.forEach(l => map.removeLayer(l));
+  window._distLines = [];
+
+  for (let i = 0; i < selWithGeom.length; i++) {
+    for (let j = i + 1; j < selWithGeom.length; j++) {
+      const kA = selWithGeom[i], kB = selWithGeom[j];
+      const fA = allFeatures.find(x => bookingKey(x) === kA);
+      const fB = allFeatures.find(x => bookingKey(x) === kB);
+      if (!fA?.geometry || !fB?.geometry) continue;
+
+      const cA = centroidOf(fA.geometry);
+      const cB = centroidOf(fB.geometry);
+      if (!cA || !cB) continue;
+
+      const km  = haversineKm(cA, cB);
+      const lbl = km < 1 ? `${(km * 1000).toFixed(0)} m` : `${km.toFixed(2)} km`;
+
+      // Draw dashed line between centroids
+      const line = L.polyline([[cA[1], cA[0]], [cB[1], cB[0]]], {
+        color: "#a78bfa", dashArray: "6 4", weight: 2, opacity: 0.8
+      }).addTo(map);
+      line.bindTooltip(lbl, { permanent: true, className: "dist-tooltip", direction: "center" });
+      window._distLines.push(line);
+
+      const nameA = fA.properties.farmer_name + " / " + (fA.properties.plot_id || "?");
+      const nameB = fB.properties.farmer_name + " / " + (fB.properties.plot_id || "?");
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${nameA}</td>
+        <td>${nameB}</td>
+        <td class="dist-val">${lbl}</td>`;
+      tbody.appendChild(tr);
+    }
+  }
+}
+
+// ─── SEARCH / FILTER ────────────────────────────────────────────────
+function filterCards(q) {
+  q = q.toLowerCase();
+  Object.entries(cardMap).forEach(([key, card]) => {
+    const match = !q || card.dataset.search.includes(q);
+    card.style.display = match ? "" : "none";
+  });
+}
+
+// ─── UTILITY ────────────────────────────────────────────────────────
+function fitAll() {
+  const layers = Object.values(layerMap);
+  if (!layers.length) return;
+  const group = L.featureGroup(layers);
+  map.fitBounds(group.getBounds().pad(0.1));
+}
+
+function updateStats() {
+  document.getElementById("stat-total").textContent  = allFeatures.length;
+  document.getElementById("stat-coords").textContent = allFeatures.filter(f => f.geometry).length;
+}
+</script>
+</body>
+</html>
