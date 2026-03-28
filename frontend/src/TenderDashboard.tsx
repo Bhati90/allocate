@@ -2,6 +2,8 @@
 import React, { useCallback, useEffect,useMemo,useRef, useState } from "react";
 // import { groupActivitiesByName } from './FarmerBillingPage';
 import { groupActivitiesByName } from "./components/FarmerBillPage";
+// import {BookingPlotMapV2} from "./Map"
+import BookingPlotMapV2 from "./Map.jsx"; 
 import axios from "axios";
 import {Pencil,Pen,Check,X,
   Users, Briefcase, ChevronDown, ChevronUp,
@@ -7617,6 +7619,7 @@ if (actSubTab === 'data_issue') {
       <div className="pt-4">
  <TenderFunnelStats farmers={subTabFilteredFarmers} summary={displaySummary ?? data?.summary} />
 </div>
+<BookingPlotMapV2/>
           <SalesPerformance onKpisReady={setSalesKpis} />
       <AgroIntelUnified/>
           </>

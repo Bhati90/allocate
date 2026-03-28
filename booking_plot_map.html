@@ -144,45 +144,75 @@
     .leaflet-popup-content{font-size:12px;line-height:1.7;}
     .leaflet-popup-content b{color:var(--accent);}
 
-    /* ── RICH PLOT POPUP PANEL (floats over map) ── */
+    /* ── RICH PLOT POPUP PANEL (floats over map) — JSX style ── */
     #plot-popup{position:absolute;z-index:1500;display:none;pointer-events:none;}
     #plot-popup.open{display:block;pointer-events:all;}
-    .pp-card{background:#fff;border:2px solid #e2e8f0;border-radius:14px;box-shadow:0 8px 40px rgba(0,0,0,.25);width:310px;overflow:hidden;font-family:'Inter',system-ui,sans-serif;}
-    .pp-header{padding:14px 16px 10px;border-bottom:1px solid #f1f5f9;position:relative;}
-    .pp-close{position:absolute;top:10px;right:12px;background:none;border:none;font-size:16px;color:#94a3b8;cursor:pointer;line-height:1;padding:2px 6px;border-radius:4px;}
-    .pp-close:hover{background:#f1f5f9;color:#475569;}
-    .pp-farmer{font-size:15px;font-weight:700;color:#0f172a;margin-bottom:6px;}
-    .pp-meta{display:flex;gap:5px;flex-wrap:wrap;}
-    .pp-meta span{background:#f1f5f9;border-radius:4px;padding:2px 7px;font-size:11px;color:#475569;font-weight:500;}
-    .pp-meta .s-partial{background:#fef3c7;color:#b45309;}
-    .pp-meta .s-pending{background:#eff6ff;color:#1d4ed8;}
-    .pp-meta .s-done{background:#d1fae5;color:#065f46;}
-    .pp-body{padding:12px 16px;max-height:400px;overflow-y:auto;}
-    .pp-act-block{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 13px;margin-bottom:10px;}
-    .pp-act-block:last-child{margin-bottom:0;}
-    .pp-act-timing{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
-    .pp-now{font-size:10px;color:#16a34a;font-weight:700;}
-    .pp-timeleft{font-size:10px;color:#d97706;font-weight:600;}
-    .pp-timeleft.overdue{color:#ef4444;}
-    .pp-actname{font-size:13px;font-weight:700;color:#0f172a;margin-bottom:8px;}
-    .pp-details{display:flex;gap:16px;margin-bottom:8px;}
-    .pp-det{display:flex;flex-direction:column;gap:1px;}
-    .pp-det-lbl{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:#94a3b8;}
-    .pp-det-val{font-size:12px;font-weight:700;color:#0f172a;}
-    .pp-det-val.warn{color:#d97706;}
-    .pp-prog-bar{height:5px;background:#e2e8f0;border-radius:99px;overflow:hidden;margin-bottom:3px;}
-    .pp-prog-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,#22c55e,#86efac);}
-    .pp-prog-fill.partial{background:linear-gradient(90deg,#f59e0b,#fcd34d);}
-    .pp-prog-text{font-size:9px;color:#94a3b8;display:flex;justify-content:space-between;margin-bottom:10px;}
-    .pp-act-btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
-    .pp-act-btns button{padding:8px 4px;font-size:11px;font-weight:700;border:none;border-radius:8px;cursor:pointer;transition:opacity .15s;}
-    .pp-act-btns button:hover{opacity:.82;}
-    .pp-btn-alloc{background:#1d4ed8;color:#fff;}
-    .pp-btn-move{background:#78350f;color:#fef3c7;}
-    .pp-btn-note{background:#374151;color:#e5e7eb;}
-    .pp-btn-cancel{background:#dc2626;color:#fff;}
-    .pp-footer{padding:9px 16px;border-top:1px solid #f1f5f9;display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;}
-    .pp-footer .pp-bal{color:#d97706;font-weight:600;}
+    @keyframes cp{0%,100%{opacity:1}50%{opacity:.4}}
+    @keyframes sp{0%,100%{opacity:1}50%{opacity:.3}}
+    .pp-card{
+      background:#fff;border:1px solid #e5e7eb;border-radius:12px;
+      box-shadow:0 12px 40px rgba(0,0,0,.25),0 2px 8px rgba(0,0,0,.1);
+      width:310px;overflow:hidden;font-family:'Inter',system-ui,sans-serif;
+    }
+    /* urgency strip */
+    .pp-urgency-strip{height:3px;width:100%;}
+    /* header */
+    .pp-header-inner{padding:10px 14px 8px;}
+    .pp-header-row{display:flex;justify-content:space-between;align-items:flex-start;}
+    .pp-name{font-size:14px;font-weight:700;color:#111;line-height:1.2;}
+    .pp-meta-row{font-size:10px;color:#9ca3af;font-family:'Courier New',monospace;margin-top:3px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
+    .pp-meta-sep{color:#e0e0e0;}
+    .pp-close-btn{
+      width:22px;height:22px;border-radius:5px;border:1px solid #e5e7eb;
+      background:#f9fafb;color:#9ca3af;font-size:14px;cursor:pointer;
+      display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-left:6px;
+      line-height:1;padding:0;
+    }
+    .pp-close-btn:hover{background:#f1f5f9;color:#374151;}
+    /* current activity hero */
+    .pp-hero{margin:0 14px 8px;padding:10px 12px;border-radius:8px;}
+    .pp-hero-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
+    .pp-hero-status{font-size:8px;font-weight:700;letter-spacing:.07em;}
+    .pp-hero-days{font-size:10px;font-weight:700;font-family:'Courier New',monospace;}
+    .pp-hero-actname{font-size:13px;font-weight:700;color:#111;line-height:1.2;margin-bottom:7px;}
+    .pp-hero-details{display:flex;gap:14px;font-size:10px;color:#374151;}
+    .pp-hero-det-lbl{font-size:7px;color:#9ca3af;font-weight:600;letter-spacing:.07em;text-transform:uppercase;margin-bottom:1px;}
+    .pp-hero-det-val{font-size:11px;font-weight:600;color:#111;}
+    .pp-team-badge{
+      display:inline-flex;align-items:center;justify-content:center;
+      width:14px;height:14px;border-radius:3px;color:#fff;
+      font-size:7px;font-weight:700;margin-right:3px;vertical-align:middle;
+    }
+    /* progress */
+    .pp-progress-section{padding:0 14px 8px;}
+    .pp-prog-header{display:flex;justify-content:space-between;margin-bottom:4px;}
+    .pp-prog-label{font-size:8px;font-weight:600;color:#9ca3af;letter-spacing:.06em;text-transform:uppercase;}
+    .pp-prog-count{font-size:9px;color:#6b7280;font-family:'Courier New',monospace;}
+    .pp-segs{display:flex;gap:2px;}
+    .pp-seg{flex:1;height:4px;border-radius:2px;}
+    /* action buttons */
+    .pp-actions{padding:8px 14px;border-top:1px solid #f3f4f6;display:flex;gap:4px;flex-wrap:wrap;}
+    .pp-action-btn{
+      padding:5px 10px;border-radius:5px;border:1px solid #e5e7eb;
+      background:#fff;font-size:10px;font-weight:600;cursor:pointer;
+      font-family:'Inter',system-ui,sans-serif;color:#374151;transition:opacity .15s;
+    }
+    .pp-action-btn:hover{opacity:.8;}
+    .pp-action-btn.primary{background:#111;color:#fff;border-color:#111;flex:1;}
+    .pp-action-btn.success{background:#059669;color:#fff;border-color:#059669;}
+    .pp-action-btn.danger{color:#dc2626;border-color:#fecaca;}
+    /* footer */
+    .pp-footer-new{
+      padding:6px 14px;border-top:1px solid #f3f4f6;background:#fafafa;
+      display:flex;justify-content:space-between;font-size:9px;color:#9ca3af;
+    }
+    .pp-footer-bal{font-weight:600;}
+    /* done banner */
+    .pp-done-banner{
+      margin:0 14px 8px;padding:8px 12px;border-radius:8px;
+      background:#f0fdf4;border:1px solid #bbf7d0;
+      font-size:11px;color:#16a34a;font-weight:600;text-align:center;
+    }
 
     /* ── NOTE MODAL ── */
     #note-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:2001;display:none;align-items:center;justify-content:center;}
@@ -366,7 +396,7 @@
     <span class="ami-icon">✎</span> Add Note
   </button>
   <button class="act-menu-item ami-cancel" id="ami-cancel" onclick="actMenuAction('cancel')">
-    <span class="ami-icon">✕</span> Cancel Allocation
+    <span class="ami-icon">✕</span> Cancel Job
   </button>
 </div>
 
@@ -433,21 +463,9 @@
   </div>
 </div>
 
-<!-- ── FLOATING PLOT POPUP PANEL (alloc tab) ── -->
+<!-- ── FLOATING PLOT POPUP PANEL (alloc tab) — JSX style ── -->
 <div id="plot-popup">
-  <div class="pp-card">
-    <div class="pp-header">
-      <button class="pp-close" onclick="closePlotPopup()">✕</button>
-      <div class="pp-farmer" id="pp-farmer-name">—</div>
-      <div class="pp-meta" id="pp-meta"></div>
-    </div>
-    <div class="pp-body" id="pp-body"></div>
-    <div class="pp-footer" id="pp-footer" style="display:none;">
-      <span id="pp-total"></span>
-      <span class="pp-bal" id="pp-bal"></span>
-      <span id="pp-plotid"></span>
-    </div>
-  </div>
+  <div class="pp-card" id="pp-card-inner"></div>
 </div>
 
 <!-- ── NOTE MODAL ── -->
@@ -498,10 +516,10 @@
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 
 <script>
-// const BASE = 'https://tender.bharatintelligence.ai';
-const BASE = 'http://localhost:8002';
-const AUTH_TOKEN = '86c2310266badffabcd3fb21256e15921ce3105d'
-// const AUTH_TOKEN = 'd84ae6315796e8b531fe5a6ca7a593cab2fac584';
+const BASE = 'https://tender.bharatintelligence.ai';
+// const BASE = 'http://localhost:8002';
+//const AUTH_TOKEN = '86c2310266badffabcd3fb21256e15921ce3105d'
+ const AUTH_TOKEN = 'd84ae6315796e8b531fe5a6ca7a593cab2fac584';
 function onMukkadamChange() {
   const sel      = document.getElementById('m-mukkadam');
   const selected = sel.options[sel.selectedIndex];
@@ -995,9 +1013,8 @@ function renderAllocMap() {
   document.getElementById('legend').style.display = 'none';
 }
 
-// ── FLOATING PLOT POPUP ───────────────────────────────────────────────────
+// ── FLOATING PLOT POPUP (JSX-style) ──────────────────────────────────────
 function showPlotPopup(p, acts, pt) {
-  // Only use acts with total_area > 0
   acts = acts.filter(ja => parseFloat(ja.total_area || 0) > 0);
 
   const popup  = document.getElementById('plot-popup');
@@ -1007,120 +1024,215 @@ function showPlotPopup(p, acts, pt) {
   let left = pt.x + mapRect.left + 16;
   let top  = pt.y + mapRect.top  - 80;
   if (left + 330 > mapRect.right  - 10) left = pt.x + mapRect.left - 340;
-  if (top  + 500 > mapRect.bottom - 10) top  = mapRect.bottom - 510;
+  if (top  + 520 > mapRect.bottom - 10) top  = mapRect.bottom - 530;
   if (top < mapRect.top + 10) top = mapRect.top + 10;
-
   popup.style.left = left + 'px';
   popup.style.top  = top  + 'px';
 
-  document.getElementById('pp-farmer-name').textContent = p.farmer_name;
+  // ── determine urgency ─────────────────────────────────────────────────
+  const doneCount = acts.filter(ja => ja.allocation_status === 'completed' || ja.allocation_status === 'fully_allocated').length;
+  const totalActs = acts.length;
 
-  const overallStatus = getPlotAllocStatus(acts);
-  const statusLabel = {pending:'Pending',partially_allocated:'Partial',fully_allocated:'Fully Alloc',completed:'Completed',none:'No Jobs'}[overallStatus]||overallStatus;
-  const sClass = {pending:'s-pending',partially_allocated:'s-partial',fully_allocated:'s-done',completed:'s-done'}[overallStatus]||'';
-  document.getElementById('pp-meta').innerHTML =
-    `<span>${p.plot_id||'—'}</span><span>${p.variety||p.crop||'—'}</span><span>${p.area_acres||'?'} ac</span><span class="${sClass}">${statusLabel}</span>`;
+  const currentAct = acts.find(ja =>
+    ['pending','partially_allocated','in_progress'].includes(ja.allocation_status || '')
+  );
 
-  const body = document.getElementById('pp-body');
-  body.innerHTML = '';
+  let stripColor = '#22c55e', heroBg = '#f0fdf4', heroBorder = '#bbf7d0';
+  let statusLabel = '● NOW', statusColor = '#059669';
 
-  if (!acts.length) {
-    body.innerHTML = '<p style="font-size:11px;color:#94a3b8;padding:4px 0;">No job activities for this plot.</p>';
-  } else {
-    acts.forEach(ja => {
-      const s        = ja.allocation_status || 'pending';
-      const allocs   = allocations[String(ja.id)] || [];
-      const activeA  = allocs.find(a => a.work_status !== 'completed');
-      const mukkName = allocs.map(a=>a.mukkadam_name||a.mukkadam||'').filter(Boolean).join(', ') || '—';
-      const allocArea= parseFloat(ja.allocated_area||0);
-      const totalArea= parseFloat(ja.total_area||ja.area_acres||p.area_acres||0);
-      const pct      = totalArea > 0 ? Math.min(100, Math.round((allocArea/totalArea)*100)) : 0;
-      const isPartial= pct > 0 && pct < 100;
-
-      let timeLeftHtml = '';
-      if (ja.deadline) {
-        const d = Math.ceil((new Date(ja.deadline) - Date.now()) / 86400000);
-        const cls = d <= 0 ? 'overdue' : '';
-        const txt = d > 0 ? `${d}d left` : `${Math.abs(d)}d overdue`;
-        timeLeftHtml = `<span class="pp-timeleft ${cls}">${txt}</span>`;
+  if (currentAct) {
+    const s = currentAct.allocation_status || 'pending';
+    if (s === 'in_progress') {
+      stripColor = '#10b981'; heroBg = '#ecfdf3'; heroBorder = '#a7f3d0';
+      statusLabel = '▶ IN PROGRESS'; statusColor = '#059669';
+    } else if (s === 'partially_allocated') {
+      stripColor = '#f59e0b'; heroBg = '#fffbeb'; heroBorder = '#fde68a';
+      statusLabel = '◑ PARTIAL'; statusColor = '#d97706';
+    } else if (s === 'pending' && currentAct.deadline) {
+      const d = Math.ceil((new Date(currentAct.deadline) - Date.now()) / 86400000);
+      if (d <= 0) {
+        stripColor = '#ef4444'; heroBg = '#fef2f2'; heroBorder = '#fecaca';
+        statusLabel = '⚠ OVERDUE'; statusColor = '#dc2626';
+      } else if (d <= 3) {
+        stripColor = '#f97316'; heroBg = '#fff7ed'; heroBorder = '#fed7aa';
+        statusLabel = '● DUE SOON'; statusColor = '#ea580c';
+      } else if (d <= 7) {
+        stripColor = '#fbbf24'; heroBg = '#fffbeb'; heroBorder = '#fde68a';
+        statusLabel = '● THIS WEEK'; statusColor = '#d97706';
+      } else {
+        stripColor = '#22c55e'; heroBg = '#f0fdf4'; heroBorder = '#bbf7d0';
+        statusLabel = '● ON TRACK'; statusColor = '#16a34a';
       }
-
-      const canAlloc  = s === 'pending' || s === 'partially_allocated';
-      const canMove   = !!activeA;
-      const canCancel = !!activeA;
-
-      const block = document.createElement('div');
-      block.className = 'pp-act-block';
-      block.innerHTML = `
-        <div class="pp-act-timing">
-          <span class="pp-now">NOW</span>
-          ${timeLeftHtml}
-        </div>
-        <div class="pp-actname">${ja.activity_name||'—'}</div>
-        <div class="pp-details">
-          ${ja.deadline ? `<div class="pp-det"><div class="pp-det-lbl">DEADLINE</div><div class="pp-det-val warn">${ja.deadline}</div></div>` : ''}
-          <div class="pp-det"><div class="pp-det-lbl">ACRES</div><div class="pp-det-val">${totalArea}</div></div>
-          <div class="pp-det"><div class="pp-det-lbl">TEAM</div><div class="pp-det-val">${mukkName}</div></div>
-        </div>
-        <div class="pp-prog-bar"><div class="pp-prog-fill${isPartial?' partial':''}" style="width:${pct}%"></div></div>
-        <div class="pp-prog-text"><span>Activities ${allocs.length}/${acts.length}</span><span>${allocArea}/${totalArea} ac</span></div>
-        <div class="pp-act-btns">
-          ${canAlloc  ? `<button class="pp-btn-alloc" id="ppb-alloc-${ja.id}">Allocate →</button>` : ''}
-          ${canMove   ? `<button class="pp-btn-move"  id="ppb-move-${ja.id}">↔ Move</button>` : ''}
-          <button class="pp-btn-note" id="ppb-note-${ja.id}">✏️ Note</button>
-          ${canCancel ? `<button class="pp-btn-cancel" id="ppb-cancel-${ja.id}">Cancel</button>` : ''}
-        </div>`;
-      body.appendChild(block);
-
-      const plotName = 'Plot ' + (p.plot_id||'');
-      
-// ─── PLOT POPUP BUTTON WIRING (showPlotPopup, inside acts.forEach) ────────────
-// Replace the wire section at the bottom of showPlotPopup with this:
-if (canAlloc) {
-  block.querySelector(`#ppb-alloc-${ja.id}`).addEventListener('click', () => {
-  closePlotPopup();
-  openAllocModal(
-    ja.id, ja.activity_name || ja.activityname, plotName, p.farmer_name || p.farmername,
-    totalArea,
-    ja.scheduled_date || ja.scheduleddate || ''   // ✅ pass scheduled date
-  );
-});
-}
-if (canMove) {
-  block.querySelector(`#ppb-move-${ja.id}`).addEventListener('click', () => {
-    closePlotPopup();
-    openMoveModal(activeA.id, ja.id, ja.activity_name, plotName, p.farmer_name, totalArea);
-  });
-}
-block.querySelector(`#ppb-note-${ja.id}`).addEventListener('click', () => {
-  closePlotPopup();
-  openNoteModal(
-    activeA ? activeA.id : null,
-    ja.id,
-    ja.job,                              // ✅ job_id string
-    ja.activity_name || ja.activityname,
-    (p.farmer_name || p.farmername) + ' — ' + (ja.activity_name || ja.activityname)
-  );
-});
-if (canCancel) {
-  block.querySelector(`#ppb-cancel-${ja.id}`).addEventListener('click', () => {
-    closePlotPopup();
-    openCancelModal(activeA.id, ja.activity_name, p.farmer_name);
-  });
-}
-    });
+    }
+  } else if (totalActs > 0 && doneCount === totalActs) {
+    stripColor = '#4b5563'; heroBg = '#f0fdf4'; heroBorder = '#bbf7d0';
+    statusLabel = '✓ DONE'; statusColor = '#16a34a';
   }
 
-  const totalAmt = p.total_activities_amount||0;
-  const balAmt   = p.balance||0;
-  const footer   = document.getElementById('pp-footer');
-  if (totalAmt) {
-    document.getElementById('pp-total').textContent = `Total ₹${Number(totalAmt).toLocaleString('en-IN')}`;
-    document.getElementById('pp-bal').textContent   = `Bal ₹${Number(balAmt).toLocaleString('en-IN')}`;
-    document.getElementById('pp-plotid').textContent= `Plot ${p.plot_id||'—'}`;
-    footer.style.display = 'flex';
+  // ── pay status ─────────────────────────────────────────────────────────
+  const totalAmt  = p.total_activities_amount || 0;
+  const balAmt    = p.balance || 0;
+  const advAmt    = totalAmt - balAmt;
+  let payStatus   = 'Unpaid', payColor = '#9ca3af';
+  if (balAmt === 0 && totalAmt > 0) { payStatus = 'Paid';    payColor = '#16a34a'; }
+  else if (advAmt > 0 && balAmt > 0){ payStatus = 'Partial'; payColor = '#d97706'; }
+
+  // ── activity segments ──────────────────────────────────────────────────
+  const segsHtml = acts.map(ja => {
+    const s = ja.allocation_status || 'pending';
+    const c = s === 'completed'           ? '#22c55e'
+            : s === 'fully_allocated'     ? '#0891b2'
+            : s === 'in_progress'         ? '#0891b2'
+            : s === 'partially_allocated' ? '#f59e0b'
+            : '#e5e7eb';
+    const anim = s === 'in_progress' ? 'animation:sp 1.5s infinite;' : '';
+    return `<div class="pp-seg" title="${ja.activity_name||''}" style="background:${c};${anim}"></div>`;
+  }).join('') || '<div class="pp-seg" style="background:#e5e7eb;"></div>';
+
+  // ── hero block ─────────────────────────────────────────────────────────
+  let heroHtml = '';
+  if (!acts.length) {
+    heroHtml = `<div class="pp-done-banner">No job activities for this plot.</div>`;
+  } else if (!currentAct) {
+    heroHtml = `<div class="pp-done-banner">✓ Current work completed</div>`;
   } else {
-    footer.style.display = 'none';
+    const ja        = currentAct;
+    const allocs    = allocations[String(ja.id)] || [];
+    const mukkNames = allocs.map(a => a.mukkadam_name || a.mukkadam || '').filter(Boolean);
+    const mukkName  = mukkNames.join(', ') || null;
+    const totalArea = parseFloat(ja.total_area || ja.area_acres || p.area_acres || 0);
+
+    let daysHtml = '';
+    if (ja.deadline) {
+      const d = Math.ceil((new Date(ja.deadline) - Date.now()) / 86400000);
+      const txt = d < 0 ? `${Math.abs(d)}d late` : d === 0 ? 'Today' : `${d}d left`;
+      daysHtml = `<span class="pp-hero-days" style="color:${statusColor};">${txt}</span>`;
+    }
+
+    const teamHtml = mukkName
+      ? `<span class="pp-hero-det-val">${mukkName.split(/[,\s]/)[0]}</span>`
+      : `<span class="pp-hero-det-val" style="color:#dc2626;">—</span>`;
+
+    const deadlineHtml = ja.deadline
+      ? `<div><div class="pp-hero-det-lbl">DEADLINE</div><div class="pp-hero-det-val" style="color:${statusColor};">${ja.deadline}</div></div>` : '';
+
+    heroHtml = `
+      <div class="pp-hero" style="background:${heroBg};border:1px solid ${heroBorder};">
+        <div class="pp-hero-top">
+          <span class="pp-hero-status" style="color:${statusColor};">${statusLabel}</span>
+          ${daysHtml}
+        </div>
+        <div class="pp-hero-actname">${ja.activity_name || '—'}</div>
+        <div class="pp-hero-details">
+          ${deadlineHtml}
+          <div><div class="pp-hero-det-lbl">ACRES</div><div class="pp-hero-det-val">${totalArea}</div></div>
+          <div><div class="pp-hero-det-lbl">TEAM</div>${teamHtml}</div>
+        </div>
+      </div>`;
+  }
+
+  // ── action buttons ─────────────────────────────────────────────────────
+  // We always show Move, Note, Cancel. Allocate shown if no team. Complete if team & not done.
+  let btnHtml = '';
+  if (acts.length) {
+    const ja       = currentAct || acts[0];
+    const s        = ja.allocation_status || 'pending';
+    const allocs   = allocations[String(ja.id)] || [];
+    const activeA  = allocs.find(a => a.work_status !== 'completed');
+    const canAlloc = s === 'pending' || s === 'partially_allocated';
+    const canMove  = !!activeA;
+    const canCancel= !!activeA;
+
+    if (canAlloc) btnHtml += `<button class="pp-action-btn primary" id="pp-btn-alloc-${ja.id}">Allocate →</button>`;
+    if (activeA && s !== 'completed') btnHtml += `<button class="pp-action-btn success" id="pp-btn-complete-${ja.id}">✓ Complete</button>`;
+    btnHtml += `<button class="pp-action-btn" id="pp-btn-move-${ja.id}">↔ Move</button>`;
+    btnHtml += `<button class="pp-action-btn" id="pp-btn-note-${ja.id}">📝 Note</button>`;
+    btnHtml += `<button class="pp-action-btn danger" id="pp-btn-cancel-${ja.id}">Cancel</button>`;
+  }
+
+  // ── financial footer ───────────────────────────────────────────────────
+  let footerHtml = '';
+  if (totalAmt) {
+    const balColor = balAmt > 0 ? '#d97706' : '#16a34a';
+    footerHtml = `
+      <div class="pp-footer-new">
+        <span>Total ₹${(totalAmt/1000).toFixed(1)}K</span>
+        <span class="pp-footer-bal" style="color:${balColor};">Bal ₹${(balAmt/1000).toFixed(1)}K</span>
+        <span>Plot ${p.plot_id || '—'}</span>
+      </div>`;
+  }
+
+  // ── build full card ────────────────────────────────────────────────────
+  document.getElementById('pp-card-inner').innerHTML = `
+    <div class="pp-urgency-strip" style="background:${stripColor};"></div>
+    <div class="pp-header-inner">
+      <div class="pp-header-row">
+        <div style="flex:1;min-width:0;">
+          <div class="pp-name">${p.farmer_name || '—'}</div>
+          <div class="pp-meta-row">
+            <span>${p.plot_id || '—'}</span>
+            <span class="pp-meta-sep">|</span>
+            <span>${p.variety || p.crop || '—'}</span>
+            <span class="pp-meta-sep">|</span>
+            <span style="font-weight:600;color:#6b7280;">${p.area_acres || '?'} ac</span>
+            <span class="pp-meta-sep">|</span>
+            <span style="color:${payColor};font-weight:600;">${payStatus}</span>
+          </div>
+        </div>
+        <button class="pp-close-btn" onclick="closePlotPopup()">×</button>
+      </div>
+    </div>
+    ${heroHtml}
+    <div class="pp-progress-section">
+      <div class="pp-prog-header">
+        <span class="pp-prog-label">Activities</span>
+        <span class="pp-prog-count">${doneCount}/${totalActs}</span>
+      </div>
+      <div class="pp-segs">${segsHtml}</div>
+    </div>
+    ${btnHtml ? `<div class="pp-actions" id="pp-actions-bar">${btnHtml}</div>` : ''}
+    ${footerHtml}
+  `;
+
+  // ── wire button events ─────────────────────────────────────────────────
+  if (acts.length) {
+    const ja       = currentAct || acts[0];
+    const allocs   = allocations[String(ja.id)] || [];
+    const activeA  = allocs.find(a => a.work_status !== 'completed');
+    const s        = ja.allocation_status || 'pending';
+    const canAlloc = s === 'pending' || s === 'partially_allocated';
+    const canMove  = !!activeA;
+    const canCancel= !!activeA;
+    const totalArea= parseFloat(ja.total_area || ja.area_acres || p.area_acres || 0);
+    const plotName = 'Plot ' + (p.plot_id || '');
+
+    const $  = id => document.getElementById(id);
+
+    if (canAlloc && $(`pp-btn-alloc-${ja.id}`)) {
+      $(`pp-btn-alloc-${ja.id}`).addEventListener('click', () => {
+        closePlotPopup();
+        openAllocModal(ja.id, ja.activity_name || ja.activityname, plotName, p.farmer_name, totalArea, ja.scheduled_date || ja.scheduleddate || '');
+      });
+    }
+    if ($(`pp-btn-move-${ja.id}`)) {
+      $(`pp-btn-move-${ja.id}`).addEventListener('click', () => {
+        closePlotPopup();
+        if (canMove) openMoveModal(activeA.id, ja.id, ja.activity_name, plotName, p.farmer_name, totalArea);
+        else openMoveModal(ja.id, ja.id, ja.activity_name, plotName, p.farmer_name, totalArea);
+      });
+    }
+    if ($(`pp-btn-note-${ja.id}`)) {
+      $(`pp-btn-note-${ja.id}`).addEventListener('click', () => {
+        closePlotPopup();
+        openNoteModal(activeA ? activeA.id : null, ja.id, ja.job, ja.activity_name || ja.activityname, (p.farmer_name || '') + ' — ' + (ja.activity_name || ja.activityname || ''));
+      });
+    }
+    if (canCancel && $(`pp-btn-cancel-${ja.id}`)) {
+      $(`pp-btn-cancel-${ja.id}`).addEventListener('click', () => {
+        closePlotPopup();
+        openCancelModal(activeA.id, ja.activity_name, p.farmer_name);
+      });
+    }
   }
 
   popup.classList.add('open');
