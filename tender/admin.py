@@ -1158,19 +1158,18 @@ from .models import FarmerPaymentWebhookLog
 # ============================================================================
 
 from .models import JobNote, AllocationAuditLog, MukkadamOTPRequest, FarmerCall, PaymentProof
-
 @admin.register(JobNote)
 class JobNoteAdmin(admin.ModelAdmin):
-    list_display = ('id', 'job', 'author', 'note_date', 'is_resolved', 'resolved_by', 'created_at')
+    list_display = ('id', 'job', 'job_activity', 'author', 'note_date', 'is_resolved', 'resolved_by', 'created_at')
     list_filter = ('is_resolved', 'note_date', 'tags')
-    search_fields = ('job__job_id', 'text', 'author__username')
+    search_fields = ('job__job_id', 'job_activity__id', 'text', 'author__username')
     readonly_fields = ('created_at', 'updated_at')
     date_hierarchy = 'note_date'
     filter_horizontal = ('mentions',)
-    autocomplete_fields = ['job', 'author', 'resolved_by']
+    autocomplete_fields = ['job', 'job_activity', 'author', 'resolved_by']
     fieldsets = (
         ('Note', {
-            'fields': ('job', 'author', 'text', 'tags', 'mentions', 'note_date')
+            'fields': ('job', 'job_activity', 'author', 'text', 'tags', 'mentions', 'note_date')
         }),
         ('Resolution', {
             'fields': ('is_resolved', 'resolved_by', 'resolved_at', 'resolution_note')
@@ -1180,7 +1179,6 @@ class JobNoteAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-
 
 @admin.register(AllocationAuditLog)
 class AllocationAuditLogAdmin(admin.ModelAdmin):

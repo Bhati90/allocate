@@ -2915,6 +2915,7 @@ const [moveSaving, setMoveSaving] = useState(false);
 }
 // ─── Main Page ───────────────────────────────────────────
 export default function TenderDashboard() {
+  const [jobsNoteActivityId, setJobsNoteActivityId] = useState<number | null>(null);
   const [salesKpis, setSalesKpis] = useState<any>(null);
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -3006,10 +3007,14 @@ const handleResolveNote = async (noteId: number, resolutionNote: string) => {
       const grouped: Record<string, any[]> = {};
       results.forEach((batchResult: any) => {
         const notes = Array.isArray(batchResult) ? batchResult : batchResult.results ?? [];
-        notes.forEach((n: any) => {
-          if (!grouped[n.job_id]) grouped[n.job_id] = [];
-          grouped[n.job_id].push(n);
-        });
+       // NEW — keyed by job_activity_id
+const jobNotes: Record<string, any[]> = {};
+notes.forEach(n => {
+  const key = String(n.job_activity_id ?? n.job_activity ?? '');
+  if (!key) return;
+  if (!jobNotes[key]) jobNotes[key] = [];
+  jobNotes[key].push(n);
+});
       });
       setJobNotes(grouped);
     } else {
@@ -3135,6 +3140,7 @@ const [tab, setTab] = useState<'data' | 'calendar' | 'global' | 'jobs' | 'paymen
   const valid = ['data', 'calendar', 'global', 'jobs', 'payment', 'plan'];
   return (valid.includes(saved ?? '') ? saved : 'jobs') as any;
 });
+const [actLocation, setActLocation] = useState('');
 const [dataSubTab, setDataSubTab] = useState<'cluster' | 'mukkadam' | 'farmer'>('cluster');
 // Command Center state
 const [cmdClusters, setCmdClusters]         = useState<Cluster[]>([]);
@@ -3307,6 +3313,7 @@ const fetchActivities = useCallback(async () => {
     if (actDateFrom) baseParams.date_from  = actDateFrom;
     if (actDateTo)   baseParams.date_to    = actDateTo;
     if (actSearch)   baseParams.search     = actSearch;
+    
 
     // Always fetch the base (no subtab filter) for correct counts
     const baseRes = await axios.get(`${API_BASE_URL}/api/activity-dashboard/`, { params: baseParams });
@@ -3373,7 +3380,9 @@ if (actSubTab === 'data_issue') {
     setActLoading(false);
   }
 }, [actCluster, actDateFrom, actDateTo, actSearch, actSubTab]);
-
+const locationOptions = useMemo(() =>
+  [...new Set(baseActivities.map((a: any) => a.farmer_taluka).filter(Boolean))].sort()
+, [baseActivities]);
 const filteredBase = actActivityFilter.length === 0
   ? baseActivities
   : baseActivities.filter((a: any) => actActivityFilter.includes(a.activity_name));
@@ -3382,11 +3391,11 @@ const todayStr = new Date().toISOString().slice(0, 10);
 const actCounts = {
 
   
-  all:           filteredBase.length,
-  upcoming:      filteredBase.filter((a: any) => a.days_until !== null && a.days_until >= 0 && a.days_until <= 10).length,
-  last10:        filteredBase.filter((a: any) => a.days_until !== null && a.days_until >= -10 && a.days_until <= 0).length,
-  not_allocated: filteredBase.filter((a: any) => a.allocation_status === 'pending').length,
-  in_progress: filteredBase.filter((a: any) => {
+  all:           filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).length,
+  upcoming:      filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) => a.days_until !== null && a.days_until >= 0 && a.days_until <= 10).length,
+  last10:        filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) => a.days_until !== null && a.days_until >= -10 && a.days_until <= 0).length,
+  not_allocated: filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) => a.allocation_status === 'pending').length,
+  in_progress: filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) => {
   if (!a.allocation_count || a.allocation_count === 0) return false;
   if (a.allocations?.every((alloc: any) => alloc.work_status === 'completed')) return false;
   // only count if scheduled date is today or in the past
@@ -3394,22 +3403,17 @@ const actCounts = {
   return a.scheduled_date <= todayStr;
 }).length,
 
-  completed:     filteredBase.filter((a: any) => a.allocations?.some((alloc: any) => alloc.work_status === 'completed')).length,
-  split:         filteredBase.filter((a: any) => a.is_split === true).length,
+  completed:     filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) => a.allocations?.some((alloc: any) => alloc.work_status === 'completed')).length,
+  split:         filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) => a.is_split === true).length,
 
-  overdue: filteredBase.filter((a: any) => {
+  overdue: filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) => {
     if (!a.scheduled_date || a.allocation_status !== 'pending') return false;
     return a.scheduled_date < todayStr && Number(a.total_area) > 0;
   }).length,
   // Find:
-data_issue: (() => {
-  const uniqueJobs = new Set(
-    filteredBase
-      .filter((a: any) => (jobNotes[a.job_id] ?? []).some((n: any) => !n.is_resolved))
-      .map((a: any) => a.job_id)
-  );
-  return uniqueJobs.size;
-})(),
+data_issue: filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) =>
+  (jobNotes[String(a.activity_id)] ?? []).some((n: any) => !n.is_resolved)
+).length,
 };
 
 // Replace the notes useEffect with:
@@ -3441,13 +3445,19 @@ useEffect(() => {
     })
   ).then(results => {
   const grouped: Record<string, any[]> = {};
+  
   results.forEach((batchResult: any) => {
     const notes = Array.isArray(batchResult) ? batchResult : batchResult.results ?? [];
+    
+    // Key by job_activity_id
     notes.forEach((n: any) => {
-      if (!grouped[n.job_id]) grouped[n.job_id] = [];
-      grouped[n.job_id].push(n);
+      const key = String(n.job_activity_id ?? n.job_activity ?? '');
+      if (!key) return;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(n);
     });
   });
+  
   setJobNotes(grouped);
 })
     .catch(() => {})
@@ -3649,10 +3659,7 @@ const [moveReason, setMoveReason] = useState('');
 const [moveSaving, setMoveSaving] = useState(false);
 
 // ── Note modal (jobs tab) ────────────────────────────────────────────────────
-const [noteDialog, setNoteDialog] = useState<{
-  jobId: string;
-  label: string;
-} | null>(null);
+const [noteDialog, setNoteDialog] = useState<{ jobId: string; label: string; activityId?: number } | null>(null);
 const [noteText, setNoteText] = useState('');
 const [noteSaving, setNoteSaving] = useState(false);
 // Compute stats from currently visible farmers when sub-tab is active
@@ -3733,6 +3740,7 @@ const displaySummary = useMemo(() => {
 }, [data, farmerSubTab, subTabFilteredFarmers, tab]);
 // ── Add these state variables near your other payment states ──
 const [bulkGenerating, setBulkGenerating]   = React.useState(false);
+
 const [bulkModalOpen, setBulkModalOpen]     = React.useState(false);
 const [bulkProgress, setBulkProgress]       = React.useState<{ done: number; total: number; current: string; errors: string[] }>({ done: 0, total: 0, current: '', errors: [] });
 const [bulkDone, setBulkDone]               = React.useState(false);
@@ -3884,7 +3892,6 @@ const handleMoveJob = async () => {
     setMoveSaving(false);
   }
 };
-// ── Save note ─────────────────────────────────────────────────────────────────
 const handleSaveNote = async () => {
   if (!noteDialog || !noteText.trim()) return;
   setNoteSaving(true);
@@ -3894,11 +3901,12 @@ const handleSaveNote = async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Token ${token}` },
       body: JSON.stringify({
-        job_id:   noteDialog.jobId,
-        text:     noteText.trim(),
-        note_date: new Date().toISOString().slice(0, 10),
-        tags:     [],
-      }),
+  job_id:          noteDialog.jobId,
+  job_activity_id: noteDialog.activityId || null,  // ← ADD
+  text:            noteText.trim(),
+  note_date:       new Date().toISOString().slice(0, 10),
+  tags:            [],
+}),
     });
     if (res.ok) {
       toast.success('Note saved');
@@ -4439,7 +4447,11 @@ const [paymentClusterId, setPaymentClusterId] = useState<number | null>(null);
       🌿 {actActivityFilter.length === 0 ? 'All Activities' : `${actActivityFilter.length} selected`}
       <span style={{ fontSize: 9 }}>▼</span>
     </button>
-
+<select value={actLocation} onChange={e => { setActLocation(e.target.value); setActSubTab('all'); }}
+  style={{ padding: '6px 12px', borderRadius: 10, fontSize: 11, fontWeight: 600, border: `1px solid ${S.stone200}`, background: '#fff', color: S.stone700, cursor: 'pointer', fontFamily: 'inherit' }}>
+  <option value="">All Locations</option>
+  {locationOptions.map((loc: string) => <option key={loc} value={loc}>{loc}</option>)}
+</select>
     {/* Dropdown */}
     {activityDropdownOpen && (
       <div style={{ position: 'absolute', top: '110%', left: 0, zIndex: 999, background: '#fff', border: `1px solid ${S.stone200}`, borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,.12)', minWidth: 240, maxHeight: 300, overflowY: 'auto', padding: '8px 0' }}>
@@ -6224,12 +6236,12 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
 
 {timelineData && <MukkadamTimeline data={timelineData} />}
           {/* ═══ SECTION 3: Today & Tomorrow Traffic Lights ═══ */}
-          {(() => {
+          {/* {(() => {
             const [showDay, setShowDay] = [insightShowDay, setInsightShowDay];
             return (
               <div style={{ marginBottom: 24 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: S.stone700, marginBottom: 12 }}>🚦 Today & Tomorrow — What Needs Attention</div>
-                {/* Filter pills */}
+                
                 <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center' }}>
                   {[
                     { key: 'both',     label: 'Both Days'           },
@@ -6249,7 +6261,7 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
                   </span>
                 </div>
 
-                {/* Cards grid */}
+             
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
                   {raw.map((cluster: any) => {
                     const tod  = cluster.today    ?? { status: 'red', msg: '—' };
@@ -6265,7 +6277,7 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
                         onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-1px)'; }}
                         onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.transform = 'none'; }}
                       >
-                        {/* Card header */}
+                        
                         <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, background: bgColor, borderBottom: `1px solid ${borderColor}` }}>
                           {statusDot(worst)}
                           <div style={{ flex: 1 }}>
@@ -6276,7 +6288,6 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
                           </div>
                         </div>
 
-                        {/* Today row */}
                         {(insightShowDay === 'both' || insightShowDay === 'today') && (
                           <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'flex-start', gap: 8, borderBottom: insightShowDay === 'both' ? '1px solid #f0ede7' : 'none' }}>
                             <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', minWidth: 46, textTransform: 'uppercase', paddingTop: 2 }}>Today</div>
@@ -6285,7 +6296,7 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
                           </div>
                         )}
 
-                        {/* Tomorrow row */}
+                        
                         {(insightShowDay === 'both' || insightShowDay === 'tomorrow') && (
                           <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                             <div style={{ fontSize: 10, fontWeight: 700, color: '#a3a398', minWidth: 46, textTransform: 'uppercase', paddingTop: 2 }}>Tmrw</div>
@@ -6294,7 +6305,6 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
                           </div>
                         )}
 
-                        {/* No cluster card */}
 
                       </div>
 
@@ -6306,7 +6316,7 @@ const uniqueActivities = [...new Set(allFarmers.map((f: any) => f.activity))];
                 
               </div>
             );
-          })()}
+          })()} */}
 
          
           <div style={{ marginBottom: 24 }}>
@@ -6986,16 +6996,19 @@ allJobs={insightDayJobs}
   const todayStr = new Date().toISOString().slice(0, 10);
 
   const displayActivities = (() => {
-    let base = actActivityFilter.length === 0
-      ? activities
-      : activities.filter((a: any) => actActivityFilter.includes(a.activity_name));
-    if (actSubTab === 'data_issue') {
-      base = base.filter((a: any) =>
-        (jobNotes[a.job_id] ?? []).some((n: any) => !n.is_resolved)
-      );
-    }
-    return base;
-  })();
+  let base = actActivityFilter.length === 0
+    ? activities
+    : activities.filter((a: any) => actActivityFilter.includes(a.activity_name));
+  if (actLocation) {
+    base = base.filter((a: any) => a.farmer_taluka === actLocation);
+  }
+  if (actSubTab === 'data_issue') {
+    base = base.filter((a: any) =>
+      (jobNotes[a.job_id] ?? []).some((n: any) => !n.is_resolved)
+    );
+  }
+  return base;
+})();
 
   // ── OVERDUE tab ──────────────────────────────────────────────────────
   if (actSubTab === 'overdue') {
@@ -7031,7 +7044,11 @@ allJobs={insightDayJobs}
                 onAllocate={async (act: any, isoDate: string) => { setAllocDialog({ open: true, act, job: { job_id: act.job_id, farmer_name: act.farmer_name }, isoDate, mukkadams: [], loadingMukkadams: true }); await fetchJobsCapacity(isoDate, act); }}
                 onAllocateWithMukkadam={(act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => { setJobsHalfDayDialog({ open: true, jobId: act.job_id, act, mukkadam: workerRow.mukkadamObj, rate: workerRow.rate, availableWorkers: workerRow.availableWorkers, neededWorkers: 0, remainingArea, isSecondJob: slotsUsed >= 1, jobSlotsUsed: slotsUsed, targetDate: isoDate }); }}
                 jobNotes={jobNotes} onSuccess={fetchDataSilent}
-                onNote={(jobId: string, label: string) => { setJobsNoteJobId(jobId); setJobsNoteJobLabel(label); }}
+                onNote={(jobId: string, label: string, activityId?: number) => {
+  setJobsNoteJobId(jobId);
+  setJobsNoteJobLabel(label);
+  setJobsNoteActivityId(activityId ?? null);   // ← ADD
+}}
               />
             );
           })}
@@ -7361,7 +7378,11 @@ if (actSubTab === 'completed') {
                   setJobsHalfDayDialog({ open: true, jobId: act.job_id, act, mukkadam: workerRow.mukkadamObj, rate: workerRow.rate, availableWorkers: workerRow.availableWorkers, neededWorkers: 0, remainingArea, isSecondJob: slotsUsed >= 1, jobSlotsUsed: slotsUsed, targetDate: isoDate });
                 }}
                 jobNotes={jobNotes} onSuccess={fetchDataSilent}
-                onNote={(jobId: string, label: string) => { setJobsNoteJobId(jobId); setJobsNoteJobLabel(label); }}
+                onNote={(jobId: string, label: string, activityId?: number) => {
+  setJobsNoteJobId(jobId);
+  setJobsNoteJobLabel(label);
+  setJobsNoteActivityId(activityId ?? null);   // ← ADD
+}}
               />
             );
           });
@@ -7370,25 +7391,17 @@ if (actSubTab === 'completed') {
     </div>
   );
 }
-// ── DATA ISSUE tab ────────────────────────────────────────────────────
 if (actSubTab === 'data_issue') {
 
-  // Build jobId → { activity + unresolved notes } from filteredBase directly
-  const jobNoteMap: Record<string, { a: any; notes: any[] }> = {};
+  // Key by activity_id, not job_id
+  const actNoteMap: { a: any; notes: any[] }[] = [];
   (filteredBase ?? baseActivities).forEach((a: any) => {
-    const unresolved = (jobNotes[a.job_id] ?? []).filter((n: any) => !n.is_resolved);
+    const unresolved = (jobNotes[String(a.activity_id)] ?? []).filter((n: any) => !n.is_resolved);
     if (unresolved.length === 0) return;
-    if (!jobNoteMap[a.job_id]) {
-      jobNoteMap[a.job_id] = { a, notes: unresolved };
-    } else {
-      const existing = new Set(jobNoteMap[a.job_id].notes.map((n: any) => n.id));
-      unresolved.forEach((n: any) => { if (!existing.has(n.id)) jobNoteMap[a.job_id].notes.push(n); });
-    }
+    actNoteMap.push({ a, notes: unresolved });
   });
 
-  const jobEntries = Object.values(jobNoteMap);
-
-  if (jobEntries.length === 0) {
+  if (actNoteMap.length === 0) {
     return <div style={{ textAlign: 'center', padding: '64px 0', color: '#16a34a', fontSize: 14, fontWeight: 600 }}>✅ No open data issues!</div>;
   }
 
@@ -7410,21 +7423,21 @@ if (actSubTab === 'data_issue') {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, padding: '10px 16px', borderRadius: 10, background: '#fef3c7', border: '1px solid #fde68a' }}>
         <span style={{ fontSize: 16 }}>📌</span>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>Data Issues — Jobs with Unresolved Notes</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>Data Issues — Activities with Unresolved Notes</div>
           <div style={{ fontSize: 11, color: '#6b7280' }}>
-            {jobEntries.length} job{jobEntries.length !== 1 ? 's' : ''} need attention · {jobEntries.reduce((s, e) => s + e.notes.length, 0)} open notes
+            {actNoteMap.length} activit{actNoteMap.length !== 1 ? 'ies' : 'y'} need attention · {actNoteMap.reduce((s, e) => s + e.notes.length, 0)} open notes
           </div>
         </div>
       </div>
 
-      {/* One card per job */}
+      {/* One card per activity */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {jobEntries.map(({ a, notes }) => (
-          <div key={a.job_id} style={{ background: '#fff', borderRadius: 14, border: '1.5px solid #fecaca', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        {actNoteMap.map(({ a, notes }) => (
+          <div key={a.activity_id} style={{ background: '#fff', borderRadius: 14, border: '1.5px solid #fecaca', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
 
-            {/* Job header */}
+            {/* Activity header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: '#fef2f2', borderBottom: '1px solid #fecaca', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#dc2626', fontFamily: 'monospace' }}>Job #{a.job_id}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#dc2626', fontFamily: 'monospace' }}>Job #{a.job_id} · Act #{a.activity_id}</span>
               <span style={{ fontSize: 11, fontWeight: 600, color: '#374151' }}>👤 {a.farmer_name}</span>
               <span style={{ fontSize: 11, color: '#6b7280' }}>🌿 {a.activity_name}</span>
               {a.plot_name && <span style={{ fontSize: 11, color: '#6b7280' }}>📍 {a.plot_name}</span>}
@@ -7444,7 +7457,8 @@ if (actSubTab === 'data_issue') {
                   👷 {a.allocations[0].allocated_date.slice(5).replace('-', ' ')}
                   {a.allocations[0].mukkadam_name ? ` · ${a.allocations[0].mukkadam_name}` : ''}
                 </span>
-              )}<div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+              )}
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700,
                   background: a.allocation_status === 'pending' ? '#fef3c7' : '#f0fdf4',
                   color: a.allocation_status === 'pending' ? '#92400e' : '#16a34a',
@@ -7456,7 +7470,11 @@ if (actSubTab === 'data_issue') {
                   {notes.length} open note{notes.length !== 1 ? 's' : ''}
                 </span>
                 <button
-                  onClick={() => { setJobsNoteJobId(a.job_id); setJobsNoteJobLabel(`${a.activity_name} – ${a.farmer_name}`); }}
+                  onClick={() => {
+                    setJobsNoteJobId(a.job_id);
+                    setJobsNoteJobLabel(`${a.activity_name} – ${a.farmer_name}`);
+                    setJobsNoteActivityId(a.activity_id);  // ← pass activity_id
+                  }}
                   style={{ padding: '3px 10px', borderRadius: 7, fontSize: 10, fontWeight: 600, border: '1px solid #e9d5ff', background: '#f5f3ff', color: '#7c3aed', cursor: 'pointer', fontFamily: 'inherit' }}>
                   + Note
                 </button>
@@ -7494,10 +7512,9 @@ if (actSubTab === 'data_issue') {
                       </span>
                     </div>
                   </div>
-                  {/* Note text */}
                   <div style={{ padding: '8px 10px', fontSize: 13, color: '#111827', lineHeight: 1.6 }}>{n.text}</div>
 
-                  {/* ── Resolve footer ── */}
+                  {/* Resolve footer */}
                   <div style={{ padding: '6px 10px', borderTop: '1px solid #fee2e2', background: '#fafafa', display: 'flex', alignItems: 'center', gap: 8 }}>
                     {resolveModalNoteId === n.id ? (
                       <div style={{ display: 'flex', flex: 1, gap: 6 }}>
@@ -7535,8 +7552,6 @@ if (actSubTab === 'data_issue') {
                 </div>
               ))}
             </div>
-
-            
           </div>
         ))}
       </div>
@@ -7570,7 +7585,7 @@ if (actSubTab === 'data_issue') {
     const onTime     = flatActs.filter((a: any) => a.allocations?.some((al: any) => al.work_status === 'completed') || a.allocation_status === 'fully_allocated').length;
 
     return (
-      <GroupedActivitySection key={actName} actName={actName} acts={acts} actSubTab={actSubTab} 
+      <GroupedActivitySection key={actName} actName={actName} acts={acts} actSubTab={actSubTab} filteredBase={filteredBase}
         totalArea={totalArea} totalValue={totalValue} unalloc={unalloc}
         ov30={ov30} ov7={ov7} ov1_7={ov1_7} onTime={onTime}
         expandedActJob={expandedActJob} setExpandedActJob={setExpandedActJob} isAdmin={isAdmin}
@@ -7578,7 +7593,11 @@ if (actSubTab === 'data_issue') {
         onAllocate={async (act: any, isoDate: string) => { setAllocDialog({ open: true, act, job: { job_id: act.job_id, farmer_name: act.farmer_name }, isoDate, mukkadams: [], loadingMukkadams: true }); await fetchJobsCapacity(isoDate, act); }}
         onAllocateWithMukkadam={(act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => { setJobsHalfDayDialog({ open: true, jobId: act.job_id, act, mukkadam: workerRow.mukkadamObj, rate: workerRow.rate, availableWorkers: workerRow.availableWorkers, neededWorkers: 0, remainingArea, isSecondJob: slotsUsed >= 1, jobSlotsUsed: slotsUsed, targetDate: isoDate }); }}
         jobNotes={jobNotes} onSuccess={fetchDataSilent}
-        onNote={(jobId: string, label: string) => { setJobsNoteJobId(jobId); setJobsNoteJobLabel(label); }}
+        onNote={(jobId: string, label: string, activityId?: number) => {
+  setJobsNoteJobId(jobId);
+  setJobsNoteJobLabel(label);
+  setJobsNoteActivityId(activityId ?? null);   // ← ADD
+}}
       />
     );
   });
@@ -7959,6 +7978,7 @@ if (actSubTab === 'data_issue') {
         <JobNoteModal
           jobId={jobsNoteJobId}
           jobLabel={jobsNoteJobLabel}
+          activityId={jobsNoteActivityId} 
           noteDate={new Date().toISOString().slice(0, 10)}
           currentUserId={currentUserId}
           currentUserName={currentUserName}
@@ -8313,7 +8333,8 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
 
   onAllocate: (act: any, isoDate: string) => Promise<void>;
   onAllocateWithMukkadam: (act: any, workerRow: any, isoDate: string, remainingArea: number, slotsUsed: number) => void;
-  onNote: (jobId: string, label: string) => void;
+  onNote: (jobId: string, label: string, activityId?: number) => void;
+
   maxWorkRows: any[];
   onSuccess: () => void;
   jobNotes: Record<string, any[]>;
@@ -8427,7 +8448,7 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
               const isOverdue   = a.days_until !== null && a.days_until < 0   && !isCompleted  && a.allocation_status === 'pending';
               const overdueDays = a.days_until !== null ? Math.abs(a.days_until) : 0;
               const workerTeamRows = getWorkerRows(a.activity_name);
- const rowNotes: any[] = jobNotes[a.job_id] ?? [];
+const rowNotes: any[] = jobNotes[String(a.activity_id)] ?? [];
                   const unresolvedNotes = rowNotes.filter((n: any) => !n.is_resolved);
                   const resolvedNotes   = rowNotes.filter((n: any) => n.is_resolved);
               const dotColor = isPending ? S.amber500 : isCompleted ? S.brand : S.sky600;
@@ -8453,7 +8474,9 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
                     {/* plot */}
                     <td style={{ ...tdR, fontFamily: S.mono, fontWeight: 700, fontSize: 12 }}>{a.plot_code || a.plot_name}</td>
                     {/* location */}
-                    <td style={{ ...tdR, color: S.stone600 }}>{a.clusters?.[0]?.name || '—'}</td>
+                    <td style={{ ...tdR, color: S.stone600 }}>
+  {[a.farmer_village, a.farmer_taluka].filter(Boolean).join(', ') || a.farmer_district || '—'}
+</td>
                     {/* acres */}
                     <td style={{ ...tdR, textAlign: 'right', fontWeight: 700, fontSize: 13 }}>{Number(a.total_area).toFixed(2)}</td>
                     {/* scheduled */}
@@ -8568,7 +8591,7 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
     <button
       onClick={() => {
         const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – ');
-        onNote(a.job_id, label);
+        onNote(a.job_id, label, a.activity_id);
       }}
       style={{ padding: '4px 10px', borderRadius: 7, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
     >
@@ -8666,7 +8689,7 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
                 ))}
               </div>
               <button
-                onClick={() => { const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – '); onNote(a.job_id, label); }}
+                onClick={() => { const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – '); onNote(a.job_id, label, a.activity_id);; }}
                 style={{ marginTop: 10, padding: '6px 14px', borderRadius: 8, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
               >
                 + Add note
@@ -8791,7 +8814,7 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
                   ))}
                 </div>
                 <button
-                  onClick={() => { const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – '); onNote(a.job_id, label); }}
+                  onClick={() => { const label = [a.activity_name, a.farmer_name, a.plot_name ? `📍 ${a.plot_name}` : null].filter(Boolean).join(' – '); onNote(a.job_id, label, a.activity_id);; }}
                   style={{ marginTop: 8, padding: '5px 12px', borderRadius: 8, background: '#f5f3ff', color: '#6d28d9', border: '1px solid #ede9fe', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
                 >
                   + Add another note

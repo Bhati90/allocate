@@ -867,7 +867,6 @@ class NoteAuthorSerializer(serializers.ModelSerializer):
 
 
 # serializers.py — replace JobNoteSerializer with this fixed version
-
 class JobNoteSerializer(serializers.ModelSerializer):
     author        = NoteAuthorSerializer(read_only=True)
     resolved_by   = NoteAuthorSerializer(read_only=True)
@@ -877,13 +876,13 @@ class JobNoteSerializer(serializers.ModelSerializer):
     )
     tag_labels    = serializers.SerializerMethodField()
 
-    # ✅ FIX: explicitly declare job_id as a writable field that maps to the job FK
-    job_id = serializers.CharField(write_only=False)  # read + write as string
+    job_id = serializers.CharField(write_only=False)
+    job_activity_id = serializers.IntegerField(required=False, allow_null=True)  # ← NEW
 
     class Meta:
         model  = JobNote
         fields = [
-            'id', 'job_id', 'author', 'text', 'tags', 'tag_labels',
+            'id', 'job_id', 'job_activity_id', 'author', 'text', 'tags', 'tag_labels',
             'mentions', 'mention_ids',
             'is_resolved', 'resolved_by', 'resolved_at', 'resolution_note',
             'note_date', 'created_at', 'updated_at',
@@ -897,24 +896,27 @@ class JobNoteSerializer(serializers.ModelSerializer):
         return [self.TAG_LABEL_MAP.get(t, t) for t in (obj.tags or [])]
 
     def validate_job_id(self, value):
-        # Confirm the job exists
         from .models import Job
         if not Job.objects.filter(job_id=value).exists():
             raise serializers.ValidationError(f"Job '{value}' does not exist.")
         return value
 
     def create(self, validated_data):
-        mention_ids = validated_data.pop('mention_ids', [])
-        job_id      = validated_data.pop('job_id')          # ✅ pop the string id
+        mention_ids     = validated_data.pop('mention_ids', [])
+        job_id          = validated_data.pop('job_id')
+        job_activity_id = validated_data.pop('job_activity_id', None)  # ← NEW
 
         from .models import Job
-        job = Job.objects.get(job_id=job_id)                # ✅ look up the Job instance
+        job = Job.objects.get(job_id=job_id)
 
-        note = JobNote.objects.create(job=job, **validated_data)  # ✅ pass FK instance
+        note = JobNote.objects.create(
+            job=job,
+            job_activity_id=job_activity_id,  # ← NEW
+            **validated_data
+        )
 
         if mention_ids:
             from django.contrib.auth.models import User
             note.mentions.set(User.objects.filter(id__in=mention_ids))
 
         return note
-    

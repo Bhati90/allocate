@@ -16,6 +16,7 @@ interface NoteUser {
 interface JobNote {
   id: number;
   job_id: string;
+  job_activity_id: number | null;  // ← ADD
   author: NoteUser;
   text: string;
   tags: string[];
@@ -28,7 +29,6 @@ interface JobNote {
   note_date: string;
   created_at: string;
 }
-
 // ── Tag config ─────────────────────────────────────────────────────────────────
 
 const ALL_TAGS: { key: string; label: string; color: string; bg: string; border: string }[] = [
@@ -96,16 +96,19 @@ const TagChip: React.FC<{ tagKey: string; small?: boolean }> = ({ tagKey, small 
 
 interface JobNoteModalProps {
   jobId: string;
-  jobLabel?: string; // e.g. "Pruning – Ramesh Farm"
-  noteDate: string;  // YYYY-MM-DD
+  jobLabel?: string;
+  noteDate: string;
   currentUserId: number;
   currentUserName: string;
   clusterId: number;
+  activityId?: number | null;  // ← ADD
   onClose: () => void;
 }
 
 export const JobNoteModal: React.FC<JobNoteModalProps> = ({
-  jobId, jobLabel, noteDate, currentUserId, currentUserName, clusterId, onClose,
+  jobId, jobLabel, noteDate, currentUserId, currentUserName, clusterId,
+  activityId,  // ← ADD
+  onClose,
 }) => {
   const [notes, setNotes]           = useState<JobNote[]>([]);
   const [loading, setLoading]       = useState(true);
@@ -127,19 +130,18 @@ export const JobNoteModal: React.FC<JobNoteModalProps> = ({
 
   // ── fetch notes ──────────────────────────────────────────────────────────────
   const fetchNotes = useCallback(async () => {
-    try {
-      const res  = await fetch(
-        `${API_BASE_URL}/api/job-notes/?job_id=${jobId}&date=${noteDate}&cluster_id=${clusterId}`
-      );
-      const data = await res.json();
-      setNotes(data);
-    } catch {
-      toast.error('Failed to load notes');
-    } finally {
-      setLoading(false);
-    }
-  }, [jobId, noteDate, clusterId]);
-
+  try {
+    let url = `${API_BASE_URL}/api/job-notes/?job_id=${jobId}&date=${noteDate}&cluster_id=${clusterId}`;
+    if (activityId) url += `&job_activity_id=${activityId}`;  // ← ADD
+    const res  = await fetch(url);
+    const data = await res.json();
+    setNotes(data);
+  } catch {
+    toast.error('Failed to load notes');
+  } finally {
+    setLoading(false);
+  }
+}, [jobId, noteDate, clusterId, activityId]);  // ← ADD dep
   useEffect(() => { fetchNotes(); }, [fetchNotes]);
 
   // ── @mention autocomplete ────────────────────────────────────────────────────
@@ -208,12 +210,13 @@ export const JobNoteModal: React.FC<JobNoteModalProps> = ({
           ...(token ? { Authorization: `Token ${token}` } : {}),
         },
         body: JSON.stringify({
-          job_id:      jobId,
-          text:        text.trim(),
-          tags:        selectedTags,
-          mention_ids: mentionIds,
-          note_date:   noteDate,
-        }),
+  job_id:          jobId,
+  job_activity_id: activityId || null,  // ← ADD
+  text:            text.trim(),
+  tags:            selectedTags,
+  mention_ids:     mentionIds,
+  note_date:       noteDate,
+}),
       });
       if (!res.ok) throw new Error();
       toast.success('Note added');

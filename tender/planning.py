@@ -123,13 +123,9 @@ def _base_qs(cluster):
         )
         .prefetch_related(
             Prefetch(
-                'allocations',
-                queryset=Allocation.objects.only(
-                    'job_activity_id', 'work_status',
-                    'allocated_workers', 'allocated_area',
-                    'mukkadam_id', 'allocated_date',
-                )
-            )
+    'allocations',
+    queryset=Allocation.objects.select_related('mukkadam'),
+),
         )
         .order_by('scheduled_date')
     )
@@ -182,6 +178,9 @@ class ClusterDataView(View):
                 'activityDate':  ja.scheduled_date.isoformat(),
                 'workers':       workers,           # alias workersNeeded
                 'workersNeeded': workers,
+                # After the existing fields in records.append({...})
+'salesDate': ja.salesdate.isoformat() if ja.salesdate else None,
+'allocatedDate': allocs[0].allocated_date.isoformat() if allocs and allocs[0].allocated_date else None,
                 'paymentStatus': _pay_label(ja),
                 'status':        status,
             })
@@ -596,26 +595,17 @@ class ClusterSeasonDataView(View):
         activities_qs = (
             JobActivity.objects
             .filter(
-                job__clusters=cluster,
-                is_lost=False,
-                scheduled_date__isnull=False,
-                total_area__gt=0,
-            )
-            .select_related(
-                'job',
-                'job__farmer',
-                'job__booking',
-                'activity',
-                'plot',
-            )
+        job__clusters=cluster,
+        is_lost=False,
+        scheduled_date__isnull=False,
+        total_area__gt=0,
+    )
+            .select_related('job', 'job__farmer', 'job__booking', 'activity', 'plot')
             .prefetch_related(
                 Prefetch(
-                    'allocations',
-                    queryset=Allocation.objects.only(
-                        'job_activity_id', 'work_status', 'allocated_workers',
-                        'allocated_area', 'mukkadam_id', 'allocated_date',
-                    )
-                )
+            'allocations',
+            queryset=Allocation.objects.select_related('mukkadam'),
+        ),
             )
             .order_by('scheduled_date')
         )
@@ -687,6 +677,8 @@ class ClusterSeasonDataView(View):
                 'allocationStatus': ja.allocation_status,
                 'isStrict': ja.is_strict,
                 # NEW
+                    'salesDate': ja.sales_date.isoformat() if ja.sales_date else None,
+    'allocatedDate': allocs[0].allocated_date.isoformat() if allocs and allocs[0].allocated_date else None,
                 'allocations': allocations_payload,
                 'completedAllocations': completed_allocations,
                 'isCompleted': bool(completed_allocations),
@@ -755,6 +747,9 @@ class ClusterSeasonDataView(View):
                     'acre':     r['acre'],
                     'workers':  r['workers'],
                     'status':   r['status'],
+                        'salesDate': r.get('salesDate'),
+    'allocatedDate': r.get('allocatedDate'),
+        'allocationStatus': r.get('allocationStatus'),
                 } for r in day_records],
             })
 
@@ -841,6 +836,8 @@ class ClusterSeasonDataView(View):
             'allocations': r['allocations'],
             'completedAllocations': r['completedAllocations'],
             'isCompleted': r['isCompleted'],
+            'salesDate': r.get('salesDate'),
+        'allocatedDate': r.get('allocatedDate'),
         } for r in records]
         return JsonResponse({
             'seasonSummary':  season_summary,
@@ -933,15 +930,11 @@ class ClusterOverviewView(View):
             )
             .select_related('job', 'job__farmer', 'job__booking', 'activity', 'plot')
             .prefetch_related(
-                Prefetch(
-                    'allocations',
-                    queryset=Allocation.objects.only(
-                        'job_activity_id', 'work_status',
-                        'mukkadam_amount', 'allocated_area',
-                        'mukkadam_id',
-                    )
-                )
-            )
+    Prefetch(
+        'allocations',
+        queryset=Allocation.objects.select_related('mukkadam'),
+    ),
+)
             .order_by('job_id', 'scheduled_date')
         )
 

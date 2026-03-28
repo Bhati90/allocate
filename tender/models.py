@@ -759,7 +759,12 @@ from django.utils import timezone
 
 
 class JobNote(models.Model):
-
+# In JobNote model, add:
+    job_activity = models.ForeignKey(
+        'JobActivity', on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='notes',
+    )
     TAG_CHOICES = [
         ('urgent',          '🔴 Urgent'),
         ('important',       '⚠️ Important'),
