@@ -5,7 +5,7 @@ __pycache__/
 venv/
 tender/migrations/
 # data/migrations/
-
+google.json/
 # Django
 db.sqlite3
 staticfiles/
