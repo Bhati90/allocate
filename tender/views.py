@@ -11158,3 +11158,183 @@ def _get_cross_job_deductions(mukkadam, assignment, current_job):
     weekly_to_deduct  = max(Decimal('0'), total_weekly - weekly_used)
 
     return advance_to_deduct, weekly_to_deduct, credit_prev, deposit_prev
+
+# views.py
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+from django.conf import settings
+import json, hmac, hashlib
+
+# ============================================================================
+# GOOGLE SHEETS → DJANGO WEBHOOK
+# ============================================================================
+# Add this to your views.py (REPLACE the old sync_from_sheet view)
+# Also add to urls.py:
+#     path('api/sync-from-sheet/', sync_from_sheet, name='sync_from_sheet'),
+# ============================================================================
+
+import json
+import logging
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+
+@csrf_exempt
+def sync_from_sheet(request):
+    """
+    Webhook endpoint called by Google Apps Script when a cell is edited.
+
+    Expects POST with JSON body:
+    {
+        "secret": "your_shared_secret",
+        "event": "edit" | "delete",
+        "job_activity_id": "123",
+        "column": "Our date",
+        "old_value": "2025-06-01",
+        "new_value": "2025-06-05",
+        "edited_by": "user@example.com"
+    }
+
+    For row deletion:
+    {
+        "secret": "your_shared_secret",
+        "event": "delete",
+        "job_activity_id": "123",
+        "edited_by": "user@example.com"
+    }
+
+    For bulk edits (multiple columns changed at once):
+    {
+        "secret": "your_shared_secret",
+        "event": "bulk_edit",
+        "job_activity_id": "123",
+        "changes": {
+            "Our date": "2025-06-05",
+            "Mukadam team": "Raju, Shyam"
+        },
+        "edited_by": "user@example.com"
+    }
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+
+    # ── Auth ──
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    
+    # ── Route by event type ──
+    event = data.get("event", "edit")
+
+    try:
+        from .sheets_sync import apply_sheet_edit
+
+        if event == "delete":
+            payload = {
+                "job_activity_id": data.get("job_activity_id"),
+                "column": "_DELETE_",
+                "new_value": "",
+                "old_value": "",
+                "edited_by": data.get("edited_by", "sheet"),
+            }
+            ok, msg = apply_sheet_edit(payload)
+            return JsonResponse({"success": ok, "message": msg},
+                                status=200 if ok else 400)
+
+        elif event == "bulk_edit":
+            changes = data.get("changes", {})
+            results = []
+            for col, new_val in changes.items():
+                payload = {
+                    "job_activity_id": data.get("job_activity_id"),
+                    "column": col,
+                    "new_value": new_val,
+                    "old_value": "",
+                    "edited_by": data.get("edited_by", "sheet"),
+                }
+                ok, msg = apply_sheet_edit(payload)
+                results.append({"column": col, "success": ok, "message": msg})
+            all_ok = all(r["success"] for r in results)
+            return JsonResponse({"success": all_ok, "results": results},
+                                status=200 if all_ok else 207)
+
+        else:  # single "edit"
+            payload = {
+                "job_activity_id": data.get("job_activity_id"),
+                "column": data.get("column", ""),
+                "new_value": data.get("new_value", ""),
+                "old_value": data.get("old_value", ""),
+                "edited_by": data.get("edited_by", "sheet"),
+            }
+            ok, msg = apply_sheet_edit(payload)
+            return JsonResponse({"success": ok, "message": msg},
+                                status=200 if ok else 400)
+
+    except Exception as e:
+        logger.error(f"[Sheet→DB webhook] Unhandled error: {e}", exc_info=True)
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+def _update_from_sheet(row):
+    """
+    Sheet can update: Our date, Status, notes on JobActivity.
+    Looks up by _job_activity_id (hidden column O in sheet).
+    """
+    from .models import JobActivity
+    import threading
+
+    ja_id = row.get("_job_activity_id")
+    if not ja_id:
+        logger.warning("[Webhook] No _job_activity_id in row, skipping")
+        return
+
+    try:
+        ja = JobActivity.objects.get(pk=ja_id)
+    except JobActivity.DoesNotExist:
+        logger.warning(f"[Webhook] JobActivity {ja_id} not found")
+        return
+
+    updated_fields = []
+
+    # Our date → scheduled_date
+    our_date = row.get("Our date", "").strip()
+    if our_date:
+        from datetime import date
+        try:
+            ja.scheduled_date = date.fromisoformat(our_date)
+            updated_fields.append("scheduled_date")
+        except ValueError:
+            pass
+
+    if updated_fields:
+        # Set flag to prevent signal loop
+        import tender.signals as sig
+        sig._syncing.active = True
+        try:
+            ja.save(update_fields=updated_fields + ["updated_at"])
+        finally:
+            sig._syncing.active = False
+
+        logger.info(f"[Webhook] Updated JA {ja_id} fields: {updated_fields}")
+def _update_job_from_sheet(row):
+    from .models import Job
+    job_id = row.get("job_id")
+    if not job_id:
+        return
+    Job.objects.filter(job_id=job_id).update(
+        status=row.get("status", "pending"),
+        priority=row.get("priority", "MEDIUM"),
+        payment_status=row.get("payment_status", "pending"),
+    )
+
+def _update_farmer_from_sheet(row):
+    from .models import Farmer
+    Farmer.objects.filter(farmer_id=row.get("farmer_id")).update(
+        farmer_name=row.get("farmer_name", ""),
+        phone_number=row.get("phone_number", ""),
+    )

@@ -298,18 +298,26 @@ def _empty_data(cluster):
     }
 
 
-# ════════════════════════════════════════════════════════════════════
-# VIEW — Cluster-wise funnel
-# GET /api/planning/clusters/funnel/
-# Returns overview/completed/in_progress/pending for EVERY cluster
-# ════════════════════════════════════════════════════════════════════
+from collections import defaultdict
+from django.db.models import Prefetch, Sum
+from django.http import JsonResponse
+from django.views import View
+from tender.models import Cluster, JobActivity, Allocation, Job
+
+
+def is_pruning_act(name):
+    n = (name or '').lower()
+    return 'pruning' in n or 'छाटणी' in n
+
+
 class ClusterFunnelView(View):
     def get(self, request):
         cluster_id = request.GET.get('cluster')
         if cluster_id:
             clusters = Cluster.objects.filter(pk=cluster_id)
         else:
-            clusters = Cluster.objects.all() # adjust filter as needed
+            clusters = Cluster.objects.all()
+
         result = []
 
         for cluster in clusters:
@@ -323,7 +331,13 @@ class ClusterFunnelView(View):
                 )
                 .select_related('job', 'job__farmer', 'job__booking', 'activity')
                 .prefetch_related(
-                    Prefetch('allocations', queryset=Allocation.objects.only('work_status', 'mukkadam_amount', 'job_activity_id'))
+                    Prefetch(
+                        'allocations',
+                        queryset=Allocation.objects.only(
+                            'id', 'job_activity_id', 'work_status',
+                            'farmer_amount', 'mukkadam_amount', 'allocated_area',
+                        )
+                    )
                 )
             )
 
@@ -341,65 +355,83 @@ class ClusterFunnelView(View):
             pe = {'activities': 0, 'pruning_acres': 0.0, 'all_acres': 0.0, 'worth': 0.0, 'mukkadam_amt': 0.0}
 
             ov_pruning = 0.0
-            ov_all = 0.0
-
-            def is_pruning_act(name):
-                n = (name or '').lower()
-                return 'pruning' in n or 'छाटणी' in n
+            ov_all     = 0.0
+            ov_worth   = 0.0
 
             for ja in activities:
                 area = float(ja.total_area or 0)
                 if area <= 0:
                     continue
-                key = f"{ja.job_id}|{ja.plot_id}|{ja.activity.name}"
+
+                key = f"{ja.job_id}|{ja.plot_id}|{ja.activity_id}"
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
 
-                allocs = list(ja.allocations.all())
-                price = float(ja.total_price or 0)
-                pruning = is_pruning_act(ja.activity.name)
+                allocs   = list(ja.allocations.all())
+                # Use total_price; fall back to area × rate if total_price is 0
+                price    = float(ja.total_price or 0) or float(
+                    (ja.total_area or 0) * (ja.rate_per_acre or 0)
+                )
+                pruning  = is_pruning_act(ja.activity.name)
                 status_val = ja.allocation_status or 'pending'
 
-                ov_all += area
+                ov_all   += area
+                ov_worth += price
                 if pruning:
                     ov_pruning += area
 
-                all_done = len(allocs) > 0 and all(a.work_status == 'completed' for a in allocs)
-                has_wip  = any(a.work_status == 'in_progress' for a in allocs)
+                # ── classify activity (same logic as GlobalOverviewView) ──
+                all_allocs_complete = (
+                    len(allocs) > 0 and
+                    all(a.work_status == 'completed' for a in allocs)
+                )
+                has_wip_alloc = any(a.work_status == 'in_progress' for a in allocs)
+                has_any_alloc = len(allocs) > 0
 
-                if status_val == 'fully_allocated' and all_done:
+                if all_allocs_complete:
                     act_class = 'completed'
-                elif status_val in ('fully_allocated', 'partially_allocated', 'in_progress') or has_wip:
+                elif has_any_alloc or status_val in (
+                    'fully_allocated', 'partially_allocated', 'in_progress'
+                ):
                     act_class = 'in_progress'
                 else:
                     act_class = 'pending'
 
-                done_amt = sum(float(a.mukkadam_amount or 0) for a in allocs if a.work_status == 'completed')
+                # mukadam_amt = farmer_amount on completed allocs (matches GlobalOverviewView)
+                completed_alloc_amt = sum(
+                    float(a.farmer_amount or 0)
+                    for a in allocs if a.work_status == 'completed'
+                )
+
                 bucket = co if act_class == 'completed' else ip if act_class == 'in_progress' else pe
-                bucket['activities'] += 1
-                bucket['all_acres']  += area
+                bucket['activities']   += 1
+                bucket['all_acres']    += area
+                bucket['worth']        += price
+                bucket['mukkadam_amt'] += completed_alloc_amt
                 if pruning:
                     bucket['pruning_acres'] += area
-                bucket['worth']        += price
-                bucket['mukkadam_amt'] += done_amt
 
                 job_act_classes[ja.job_id].append(act_class)
                 job_farmer[ja.job_id] = ja.job.farmer_id
 
-            # classify jobs & farmers
+            # ── classify jobs ──
             co_jobs, ip_jobs, pe_jobs = set(), set(), set()
             farmer_done, farmer_wip, farmer_seen = set(), set(), set()
+
             for job_id, classes in job_act_classes.items():
                 fid = job_farmer[job_id]
                 farmer_seen.add(fid)
                 if all(c == 'completed' for c in classes):
-                    co_jobs.add(job_id); farmer_done.add(fid)
+                    co_jobs.add(job_id)
+                    farmer_done.add(fid)
                 elif any(c in ('completed', 'in_progress') for c in classes):
-                    ip_jobs.add(job_id); farmer_wip.add(fid)
+                    ip_jobs.add(job_id)
+                    farmer_wip.add(fid)
                 else:
                     pe_jobs.add(job_id)
 
+            # ── classify farmers ──
             co_farmers, ip_farmers, pe_farmers = set(), set(), set()
             for fid in farmer_seen:
                 if fid in farmer_done and fid in farmer_wip:
@@ -411,9 +443,7 @@ class ClusterFunnelView(View):
                 else:
                     pe_farmers.add(fid)
 
-            # booking totals for this cluster's jobs
-            from django.db.models import Sum
-            from decimal import Decimal
+            # ── booking totals ──
             booking = (
                 Job.objects.filter(clusters=cluster)
                 .aggregate(
@@ -432,35 +462,36 @@ class ClusterFunnelView(View):
                     'activities':    len(seen_keys),
                     'acres_first':   round(ov_pruning, 1),
                     'acres_all':     round(ov_all, 1),
+                    'worth_of_work': round(ov_worth, 2),
                     'booking_value': float(booking['bv'] or 0),
                     'collected':     float(booking['col'] or 0),
                     'balance_due':   float(booking['bal'] or 0),
                 },
                 'completed': {
-                    'farmers':      len(co_farmers),
-                    'jobs':         len(co_jobs),
-                    'activities':   co['activities'],
-                    'acres_first':  round(co['pruning_acres'], 1),
-                    'acres_all':    round(co['all_acres'], 1),
+                    'farmers':       len(co_farmers),
+                    'jobs':          len(co_jobs),
+                    'activities':    co['activities'],
+                    'acres_first':   round(co['pruning_acres'], 1),
+                    'acres_all':     round(co['all_acres'], 1),
                     'worth_of_work': round(co['worth'], 2),
-                    'mukadam_paid': round(co['mukkadam_amt'], 2),
+                    'mukadam_paid':  round(co['mukkadam_amt'], 2),
                 },
                 'in_progress': {
-                    'farmers':      len(ip_farmers),
-                    'jobs':         len(ip_jobs),
-                    'activities':   ip['activities'],
-                    'acres_first':  round(ip['pruning_acres'], 1),
-                    'acres_all':    round(ip['all_acres'], 1),
-                    'worth_of_work': round(ip['worth'], 2),
+                    'farmers':         len(ip_farmers),
+                    'jobs':            len(ip_jobs),
+                    'activities':      ip['activities'],
+                    'acres_first':     round(ip['pruning_acres'], 1),
+                    'acres_all':       round(ip['all_acres'], 1),
+                    'worth_of_work':   round(ip['worth'], 2),
                     'mukadam_payable': round(ip['mukkadam_amt'], 2),
                 },
                 'pending': {
-                    'farmers':      len(pe_farmers),
-                    'jobs':         len(pe_jobs),
-                    'activities':   pe['activities'],
-                    'acres_first':  round(pe['pruning_acres'], 1),
-                    'acres_all':    round(pe['all_acres'], 1),
-                    'worth_pending': round(pe['worth'], 2),
+                    'farmers':                  len(pe_farmers),
+                    'jobs':                     len(pe_jobs),
+                    'activities':               pe['activities'],
+                    'acres_first':              round(pe['pruning_acres'], 1),
+                    'acres_all':                round(pe['all_acres'], 1),
+                    'worth_pending':            round(pe['worth'], 2),
                     'mukadam_earnings_pending': round(pe['mukkadam_amt'], 2),
                 },
             })
@@ -469,13 +500,17 @@ class ClusterFunnelView(View):
 
 
 def _empty_cluster_funnel(cluster):
-    empty = {'farmers': 0, 'jobs': 0, 'activities': 0, 'acres_first': 0.0, 'acres_all': 0.0}
+    empty = {
+        'farmers': 0, 'jobs': 0, 'activities': 0,
+        'acres_first': 0.0, 'acres_all': 0.0,
+    }
     return {
-        'clusterId': cluster.pk, 'clusterName': cluster.name,
-        'overview':     {**empty, 'booking_value': 0, 'collected': 0, 'balance_due': 0},
-        'completed':    {**empty, 'worth_of_work': 0, 'mukadam_paid': 0},
-        'in_progress':  {**empty, 'worth_of_work': 0, 'mukadam_payable': 0},
-        'pending':      {**empty, 'worth_pending': 0, 'mukadam_earnings_pending': 0},
+        'clusterId':   cluster.pk,
+        'clusterName': cluster.name,
+        'overview':    {**empty, 'worth_of_work': 0, 'booking_value': 0, 'collected': 0, 'balance_due': 0},
+        'completed':   {**empty, 'worth_of_work': 0, 'mukadam_paid': 0},
+        'in_progress': {**empty, 'worth_of_work': 0, 'mukadam_payable': 0},
+        'pending':     {**empty, 'worth_pending': 0, 'mukadam_earnings_pending': 0},
     }
 
 # ════════════════════════════════════════════════════════════════════
@@ -644,6 +679,9 @@ def _empty_optimised():
         'beforeDaily': {}, 'afterDaily': {},
         'villageDailyAfter': {}, 'optimisedPlots': [],
     }
+
+
+
 import math
 from collections import defaultdict
 from datetime import date
@@ -1576,6 +1614,9 @@ class GlobalOverviewView(View):
         "mukadam_earnings_pending": round(pe['mukkadam_amt'], 2),
     }
 })
+
+
+
 class ClusterSupplyView(View):
     def get(self, request, cluster_id):
         try:

@@ -85,12 +85,34 @@ def log_allocation_deletion(sender, instance, **kwargs):
 
 @receiver(post_save, sender=Allocation)
 def update_job_activity_on_allocation(sender, instance, created, **kwargs):
-    if created:
-        job_activity = instance.job_activity
-        JobActivity.objects.filter(pk=job_activity.pk).update(
-            allocated_area=models.F('allocated_area') + instance.allocated_area
-        )
+    if not created:
+        return
 
+    from decimal import Decimal
+    from django.db.models import Sum
+
+    ja = instance.job_activity
+
+    total_allocated = Allocation.objects.filter(
+        job_activity=ja
+    ).aggregate(total=Sum('allocated_area'))['total'] or Decimal('0')
+
+    if total_allocated <= 0:
+        new_status = 'pending'
+        is_fully = False
+    elif total_allocated >= ja.total_area:
+        new_status = 'fully_allocated'
+        is_fully = True
+    else:
+        new_status = 'partially_allocated'
+        is_fully = False
+
+    JobActivity.objects.filter(pk=ja.pk).update(
+        allocated_area=total_allocated,
+        remaining_area=max(Decimal('0'), ja.total_area - total_allocated),
+        allocation_status=new_status,
+        is_fully_allocated=is_fully,
+    )
 
 @receiver(post_save, sender=Allocation)
 def update_mukkadam_availability(sender, instance, created, **kwargs):
@@ -428,3 +450,107 @@ def on_job_activity_save(sender, instance, **kwargs):
 def on_job_activity_delete(sender, instance, **kwargs):
     for cid in _get_cluster_ids(instance):
         invalidate_planning_cache(cid)
+
+
+
+# # signals.py
+# import threading
+# from django.db.models.signals import post_save, post_delete
+# from django.dispatch import receiver
+# from .models import JobActivity, Allocation
+
+# _syncing = threading.local()
+
+# def _async(fn, *args):
+#     import threading
+#     t = threading.Thread(target=fn, args=args, daemon=True)
+#     t.start()
+
+# @receiver(post_save, sender=JobActivity)
+# def on_job_activity_save(sender, instance, **kwargs):
+#     if getattr(_syncing, "active", False):
+#         return
+#     from .sheets_sync import upsert_job_activity_to_sheet
+#     _async(upsert_job_activity_to_sheet, instance.pk)
+
+# @receiver(post_delete, sender=JobActivity)
+# def on_job_activity_delete(sender, instance, **kwargs):
+#     from .sheets_sync import delete_job_activity_from_sheet
+#     _async(delete_job_activity_from_sheet, instance.pk)
+
+# @receiver(post_save, sender=Allocation)
+# def on_allocation_save(sender, instance, **kwargs):
+#     if getattr(_syncing, "active", False):
+#         return
+#     from .sheets_sync import upsert_job_activity_to_sheet
+#     # Re-sync the parent JobActivity row — mukkadam team + status updated
+#     _async(upsert_job_activity_to_sheet, instance.job_activity_id)
+
+# @receiver(post_delete, sender=Allocation)
+# def on_allocation_delete(sender, instance, **kwargs):
+#     if getattr(_syncing, "active", False):
+#         return
+#     from .sheets_sync import upsert_job_activity_to_sheet
+#     # Re-sync after mukkadam removed from activity
+#     _async(upsert_job_activity_to_sheet, instance.job_activity_id)
+
+
+# ============================================================================
+# GOOGLE SHEETS SYNC SIGNALS
+# ============================================================================
+# Add this section at the BOTTOM of your existing signals.py
+# REPLACE the old sheet-sync signals block (the one with _syncing, _async, etc.)
+# ============================================================================
+
+import threading
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
+from .models import JobActivity, Allocation
+
+
+def _async(fn, *args):
+    """Fire-and-forget in a background thread."""
+    t = threading.Thread(target=fn, args=args, daemon=True)
+    t.start()
+
+
+def _is_syncing():
+    """Check if we're inside a Sheet→DB sync (prevent infinite loop)."""
+    from .sheets_sync import _syncing
+    return getattr(_syncing, "active", False)
+
+
+@receiver(post_save, sender=JobActivity)
+def sheet_sync_on_job_activity_save(sender, instance, **kwargs):
+    """Push JobActivity changes to Google Sheet."""
+    if _is_syncing():
+        return
+    from .sheets_sync import upsert_job_activity_to_sheet
+    _async(upsert_job_activity_to_sheet, instance.pk)
+
+
+@receiver(post_delete, sender=JobActivity)
+def sheet_sync_on_job_activity_delete(sender, instance, **kwargs):
+    """Remove row from Google Sheet when JobActivity is deleted."""
+    if _is_syncing():
+        return
+    from .sheets_sync import delete_job_activity_from_sheet
+    _async(delete_job_activity_from_sheet, instance.pk)
+
+
+@receiver(post_save, sender=Allocation)
+def sheet_sync_on_allocation_save(sender, instance, **kwargs):
+    """Re-sync the parent JobActivity row when an allocation changes."""
+    if _is_syncing():
+        return
+    from .sheets_sync import upsert_job_activity_to_sheet
+    _async(upsert_job_activity_to_sheet, instance.job_activity_id)
+
+
+@receiver(post_delete, sender=Allocation)
+def sheet_sync_on_allocation_delete(sender, instance, **kwargs):
+    """Re-sync the parent JobActivity row when an allocation is removed."""
+    if _is_syncing():
+        return
+    from .sheets_sync import upsert_job_activity_to_sheet
+    _async(upsert_job_activity_to_sheet, instance.job_activity_id)
