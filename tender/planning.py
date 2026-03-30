@@ -1,46 +1,4 @@
-"""
-planning_api_views.py
-─────────────────────────────────────────────────────────────────
-Serves the exact JSON shape that planning_app.js expects, but
-sourced live from your Django DB per-cluster.
 
-Mount in urls.py:
-    path('api/planning/', include('your_app.planning_urls')),
-
-Then planning_app.js replaces:
-    fetch('full_season_data.json')
-with:
-    fetch(`/api/planning/clusters/${clusterId}/season-data/`)
-
-Filters applied:
-  - job__clusters = selected cluster
-  - total_area   > 0          (exclude zero-acre activities)
-  - is_lost      = False      (exclude lost activities)
-  - scheduled_date is not null
-"Completed" = any Allocation on that activity has work_status = 'completed'
-"""
-"""
-original_api_views.py
-─────────────────────────────────────────────────────────────────
-Serves the exact JSON shapes that:
-  • app.js          expects  (data.json)
-  • optimised_app.js expects (optimised_data.json)
-
-Mount in urls.py:
-    path('api/planning/', include('your_app.original_urls')),
-
-Endpoints:
-  GET /api/planning/clusters/<cluster_id>/data/           → data.json shape
-  GET /api/planning/clusters/<cluster_id>/optimised-data/ → optimised_data.json shape
-
-Filters applied everywhere:
-  - job__clusters = selected cluster
-  - total_area   > 0
-  - is_lost      = False
-  - scheduled_date is not null
-
-"Completed" = any Allocation on that activity has work_status = 'completed'
-"""
 
 import math
 from collections import defaultdict
@@ -179,7 +137,7 @@ class ClusterDataView(View):
                 'workers':       workers,           # alias workersNeeded
                 'workersNeeded': workers,
                 # After the existing fields in records.append({...})
-'salesDate': ja.salesdate.isoformat() if ja.salesdate else None,
+'salesDate': ja.sales_date.isoformat() if ja.sales_date else None,
 'allocatedDate': allocs[0].allocated_date.isoformat() if allocs and allocs[0].allocated_date else None,
                 'paymentStatus': _pay_label(ja),
                 'status':        status,
@@ -339,6 +297,186 @@ def _empty_data(cluster):
         'dailySummary': [], 'villageSummary': [], 'plots': [],
     }
 
+
+# ════════════════════════════════════════════════════════════════════
+# VIEW — Cluster-wise funnel
+# GET /api/planning/clusters/funnel/
+# Returns overview/completed/in_progress/pending for EVERY cluster
+# ════════════════════════════════════════════════════════════════════
+class ClusterFunnelView(View):
+    def get(self, request):
+        cluster_id = request.GET.get('cluster')
+        if cluster_id:
+            clusters = Cluster.objects.filter(pk=cluster_id)
+        else:
+            clusters = Cluster.objects.all() # adjust filter as needed
+        result = []
+
+        for cluster in clusters:
+            activities_qs = (
+                JobActivity.objects
+                .filter(
+                    job__clusters=cluster,
+                    is_lost=False,
+                    total_area__gt=0,
+                    scheduled_date__isnull=False,
+                )
+                .select_related('job', 'job__farmer', 'job__booking', 'activity')
+                .prefetch_related(
+                    Prefetch('allocations', queryset=Allocation.objects.only('work_status', 'mukkadam_amount', 'job_activity_id'))
+                )
+            )
+
+            activities = list(activities_qs)
+            if not activities:
+                result.append(_empty_cluster_funnel(cluster))
+                continue
+
+            seen_keys = set()
+            job_act_classes = defaultdict(list)
+            job_farmer = {}
+
+            co = {'activities': 0, 'pruning_acres': 0.0, 'all_acres': 0.0, 'worth': 0.0, 'mukkadam_amt': 0.0}
+            ip = {'activities': 0, 'pruning_acres': 0.0, 'all_acres': 0.0, 'worth': 0.0, 'mukkadam_amt': 0.0}
+            pe = {'activities': 0, 'pruning_acres': 0.0, 'all_acres': 0.0, 'worth': 0.0, 'mukkadam_amt': 0.0}
+
+            ov_pruning = 0.0
+            ov_all = 0.0
+
+            def is_pruning_act(name):
+                n = (name or '').lower()
+                return 'pruning' in n or 'छाटणी' in n
+
+            for ja in activities:
+                area = float(ja.total_area or 0)
+                if area <= 0:
+                    continue
+                key = f"{ja.job_id}|{ja.plot_id}|{ja.activity.name}"
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+
+                allocs = list(ja.allocations.all())
+                price = float(ja.total_price or 0)
+                pruning = is_pruning_act(ja.activity.name)
+                status_val = ja.allocation_status or 'pending'
+
+                ov_all += area
+                if pruning:
+                    ov_pruning += area
+
+                all_done = len(allocs) > 0 and all(a.work_status == 'completed' for a in allocs)
+                has_wip  = any(a.work_status == 'in_progress' for a in allocs)
+
+                if status_val == 'fully_allocated' and all_done:
+                    act_class = 'completed'
+                elif status_val in ('fully_allocated', 'partially_allocated', 'in_progress') or has_wip:
+                    act_class = 'in_progress'
+                else:
+                    act_class = 'pending'
+
+                done_amt = sum(float(a.mukkadam_amount or 0) for a in allocs if a.work_status == 'completed')
+                bucket = co if act_class == 'completed' else ip if act_class == 'in_progress' else pe
+                bucket['activities'] += 1
+                bucket['all_acres']  += area
+                if pruning:
+                    bucket['pruning_acres'] += area
+                bucket['worth']        += price
+                bucket['mukkadam_amt'] += done_amt
+
+                job_act_classes[ja.job_id].append(act_class)
+                job_farmer[ja.job_id] = ja.job.farmer_id
+
+            # classify jobs & farmers
+            co_jobs, ip_jobs, pe_jobs = set(), set(), set()
+            farmer_done, farmer_wip, farmer_seen = set(), set(), set()
+            for job_id, classes in job_act_classes.items():
+                fid = job_farmer[job_id]
+                farmer_seen.add(fid)
+                if all(c == 'completed' for c in classes):
+                    co_jobs.add(job_id); farmer_done.add(fid)
+                elif any(c in ('completed', 'in_progress') for c in classes):
+                    ip_jobs.add(job_id); farmer_wip.add(fid)
+                else:
+                    pe_jobs.add(job_id)
+
+            co_farmers, ip_farmers, pe_farmers = set(), set(), set()
+            for fid in farmer_seen:
+                if fid in farmer_done and fid in farmer_wip:
+                    co_farmers.add(fid)
+                elif fid in farmer_wip:
+                    ip_farmers.add(fid)
+                elif fid in farmer_done:
+                    co_farmers.add(fid)
+                else:
+                    pe_farmers.add(fid)
+
+            # booking totals for this cluster's jobs
+            from django.db.models import Sum
+            from decimal import Decimal
+            booking = (
+                Job.objects.filter(clusters=cluster)
+                .aggregate(
+                    bv=Sum('booking__total_amount'),
+                    col=Sum('booking__advance_paid'),
+                    bal=Sum('booking__balance'),
+                )
+            )
+
+            result.append({
+                'clusterId':   cluster.pk,
+                'clusterName': cluster.name,
+                'overview': {
+                    'farmers':       len(farmer_seen),
+                    'jobs':          len(job_act_classes),
+                    'activities':    len(seen_keys),
+                    'acres_first':   round(ov_pruning, 1),
+                    'acres_all':     round(ov_all, 1),
+                    'booking_value': float(booking['bv'] or 0),
+                    'collected':     float(booking['col'] or 0),
+                    'balance_due':   float(booking['bal'] or 0),
+                },
+                'completed': {
+                    'farmers':      len(co_farmers),
+                    'jobs':         len(co_jobs),
+                    'activities':   co['activities'],
+                    'acres_first':  round(co['pruning_acres'], 1),
+                    'acres_all':    round(co['all_acres'], 1),
+                    'worth_of_work': round(co['worth'], 2),
+                    'mukadam_paid': round(co['mukkadam_amt'], 2),
+                },
+                'in_progress': {
+                    'farmers':      len(ip_farmers),
+                    'jobs':         len(ip_jobs),
+                    'activities':   ip['activities'],
+                    'acres_first':  round(ip['pruning_acres'], 1),
+                    'acres_all':    round(ip['all_acres'], 1),
+                    'worth_of_work': round(ip['worth'], 2),
+                    'mukadam_payable': round(ip['mukkadam_amt'], 2),
+                },
+                'pending': {
+                    'farmers':      len(pe_farmers),
+                    'jobs':         len(pe_jobs),
+                    'activities':   pe['activities'],
+                    'acres_first':  round(pe['pruning_acres'], 1),
+                    'acres_all':    round(pe['all_acres'], 1),
+                    'worth_pending': round(pe['worth'], 2),
+                    'mukadam_earnings_pending': round(pe['mukkadam_amt'], 2),
+                },
+            })
+
+        return JsonResponse({'clusters': result})
+
+
+def _empty_cluster_funnel(cluster):
+    empty = {'farmers': 0, 'jobs': 0, 'activities': 0, 'acres_first': 0.0, 'acres_all': 0.0}
+    return {
+        'clusterId': cluster.pk, 'clusterName': cluster.name,
+        'overview':     {**empty, 'booking_value': 0, 'collected': 0, 'balance_due': 0},
+        'completed':    {**empty, 'worth_of_work': 0, 'mukadam_paid': 0},
+        'in_progress':  {**empty, 'worth_of_work': 0, 'mukadam_payable': 0},
+        'pending':      {**empty, 'worth_pending': 0, 'mukadam_earnings_pending': 0},
+    }
 
 # ════════════════════════════════════════════════════════════════════
 # VIEW — optimised_data.json shape

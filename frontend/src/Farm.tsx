@@ -5131,7 +5131,7 @@ const varietyOptions = [
 <div className="filter-bar">
 
 
-{/* 
+
   <select
     value={filters.plotId ?? ''}
     onChange={(e) =>
@@ -5151,7 +5151,7 @@ const varietyOptions = [
         {p.name}
       </option>
     ))}
-  </select> */}
+  </select>
 {/* 
   <select
     value={filters.cropName || ''}

@@ -57,6 +57,8 @@ router.register(r'leaves', LeaveViewSet, basename='leave')
 router.register(r'planning', PlanningViewSet, basename='planning')
 urlpatterns = [
     path('api/', include(router.urls)),
+    path('clustersp/funnel/', v.ClusterFunnelView.as_view()),
+# must be BEFORE clusters/<cluster_id>/ or it'll match as a cluster_id
 path('api/mukkadam-timeline/', mukkadam_timeline, name='mukkadam-timeline'),
     path('api/tender-activity-count/', tender_activity_count_from_api, name='tender_activity_count_from_api'),
 path('api/payment-overview/', payment_overview, name='payment_overview'),

@@ -3317,7 +3317,7 @@ const fetchActivities = useCallback(async () => {
 
     // Always fetch the base (no subtab filter) for correct counts
     const baseRes = await axios.get(`${API_BASE_URL}/api/activity-dashboard/`, { params: baseParams });
-    const baseFetched = (baseRes.data?.activities || []).filter((a: any) => a.total_area > 0);
+    const baseFetched = (baseRes.data?.activities || [])
     setBaseActivities(baseFetched);
     allActivitiesRef.current = baseFetched;
 
@@ -3718,24 +3718,27 @@ const displaySummary = useMemo(() => {
   total_advance_paid:  advancePaid,
   total_balance:       bookingValue - advancePaid,
   // ── COMPUTE activities from visible farmers ──
-  total_activities:    (() => {
-    const activityKeys = new Set<string>();
-    visibleFarmers.forEach((f: any) => {
-      (f.plots_by_cluster || []).forEach((group: any) => {
-        (group.plots || []).forEach((p: any) => {
-          (p.jobs || []).forEach((j: any) => {
-            (j.activities || []).forEach((a: any) => {
-              if (a.total_area > 0) {
-                // key = job + plot + activity name (same logic as backend)
-                activityKeys.add(`${j.job_id}-${p.plot_id}-${a.name}`);
-              }
-            });
-          });
-        });
-      });
-    });
-    return activityKeys.size;
-  })(),
+//   total_activities:    (() => {
+//     // FIXED — matches activity-dashboard logic:
+//   const activityKeys = new Set<string>();
+//   visibleFarmers.forEach(f => {
+//       f.plotsbycluster.forEach(group => {
+//           group.plots.forEach(p => {
+//               p.jobs.forEach(j => {
+//                   j.activities.forEach(a => {
+//                       if (a.totalarea > 0 && !a.islost) {
+//                           // Use plotid ?? 'null' to handle null plots (same as activity-dashboard dedup)
+//                           activityKeys.add(`${j.jobid}-${p.plotid ?? 'null'}-${a.name}`);
+//                       }
+//                   });
+//               });
+//           });
+//       });
+// });
+// return activityKeys.size;
+//     return activityKeys.size;
+//   })(),
+totalactivities: actCounts.all,
 };
 }, [data, farmerSubTab, subTabFilteredFarmers, tab]);
 // ── Add these state variables near your other payment states ──
@@ -7619,7 +7622,7 @@ if (actSubTab === 'data_issue') {
       <div className="pt-4">
  <TenderFunnelStats farmers={subTabFilteredFarmers} summary={displaySummary ?? data?.summary} />
 </div>
-<BookingPlotMapV2/>
+
           <SalesPerformance onKpisReady={setSalesKpis} />
       <AgroIntelUnified/>
           </>

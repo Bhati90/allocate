@@ -611,12 +611,12 @@ class JobActivityAdmin(admin.ModelAdmin):
             'fields': ('total_area', 'allocated_area', 'remaining_area', 'crop_bundles')
         }),
         ('Schedule', {
-            'fields': (
-                'scheduled_date', 'original_scheduled_date',
-                'scheduled_time', 'estimated_workers',
-                'is_manually_moved', 'last_moved_by', 'last_moved_at',
-            )
-        }),
+    'fields': (
+        'scheduled_date', 'original_scheduled_date', 'sales_date',  # ← add sales_date
+        'scheduled_time', 'estimated_workers',
+        'is_manually_moved', 'last_moved_by', 'last_moved_at',
+    )
+}),
         ('Pricing', {
             'fields': ('rate_per_acre', 'total_price', 'transport_cost', 'other_cost', 'subtotal')
         }),
@@ -694,6 +694,9 @@ class JobActivityAdmin(admin.ModelAdmin):
         updated = queryset.update(is_manually_moved=False)
         self.message_user(request, f'🔓 Cleared manually moved flag on {updated} activities.')
     clear_manually_moved.short_description = '🔓 Clear Manually Moved flag'
+
+
+
 @admin.register(JobBooking)
 class JobBookingAdmin(admin.ModelAdmin):
     list_display = ('booking_id', 'job', 'status', 'total_amount', 'advance_paid', 'balance', 'assignee_number')
@@ -987,22 +990,31 @@ class MukkadamAvailabilityAdmin(admin.ModelAdmin):
 # ============================================================================
 # ALLOCATION
 # ============================================================================
-
 @admin.register(Allocation)
 class AllocationAdmin(admin.ModelAdmin):
     list_display = (
         'id', 'job_activity', 'mukkadam', 'cluster',
         'allocated_date', 'allocated_area', 'allocated_workers',
         'farmer_rate', 'mukkadam_rate', 'profit_display',
-        'status_badge', 'report_submitted', 'farmer_agreed', 'is_carry_forward'
+        'work_status_badge', 'status_badge',
+        'payment_status', 'report_submitted', 'farmer_agreed',
+        'allows_second_job', 'is_carry_forward', 'is_auto_allocated',
     )
-    list_filter = ('status', 'cluster', 'report_submitted', 'farmer_agreed', 'is_carry_forward', 'use_actual_for_settlement')
+    list_filter = (
+        'status', 'work_status', 'payment_status', 'cluster',
+        'report_submitted', 'farmer_agreed',
+        'is_carry_forward', 'is_auto_allocated',
+        'allows_second_job', 'use_actual_for_settlement',
+    )
     search_fields = (
         'job_activity__job__job_id',
         'job_activity__activity__name',
-        'mukkadam__mukkadam_name'
+        'mukkadam__mukkadam_name',
     )
-    readonly_fields = ('farmer_amount', 'mukkadam_amount', 'profit', 'efficiency_score', 'created_at', 'updated_at')
+    readonly_fields = (
+        'farmer_amount', 'mukkadam_amount', 'profit',
+        'efficiency_score', 'created_at', 'updated_at',
+    )
     date_hierarchy = 'allocated_date'
     autocomplete_fields = ['job_activity', 'mukkadam', 'cluster']
     inlines = [AllocationChangeLogInline]
@@ -1012,23 +1024,41 @@ class AllocationAdmin(admin.ModelAdmin):
             'fields': ('job_activity', 'mukkadam', 'cluster', 'allocated_date')
         }),
         ('Allocation Details', {
-            'fields': ('allocated_area', 'allocated_workers')
+            'fields': (
+                'allocated_area', 'allocated_workers',
+                'allows_second_job', 'is_auto_allocated',
+            )
         }),
         ('Pricing', {
-            'fields': ('farmer_rate', 'mukkadam_rate', 'farmer_amount', 'mukkadam_amount', 'profit')
+            'fields': (
+                'farmer_rate', 'mukkadam_rate',
+                'farmer_amount', 'mukkadam_amount', 'profit',
+            )
         }),
         ('Status', {
-            'fields': ('status', 'actual_workers', 'actual_area_completed', 'efficiency_score')
+            'fields': (
+                'status', 'work_status', 'payment_status',
+                'actual_workers', 'actual_area_completed', 'efficiency_score',
+            )
         }),
         ('Day-End Report', {
             'fields': (
                 'actual_start_time', 'actual_end_time', 'actual_crew_size',
                 'actual_area_done', 'report_submitted', 'report_submitted_at',
-                'use_actual_for_settlement'
+                'use_actual_for_settlement',
             )
         }),
         ('Farmer Verification', {
-            'fields': ('farmer_agreed', 'farmer_response_at', 'farmer_dispute_reason')
+            'fields': (
+                'farmer_agreed', 'farmer_response_at', 'farmer_dispute_reason',
+            )
+        }),
+        ('Dispute Resolution', {
+            'fields': (
+                'mukkadam_claimed_area', 'admin_override_area',
+                'dispute_reason', 'dispute_resolved_at', 'dispute_resolved_by',
+            ),
+            'classes': ('collapse',)
         }),
         ('Carry Forward', {
             'fields': ('is_carry_forward', 'carry_forward_from'),
@@ -1036,6 +1066,10 @@ class AllocationAdmin(admin.ModelAdmin):
         }),
         ('Timing', {
             'fields': ('start_time', 'end_time'),
+            'classes': ('collapse',)
+        }),
+        ('Last Modified', {
+            'fields': ('last_modified_by', 'last_modified_at'),
             'classes': ('collapse',)
         }),
         ('Notes & Audit', {
@@ -1046,21 +1080,40 @@ class AllocationAdmin(admin.ModelAdmin):
 
     def profit_display(self, obj):
         color = 'green' if obj.profit >= 0 else 'red'
-        return format_html('<span style="color:{};font-weight:bold;">₹{}</span>', color, obj.profit)
+        return format_html(
+            '<span style="color:{};font-weight:bold;">₹{}</span>',
+            color, obj.profit
+        )
     profit_display.short_description = 'Profit'
 
     def status_badge(self, obj):
         colors = {
-            'scheduled': '#3b82f6', 'in_progress': '#8b5cf6',
-            'completed': '#10b981', 'cancelled': '#ef4444',
+            'scheduled':   '#3b82f6',
+            'in_progress': '#8b5cf6',
+            'completed':   '#10b981',
+            'cancelled':   '#ef4444',
         }
         color = colors.get(obj.status, '#6b7280')
         return format_html(
-            '<span style="background:{};color:white;padding:2px 8px;border-radius:12px;font-size:11px;">{}</span>',
+            '<span style="background:{};color:white;padding:2px 8px;'
+            'border-radius:12px;font-size:11px;">{}</span>',
             color, obj.get_status_display()
         )
     status_badge.short_description = 'Status'
 
+    def work_status_badge(self, obj):
+        colors = {
+            'work_not_started': '#f59e0b',
+            'in_progress':      '#8b5cf6',
+            'completed':        '#10b981',
+        }
+        color = colors.get(obj.work_status, '#6b7280')
+        return format_html(
+            '<span style="background:{};color:white;padding:2px 8px;'
+            'border-radius:12px;font-size:11px;">{}</span>',
+            color, obj.get_work_status_display()
+        )
+    work_status_badge.short_description = 'Work Status'
 @admin.register(MukkadamPayment)
 class MukkadamPaymentAdmin(admin.ModelAdmin):
     list_display = ('payment_id', 'mukkadam', 'settlement', 'mode', 'amount', 'paid_at', 'created_by')

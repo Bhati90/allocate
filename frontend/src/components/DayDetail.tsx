@@ -2030,7 +2030,7 @@ return (
         {[
           ['Area', `${halfDayDialog.remainingArea.toFixed(2)} ac`],
           ['Workers available', `${halfDayDialog.availableWorkers} workers`],
-          ['Workers needed', `${halfDayDialog.neededWorkers} workers`],
+          // ['Workers needed', `${halfDayDialog.neededWorkers} workers`],
           ['Rate', `₹${Number(halfDayDialog.rate?.rate_per_acre || 0).toFixed(0)}/ac`],
         ].map(([label, value]) => (
           <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>

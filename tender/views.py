@@ -370,11 +370,13 @@ def cluster_insights(request):
         )
 
     clusters = Cluster.objects.all().order_by('name')
+    # FIXED — matches activity-dashboard logic:
     activity_qs = JobActivity.objects.filter(
-        job__booking_type='tender',
+        job__booking_type__in=["tender", "ondemand"],
         total_area__gt=0,
-        plot__isnull=False,
+        is_lost=False,
     )
+    totalactivities = activity_qs.values("job", "plot", "api_activity_id").distinct().count()
 
     # ── Global KPIs ────────────────────────────────────────────────────────
     total_farmers  = Farmer.objects.count()
@@ -382,8 +384,7 @@ def cluster_insights(request):
     allocated_area = JobActivity.objects.filter(total_area__gt=0).aggregate(s=models.Sum('allocated_area'))['s'] or Decimal('0')
     total_jobs     = Job.objects.count()
     total_plots    = Plot.objects.count()
-    total_activities = activity_qs.values('job', 'plot', 'api_activity_id').distinct().count()
-
+    
     # ── Global daily unallocated + crew ────────────────────────────────────
     global_daily = []
     for d in week_days:
@@ -610,7 +611,7 @@ def cluster_insights(request):
             'total_area': float(total_area), 'allocated_area': float(allocated_area),
             'pending_area': float(total_area - allocated_area),
             'pct_complete': round(float(allocated_area / total_area * 100), 1) if total_area > 0 else 0,
-            'total_jobs': total_jobs, 'total_activities': total_activities,
+            'total_jobs': total_jobs, 'total_activities': totalactivities,
         },
         'global_daily':   global_daily,
         'clusters':        cluster_data,
@@ -1227,6 +1228,29 @@ class FarmerViewSet(viewsets.ModelViewSet):
             )
 
         return queryset.order_by('farmer_name')
+    
+    @action(detail=True, methods=['get'], url_path='profile')
+    def farmer_profile(self, request, pk=None):
+        try:
+            farmer = (
+                Farmer.objects
+                .prefetch_related(
+                    'clusters',
+                    'plots__clusters',
+                    'plots__activities__activity',               # ← ADD
+                    'plots__activities__allocations__mukkadam',  # ← ADD
+                    'jobs__clusters',
+                    'jobs__plot',
+                    'jobs__booking__payments',
+                )
+                .select_related('last_cluster_modified_by')
+                .get(pk=pk)
+            )
+        except Farmer.DoesNotExist:
+            return Response({'error': 'Farmer not found'}, status=404)
+
+        serializer = FarmerProfileSerializer(farmer, context={'request': request})
+        return Response(serializer.data)
 @api_view(['GET'])
 def get_cluster_plots(request, cluster_id):
     # ✅ M2M: filter plots where clusters contains this cluster
@@ -2414,7 +2438,7 @@ def activity_dashboard(request):
         days_until = (a.scheduled_date - today).days if a.scheduled_date else None
 
         # Dedup key — same logic as summary card
-        dedup_key = (job.job_id, plot.id if plot else None, a.activity.name)
+        dedup_key = f"{a.job.job_id}-{a.plot_id}-{a.api_activity_id}"
 
         if dedup_key not in merged:
             merged[dedup_key] = {
@@ -3050,11 +3074,14 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 },
             )
 
-            # 3. Cascade subsequent activities ─────────────────────────────────────
+                        # 3. Cascade subsequent activities ─────────────────────────────────────
             shifted_activities = []
             warnings           = []
 
             if original_date:
+                # Calculate the shift: how many days the original was moved
+                shift_days = (new_date_obj - original_date).days
+
                 subsequent = list(
                     JobActivity.objects.filter(
                         job=activity.job,
@@ -3071,47 +3098,24 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                     a.id,
                 ))
 
-                reference_date    = new_date_obj
                 current_seq_order = get_activity_sequence_order(activity)
 
                 for act in subsequent:
                     if get_activity_sequence_order(act) <= current_seq_order:
                         continue
 
-                    # ── Already allocated → becomes new anchor ────────────────────
+                    # ── Already allocated/completed → skip, do NOT move ───────────
                     if act.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                        reference_date = act.scheduled_date
                         warnings.append({
                             'activity_id':   act.id,
                             'activity_name': act.activity.name,
                             'old_date':      str(act.scheduled_date),
                             'new_date':      str(act.scheduled_date),
-                            'message':       (
-                                f'Skipped — already {act.allocation_status}. '
-                                f'Becomes new reference anchor ({act.scheduled_date}).'
-                            ),
+                            'message':       f'Skipped — already {act.allocation_status}.',
                         })
-                        ActivityLogTender.objects.create(
-                            action       = 'JOB_ACTIVITY_UPDATED',
-                            job          = activity.job,
-                            job_activity = act,
-                            performed_by = request.user if request.user.is_authenticated else None,
-                            details      = {
-                                'event':       'cascade_skipped_allocated',
-                                'description': (
-                                    f'Activity "{act.activity.name}" skipped during cascade — '
-                                    f'already {act.allocation_status}. '
-                                    f'It is now the cascade reference anchor ({act.scheduled_date}).'
-                                ),
-                                'trigger_activity_id': activity.id,
-                                'allocation_status':   act.allocation_status,
-                                'scheduled_date':      str(act.scheduled_date),
-                                'new_reference_anchor': str(reference_date),
-                            },
-                        )
                         continue
 
-                    # ── Manually moved → skip entirely ────────────────────────────
+                    # ── Manually moved → skip, do NOT move ────────────────────────
                     if act.is_manually_moved:
                         warnings.append({
                             'activity_id':   act.id,
@@ -3120,21 +3124,6 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                             'new_date':      str(act.scheduled_date),
                             'message':       'Skipped — manually moved',
                         })
-                        ActivityLogTender.objects.create(
-                            action       = 'JOB_ACTIVITY_UPDATED',
-                            job          = activity.job,
-                            job_activity = act,
-                            performed_by = request.user if request.user.is_authenticated else None,
-                            details      = {
-                                'event':       'cascade_skipped_manual',
-                                'description': (
-                                    f'Activity "{act.activity.name}" skipped during cascade — '
-                                    f'it was already manually moved and its date is preserved.'
-                                ),
-                                'trigger_activity_id': activity.id,
-                                'scheduled_date':      str(act.scheduled_date),
-                            },
-                        )
                         continue
 
                     # ── Zero area → skip ──────────────────────────────────────────
@@ -3146,27 +3135,11 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                             'new_date':      str(act.scheduled_date),
                             'message':       'Skipped — zero area',
                         })
-                        ActivityLogTender.objects.create(
-                            action       = 'JOB_ACTIVITY_UPDATED',
-                            job          = activity.job,
-                            job_activity = act,
-                            performed_by = request.user if request.user.is_authenticated else None,
-                            details      = {
-                                'event':       'cascade_skipped_zero_area',
-                                'description': (
-                                    f'Activity "{act.activity.name}" skipped during cascade — '
-                                    f'total area is zero or null.'
-                                ),
-                                'trigger_activity_id': activity.id,
-                                'total_area':          float(act.total_area or 0),
-                            },
-                        )
                         continue
 
-                    # ── Unallocated → recalculate date ────────────────────────────
-                    gap          = gap_map.get(act.id, 0)
+                    # ── Simply shift by the same number of days ───────────────────
                     old_date     = act.scheduled_date
-                    new_act_date = reference_date + timedelta(days=gap)
+                    new_act_date = old_date + timedelta(days=shift_days)
 
                     act.scheduled_date = new_act_date
                     act.move_reason    = f'Cascade from activity {activity.id} move: {reason}'
@@ -3186,32 +3159,29 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                         details      = {
                             'event':       'cascade_date_shifted',
                             'description': (
-                                f'Activity "{act.activity.name}" rescheduled from '
-                                f'{old_date} → {new_act_date} during cascade '
-                                f'(gap: {gap} days from reference {reference_date}).'
+                                f'Activity "{act.activity.name}" shifted by {shift_days} days '
+                                f'({old_date} → {new_act_date}).'
                             ),
                             'trigger_activity_id': activity.id,
                             'move_reason':         act.move_reason,
-                            'gap_days':            gap,
-                            'reference_date':      str(reference_date),
+                            'shift_days':          shift_days,
                             'before': {
-                                'scheduled_date':   str(old_date),
+                                'scheduled_date':    str(old_date),
                                 'allocation_status': act.allocation_status,
                             },
                             'after': {
-                                'scheduled_date':   str(new_act_date),
+                                'scheduled_date':    str(new_act_date),
                                 'allocation_status': act.allocation_status,
                             },
                         },
                     )
 
-                    reference_date = new_act_date
                     shifted_activities.append({
                         'activity_id':   act.id,
                         'activity_name': act.activity.name,
                         'old_date':      str(old_date),
                         'new_date':      str(new_act_date),
-                        'gap_used':      gap,
+                        'shift_days':    shift_days,
                         'status':        act.allocation_status,
                     })
 
@@ -3638,7 +3608,7 @@ class MukkadamActivityRateViewSet(viewsets.ModelViewSet):
         
         return queryset.filter(is_active=True).order_by('activity__name')
 # views.py - Update MukkadamViewSet
-
+from .serializers import FarmerProfileSerializer, MukkadamProfileSerializer
 class MukkadamViewSet(viewsets.ModelViewSet):
     qqueryset             = Mukkadam.objects.all().prefetch_related('clusters')
     serializer_class     = MukkadamSerializer
@@ -3668,6 +3638,29 @@ class MukkadamViewSet(viewsets.ModelViewSet):
         if date:
             ctx['selected_date'] = date
         return ctx
+    
+    @action(detail=True, methods=['get'], url_path='profile')
+    def mukkadam_profile(self, request, pk=None):
+        """
+        GET /api/mukkadams/<mukkadam_id>/profile/
+        Returns full denormalized profile: mukkadam + cluster assignments +
+        activity rates + availability + allocations (last 30 days) +
+        payments + weekly payments + leaves + extra workers + OTP requests.
+        """
+        try:
+            mukkadam = (
+                Mukkadam.objects
+                .prefetch_related(
+                    'clusters',
+                    'activity_rates__activity',
+                )
+                .get(pk=pk)
+            )
+        except Mukkadam.DoesNotExist:
+            return Response({'error': 'Mukkadam not found'}, status=404)
+ 
+        serializer = MukkadamProfileSerializer(mukkadam, context={'request': request})
+        return Response(serializer.data)
 
     # ── Set manual status ─────────────────────────────────────────────
     @action(detail=True, methods=['post'])
@@ -6424,16 +6417,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def change_date(self, request, pk=None):
-        """
-        Move an existing Allocation to a new date (full or partial area).
-
-        Rules enforced:
-        Rule 5  — Block if work_status=in_progress or completed+paid
-        Rule 4  — Block if new_date violates sequence ordering vs allocated neighbours
-        Rule 3  — If all downstream unallocated, cascade shifts by delta
-        Rule 4  — If a downstream allocated activity exists, it anchors; unallocated
-                    activities after it recalculate via reference + original_gap
-        """
         from datetime import timedelta
         from django.db.models import Sum
 
@@ -6461,22 +6444,20 @@ class AllocationViewSet(viewsets.ModelViewSet):
         else:
             new_area = allocation.allocated_area
 
-        # ── Rule 5: Block if in-progress ─────────────────────────────────────────
+        # ── Rule 5: Block if in-progress ─────────────────────────────────────
         if allocation.work_status == 'in_progress':
             return Response(
                 {"error": "Allocation is in-progress and cannot be moved."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── Rule 5: Block if completed + paid ────────────────────────────────────
+        # ── Rule 5: Block if completed + paid ────────────────────────────────
         if allocation.work_status == 'completed' and allocation.payment_status in ('done', 'settled'):
             return Response(
                 {"error": "Allocation is completed and paid — no changes allowed."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── Load full job sequence for sequencing checks ──────────────────────────
-        # Done BEFORE the atomic block — no locks needed for read-only validation.
         job_act = allocation.job_activity
 
         all_activities = list(
@@ -6498,69 +6479,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
         except StopIteration:
             return Response({"error": "Job activity not found in sequence"}, status=status.HTTP_400_BAD_REQUEST)
 
-        predecessors = all_activities[:current_idx]
-        successors   = all_activities[current_idx + 1:]
-
-        # ── Rule 4: Block if new_date <= nearest allocated predecessor ────────────
-        # nearest_alloc_pred = None
-        # for pred in reversed(predecessors):
-        #     if pred.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-        #         nearest_alloc_pred = pred
-        #         break
-
-        # if nearest_alloc_pred and new_date <= nearest_alloc_pred.scheduled_date:
-        #     return Response(
-        #         {
-        #             "error": (
-        #                 f"New date {new_date} is on or before "
-        #                 f'"{nearest_alloc_pred.activity.name}" '
-        #                 f"(allocated on {nearest_alloc_pred.scheduled_date}). "
-        #                 f"Move or cancel that allocation first."
-        #             )
-        #         },
-        #         status=status.HTTP_400_BAD_REQUEST,
-        #     )
-
-        # ── Rule 4: Block if new_date >= nearest allocated successor ─────────────
-        # Exclude the current job_act itself when scanning successors —
-        # a partial move may leave the original job_act allocated too.
-        # nearest_alloc_succ = None
-        # for succ in successors:
-        #     if succ.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-        #         nearest_alloc_succ = succ
-        #         break
-
-        # if nearest_alloc_succ and new_date >= nearest_alloc_succ.scheduled_date:
-        #     return Response(
-        #         {
-        #             "error": (
-        #                 f"New date {new_date} is on or after "
-        #                 f'"{nearest_alloc_succ.activity.name}" '
-        #                 f"(allocated on {nearest_alloc_succ.scheduled_date}). "
-        #                 f"Move that allocation further first."
-        #             )
-        #         },
-        #         status=status.HTTP_400_BAD_REQUEST,
-        #     )
-
-        # ── Snapshot gap_map before writes ───────────────────────────────────────
-        gap_map = {}
-        for i, act in enumerate(all_activities):
-            if i == 0:
-                gap_map[act.id] = 0
-            else:
-                prev = all_activities[i - 1]
-                if act.original_gap_days is not None:
-                    gap_map[act.id] = act.original_gap_days
-                else:
-                    if act.scheduled_date and prev.scheduled_date:
-                        gap_map[act.id] = (act.scheduled_date - prev.scheduled_date).days
-                    else:
-                        gap_map[act.id] = 0
+        successors = all_activities[current_idx + 1:]
 
         try:
             with transaction.atomic():
-                # Re-fetch job_act with lock inside transaction
                 job_act  = JobActivity.objects.select_for_update(of=('self',)).get(id=job_act.id)
                 mukkadam = allocation.mukkadam
 
@@ -6604,7 +6526,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 ).aggregate(total=models.Sum('crew_on_leave'))['total'] or 0
 
                 remaining_capacity = max(crew - used_across_all - on_leave, 0)
-                # Capacity warning included in response but not blocking (commented check preserved)
 
                 # ---------- 0c) Holiday check ----------
                 is_holiday = Leave.objects.filter(
@@ -6620,7 +6541,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                # ---------- 1) Capture original date for cascade ----------
+                # ---------- 1) Capture original date ----------
                 original_date = job_act.scheduled_date
                 day_delta     = (new_date - original_date).days if original_date else 0
 
@@ -6628,14 +6549,14 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 remaining_area_alloc = allocation.allocated_area - new_area
 
                 if remaining_area_alloc > Decimal('0.01'):
-                    # Partial move — shrink original allocation, create new on new_date
+                    # Partial move — shrink original, create new
                     allocation.allocated_area   = remaining_area_alloc
                     allocation.last_modified_by = request.user if request.user.is_authenticated else None
                     allocation.last_modified_at = timezone.now()
                     allocation.save()
 
                     new_allocation = Allocation.objects.create(
-                        job_activity      = job_act,   # re-pointed below if day_delta != 0
+                        job_activity      = job_act,
                         mukkadam          = mukkadam,
                         allocated_date    = new_date,
                         allocated_area    = new_area,
@@ -6649,7 +6570,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         last_modified_at  = timezone.now(),
                     )
                 else:
-                    # Full move — update existing allocation in place
+                    # Full move — update in place
                     allocation.allocated_date    = new_date
                     allocation.allocated_area    = new_area
                     allocation.allocated_workers = workers_needed
@@ -6658,25 +6579,24 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     allocation.save()
                     new_allocation = None
 
-                # ---------- 3) If date actually changed — split JobActivity + cascade ----------
+                # ---------- 3) If date changed — split JobActivity + cascade ----------
                 shifted_activities = []
                 warnings           = []
                 new_job_activity   = None
 
                 if day_delta != 0 and original_date:
 
-                    # ── Shrink original JobActivity ──
-                    job_act.total_area     = max(Decimal('0'), job_act.total_area - new_area)
-                    job_act.allocated_area = max(Decimal('0'), job_act.allocated_area - new_area)
-                    job_act.remaining_area = max(Decimal('0'), job_act.total_area - job_act.allocated_area)
-                    job_act.move_reason    = f'Allocation split — {new_area}ac moved to {new_date}'
-                    if request.user and request.user.is_authenticated:
-                        job_act.last_moved_by = request.user
-                        job_act.last_moved_at = timezone.now()
-                    job_act.save(update_fields=[
-                        'total_area', 'allocated_area', 'remaining_area',
-                        'move_reason', 'last_moved_by', 'last_moved_at',
-                    ])
+                    # ── Shrink original JobActivity (raw update, no signals) ──
+                    JobActivity.objects.filter(pk=job_act.pk).update(
+                        total_area=models.F('total_area') - new_area,
+                        allocated_area=models.F('allocated_area') - new_area,
+                        move_reason=f'Allocation split — {new_area}ac moved to {new_date}',
+                    )
+                    job_act.refresh_from_db()
+                    # Fix remaining_area
+                    JobActivity.objects.filter(pk=job_act.pk).update(
+                        remaining_area=models.F('total_area') - models.F('allocated_area'),
+                    )
 
                     # ── Create new JobActivity on new_date ──
                     new_job_activity = JobActivity.objects.create(
@@ -6689,7 +6609,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         remaining_area          = Decimal('0'),
                         scheduled_date          = new_date,
                         original_scheduled_date = job_act.original_scheduled_date or original_date,
-                        original_gap_days       = gap_map.get(job_act.id, 0),
+                        original_gap_days       = 0,
                         rate_per_acre           = job_act.rate_per_acre,
                         transport_cost          = job_act.transport_cost,
                         other_cost              = job_act.other_cost,
@@ -6716,56 +6636,28 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         allocation.job_activity = new_job_activity
                         allocation.save(update_fields=['job_activity'])
 
-                    # ── Cascade subsequent activities (Rule 3 + Rule 4) ──
-                    #
-                    # Reference starts at new_date (the moved split's date).
-                    # - ALLOCATED successor  → stays fixed, becomes new reference anchor.
-                    # - MANUALLY MOVED       → skip, do NOT update reference.
-                    # - UNALLOCATED          → recalculate as reference_date + gap.
-                    # - ZERO AREA            → skip.
-                    #
-                    # We exclude the original job_act and new_job_activity from cascade.
-
-                    exclude_ids    = {job_act.id, new_job_activity.id}
-                    reference_date = new_date   # start anchor = newly moved date
-
-                    subsequent = list(
-                        JobActivity.objects.filter(
-                            job=job_act.job,
-                            plot=job_act.plot,
-                            is_lost=False,
-                        )
-                        .exclude(id__in=exclude_ids)
-                        .select_related('activity')
-                    )
-                    subsequent.sort(key=lambda a: (
-                        get_activity_sequence_order(a),
-                        a.scheduled_date or date.min,
-                        a.id,
-                    ))
-
+                    # ── Cascade: shift all subsequent by same day_delta ──
                     current_seq_order = get_activity_sequence_order(job_act)
+                    exclude_ids = {job_act.id, new_job_activity.id}
 
-                    for act in subsequent:
+                    for act in successors:
+                        if act.id in exclude_ids:
+                            continue
                         if get_activity_sequence_order(act) <= current_seq_order:
                             continue
 
-                        # ── Allocated / completed → stays fixed, reset reference anchor ──
+                        # Allocated/completed → skip
                         if act.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                            reference_date = act.scheduled_date
                             warnings.append({
                                 'activity_id':   act.id,
                                 'activity_name': act.activity.name,
                                 'old_date':      str(act.scheduled_date),
                                 'new_date':      str(act.scheduled_date),
-                                'message':       (
-                                    f'Skipped — already {act.allocation_status}. '
-                                    f'Becomes new reference anchor ({act.scheduled_date}).'
-                                ),
+                                'message':       f'Skipped — already {act.allocation_status}.',
                             })
                             continue
 
-                        # ── Manually moved → skip, do NOT update reference ────────────
+                        # Manually moved → skip
                         if act.is_manually_moved:
                             warnings.append({
                                 'activity_id':   act.id,
@@ -6776,7 +6668,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
                             })
                             continue
 
-                        # ── Zero area → skip ──────────────────────────────────────────
+                        # Zero area → skip
                         if not act.total_area or act.total_area <= 0:
                             warnings.append({
                                 'activity_id':   act.id,
@@ -6787,40 +6679,29 @@ class AllocationViewSet(viewsets.ModelViewSet):
                             })
                             continue
 
-                        # ── Unallocated → recalculate date = reference_date + gap ─────
-                        gap          = gap_map.get(act.id, 0)
+                        # ── Simple shift by same day_delta ──
                         old_date     = act.scheduled_date
-                        new_act_date = reference_date + timedelta(days=gap)
+                        new_act_date = old_date + timedelta(days=day_delta)
 
-                        act.scheduled_date = new_act_date
-                        act.move_reason    = f'Cascade from allocation change_date — activity {job_act.id}'
-                        if request.user and request.user.is_authenticated:
-                            act.last_moved_by = request.user
-                            act.last_moved_at = timezone.now()
-                        act.save(update_fields=[
-                            'scheduled_date', 'move_reason',
-                            'last_moved_by', 'last_moved_at',
-                        ])
-
-                        reference_date = new_act_date   # advance anchor
+                        JobActivity.objects.filter(pk=act.pk).update(
+                            scheduled_date=new_act_date,
+                            move_reason=f'Cascade from allocation change_date — activity {job_act.id}',
+                        )
 
                         shifted_activities.append({
                             'activity_id':   act.id,
                             'activity_name': act.activity.name,
                             'old_date':      str(old_date),
                             'new_date':      str(new_act_date),
-                            'gap_used':      gap,
+                            'shift_days':    day_delta,
                         })
 
                 else:
-                    # Same date — no JobActivity split needed.
-                    # If it was a partial allocation move, adjust job_act.allocated_area.
+                    # Same date — partial allocation move only
                     if new_allocation:
-                        job_act.allocated_area = max(
-                            Decimal('0'),
-                            job_act.allocated_area - new_area,
+                        JobActivity.objects.filter(pk=job_act.pk).update(
+                            allocated_area=models.F('allocated_area') - new_area,
                         )
-                        job_act.save(update_fields=['allocated_area'])
 
             return Response({
                 'success':             True,
@@ -6835,7 +6716,6 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
     @action(detail=False, methods=['get'])
     def calendar_view(self, request):
         start_date = request.query_params.get('start_date')
@@ -7194,30 +7074,21 @@ class AllocationViewSet(viewsets.ModelViewSet):
     #         },
     #         status=status.HTTP_200_OK,
     #     )
-   
-   
     @action(detail=True, methods=['delete'])
     def delete_allocation(self, request, pk=None):
-        """
-        Delete an allocation with:
-        Rule 5  — Block if in-progress or completed+paid
-        Rule 6  — After deletion, downstream unallocated activities recalculate
-                    using nearest remaining allocated predecessor as reference,
-                    or original sales_date / original_scheduled_date as fallback.
-        """
         from datetime import timedelta
         from django.db.models import Sum
 
         allocation = self.get_object()
 
-        # ── Rule 5: Block if in-progress ─────────────────────────────────────────
+        # ── Rule 5: Block if in-progress ─────────────────────────────────────
         if allocation.work_status == 'in_progress':
             return Response(
                 {'error': 'Allocation is in-progress and cannot be deleted.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ── Rule 5: Block if completed + paid ────────────────────────────────────
+        # ── Rule 5: Block if completed + paid ────────────────────────────────
         if allocation.work_status == 'completed' and allocation.payment_status in ('done', 'settled'):
             return Response(
                 {'error': 'Allocation is completed and paid — deletion not allowed.'},
@@ -7227,45 +7098,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             job_activity = allocation.job_activity
 
-            # ── Load full job sequence BEFORE delete, for Rule 6 cascade ─────────
-            all_activities = list(
-                JobActivity.objects.filter(
-                    job=job_activity.job,
-                    plot=job_activity.plot,
-                    total_area__gt=0,
-                    is_lost=False,
-                ).select_related('activity')
-            )
-            all_activities.sort(key=lambda a: (
-                get_activity_sequence_order(a),
-                a.scheduled_date or date.min,
-                a.id,
-            ))
-
-            try:
-                current_idx = next(i for i, a in enumerate(all_activities) if a.id == job_activity.id)
-            except StopIteration:
-                return Response({'error': 'Job activity not found in sequence'}, status=status.HTTP_400_BAD_REQUEST)
-
-            predecessors = all_activities[:current_idx]
-            successors   = all_activities[current_idx + 1:]
-
-            # ── Snapshot gap_map before any writes ───────────────────────────────
-            gap_map = {}
-            for i, act in enumerate(all_activities):
-                if i == 0:
-                    gap_map[act.id] = 0
-                else:
-                    prev = all_activities[i - 1]
-                    if act.original_gap_days is not None:
-                        gap_map[act.id] = act.original_gap_days
-                    else:
-                        if act.scheduled_date and prev.scheduled_date:
-                            gap_map[act.id] = (act.scheduled_date - prev.scheduled_date).days
-                        else:
-                            gap_map[act.id] = 0
-
-            # ── Log BEFORE deleting ───────────────────────────────────────────────
+            # ── Log BEFORE deleting ───────────────────────────────────────────
             AllocationAuditLog.objects.create(
                 action            = 'deleted',
                 allocation_id     = allocation.id,
@@ -7295,7 +7128,7 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 ),
             )
 
-            # ── Build payload before delete ───────────────────────────────────────
+            # ── Build payload before delete ───────────────────────────────────
             deleted_payload = {
                 "allocation_id":         allocation.id,
                 "booking_id":            job_activity.job.booking.booking_id if job_activity.job.booking else None,
@@ -7319,142 +7152,281 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 "deleted_at":            str(timezone.now()),
             }
 
-            # ── Delete the allocation ─────────────────────────────────────────────
+            # ── Delete the allocation ─────────────────────────────────────────
             allocation.delete()
 
-            # ── Fire signal (area + mukkadam availability restore happens here) ───
+            # ── Fire custom signal ────────────────────────────────────────────
             from .signals import allocation_deleted
             allocation_deleted.send(sender=None, payload=deleted_payload)
 
-            # ── Recalculate job_activity.allocated_area from remaining allocations ─
-            # Do NOT hard-reset to 0 — other allocations may still exist on this activity.
-            total_still_allocated = Allocation.objects.filter(
-                job_activity=job_activity,
-                status__in=['scheduled', 'in_progress', 'completed'],
-            ).aggregate(total=Sum('allocated_area'))['total'] or Decimal('0')
-
-            job_activity.allocated_area = total_still_allocated
-            # remaining_area + allocation_status are auto-recalculated in save()
-            job_activity.save()
-
-            # ── Rule 6: Cascade downstream unallocated activities ────────────────
-            #
-            # Now that this allocation is deleted, we need to find the correct
-            # fallback reference for downstream activities:
-            #
-            # Case E  (spec): Another allocated predecessor still exists →
-            #                 reference = that predecessor's scheduled_date
-            # Case E2 (spec): No allocated predecessor at all →
-            #                 reference = job_activity.sales_date
-            #                             or original_scheduled_date
-            #                             (the original sales/calendar date)
-            #
-            # Then cascade each subsequent unallocated activity:
-            #   new_date = reference_date + original_gap
-
-            # Find fallback reference: nearest still-allocated predecessor
-            # (after deletion, re-check by scanning predecessors in reverse)
-            fallback_reference = None
-            for pred in reversed(predecessors):
-                # Re-fetch to get latest state (allocation may have changed above)
-                pred_fresh = JobActivity.objects.get(id=pred.id)
-                if pred_fresh.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                    fallback_reference = pred_fresh.scheduled_date
-                    break
-
-            # Also check if job_activity itself still has allocations (partial delete)
-            if total_still_allocated > Decimal('0'):
-                # This activity is still (partially) allocated — it remains as reference
-                fallback_reference = job_activity.scheduled_date
-
-            # Final fallback: original sales/calendar date (Rule 6 / E2)
-            if fallback_reference is None:
-                fallback_reference = (
-                    job_activity.sales_date
-                    or job_activity.original_scheduled_date
-                    or job_activity.scheduled_date
-                )
-
-            cascade_shifted  = []
-            cascade_warnings = []
-            reference_date   = fallback_reference
-
-            for succ in successors:
-                # ── Already allocated → stays fixed, reset reference anchor ──────
-                if succ.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
-                    reference_date = succ.scheduled_date
-                    cascade_warnings.append({
-                        'activity_id':   succ.id,
-                        'activity_name': succ.activity.name,
-                        'old_date':      str(succ.scheduled_date),
-                        'new_date':      str(succ.scheduled_date),
-                        'message':       (
-                            f'Skipped — already {succ.allocation_status}. '
-                            f'Becomes new reference anchor ({succ.scheduled_date}).'
-                        ),
-                    })
-                    continue
-
-                # ── Manually moved → skip, do NOT update reference ────────────────
-                if succ.is_manually_moved:
-                    cascade_warnings.append({
-                        'activity_id':   succ.id,
-                        'activity_name': succ.activity.name,
-                        'old_date':      str(succ.scheduled_date),
-                        'new_date':      str(succ.scheduled_date),
-                        'message':       'Skipped — manually moved',
-                    })
-                    continue
-
-                # ── Zero area → skip ──────────────────────────────────────────────
-                if not succ.total_area or succ.total_area <= 0:
-                    cascade_warnings.append({
-                        'activity_id':   succ.id,
-                        'activity_name': succ.activity.name,
-                        'old_date':      str(succ.scheduled_date),
-                        'new_date':      str(succ.scheduled_date),
-                        'message':       'Skipped — zero area',
-                    })
-                    continue
-
-                # ── Unallocated → recalculate date = reference_date + gap ─────────
-                gap          = gap_map.get(succ.id, 0)
-                old_date     = succ.scheduled_date
-                new_succ_date = reference_date + timedelta(days=gap)
-
-                succ.scheduled_date = new_succ_date
-                succ.move_reason    = (
-                    f'Cascade from deletion of allocation on '
-                    f'{job_activity.activity.name} (activity #{job_activity.id})'
-                )
-                if request.user and request.user.is_authenticated:
-                    succ.last_moved_by = request.user
-                    succ.last_moved_at = timezone.now()
-                succ.save(update_fields=[
-                    'scheduled_date', 'move_reason',
-                    'last_moved_by', 'last_moved_at',
-                ])
-
-                reference_date = new_succ_date  # advance anchor
-
-                cascade_shifted.append({
-                    'activity_id':   succ.id,
-                    'activity_name': succ.activity.name,
-                    'old_date':      str(old_date),
-                    'new_date':      str(new_succ_date),
-                    'gap_used':      gap,
-                })
-
         return Response(
             {
-                'success':          True,
-                'message':          'Allocation deleted',
-                'fallback_reference': str(fallback_reference),
-                'cascade_shifted':  cascade_shifted,
-                'cascade_warnings': cascade_warnings,
+                'success':  True,
+                'message':  'Allocation deleted',
             },
             status=status.HTTP_200_OK,
         )
+   
+    # @action(detail=True, methods=['delete'])
+    # def delete_allocation(self, request, pk=None):
+    #     """
+    #     Delete an allocation with:
+    #     Rule 5  — Block if in-progress or completed+paid
+    #     Rule 6  — After deletion, downstream unallocated activities recalculate
+    #                 using nearest remaining allocated predecessor as reference,
+    #                 or original sales_date / original_scheduled_date as fallback.
+    #     """
+    #     from datetime import timedelta
+    #     from django.db.models import Sum
+
+    #     allocation = self.get_object()
+
+    #     # ── Rule 5: Block if in-progress ─────────────────────────────────────────
+    #     if allocation.work_status == 'in_progress':
+    #         return Response(
+    #             {'error': 'Allocation is in-progress and cannot be deleted.'},
+    #             status=status.HTTP_400_BAD_REQUEST,
+    #         )
+
+    #     # ── Rule 5: Block if completed + paid ────────────────────────────────────
+    #     if allocation.work_status == 'completed' and allocation.payment_status in ('done', 'settled'):
+    #         return Response(
+    #             {'error': 'Allocation is completed and paid — deletion not allowed.'},
+    #             status=status.HTTP_400_BAD_REQUEST,
+    #         )
+
+    #     with transaction.atomic():
+    #         job_activity = allocation.job_activity
+
+    #         # ── Load full job sequence BEFORE delete, for Rule 6 cascade ─────────
+    #         all_activities = list(
+    #             JobActivity.objects.filter(
+    #                 job=job_activity.job,
+    #                 plot=job_activity.plot,
+    #                 total_area__gt=0,
+    #                 is_lost=False,
+    #             ).select_related('activity')
+    #         )
+    #         all_activities.sort(key=lambda a: (
+    #             get_activity_sequence_order(a),
+    #             a.scheduled_date or date.min,
+    #             a.id,
+    #         ))
+
+    #         try:
+    #             current_idx = next(i for i, a in enumerate(all_activities) if a.id == job_activity.id)
+    #         except StopIteration:
+    #             return Response({'error': 'Job activity not found in sequence'}, status=status.HTTP_400_BAD_REQUEST)
+
+    #         predecessors = all_activities[:current_idx]
+    #         successors   = all_activities[current_idx + 1:]
+
+    #         # ── Snapshot gap_map before any writes ───────────────────────────────
+    #         gap_map = {}
+    #         for i, act in enumerate(all_activities):
+    #             if i == 0:
+    #                 gap_map[act.id] = 0
+    #             else:
+    #                 prev = all_activities[i - 1]
+    #                 if act.original_gap_days is not None:
+    #                     gap_map[act.id] = act.original_gap_days
+    #                 else:
+    #                     if act.scheduled_date and prev.scheduled_date:
+    #                         gap_map[act.id] = (act.scheduled_date - prev.scheduled_date).days
+    #                     else:
+    #                         gap_map[act.id] = 0
+
+    #         # ── Log BEFORE deleting ───────────────────────────────────────────────
+    #         AllocationAuditLog.objects.create(
+    #             action            = 'deleted',
+    #             allocation_id     = allocation.id,
+    #             job_activity_id   = job_activity.id,
+    #             job_id            = job_activity.job.job_id,
+    #             mukkadam_id       = allocation.mukkadam.mukkadam_id,
+    #             mukkadam_name     = allocation.mukkadam.mukkadam_name,
+    #             farmer_name       = job_activity.job.farmer.farmer_name,
+    #             activity_name     = job_activity.activity.name,
+    #             allocated_date    = allocation.allocated_date,
+    #             allocated_area    = allocation.allocated_area,
+    #             allocated_workers = allocation.allocated_workers,
+    #             snapshot          = {
+    #                 'allocated_area':    str(allocation.allocated_area),
+    #                 'allocated_workers': allocation.allocated_workers,
+    #                 'allocated_date':    str(allocation.allocated_date),
+    #                 'mukkadam_rate':     str(allocation.mukkadam_rate),
+    #                 'farmer_rate':       str(allocation.farmer_rate),
+    #                 'work_status':       allocation.work_status,
+    #                 'payment_status':    allocation.payment_status,
+    #                 'notes':             allocation.notes,
+    #             },
+    #             changed_by = request.user if request.user.is_authenticated else None,
+    #             notes      = (
+    #                 f"Deleted via dashboard — restored {allocation.allocated_area}ac "
+    #                 f"to activity #{job_activity.id}"
+    #             ),
+    #         )
+
+    #         # ── Build payload before delete ───────────────────────────────────────
+    #         deleted_payload = {
+    #             "allocation_id":         allocation.id,
+    #             "booking_id":            job_activity.job.booking.booking_id if job_activity.job.booking else None,
+    #             "api_activity_id":       job_activity.api_activity_id or None,
+    #             "activity_name":         job_activity.activity.name,
+    #             "allocated_area":        float(allocation.allocated_area),
+    #             "allocated_date":        str(allocation.allocated_date),
+    #             "mukkadam_id":           allocation.mukkadam.mukkadam_id,
+    #             "mukkadam_name":         allocation.mukkadam.mukkadam_name,
+    #             "farmer_rate":           float(allocation.farmer_rate),
+    #             "mukkadam_rate":         float(allocation.mukkadam_rate),
+    #             "job_id":                job_activity.job.job_id,
+    #             "farmer_id":             job_activity.job.farmer.farmer_id,
+    #             "farmer_name":           job_activity.job.farmer.farmer_name,
+    #             "plot_id":               job_activity.plot.id if job_activity.plot else None,
+    #             "plot_code":             job_activity.plot.plot_code if job_activity.plot else None,
+    #             "last_modified_by_id":   allocation.last_modified_by.id if allocation.last_modified_by else None,
+    #             "last_modified_by_name": allocation.last_modified_by.get_full_name() if allocation.last_modified_by else None,
+    #             "deleted_by_id":         request.user.id if request.user.is_authenticated else None,
+    #             "deleted_by_name":       request.user.get_full_name() or request.user.username if request.user.is_authenticated else None,
+    #             "deleted_at":            str(timezone.now()),
+    #         }
+
+    #         # ── Delete the allocation ─────────────────────────────────────────────
+    #         allocation.delete()
+
+    #         # ── Fire signal (area + mukkadam availability restore happens here) ───
+    #         from .signals import allocation_deleted
+    #         allocation_deleted.send(sender=None, payload=deleted_payload)
+
+    #         # ── Recalculate job_activity.allocated_area from remaining allocations ─
+    #         # Do NOT hard-reset to 0 — other allocations may still exist on this activity.
+    #         total_still_allocated = Allocation.objects.filter(
+    #             job_activity=job_activity,
+    #             status__in=['scheduled', 'in_progress', 'completed'],
+    #         ).aggregate(total=Sum('allocated_area'))['total'] or Decimal('0')
+
+    #         job_activity.allocated_area = total_still_allocated
+    #         # remaining_area + allocation_status are auto-recalculated in save()
+    #         job_activity.save()
+
+    #         # ── Rule 6: Cascade downstream unallocated activities ────────────────
+    #         #
+    #         # Now that this allocation is deleted, we need to find the correct
+    #         # fallback reference for downstream activities:
+    #         #
+    #         # Case E  (spec): Another allocated predecessor still exists →
+    #         #                 reference = that predecessor's scheduled_date
+    #         # Case E2 (spec): No allocated predecessor at all →
+    #         #                 reference = job_activity.sales_date
+    #         #                             or original_scheduled_date
+    #         #                             (the original sales/calendar date)
+    #         #
+    #         # Then cascade each subsequent unallocated activity:
+    #         #   new_date = reference_date + original_gap
+
+    #         # Find fallback reference: nearest still-allocated predecessor
+    #         # (after deletion, re-check by scanning predecessors in reverse)
+    #         # fallback_reference = None
+    #         # for pred in reversed(predecessors):
+    #         #     # Re-fetch to get latest state (allocation may have changed above)
+    #         #     pred_fresh = JobActivity.objects.get(id=pred.id)
+    #         #     if pred_fresh.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+    #         #         fallback_reference = pred_fresh.scheduled_date
+    #         #         break
+
+    #         # # Also check if job_activity itself still has allocations (partial delete)
+    #         # if total_still_allocated > Decimal('0'):
+    #         #     # This activity is still (partially) allocated — it remains as reference
+    #         #     fallback_reference = job_activity.scheduled_date
+
+    #         # # Final fallback: original sales/calendar date (Rule 6 / E2)
+    #         # if fallback_reference is None:
+    #         #     fallback_reference = (
+    #         #         job_activity.sales_date
+    #         #         or job_activity.original_scheduled_date
+    #         #         or job_activity.scheduled_date
+    #         #     )
+
+    #         #           # ── Rule 6: Cascade only if activity became fully unallocated ────────
+    #         # cascade_shifted  = []
+    #         # cascade_warnings = []
+
+    #         # # Only cascade if this activity went from allocated → fully unallocated
+    #         # if total_still_allocated <= Decimal('0') and job_activity.scheduled_date != job_activity.original_scheduled_date:
+    #         #     # Revert this activity to its original date
+    #         #     old_date = job_activity.scheduled_date
+    #         #     original_date = (
+    #         #         job_activity.original_scheduled_date
+    #         #         or job_activity.sales_date
+    #         #         or job_activity.scheduled_date
+    #         #     )
+    #         #     shift_days = (original_date - old_date).days
+
+    #         #     if shift_days != 0:
+    #         #         job_activity.scheduled_date = original_date
+    #         #         job_activity.save(update_fields=['scheduled_date'])
+
+    #         #         # Shift all subsequent unallocated activities by the same amount
+    #         #         for succ in successors:
+    #         #             if succ.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+    #         #                 cascade_warnings.append({
+    #         #                     'activity_id':   succ.id,
+    #         #                     'activity_name': succ.activity.name,
+    #         #                     'old_date':      str(succ.scheduled_date),
+    #         #                     'new_date':      str(succ.scheduled_date),
+    #         #                     'message':       f'Skipped — already {succ.allocation_status}.',
+    #         #                 })
+    #         #                 continue
+
+    #         #             if succ.is_manually_moved:
+    #         #                 cascade_warnings.append({
+    #         #                     'activity_id':   succ.id,
+    #         #                     'activity_name': succ.activity.name,
+    #         #                     'old_date':      str(succ.scheduled_date),
+    #         #                     'new_date':      str(succ.scheduled_date),
+    #         #                     'message':       'Skipped — manually moved',
+    #         #                 })
+    #         #                 continue
+
+    #         #             if not succ.total_area or succ.total_area <= 0:
+    #         #                 cascade_warnings.append({
+    #         #                     'activity_id':   succ.id,
+    #         #                     'activity_name': succ.activity.name,
+    #         #                     'old_date':      str(succ.scheduled_date),
+    #         #                     'new_date':      str(succ.scheduled_date),
+    #         #                     'message':       'Skipped — zero area',
+    #         #                 })
+    #         #                 continue
+
+    #         #             # Simple shift by same days
+    #         #             succ_old = succ.scheduled_date
+    #         #             succ.scheduled_date = succ_old + timedelta(days=shift_days)
+    #         #             succ.move_reason = (
+    #         #                 f'Cascade from deletion of allocation on '
+    #         #                 f'{job_activity.activity.name} (activity #{job_activity.id})'
+    #         #             )
+    #         #             if request.user and request.user.is_authenticated:
+    #         #                 succ.last_moved_by = request.user
+    #         #                 succ.last_moved_at = timezone.now()
+    #         #             succ.save(update_fields=[
+    #         #                 'scheduled_date', 'move_reason',
+    #         #                 'last_moved_by', 'last_moved_at',
+    #         #             ])
+
+    #         #             cascade_shifted.append({
+    #         #                 'activity_id':   succ.id,
+    #         #                 'activity_name': succ.activity.name,
+    #         #                 'old_date':      str(succ_old),
+    #         #                 'new_date':      str(succ.scheduled_date),
+    #         #                 'shift_days':    shift_days,
+    #         #             })
+
+    #     return Response(
+    #         {
+    #             'success':  True,
+    #             'message':  'Allocation deleted',
+    #         },
+    #         status=status.HTTP_200_OK,
+    #     )
 
 
 
@@ -8414,9 +8386,10 @@ def tender_dashboard(request):
     from django.db.models import Sum, Q
 
     activity_qs = JobActivity.objects.filter(
-        job__booking_type='tender',
-        is_lost=False,  
-        total_area__gt=0,
+        job__booking_type__in=["tender", "ondemand"],
+    is_lost=False,
+    total_area__gt=0,
+
        
     )
     if cluster_id_int:

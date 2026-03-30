@@ -111,9 +111,38 @@ def update_mukkadam_availability(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=Allocation)
 def restore_capacity_on_deletion(sender, instance, **kwargs):
-    JobActivity.objects.filter(pk=instance.job_activity.pk).update(
-        allocated_area=models.F('allocated_area') - instance.allocated_area
+    from django.db.models import Sum
+    from decimal import Decimal
+
+    ja = instance.job_activity
+
+    # Recalculate from remaining allocations (not F() subtraction which can drift)
+    total_still_allocated = Allocation.objects.filter(
+        job_activity=ja,
+    ).aggregate(total=Sum('allocated_area'))['total'] or Decimal('0')
+
+    # Determine correct status
+    if total_still_allocated <= Decimal('0'):
+        new_status = 'pending'
+        is_fully = False
+    elif total_still_allocated >= ja.total_area:
+        new_status = 'fully_allocated'
+        is_fully = True
+    else:
+        new_status = 'partially_allocated'
+        is_fully = False
+
+    remaining = ja.total_area - total_still_allocated
+
+    # Raw update — no signals triggered
+    JobActivity.objects.filter(pk=ja.pk).update(
+        allocated_area=total_still_allocated,
+        remaining_area=remaining,
+        allocation_status=new_status,
+        is_fully_allocated=is_fully,
     )
+
+    # Restore mukkadam availability
     try:
         MukkadamAvailability.objects.filter(
             mukkadam=instance.mukkadam,
@@ -123,8 +152,6 @@ def restore_capacity_on_deletion(sender, instance, **kwargs):
         )
     except Exception:
         pass
-
-
 # ============================================================================
 # SETTLEMENT TRIGGER
 #

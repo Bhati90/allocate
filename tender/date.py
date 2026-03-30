@@ -91,7 +91,7 @@ def main():
     bootstrap_django()
 
     # Import after Django setup
-    from jobs.models import JobActivity  # ⚠️ adjust app name if needed
+    from tender.models import JobActivity  # ⚠️ adjust app name if needed
 
     print("\n📡 Fetching jobs from API...")
     jobs = fetch_all_jobs(args.token)

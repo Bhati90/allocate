@@ -922,3 +922,291 @@ class JobNoteSerializer(serializers.ModelSerializer):
             note.mentions.set(User.objects.filter(id__in=mention_ids))
 
         return note
+
+
+# ============================================================
+# ADD THIS TO THE BOTTOM OF YOUR EXISTING serializers.py
+# ============================================================
+
+from .models import FarmerCall, FarmerBillWebhookLog, ClusterMukkadamAssignment, Leave, ExtraWorker, MukkadamOTPRequest,MukkadamWeeklyPayment
+
+
+# ── Farmer Profile ──────────────────────────────────────────
+
+class FarmerCallSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FarmerCall
+        fields = [
+            'call_sid', 'purpose', 'status', 'direction',
+            'duration', 'talk_time', 'initiated_at',
+            'answered_at', 'completed_at',
+        ]
+
+
+class FarmerBillWebhookLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FarmerBillWebhookLog
+        fields = [
+            'id', 'job_id', 'activity_name',
+            'total_billed', 'total_paid', 'balance_due',
+            'webhook_booking_status', 'webhook_success', 'sent_at',
+        ]
+class FarmerProfilePlotSerializer(serializers.ModelSerializer):
+    clusters   = serializers.SerializerMethodField()
+    activities = serializers.SerializerMethodField()   # ← ADD
+
+    class Meta:
+        model = Plot
+        fields = [
+            'id', 'name', 'area_acres', 'crop_name', 'variety',
+            'pruning_date', 'plot_code', 'latitude', 'longitude',
+            'clusters',
+            'activities',   # ← ADD
+        ]
+
+    def get_clusters(self, obj):
+        return [{'id': c.id, 'name': c.name} for c in obj.clusters.all()]
+
+    def get_activities(self, obj):                     # ← ADD
+        qs = (
+            obj.activities
+            .filter(is_lost=False, total_area__gt=0)
+            .select_related('activity')
+            .prefetch_related('allocations__mukkadam')
+            .order_by('scheduled_date')
+        )
+        return PlotActivitySerializer(qs, many=True).data
+
+class FarmerProfileJobSerializer(serializers.ModelSerializer):
+    plot_name = serializers.CharField(source='plot.name', default=None, read_only=True)
+    booking   = JobBookingSerializer(read_only=True)
+    clusters  = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Job
+        fields = [
+            'job_id', 'crop_name', 'variety', 'status', 'priority',
+            'booking_amount', 'payment_status', 'scheduled_date',
+            'completed_date', 'plot_name', 'booking', 'clusters',
+            'is_field_verified', 'is_complex', 'total_activities_amount',
+        ]
+
+    def get_clusters(self, obj):
+        return [{'id': c.id, 'name': c.name} for c in obj.clusters.all()]
+
+
+class FarmerProfileSerializer(serializers.ModelSerializer):
+    clusters  = serializers.SerializerMethodField()
+    plots     = FarmerProfilePlotSerializer(many=True, read_only=True)
+    jobs      = FarmerProfileJobSerializer(many=True, read_only=True)
+    calls     = serializers.SerializerMethodField()
+    notes     = serializers.SerializerMethodField()
+    bill_logs = serializers.SerializerMethodField()
+    last_cluster_modified_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Farmer
+        fields = [
+            'farmer_id', 'farmer_name', 'phone_number',
+            'location', 'latitude', 'longitude', 'last_synced',
+            'last_cluster_modified_by_name',
+            'clusters', 'plots', 'jobs', 'calls', 'notes', 'bill_logs',
+        ]
+
+    def get_clusters(self, obj):
+        return [{'id': c.id, 'name': c.name} for c in obj.clusters.all()]
+
+    def get_last_cluster_modified_by_name(self, obj):
+        u = obj.last_cluster_modified_by
+        return u.get_full_name() or u.username if u else None
+
+    def get_calls(self, obj):
+        qs = FarmerCall.objects.filter(
+            mobile_number=obj.phone_number
+        ).order_by('-initiated_at')[:20]
+        return FarmerCallSerializer(qs, many=True).data
+
+    def get_notes(self, obj):
+        from .models import JobNote
+        qs = JobNote.objects.filter(
+            job__farmer=obj
+        ).select_related('author').order_by('-created_at')[:20]
+        return JobNoteSerializer(qs, many=True).data
+
+    def get_bill_logs(self, obj):
+        qs = FarmerBillWebhookLog.objects.filter(
+            farmer_id=obj.farmer_id
+        ).order_by('-created_at')[:10]
+        return FarmerBillWebhookLogSerializer(qs, many=True).data
+class PlotActivitySerializer(serializers.ModelSerializer):
+    activity_name = serializers.CharField(source='activity.name', read_only=True)
+    allocations_summary = serializers.SerializerMethodField()
+
+    class Meta:
+        model = JobActivity
+        fields = [
+            'id', 'activity_name', 'scheduled_date', 'sales_date',
+            'total_area', 'allocated_area', 'remaining_area',
+            'allocation_status', 'is_strict', 'is_lost',
+            'rate_per_acre', 'total_price',
+            'allocations_summary',
+        ]
+
+    def get_allocations_summary(self, obj):
+        return [
+            {
+                'mukkadam_name': a.mukkadam.mukkadam_name,
+                'allocated_date': a.allocated_date.isoformat() if a.allocated_date else None,
+                'allocated_area': float(a.allocated_area or 0),
+                'allocated_workers': a.allocated_workers,
+                'work_status': a.work_status,
+            }
+            for a in obj.allocations.select_related('mukkadam').all()
+        ]
+
+# ── Mukkadam Profile ─────────────────────────────────────────
+
+class ClusterAssignmentSerializer(serializers.ModelSerializer):
+    cluster_name = serializers.CharField(source='cluster.name', read_only=True)
+
+    class Meta:
+        model = ClusterMukkadamAssignment
+        fields = [
+            'cluster_name', 'mukkadam_type', 'weekly_amount', 'transport_price',
+            'advance_amount', 'advance_is_manual', 'weekly_payment_day',
+            'is_active', 'joined_date', 'updown_mode',
+            'updown_from_date', 'updown_to_date', 'updown_specific_dates',
+        ]
+
+
+class MukkadamAllocationSerializer(serializers.ModelSerializer):
+    job_id        = serializers.CharField(source='job_activity.job.job_id', read_only=True)
+    activity_name = serializers.CharField(source='job_activity.activity.name', read_only=True)
+    farmer_name   = serializers.CharField(source='job_activity.job.farmer.farmer_name', read_only=True)
+    cluster_name  = serializers.CharField(source='cluster.name', default=None, read_only=True)
+
+    class Meta:
+        model = Allocation
+        fields = [
+            'id', 'job_id', 'activity_name', 'farmer_name', 'cluster_name',
+            'allocated_date', 'allocated_area', 'allocated_workers',
+            'farmer_rate', 'mukkadam_rate', 'farmer_amount', 'mukkadam_amount',
+            'status', 'work_status', 'payment_status',
+            'allows_second_job', 'is_auto_allocated', 'is_carry_forward',
+            'actual_area_done', 'actual_crew_size', 'report_submitted', 'farmer_agreed',
+        ]
+
+
+class MukkadamLeaveSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Leave
+        fields = ['id', 'date', 'leave_type', 'crew_on_leave', 'reason', 'is_active']
+
+
+class MukkadamExtraWorkerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExtraWorker
+        fields = ['id', 'date', 'workers', 'note']
+
+
+class MukkadamOTPSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MukkadamOTPRequest
+        fields = ['id', 'phone', 'crew_size', 'otp_type', 'requested_at', 'is_used']
+
+
+class MukkadamWeeklyPaymentProfileSerializer(serializers.ModelSerializer):
+    cluster_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MukkadamWeeklyPayment   # already imported in your serializers.py (check — add import if missing)
+        fields = ['id', 'cluster_name', 'week_start', 'amount', 'status', 'paid_at']
+
+    def get_cluster_name(self, obj):
+        try:
+            return obj.assignment.cluster.name
+        except Exception:
+            return None
+
+
+class MukkadamProfileSerializer(serializers.ModelSerializer):
+    cluster_assignments = serializers.SerializerMethodField()
+    activity_rates      = MukkadamActivityRateSerializer(many=True, read_only=True)
+    daily_availability  = serializers.SerializerMethodField()
+    allocations         = serializers.SerializerMethodField()
+    payments            = serializers.SerializerMethodField()
+    weekly_payments     = serializers.SerializerMethodField()
+    leaves              = serializers.SerializerMethodField()
+    extra_workers       = serializers.SerializerMethodField()
+    otp_requests        = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Mukkadam
+        fields = [
+            'mukkadam_id', 'mukkadam_name', 'mobile_numbers',
+            'manual_status', 'manual_status_note', 'manual_status_set_by', 'manual_status_set_at',
+            'is_permanent',
+            'state', 'state_code', 'district', 'district_code',
+            'taluka', 'taluka_code', 'village', 'village_code',
+            'current_latitude', 'current_longitude',
+            'crew_size', 'max_crew_capacity', 'has_smartphone', 'work_mode',
+            'start_date', 'end_date', 'efficiency',
+            'tender_activities', 'rate_card',
+            'cluster_assignments', 'activity_rates', 'daily_availability',
+            'allocations', 'payments', 'weekly_payments',
+            'leaves', 'extra_workers', 'otp_requests',
+        ]
+
+    def get_cluster_assignments(self, obj):
+        qs = ClusterMukkadamAssignment.objects.filter(
+            mukkadam=obj
+        ).select_related('cluster').order_by('-is_active')
+        return ClusterAssignmentSerializer(qs, many=True).data
+
+    def get_daily_availability(self, obj):
+        from datetime import date, timedelta
+        today = date.today()
+        qs = MukkadamAvailability.objects.filter(
+            mukkadam=obj,
+            date__gte=today - timedelta(days=7),
+            date__lte=today + timedelta(days=14),
+        ).order_by('date')
+        return MukkadamAvailabilitySerializer(qs, many=True).data
+
+    def get_allocations(self, obj):
+        from datetime import date, timedelta
+        cutoff = date.today() - timedelta(days=30)
+        qs = Allocation.objects.filter(
+            mukkadam=obj,
+            allocated_date__gte=cutoff,
+        ).select_related(
+            'job_activity__job__farmer',
+            'job_activity__activity',
+            'cluster',
+        ).order_by('-allocated_date')[:50]
+        return MukkadamAllocationSerializer(qs, many=True).data
+
+    def get_payments(self, obj):
+        qs = MukkadamPayment.objects.filter(mukkadam=obj).order_by('-paid_at')[:20]
+        return MukkadamPaymentSerializer(qs, many=True).data
+
+    def get_weekly_payments(self, obj):
+        try:
+            qs = MukkadamWeeklyPayment.objects.filter(
+                assignment__mukkadam=obj
+            ).select_related('assignment__cluster').order_by('-week_start')[:20]
+            return MukkadamWeeklyPaymentProfileSerializer(qs, many=True).data
+        except Exception:
+            return []
+
+    def get_leaves(self, obj):
+        qs = Leave.objects.filter(mukkadam=obj).order_by('-date')[:20]
+        return MukkadamLeaveSerializer(qs, many=True).data
+
+    def get_extra_workers(self, obj):
+        qs = ExtraWorker.objects.filter(mukkadam=obj).order_by('-date')[:20]
+        return MukkadamExtraWorkerSerializer(qs, many=True).data
+
+    def get_otp_requests(self, obj):
+        qs = MukkadamOTPRequest.objects.filter(mukkadam=obj).order_by('-requested_at')[:20]
+        return MukkadamOTPSerializer(qs, many=True).data
