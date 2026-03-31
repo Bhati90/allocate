@@ -536,20 +536,17 @@ def full_sheet_refresh():
     ws.clear()
     ws.append_row(_HEADERS_WITH_KEY)
 
-    qs = (
-        JobActivity.objects
-        .select_related("job__farmer", "plot", "activity")
-        .prefetch_related("job__clusters", "allocations__mukkadam")
-        .filter(total_area__gt=0)
-        .order_by("scheduled_date", "pk")
-    )
+    qs = JobActivity.objects \
+        .select_related('job__farmer', 'plot', 'activity') \
+        .prefetch_related('job__clusters', 'allocations__mukkadam') \
+        .filter(total_area__gt=0, is_lost=False) \
+        .order_by('scheduled_date', 'pk')
+
     rows = [_job_activity_to_row(ja) for ja in qs]
     if rows:
-        ws.update(f"A2:M{1 + len(rows)}", rows)
-
-    logger.info(f"[Sheets] Full refresh: {len(rows)} rows")
+        ws.update(f'A2:M{1 + len(rows)}', rows)
+    logger.info(f"Sheets: Full refresh {len(rows)} rows")
     return len(rows)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AUDIT LOG HELPER

@@ -277,7 +277,7 @@ CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TASK_SERIALIZER = 'json'
 GOOGLE_SHEETS_CREDENTIALS = BASE_DIR / "google.json"
-GOOGLE_SHEET_ID = "1-6x4lSXUKxzDJW_e7bUv7h_V5eTFoActBUrDusuIvCc"  # from the sheet URL
+GOOGLE_SHEET_ID = "1dT9aM83YvhsaHj60_YMMuktYM5aKS7l5VPfFD-1Tp3g"  # from the sheet URL
 # Cache
 # CACHES = {
 #     'default': {

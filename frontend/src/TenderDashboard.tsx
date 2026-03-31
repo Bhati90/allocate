@@ -8399,7 +8399,7 @@ const rowNotes: any[] = jobNotes[String(a.activity_id)] ?? [];
 
 
               return (
-                <React.Fragment key={a.activity_id}>
+                <React.Fragment key={`${a.job_id}_${a.plot_id}_${a.activity_id}_${rowIndex}`}>
                   <tr style={{ cursor: 'pointer', background: isExp ? S.brandLight : 'transparent', transition: 'background 150ms' }}
                     onMouseEnter={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = S.stone25; }}
                     onMouseLeave={e => { if (!isExp) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}

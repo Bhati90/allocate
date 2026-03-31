@@ -12,12 +12,12 @@ class Command(BaseCommand):
         ws.clear()
 
         qs = (
-            JobActivity.objects
-            .select_related("job__farmer", "plot", "activity")
-            .prefetch_related("job__clusters", "allocations__mukkadam")
-            .filter(total_area__gt=0)      # ADD THIS — exclude acre <= 0
-            .order_by("scheduled_date")
-        )
+    JobActivity.objects
+    .select_related("job__farmer", "plot", "activity")
+    .prefetch_related("job__clusters", "allocations__mukkadam")
+    .filter(total_area__gt=0, is_lost=False)  # ← added is_lost=False
+    .order_by("scheduled_date")
+)
 
         rows = [_HEADERS_WITH_KEY]
         for ja in qs:
