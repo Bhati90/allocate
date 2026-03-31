@@ -3075,114 +3075,66 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             )
 
                         # 3. Cascade subsequent activities ─────────────────────────────────────
-            shifted_activities = []
-            warnings           = []
+                    # 3. Cascade — simple uniform shift
+        shifted_activities = []
+        warnings = []
 
-            if original_date:
-                # Calculate the shift: how many days the original was moved
-                shift_days = (new_date_obj - original_date).days
+        if original_date:
+            shift_days = (new_date_obj - original_date).days
 
+            if shift_days != 0:
                 subsequent = list(
                     JobActivity.objects.filter(
                         job=activity.job,
                         plot=activity.plot,
                         is_lost=False,
+                        total_area__gt=0,
                     )
                     .exclude(id=activity.id)
                     .exclude(id=new_activity.id)
                     .select_related('activity')
                 )
-                subsequent.sort(key=lambda a: (
-                    get_activity_sequence_order(a),
-                    a.scheduled_date or date.min,
-                    a.id,
-                ))
-
-                current_seq_order = get_activity_sequence_order(activity)
+                # Sort by date only — no sequence order
+                subsequent.sort(key=lambda a: (a.scheduled_date or date.min, a.id))
 
                 for act in subsequent:
-                    if get_activity_sequence_order(act) <= current_seq_order:
+                    if not act.scheduled_date:
+                        continue
+                    # Only shift activities on or after the original date
+                    if act.scheduled_date < original_date:
                         continue
 
-                    # ── Already allocated/completed → skip, do NOT move ───────────
+                    # Skip allocated/completed
                     if act.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
                         warnings.append({
-                            'activity_id':   act.id,
+                            'activity_id': act.id,
                             'activity_name': act.activity.name,
-                            'old_date':      str(act.scheduled_date),
-                            'new_date':      str(act.scheduled_date),
-                            'message':       f'Skipped — already {act.allocation_status}.',
+                            'old_date': str(act.scheduled_date),
+                            'new_date': str(act.scheduled_date),
+                            'message': f'Skipped: already {act.allocation_status}.',
                         })
                         continue
 
-                    # ── Manually moved → skip, do NOT move ────────────────────────
-                    if act.is_manually_moved:
-                        warnings.append({
-                            'activity_id':   act.id,
-                            'activity_name': act.activity.name,
-                            'old_date':      str(act.scheduled_date),
-                            'new_date':      str(act.scheduled_date),
-                            'message':       'Skipped — manually moved',
-                        })
-                        continue
-
-                    # ── Zero area → skip ──────────────────────────────────────────
-                    if not act.total_area or act.total_area <= 0:
-                        warnings.append({
-                            'activity_id':   act.id,
-                            'activity_name': act.activity.name,
-                            'old_date':      str(act.scheduled_date),
-                            'new_date':      str(act.scheduled_date),
-                            'message':       'Skipped — zero area',
-                        })
-                        continue
-
-                    # ── Simply shift by the same number of days ───────────────────
-                    old_date     = act.scheduled_date
+                    old_date = act.scheduled_date
                     new_act_date = old_date + timedelta(days=shift_days)
-
                     act.scheduled_date = new_act_date
-                    act.move_reason    = f'Cascade from activity {activity.id} move: {reason}'
+                    act.move_reason = f'Cascade from activity {activity.id} move: {reason}'
                     if request.user and request.user.is_authenticated:
                         act.last_moved_by = request.user
                         act.last_moved_at = timezone.now()
                     act.save(update_fields=[
                         'scheduled_date', 'move_reason',
-                        'last_moved_by', 'last_moved_at',
+                        'last_moved_by', 'last_moved_at', 'updated_at',
                     ])
 
-                    ActivityLogTender.objects.create(
-                        action       = 'JOB_ACTIVITY_UPDATED',
-                        job          = activity.job,
-                        job_activity = act,
-                        performed_by = request.user if request.user.is_authenticated else None,
-                        details      = {
-                            'event':       'cascade_date_shifted',
-                            'description': (
-                                f'Activity "{act.activity.name}" shifted by {shift_days} days '
-                                f'({old_date} → {new_act_date}).'
-                            ),
-                            'trigger_activity_id': activity.id,
-                            'move_reason':         act.move_reason,
-                            'shift_days':          shift_days,
-                            'before': {
-                                'scheduled_date':    str(old_date),
-                                'allocation_status': act.allocation_status,
-                            },
-                            'after': {
-                                'scheduled_date':    str(new_act_date),
-                                'allocation_status': act.allocation_status,
-                            },
-                        },
-                    )
+                    Allocation.objects.filter(job_activity=act).update(allocated_date=new_act_date)
 
                     shifted_activities.append({
-                        'activity_id':   act.id,
+                        'activity_id': act.id,
                         'activity_name': act.activity.name,
-                        'old_date':      str(old_date),
-                        'new_date':      str(new_act_date),
-                        'shift_days':    shift_days,
-                        'status':        act.allocation_status,
+                        'old_date': str(old_date),
+                        'new_date': str(new_act_date),
+                        'shift_days': shift_days,
                     })
 
         return Response(
