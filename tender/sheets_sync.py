@@ -586,9 +586,12 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
 
     Skips:
       - already allocated / completed
-      - manually moved
       - zero area
       - the exclude_ja_id (used by split to exclude the newly created child)
+
+    NOTE: Does NOT skip is_manually_moved activities — same behaviour as the
+    app's JobActivity move action, which always cascades all unallocated
+    successors regardless of how they were previously moved.
     """
     from datetime import date, timedelta
     from .models import JobActivity, Allocation
@@ -597,11 +600,7 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
     if shift_days == 0:
         return
 
-    try:
-        from .utils import get_activity_sequence_order
-    except ImportError:
-        # fallback if utils not available
-        get_activity_sequence_order = lambda a: 0
+    from .utils import get_activity_sequence_order
 
     all_on_plot = list(
         JobActivity.objects
@@ -626,9 +625,9 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
         if act.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
             logger.info(f"[Cascade] Skip JA#{act.pk} — {act.allocation_status}")
             continue
-        if act.is_manually_moved:
-            logger.info(f"[Cascade] Skip JA#{act.pk} — manually moved")
-            continue
+        # NOTE: is_manually_moved is intentionally NOT skipped here.
+        # The app's move action cascades all unallocated successors regardless,
+        # so the sheet should behave identically.
         if not act.scheduled_date:
             continue
 
