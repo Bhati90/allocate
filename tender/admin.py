@@ -696,7 +696,101 @@ class JobActivityAdmin(admin.ModelAdmin):
     clear_manually_moved.short_description = '🔓 Clear Manually Moved flag'
 
 
+from django.contrib import admin
+from .models import SheetEditLog
 
+
+@admin.register(SheetEditLog)
+class SheetEditLogAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'created_at',
+        'event',
+        'job_activity_link',
+        'job_activity_id_raw',
+        'column',
+        'edited_by',
+        'success',
+        'short_message',
+    )
+    list_filter = (
+        'event',
+        'success',
+        'column',
+        'edited_by',
+        'created_at',
+    )
+    search_fields = (
+        'job_activity_id_raw',
+        'edited_by',
+        'column',
+        'old_value',
+        'new_value',
+        'message',
+        'job_activity__id',
+    )
+    readonly_fields = (
+        'job_activity',
+        'job_activity_id_raw',
+        'event',
+        'column',
+        'old_value',
+        'new_value',
+        'edited_by',
+        'success',
+        'message',
+        'split_child_ja_id',
+        'created_at',
+    )
+    date_hierarchy = 'created_at'
+    list_select_related = ('job_activity',)
+    ordering = ('-created_at',)
+    raw_id_fields = ('job_activity',)
+
+    fieldsets = (
+        ('Event Info', {
+            'fields': (
+                'created_at',
+                'event',
+                'success',
+                'message',
+            )
+        }),
+        ('Job Activity', {
+            'fields': (
+                'job_activity',
+                'job_activity_id_raw',
+                'split_child_ja_id',
+            )
+        }),
+        ('Edit Details', {
+            'fields': (
+                'column',
+                'old_value',
+                'new_value',
+                'edited_by',
+            )
+        }),
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    @admin.display(description='Job Activity', ordering='job_activity__id')
+    def job_activity_link(self, obj):
+        return obj.job_activity_id_raw or '-'
+
+    @admin.display(description='Message')
+    def short_message(self, obj):
+        if not obj.message:
+            return '-'
+        return obj.message[:80] + ('...' if len(obj.message) > 80 else '')
 @admin.register(JobBooking)
 class JobBookingAdmin(admin.ModelAdmin):
     list_display = ('booking_id', 'job', 'status', 'total_amount', 'advance_paid', 'balance', 'assignee_number')

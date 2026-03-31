@@ -119,9 +119,9 @@ def _job_activity_to_row(ja):
         pass
 
     actual_date = (
-        ja.original_scheduled_date.strftime("%Y-%m-%d")
-        if ja.original_scheduled_date else ""
-    )
+    ja.sales_date.strftime("%Y-%m-%d")
+    if ja.sales_date else ""
+)
     our_date = (
         ja.scheduled_date.strftime("%Y-%m-%d")
         if ja.scheduled_date else ""
@@ -325,6 +325,7 @@ def apply_sheet_edit(payload):
 
 def _apply_date_change(ja, new_date_str, edited_by):
     from .models import Allocation
+
     if not new_date_str:
         return False, "Date value is empty"
     try:
@@ -333,15 +334,45 @@ def _apply_date_change(ja, new_date_str, edited_by):
         return False, f"Invalid date: '{new_date_str}'. Use YYYY-MM-DD."
 
     old_date = ja.scheduled_date
+    if not old_date:
+        with transaction.atomic():
+            ja.scheduled_date = new_date
+            ja.save(update_fields=["scheduled_date", "updated_at"])
+            Allocation.objects.filter(job_activity=ja).update(allocated_date=new_date)
+        return True, f"Date set to {new_date} (no cascade — no previous date)"
+
+    shift_days = (new_date - old_date).days
+    if shift_days == 0:
+        return True, "Date unchanged"
+
     with transaction.atomic():
-        ja.scheduled_date = new_date
-        ja.save(update_fields=["scheduled_date", "updated_at"])
-        moved = Allocation.objects.filter(job_activity=ja).update(allocated_date=new_date)
+        ja.scheduled_date    = new_date
+        ja.is_manually_moved = True
+        ja.move_reason       = f"Moved via sheet by {edited_by}"
+        ja.save(update_fields=[
+            "scheduled_date", "is_manually_moved", "move_reason", "updated_at"
+        ])
+        alloc_moved = Allocation.objects.filter(job_activity=ja).update(
+            allocated_date=new_date
+        )
 
-    logger.info(f"[Sheet->DB] Date JA {ja.pk}: {old_date} -> {new_date}, {moved} allocs moved")
-    return True, f"Date updated to {new_date}, {moved} allocations moved"
+    # Cascade successors on same plot (outside the atomic block — each
+    # successor gets its own save + sheet sync thread)
+    _cascade_successors(
+        trigger_ja = ja,
+        old_date   = old_date,
+        new_date   = new_date,
+        edited_by  = edited_by,
+    )
 
-
+    logger.info(
+        f"[Sheet->DB] Date JA#{ja.pk}: {old_date} → {new_date} "
+        f"(shift={shift_days:+d}d), {alloc_moved} allocs moved, by {edited_by}"
+    )
+    return True, (
+        f"Date updated to {new_date} ({shift_days:+d} days). "
+        f"Successor activities on same plot cascaded."
+    )
 def _apply_work_status_change(ja, new_work_status_display, edited_by):
     """
     Updates Allocation.work_status on ALL allocations for this JobActivity.
@@ -547,7 +578,84 @@ def _log_sheet_edit(*, ja, ja_id_raw, event, column="", old_value="",
     except Exception as exc:
         logger.error(f"[SheetEditLog] Failed to write log: {exc}")
 
+def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id=None):
+    """
+    Shift all successor JobActivities on the same job+plot by the same
+    number of days as (new_date - old_date).
 
+    Skips:
+      - already allocated / completed
+      - manually moved
+      - zero area
+      - the exclude_ja_id (used by split to exclude the newly created child)
+    """
+    from datetime import date, timedelta
+    from .models import JobActivity, Allocation
+
+    shift_days = (new_date - old_date).days
+    if shift_days == 0:
+        return
+
+    try:
+        from .utils import get_activity_sequence_order
+    except ImportError:
+        # fallback if utils not available
+        get_activity_sequence_order = lambda a: 0
+
+    all_on_plot = list(
+        JobActivity.objects
+        .filter(job=trigger_ja.job, plot=trigger_ja.plot, is_lost=False, total_area__gt=0)
+        .exclude(pk=trigger_ja.pk)
+        .select_related("activity")
+    )
+    if exclude_ja_id:
+        all_on_plot = [a for a in all_on_plot if a.pk != exclude_ja_id]
+
+    all_on_plot.sort(key=lambda a: (
+        get_activity_sequence_order(a),
+        a.scheduled_date or date.min,
+        a.id,
+    ))
+
+    current_seq = get_activity_sequence_order(trigger_ja)
+
+    for act in all_on_plot:
+        if get_activity_sequence_order(act) <= current_seq:
+            continue
+        if act.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+            logger.info(f"[Cascade] Skip JA#{act.pk} — {act.allocation_status}")
+            continue
+        if act.is_manually_moved:
+            logger.info(f"[Cascade] Skip JA#{act.pk} — manually moved")
+            continue
+        if not act.scheduled_date:
+            continue
+
+        old_act_date = act.scheduled_date
+        new_act_date = old_act_date + timedelta(days=shift_days)
+
+        act.scheduled_date = new_act_date
+        act.move_reason    = (
+            f"Cascade from JA#{trigger_ja.id} sheet move by {edited_by} "
+            f"({shift_days:+d} days)"
+        )
+        act.save(update_fields=["scheduled_date", "move_reason", "updated_at"])
+        Allocation.objects.filter(job_activity=act).update(allocated_date=new_act_date)
+
+        logger.info(
+            f"[Cascade] JA#{act.pk} {act.activity.name}: "
+            f"{old_act_date} → {new_act_date}"
+        )
+
+        try:
+            import threading
+            threading.Thread(
+                target=upsert_job_activity_to_sheet,
+                args=(act.pk,),
+                daemon=True,
+            ).start()
+        except Exception:
+            pass
 # ─────────────────────────────────────────────────────────────────────────────
 # SPLIT
 # ─────────────────────────────────────────────────────────────────────────────
@@ -585,40 +693,52 @@ def _apply_split(ja, split_acres_str, split_date_str, edited_by):
         return False, f"Invalid split_date: '{split_date_str}'. Use YYYY-MM-DD.", None
 
     parent_new_area = ja.total_area - split_acres
+    original_date   = ja.scheduled_date
 
     with transaction.atomic():
-        # ── Shrink parent ────────────────────────────────────────────────────
-        old_total = ja.total_area
+        # Shrink parent
+        old_total     = ja.total_area
         ja.total_area = parent_new_area
-        ja.save()   # triggers remaining_area / price recalc via model.save()
+        ja.save()
 
-        # ── Create child ─────────────────────────────────────────────────────
+        # Create child
         child = JobActivity(
-            job=ja.job,
-            activity=ja.activity,
-            plot=ja.plot,
-            total_area=split_acres,
-            allocated_area=Decimal("0"),
-            remaining_area=split_acres,
-            scheduled_date=split_date,
-            original_scheduled_date=split_date,
-            rate_per_acre=ja.rate_per_acre,
-            estimated_workers=max(1, int(float(split_acres) * 10)),
-            location=ja.location,
-            source="manual",
-            original_source="manual",
-            is_strict=ja.is_strict,
-            # backlink so we know where it came from
-            moved_from_activity=ja,
-            move_reason=f"Split {split_acres} ac from JA#{ja.pk} by {edited_by}",
+            job                     = ja.job,
+            activity                = ja.activity,
+            plot                    = ja.plot,
+            total_area              = split_acres,
+            allocated_area          = Decimal("0"),
+            remaining_area          = split_acres,
+            scheduled_date          = split_date,
+            original_scheduled_date = ja.original_scheduled_date or original_date,
+            rate_per_acre           = ja.rate_per_acre,
+            estimated_workers       = max(1, int(float(split_acres) * 10)),
+            location                = ja.location,
+            source                  = "manual",
+            original_source         = "manual",
+            is_strict               = ja.is_strict,
+            is_manually_moved       = True,
+            moved_from_activity     = ja,
+            move_reason             = f"Split {split_acres} ac from JA#{ja.pk} by {edited_by}",
         )
         child.save()
 
-    # ── Sync both rows back to sheet ─────────────────────────────────────────
+    # Cascade successors from the CHILD's date perspective
+    # (same as a date change — shift everything after ja on same plot)
+    if original_date and split_date != original_date:
+        _cascade_successors(
+            trigger_ja    = ja,
+            old_date      = original_date,
+            new_date      = split_date,
+            edited_by     = edited_by,
+            exclude_ja_id = child.pk,   # don't cascade the child we just made
+        )
+
+    # Sync both rows to sheet
     try:
         import threading
         threading.Thread(
-            target=upsert_job_activity_to_sheet, args=(ja.pk,), daemon=True
+            target=upsert_job_activity_to_sheet, args=(ja.pk,),    daemon=True
         ).start()
         threading.Thread(
             target=upsert_job_activity_to_sheet, args=(child.pk,), daemon=True
