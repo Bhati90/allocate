@@ -1649,6 +1649,8 @@ class Allocation(models.Model):
         
         super().save(*args, **kwargs)
 
+
+
 PAYMENT_PROOF_TYPE_CHOICES = [
     ('farmer',   'Farmer Payment'),
     ('mukkadam', 'Mukkadam Payment'),
@@ -1670,7 +1672,52 @@ class PaymentProof(models.Model):
     def __str__(self):
         return f"{self.proof_type} proof for ref {self.reference_id}"
     
+class SheetEditLog(models.Model):
+    """Audit trail for every edit made via Google Sheets webhook."""
+    
+    job_activity = models.ForeignKey(
+        'JobActivity',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='sheet_edit_logs',
+    )
+    job_activity_id_raw = models.CharField(
+        max_length=50, blank=True,
+        help_text="Raw JA id from sheet (kept even if JA deleted)"
+    )
+    event = models.CharField(
+        max_length=30,
+        help_text="edit / delete / bulk_edit / split"
+    )
+    column = models.CharField(max_length=100, blank=True)
+    old_value = models.TextField(blank=True)
+    new_value = models.TextField(blank=True)
+    edited_by = models.CharField(
+        max_length=255,
+        help_text="Gmail of the person who made the edit"
+    )
+    success = models.BooleanField(default=True)
+    message = models.TextField(blank=True)
 
+    # For split events only
+    split_child_ja_id = models.IntegerField(
+        null=True, blank=True,
+        help_text="ID of the newly created child JobActivity (split only)"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'sheet_edit_log'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['edited_by', '-created_at']),
+            models.Index(fields=['job_activity_id_raw']),
+            models.Index(fields=['event', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"[{self.event}] JA#{self.job_activity_id_raw} col={self.column} by={self.edited_by} @ {self.created_at:%Y-%m-%d %H:%M}"
 class MukkadamPayment(models.Model):
     mukkadam = models.ForeignKey(Mukkadam, on_delete=models.CASCADE, related_name='payments')
     settlement = models.ForeignKey(

@@ -244,16 +244,21 @@ def delete_job_activity_from_sheet(ja_id):
 # =============================================================================
 
 def apply_sheet_edit(payload):
+    """
+    Route a single sheet edit to the correct handler.
+    Now also writes to SheetEditLog on every call.
+    Returns (ok: bool, message: str)
+    """
     from .models import JobActivity
 
-    ja_id     = payload.get("job_activity_id")
-    column    = payload.get("column", "").strip()
-    new_val   = (payload.get("new_value") or "").strip()
-    edited_by = payload.get("edited_by", "sheet")
+    ja_id      = payload.get("job_activity_id")
+    column     = payload.get("column", "")
+    new_val    = str(payload.get("new_value", "")).strip()
+    old_val    = str(payload.get("old_value", "")).strip()
+    edited_by  = payload.get("edited_by", "unknown")
+    event      = payload.get("event", "edit")
 
-    if not ja_id:
-        return False, "Missing job_activity_id"
-
+    # ── Load JA ──────────────────────────────────────────────────────────────
     try:
         ja = (
             JobActivity.objects
@@ -261,37 +266,62 @@ def apply_sheet_edit(payload):
             .prefetch_related("job__clusters", "allocations__mukkadam")
             .get(pk=int(ja_id))
         )
-    except (JobActivity.DoesNotExist, ValueError):
-        return False, f"JobActivity {ja_id} not found"
+    except (JobActivity.DoesNotExist, ValueError, TypeError):
+        msg = f"JobActivity {ja_id} not found"
+        _log_sheet_edit(ja=None, ja_id_raw=ja_id, event=event,
+                        column=column, old_value=old_val, new_value=new_val,
+                        edited_by=edited_by, success=False, message=msg)
+        return False, msg
 
     _syncing.active = True
+    ok, msg, child_ja_id = False, "", None
     try:
-        if column == "Our date":
-            return _apply_date_change(ja, new_val, edited_by)
+        # ── SPLIT ─────────────────────────────────────────────────────────────
+        if event == "split":
+            split_date = payload.get("split_date", "")
+            ok, msg, child_ja_id = _apply_split(ja, new_val, split_date, edited_by)
+
+        elif column == "Our date":
+            ok, msg = _apply_date_change(ja, new_val, edited_by)
 
         elif column == "Work status":
-            return _apply_work_status_change(ja, new_val, edited_by)
+            ok, msg = _apply_work_status_change(ja, new_val, edited_by)
 
         elif column == "Alloc status":
-            return False, (
-                "Alloc status is read-only — it is set automatically "
-                "by the system when mukkadams are allocated."
-            )
+            ok, msg = False, "Alloc status is read-only — set automatically by system"
 
         elif column == "Mukadam team":
-            return _apply_mukadam_change(ja, new_val, edited_by)
+            ok, msg = _apply_mukadam_change(ja, new_val, edited_by)
 
         elif column == "Acre":
-            return _apply_acre_change(ja, new_val, edited_by)
+            ok, msg = _apply_acre_change(ja, new_val, edited_by)
 
         elif column == "_DELETE_":
-            return _apply_delete(ja, edited_by)
+            ok, msg = _apply_delete(ja, edited_by)
 
         else:
-            return False, f"Column '{column}' is not editable from sheet"
+            ok, msg = False, f"Column '{column}' is not editable from sheet"
+
+    except Exception as exc:
+        ok, msg = False, f"Unhandled error: {exc}"
+        logger.error(f"[apply_sheet_edit] {msg}", exc_info=True)
     finally:
         _syncing.active = False
 
+    # ── Always log ────────────────────────────────────────────────────────────
+    _log_sheet_edit(
+        ja=ja,
+        ja_id_raw=ja_id,
+        event=event,
+        column=column,
+        old_value=old_val,
+        new_value=new_val,
+        edited_by=edited_by,
+        success=ok,
+        message=msg,
+        split_child_ja_id=child_ja_id,
+    )
+    return ok, msg
 
 def _apply_date_change(ja, new_date_str, edited_by):
     from .models import Allocation
@@ -322,6 +352,7 @@ def _apply_work_status_change(ja, new_work_status_display, edited_by):
     Completed    -> completed  (also sets JobActivity.allocation_status='completed')
     """
     from .models import Allocation
+    from .models import JobActivity
 
     WORK_STATUS_MAP = {
         "Not Started": "work_not_started",
@@ -486,3 +517,118 @@ def full_sheet_refresh():
 
     logger.info(f"[Sheets] Full refresh: {len(rows)} rows")
     return len(rows)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUDIT LOG HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _log_sheet_edit(*, ja, ja_id_raw, event, column="", old_value="",
+                    new_value="", edited_by, success, message,
+                    split_child_ja_id=None):
+    """
+    Write one row to SheetEditLog. Never raises — logging must not break
+    the main request flow.
+    """
+    try:
+        from .models import SheetEditLog
+        SheetEditLog.objects.create(
+            job_activity=ja,
+            job_activity_id_raw=str(ja_id_raw),
+            event=event,
+            column=column,
+            old_value=str(old_value),
+            new_value=str(new_value),
+            edited_by=edited_by or "unknown",
+            success=success,
+            message=message,
+            split_child_ja_id=split_child_ja_id,
+        )
+    except Exception as exc:
+        logger.error(f"[SheetEditLog] Failed to write log: {exc}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPLIT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_split(ja, split_acres_str, split_date_str, edited_by):
+    """
+    Split a JobActivity into two:
+      - Parent JA: total_area reduced by split_acres, keeps original date
+      - Child  JA: new row with split_acres on split_date
+
+    Returns (ok: bool, message: str, child_ja_id: int | None)
+    """
+    from decimal import Decimal, InvalidOperation
+    from datetime import datetime
+    from .models import JobActivity
+
+    # ── Validate inputs ──────────────────────────────────────────────────────
+    try:
+        split_acres = Decimal(str(split_acres_str).strip())
+    except (InvalidOperation, TypeError):
+        return False, f"Invalid split_acres: '{split_acres_str}'", None
+
+    if split_acres <= 0:
+        return False, "split_acres must be > 0", None
+
+    if split_acres >= ja.total_area:
+        return False, (
+            f"split_acres ({split_acres}) must be less than total_area "
+            f"({ja.total_area}). Use 'Acre' edit to just change the total."
+        ), None
+
+    try:
+        split_date = datetime.strptime(str(split_date_str).strip(), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return False, f"Invalid split_date: '{split_date_str}'. Use YYYY-MM-DD.", None
+
+    parent_new_area = ja.total_area - split_acres
+
+    with transaction.atomic():
+        # ── Shrink parent ────────────────────────────────────────────────────
+        old_total = ja.total_area
+        ja.total_area = parent_new_area
+        ja.save()   # triggers remaining_area / price recalc via model.save()
+
+        # ── Create child ─────────────────────────────────────────────────────
+        child = JobActivity(
+            job=ja.job,
+            activity=ja.activity,
+            plot=ja.plot,
+            total_area=split_acres,
+            allocated_area=Decimal("0"),
+            remaining_area=split_acres,
+            scheduled_date=split_date,
+            original_scheduled_date=split_date,
+            rate_per_acre=ja.rate_per_acre,
+            estimated_workers=max(1, int(float(split_acres) * 10)),
+            location=ja.location,
+            source="manual",
+            original_source="manual",
+            is_strict=ja.is_strict,
+            # backlink so we know where it came from
+            moved_from_activity=ja,
+            move_reason=f"Split {split_acres} ac from JA#{ja.pk} by {edited_by}",
+        )
+        child.save()
+
+    # ── Sync both rows back to sheet ─────────────────────────────────────────
+    try:
+        import threading
+        threading.Thread(
+            target=upsert_job_activity_to_sheet, args=(ja.pk,), daemon=True
+        ).start()
+        threading.Thread(
+            target=upsert_job_activity_to_sheet, args=(child.pk,), daemon=True
+        ).start()
+    except Exception as e:
+        logger.warning(f"[Split] Sheet sync thread error: {e}")
+
+    msg = (
+        f"Split OK: JA#{ja.pk} now {parent_new_area} ac on {ja.scheduled_date}; "
+        f"new JA#{child.pk} = {split_acres} ac on {split_date}"
+    )
+    logger.info(f"[Sheet->DB] {msg} by {edited_by}")
+    return True, msg, child.pk

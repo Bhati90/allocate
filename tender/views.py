@@ -11262,7 +11262,20 @@ def sync_from_sheet(request):
             all_ok = all(r["success"] for r in results)
             return JsonResponse({"success": all_ok, "results": results},
                                 status=200 if all_ok else 207)
-
+        elif event == "split":
+            # new_value = split_acres, split_date is a separate field
+            payload = {
+                "event": "split",
+                "job_activity_id": data.get("job_activity_id"),
+                "column": "Acre",           # for logging clarity
+                "new_value": data.get("split_acres", ""),
+                "old_value": "",
+                "split_date": data.get("split_date", ""),
+                "edited_by": data.get("edited_by", "sheet"),
+            }
+            ok, msg = apply_sheet_edit(payload)
+            return JsonResponse({"success": ok, "message": msg},
+                                status=200 if ok else 400)
         else:  # single "edit"
             payload = {
                 "job_activity_id": data.get("job_activity_id"),
