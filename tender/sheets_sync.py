@@ -202,7 +202,7 @@ def upsert_job_activity_to_sheet(ja_id):
         logger.warning(f"[Sheets] JobActivity {ja_id} not found")
         return
 
-    if not ja.total_area or ja.total_area <= 0:
+    if ja.is_lost or not ja.total_area or ja.total_area <= 0:
         delete_job_activity_from_sheet(ja_id)
         return
 
@@ -600,7 +600,7 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
     if shift_days == 0:
         return
 
-    from .utils import get_activity_sequence_order
+    from .views import get_activity_sequence_order
 
     all_on_plot = list(
         JobActivity.objects
