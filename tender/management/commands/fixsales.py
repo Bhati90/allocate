@@ -5,25 +5,36 @@ Place at: tender/management/commands/fixsales.py
 
 Rules:
 1. Allocated → NEVER touch
-2. Unallocated + scheduled_date is MORE than 5 days before sales_date → Apply pruning + gap
+2. Unallocated + scheduled_date > 5 days before sales_date → Apply pruning + gap
 3. All other cases → No change
+4. Skip 0-acre activities
 
 Usage:
     python manage.py fixsales              # dry run
     python manage.py fixsales --apply      # update DB
-    python manage.py fixsales --cluster=Nashik
 """
 
-import csv
+import os
 from datetime import timedelta
 from collections import Counter
 
 from django.core.management.base import BaseCommand
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 
 from tender.models import (
     Plot, JobActivity,
     ClusterActivityScheduleRule, ActivityScheduleRule,
 )
+
+HDR_FILL = PatternFill('solid', fgColor='1F3864')
+HDR_FONT = Font(name='Calibri', bold=True, color='FFFFFF', size=11)
+BODY_FONT = Font(name='Calibri', size=11)
+UPDATE_FILL = PatternFill('solid', fgColor='FFF2CC')
+SKIP_FILL = PatternFill('solid', fgColor='E2EFDA')
+CENTER = Alignment(horizontal='center', vertical='center')
+LEFT = Alignment(horizontal='left', vertical='center', indent=1)
 
 
 class Command(BaseCommand):
@@ -33,11 +44,11 @@ class Command(BaseCommand):
         parser.add_argument('--apply', action='store_true', default=False)
         parser.add_argument('--cluster', type=str, default=None)
         parser.add_argument('--plot-id', type=int, default=None)
-        parser.add_argument('--csv-output', type=str, default='schedule_fix_report.csv')
+        parser.add_argument('--output', type=str, default='schedule_fix_report.xlsx')
 
     def handle(self, *args, **options):
         apply_changes = options['apply']
-        csv_path = options['csv_output']
+        out_path = options['output']
 
         if apply_changes:
             self.stdout.write(self.style.WARNING("⚠️  APPLY MODE"))
@@ -60,11 +71,11 @@ class Command(BaseCommand):
             job_activities = (
                 JobActivity.objects
                 .filter(plot=plot)
+                .exclude(total_area=0)
                 .select_related('activity', 'job')
                 .order_by('scheduled_date')
             )
 
-            # Find Pruning → BASE DATE
             pruning_ja = None
             for ja in job_activities:
                 if self._is_pruning(ja.activity):
@@ -84,30 +95,73 @@ class Command(BaseCommand):
                         ja.save(update_fields=['scheduled_date', 'updated_at'])
                         update_count += 1
 
-        # CSV
-        fieldnames = [
-            'plot', 'activity', 'current_scheduled_date', 'sales_date',
-            'diff_days', 'is_allocated', 'gap_days_used', 'gap_source',
-            'new_scheduled_date', 'action',
-        ]
-        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for r in results:
-                writer.writerow({k: v for k, v in r.items() if k in fieldnames})
+        # ── Write Excel ──
+        self._write_xlsx(results, out_path)
 
-        # Summary
         actions = Counter(r['action'] for r in results)
         self.stdout.write(f"\nTotal: {len(results)}")
         for act, cnt in actions.most_common():
             self.stdout.write(f"  {act}: {cnt}")
-        self.stdout.write(f"\nCSV: {csv_path}")
+        self.stdout.write(f"\nReport: {out_path}")
 
         if apply_changes:
             self.stdout.write(self.style.SUCCESS(f"✅ Updated {update_count} scheduled_dates."))
         else:
             needs = sum(1 for r in results if r['action'] == 'UPDATE scheduled_date')
             self.stdout.write(self.style.WARNING(f"⏳ {needs} need updating. Re-run with --apply"))
+
+    def _write_xlsx(self, results, path):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Schedule Fix Report"
+
+        headers = [
+            'Farmer', 'Plot', 'Acres', 'Activity', 'Current Scheduled',
+            'Sales Date', 'Diff (days)', 'Allocated?', 'Gap Days',
+            'Gap Source', 'New Scheduled', 'Action',
+        ]
+
+        for c, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=c, value=h)
+            cell.fill = HDR_FILL
+            cell.font = HDR_FONT
+            cell.alignment = CENTER
+
+        for i, r in enumerate(results, 2):
+            vals = [
+                r['farmer'], r['plot_name'], r['acres'], r['activity'],
+                r['current_scheduled_date'], r['sales_date'], r['diff_days'],
+                'Yes' if r['is_allocated'] else 'No', r['gap_days_used'],
+                r['gap_source'], r['new_scheduled_date'], r['action'],
+            ]
+            is_update = r['action'] == 'UPDATE scheduled_date'
+            is_skip = 'SKIP' in r['action']
+
+            for c, v in enumerate(vals, 1):
+                cell = ws.cell(row=i, column=c, value=v)
+                cell.font = BODY_FONT
+                if c in (3, 7, 9):
+                    cell.alignment = CENTER
+                    if c == 3:
+                        cell.number_format = '0.00'
+                elif c in (5, 6, 11):
+                    cell.alignment = CENTER
+                else:
+                    cell.alignment = LEFT
+
+                if is_update:
+                    cell.fill = UPDATE_FILL
+                elif is_skip:
+                    cell.fill = SKIP_FILL
+
+        widths = [20, 18, 8, 25, 16, 16, 10, 10, 9, 20, 16, 35]
+        for c, w in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(c)].width = w
+
+        ws.freeze_panes = 'A2'
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(results)+1}"
+
+        wb.save(path)
 
     @staticmethod
     def _is_pruning(activity):
@@ -140,7 +194,6 @@ class Command(BaseCommand):
         new_sched = current_sched
         action = "NO CHANGE"
 
-        # Calculate what scheduled_date SHOULD be (pruning + gap)
         if self._is_pruning(ja.activity):
             expected = current_sched
             gap_days_used = 0
@@ -152,22 +205,15 @@ class Command(BaseCommand):
             gap_days_used, gap_source = self._get_gap_days(plot, ja.activity)
             expected = base_date + timedelta(days=gap_days_used)
 
-        # ── RULE 1: Allocated → NEVER touch ──
         if is_alloc:
             action = "SKIP (allocated)"
-
-        # ── RULE 2 & 3 & 4: Unallocated ──
         elif current_sched and current_sales:
-            diff = (current_sched - current_sales).days  # negative = sched is before sales
-
+            diff = (current_sched - current_sales).days
             if diff < -5:
-                # scheduled_date is MORE than 5 days before sales_date → FIX IT
                 action = "UPDATE scheduled_date"
                 new_sched = expected
             else:
-                # diff is -5 to 0 (within range) or positive (sched after sales) → no change
                 action = f"OK (diff={diff}d, within tolerance)"
-
         elif current_sched and not current_sales:
             action = "OK (no sales_date to compare)"
         else:
@@ -175,17 +221,20 @@ class Command(BaseCommand):
 
         diff_days = (current_sched - current_sales).days if current_sched and current_sales else None
         farmer_name = getattr(plot.farmer, 'farmer_name', '?')
+        plot_acres = float(plot.area_acres) if plot.area_acres else 0
 
         return {
-            'plot': f"{farmer_name} - {plot.name}",
+            'farmer': farmer_name,
+            'plot_name': plot.name,
+            'acres': plot_acres,
             'activity': ja.activity.name,
-            'current_scheduled_date': str(current_sched),
-            'sales_date': str(current_sales),
+            'current_scheduled_date': current_sched,
+            'sales_date': current_sales,
             'diff_days': diff_days,
             'is_allocated': is_alloc,
             'gap_days_used': gap_days_used,
             'gap_source': gap_source,
-            'new_scheduled_date': str(new_sched),
+            'new_scheduled_date': new_sched,
             'action': action,
             '_new_date_raw': new_sched,
         }
