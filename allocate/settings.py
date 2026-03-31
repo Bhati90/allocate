@@ -240,7 +240,7 @@ DATABASES = {
 }
 SALES_WEBHOOK_URL        = "https://a801-157-20-14-50.ngrok-free.app/ops/activity-status-webhook/"
 SALES_CANCEL_WEBHOOK_URL = "https://a801-157-20-14-50.ngrok-free.app/ops/activity-status-webhook/"  # 👈
-
+SHEETS_WEBHOOK_SECRET = "django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw$9t"
 SALES_WEBHOOK_TOKEN      = "89b9fd0698faed6c12c1a8e714fca12c86ee2000"
 # DATABASES = {
 #     'default': dj_database_url.config(

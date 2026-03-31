@@ -7,7 +7,7 @@ from .views import (
     ClusterViewSet,mukkadam_timeline,
     JobActivityViewSet,mukkadam_settlement_detail,raise_mukkadam_payment,
     JobViewSet,MakeCallViews,send_farmer_otp,
-    sync_from_sheet,verify_farmer_otp,booking_map_proxy,
+    sync_from_sheet,verify_farmer_otp,booking_map_proxy,split_from_sheet,
     LeaveViewSet,ExtraWorkerViewSet,send_start_otp,verify_start_otp,submit_day_end_report,verify_end_otp,resolve_dispute,
     MukkadamViewSet,cluster_payment_dashboard,get_payment_proof_presign,save_payment_proof,
     AllocationViewSet,FarmerViewSet,mukkadam_all_settlements,mukkadam_misc_cost_delete,mukkadam_misc_costs,
@@ -207,6 +207,8 @@ path('api/cluster/<int:cluster_id>/search_farmers/', search_farmers_for_cluster)
 path('api/cluster/<int:cluster_id>/add_farmer/', add_farmer_plots_to_cluster),
 path('api/cluster/<int:cluster_id>/search_mukkadams/', search_mukkadams_for_cluster),
 path('api/cluster/<int:cluster_id>/add_mukkadam/', add_mukkadam_to_cluster),
+
+path('api/split-from-sheet/', split_from_sheet, name='split_from_sheet'),
 
 
 path('api/clusters/<int:cluster_id>/insights/', ClusterInsightsView.as_view(),

@@ -3200,6 +3200,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             },
             status=200,
         )
+    
+    
     # @action(detail=True, methods=['post'])
     # def move(self, request, pk=None):
     #     """
@@ -11351,3 +11353,168 @@ def _update_farmer_from_sheet(row):
         farmer_name=row.get("farmer_name", ""),
         phone_number=row.get("phone_number", ""),
     )
+
+
+@csrf_exempt
+def split_from_sheet(request):
+    """
+    Called by Apps Script to split a JobActivity into two.
+    Delegates entirely to the existing JobActivityViewSet.move() logic.
+
+    POST body:
+    {
+        "job_activity_id": "42",
+        "split_acres":     "1",
+        "split_date":      "2025-07-02",
+        "reason":          "Split via sheet by user@gmail.com",
+        "edited_by":       "user@gmail.com"
+    }
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+
+    secret = request.headers.get("X-Webhook-Secret", "")
+    if secret != settings.SHEETS_WEBHOOK_SECRET:
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    ja_id       = data.get("job_activity_id")
+    split_acres = data.get("split_acres", "")
+    split_date  = data.get("split_date", "")
+    edited_by   = data.get("edited_by", "sheet")
+    reason      = data.get("reason") or f"Split via Google Sheet by {edited_by}"
+
+    if not ja_id or not split_acres or not split_date:
+        return JsonResponse({"error": "job_activity_id, split_acres and split_date are required"}, status=400)
+
+    # ── Reuse the move() logic directly ──────────────────────────────────────
+    from .models import JobActivity
+    from decimal import Decimal
+    from datetime import date
+    from django.db import transaction
+    from django.utils import timezone
+
+    try:
+        activity = (
+            JobActivity.objects
+            .select_related("job__farmer", "plot", "activity")
+            .prefetch_related("job__clusters")
+            .get(pk=int(ja_id))
+        )
+    except (JobActivity.DoesNotExist, ValueError):
+        return JsonResponse({"error": f"JobActivity {ja_id} not found"}, status=404)
+
+    try:
+        area = Decimal(str(split_acres).strip())
+    except Exception:
+        return JsonResponse({"error": f"Invalid split_acres: {split_acres}"}, status=400)
+
+    if area <= 0:
+        return JsonResponse({"error": "split_acres must be > 0"}, status=400)
+
+    if area >= activity.total_area:
+        return JsonResponse({
+            "error": f"split_acres ({area}) must be less than total_area ({activity.total_area})"
+        }, status=400)
+
+    try:
+        new_date_obj = date.fromisoformat(str(split_date).strip())
+    except ValueError:
+        return JsonResponse({"error": f"Invalid split_date: {split_date}. Use YYYY-MM-DD"}, status=400)
+
+    # ── Build a fake request object the move() helper can work with ──────────
+    # Instead of duplicating all the move() code, we call it via a mock request.
+    # Simpler: just inline the core logic (no cascade needed from sheet split).
+
+    original_date    = activity.scheduled_date
+    parent_new_area  = activity.total_area - area
+
+    try:
+        with transaction.atomic():
+            # Shrink parent
+            old_total            = activity.total_area
+            activity.total_area  = parent_new_area
+            activity.move_reason = reason
+            activity.is_manually_moved = True
+            activity.save()
+
+            # Create child
+            from .models import ActivityLogTender
+            child = JobActivity.objects.create(
+                job                     = activity.job,
+                activity                = activity.activity,
+                plot                    = activity.plot,
+                is_strict               = activity.is_strict,
+                total_area              = area,
+                allocated_area          = Decimal('0'),
+                remaining_area          = area,
+                scheduled_date          = new_date_obj,
+                original_scheduled_date = activity.original_scheduled_date or original_date,
+                original_gap_days       = activity.original_gap_days,
+                rate_per_acre           = activity.rate_per_acre,
+                transport_cost          = activity.transport_cost,
+                other_cost              = activity.other_cost,
+                estimated_workers       = max(1, int(float(area) * 10)),
+                location                = activity.location,
+                is_manually_moved       = True,
+                moved_from_activity     = activity,
+                source                  = 'manual',
+                original_source         = activity.original_source,
+                move_reason             = reason,
+                api_activity_id         = activity.api_activity_id,
+            )
+
+            # Log both
+            ActivityLogTender.objects.create(
+                action       = 'JOB_ACTIVITY_UPDATED',
+                job          = activity.job,
+                job_activity = activity,
+                performed_by = None,
+                details      = {
+                    'event':         'split_source_shrunk',
+                    'description':   f'Shrunk {old_total} → {parent_new_area} ac. {area} ac split to {split_date}.',
+                    'split_to_date': split_date,
+                    'edited_by':     edited_by,
+                    'move_reason':   reason,
+                },
+            )
+            ActivityLogTender.objects.create(
+                action       = 'JOB_ACTIVITY_CREATED',
+                job          = child.job,
+                job_activity = child,
+                performed_by = None,
+                details      = {
+                    'event':              'split_activity_created',
+                    'description':        f'{area} ac on {split_date} split from JA#{activity.pk}.',
+                    'source_activity_id': activity.pk,
+                    'edited_by':          edited_by,
+                    'move_reason':        reason,
+                },
+            )
+
+        # Sync both rows to sheet in background
+        try:
+            import threading
+            from .sheets_sync import upsert_job_activity_to_sheet
+            threading.Thread(target=upsert_job_activity_to_sheet, args=(activity.pk,), daemon=True).start()
+            threading.Thread(target=upsert_job_activity_to_sheet, args=(child.pk,),    daemon=True).start()
+        except Exception as e:
+            logger.warning(f"[split_from_sheet] sheet sync thread error: {e}")
+
+        return JsonResponse({
+            "success":           True,
+            "message":           f"{area} ac split to {split_date}. Parent JA#{activity.pk} now {parent_new_area} ac.",
+            "parent_ja_id":      activity.pk,
+            "parent_area":       float(parent_new_area),
+            "child_ja_id":       child.pk,
+            "child_area":        float(area),
+            "child_date":        split_date,
+        })
+
+    except Exception as e:
+        logger.error(f"[split_from_sheet] Error: {e}", exc_info=True)
+        return JsonResponse({"error": str(e)}, status=500)
