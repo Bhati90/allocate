@@ -638,7 +638,17 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
         )
         act.save(update_fields=["scheduled_date", "move_reason", "updated_at"])
         Allocation.objects.filter(job_activity=act).update(allocated_date=new_act_date)
-
+        _log_sheet_edit(
+            ja=act,
+            ja_id_raw=str(act.pk),
+            event='cascade',
+            column='Our date',
+            old_value=str(old_act_date),
+            new_value=str(new_act_date),
+            edited_by=edited_by,   # <-- passes the original editor's email
+            success=True,
+            message=f'Cascade from JA{trigger_ja.pk} ({shift_days:+d} days).',
+        )
         logger.info(
             f"[Cascade] JA#{act.pk} {act.activity.name}: "
             f"{old_act_date} → {new_act_date}"
