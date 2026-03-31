@@ -48,18 +48,18 @@ SCOPES = [
 ]
 
 HEADERS = [
-    "Farmer name",   # A  col 1   read-only
-    "Activity name", # B  col 2   read-only
-    "Plot Id",       # C  col 3   read-only
-    "Acre",          # D  col 4   EDITABLE
-    "Price",         # E  col 5   read-only
-    "Village",       # F  col 6   read-only
-    "Actual date",   # G  col 7   read-only
-    "Our date",      # H  col 8   EDITABLE
-    "Alloc status",  # I  col 9   read-only (JobActivity.allocation_status)
-    "Work status",   # J  col 10  EDITABLE  (Allocation.work_status)
-    "Mukadam team",  # K  col 11  EDITABLE
-    "Cluster",       # L  col 12  read-only
+    "Farmer name",      # A col 1
+    "Activity name",    # B col 2
+    "Plot Id",          # C col 3
+    "Acre",             # D col 4
+    "Price",            # E col 5
+    "Village",          # F col 6
+    "Actual date",      # G col 7
+    "Our date",         # H col 8
+    "Mukadam team",     # I col 9  ← was Alloc status
+    "Alloc status",     # J col 10 ← was Work status
+    "Work status",      # K col 11 ← was Mukadam team
+    "Cluster",          # L col 12
 ]
 
 _HEADERS_WITH_KEY = HEADERS + ["_job_activity_id"]  # M  col 13
@@ -176,10 +176,11 @@ def _job_activity_to_row(ja):
         price,          # E
         village,        # F
         actual_date,    # G
-        our_date,       # H
+        our_date,  
+        mukadam_team,     # H
         alloc_status,   # I  read-only
         work_status,    # J  editable
-        mukadam_team,   # K  editable
+           # K  editable
         cluster,        # L
         str(ja.pk),     # M  hidden key
     ]
