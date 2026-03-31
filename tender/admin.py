@@ -584,6 +584,8 @@ class JobActivityAdmin(admin.ModelAdmin):
         'activity', 'source',
     )
     search_fields = (
+        'id',                          # search by JA primary key
+    'api_activity_id',    
         'job__job_id',
         'job__farmer__farmer_name',
         'activity__name',

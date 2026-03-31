@@ -1718,6 +1718,8 @@ class SheetEditLog(models.Model):
 
     def __str__(self):
         return f"[{self.event}] JA#{self.job_activity_id_raw} col={self.column} by={self.edited_by} @ {self.created_at:%Y-%m-%d %H:%M}"
+
+
 class MukkadamPayment(models.Model):
     mukkadam = models.ForeignKey(Mukkadam, on_delete=models.CASCADE, related_name='payments')
     settlement = models.ForeignKey(
