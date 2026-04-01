@@ -122,10 +122,22 @@ def _job_activity_to_row(ja):
     ja.sales_date.strftime("%Y-%m-%d")
     if ja.sales_date else ""
 )
-    our_date = (
-        ja.scheduled_date.strftime("%Y-%m-%d")
-        if ja.scheduled_date else ""
-    )
+    # For fully allocated → show the actual allocated date
+    # For everything else → show scheduled_date
+    if ja.allocation_status in ('fully_allocated', 'completed'):
+        first_alloc = (
+            ja.allocations.order_by("allocated_date")
+            .values_list("allocated_date", flat=True)
+            .first()
+        )
+        our_date = first_alloc.strftime("%Y-%m-%d") if first_alloc else (
+            ja.scheduled_date.strftime("%Y-%m-%d") if ja.scheduled_date else ""
+        )
+    else:
+        our_date = (
+            ja.scheduled_date.strftime("%Y-%m-%d")
+            if ja.scheduled_date else ""
+        )
 
     # Col I — Alloc status: how much area is allocated (read-only from sheet)
     alloc_status = ja.get_allocation_status_display()
