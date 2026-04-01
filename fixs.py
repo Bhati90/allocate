@@ -265,9 +265,16 @@ def compute_corrections(activities_raw, alloc_map, global_gap, cluster_gap):
                 continue
 
             # ── Unallocated — compute correct date ───────────────────────────
+            # ── Unallocated — compute correct date ───────────────────────────
             gap_delta = this_gap - anchor_gap
             new_date  = anchor_date + timedelta(days=gap_delta)
-            changed   = new_date != current_date
+
+            # If the suggested new date is before the current scheduled date,
+            # don't move it backwards — leave it as-is.
+            if current_date and new_date < current_date:
+                new_date = current_date
+
+            changed = new_date != current_date
 
             rows_out.append({
                 'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
