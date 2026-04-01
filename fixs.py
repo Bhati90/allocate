@@ -22,11 +22,13 @@ Logic:
       suggested date is earlier than current (dates moved too far forward)
 
   PRUNING NOT PRESENT:
-    - Find last allocated activity by phase_order → use its alloc_date as base
-    - Compute dates relative to that base using phase_order delta × avg_gap
-    - Still: gap rules are meaningless without a pruning anchor, so we use
-      inter-activity relative offsets (phase_order diff × avg_gap_days between
-      consecutive activities)
+    - First activity on the plot (lowest phase_order) becomes the anchor
+    - base_date = its alloc_date if allocated, else its scheduled_date
+    - For each subsequent unallocated activity:
+        rel_gap  = this_activity.gap_days - anchor.gap_days
+        new_date = base_date + rel_gap
+    - This correctly chains: Corden(gap=3) → Shoot(gap=10) = Corden + 7d
+    - Anchor row itself is never moved backward
 
   ALLOCATED (any status):
     - Use earliest alloc_date as the real "when it happened" base
@@ -173,8 +175,14 @@ def compute_corrections(activities_raw, alloc_map, global_gap, cluster_gap):
 
         # ── CASE A: Pruning exists ───────────────────────────────────────────
         if has_pruning:
-            # Use the pruning row with highest ID (most recently created/moved)
-            pruning          = max(all_prunings, key=lambda a: a['id'])
+            # Anchor = pruning row with the LATEST alloc_date (most recent work done).
+            # If none are allocated, fall back to the pruning with the highest ID.
+            allocated_prunings = [a for a in all_prunings if alloc_map.get(a['id']) is not None]
+            if allocated_prunings:
+                pruning = max(allocated_prunings, key=lambda a: alloc_map[a['id']])
+            else:
+                pruning = max(all_prunings, key=lambda a: a['id'])
+
             pruning_ids_skip = {a['id'] for a in all_prunings if a['id'] != pruning['id']}
 
             pruning_alloc_date   = alloc_map.get(pruning['id'])
@@ -258,7 +266,6 @@ def compute_corrections(activities_raw, alloc_map, global_gap, cluster_gap):
                     continue
 
                 # ── Unallocated non-pruning: absolute gap from pruning base ──
-                # gap_days in rule = days after pruning date
                 new_date    = pruning_base + timedelta(days=abs_gap)
                 changed     = new_date != current_date
                 base_reason = (f'Pruning base {pruning_base} + abs_gap {abs_gap}d '
@@ -272,49 +279,47 @@ def compute_corrections(activities_raw, alloc_map, global_gap, cluster_gap):
                     'reason': base_reason,
                 })
 
-        # ── CASE B: No pruning — relative cascade from last allocated ────────
+        # ── CASE B: No pruning — relative cascade from first activity ────────
         else:
-            # Find the last allocated activity by phase_order (use alloc_date as base)
-            # If nothing allocated, use first activity's scheduled_date as base
-            allocated_acts = [a for a in activities if alloc_map.get(a['id']) is not None]
+            # Anchor = first activity on the plot (lowest phase_order / earliest in list)
+            # activities list is already sorted by phase_order, scheduled_date
+            base_act          = activities[0]
+            base_alloc_date   = alloc_map.get(base_act['id'])
+            base_is_allocated = base_alloc_date is not None
 
-            if allocated_acts:
-                # Pick the one with highest phase_order as the cascade start point
-                base_act    = max(allocated_acts, key=lambda a: a['phase_order'])
-                base_date   = alloc_map[base_act['id']]
-                base_phase  = base_act['phase_order']
-                base_label  = f"last-allocated ({base_act['activity_name']}) alloc={base_date}"
-            else:
-                base_act    = activities[0]
-                base_date   = base_act['scheduled_date']
-                base_phase  = base_act['phase_order']
-                base_label  = f"first activity ({base_act['activity_name']}) sched={base_date}"
+            # Prefer alloc_date over scheduled_date for anchor
+            base_date  = base_alloc_date if base_is_allocated else base_act['scheduled_date']
+            base_label = (
+                f"first activity ({base_act['activity_name']}) alloc={base_alloc_date}"
+                if base_is_allocated
+                else f"first activity ({base_act['activity_name']}) sched={base_act['scheduled_date']}"
+            )
 
             if not base_date:
                 skipped_no_base += 1
                 continue
 
-            # Compute avg gap between consecutive activities for relative offsets
-            # We use default_gap_days since rule gaps are pruning-relative (meaningless here)
-            # Relative offset = (this_phase - base_phase) * avg_gap_per_phase_step
-            # Simplification: use each activity's own default_gap_days as its offset
-            # from the base (i.e., treat gap_days as "days after base" proportionally)
-            phases   = sorted(set(a['phase_order'] for a in activities))
-            n_phases = len(phases)
-            # Build a phase_index lookup
-            phase_idx = {p: i for i, p in enumerate(phases)}
-
-            # Average gap per phase step from default_gap_days of activities in order
-            # Use a simple per-activity approach: offset = phase_rank_diff * avg_days_per_step
-            avg_days_per_step = 7  # sensible default; adjust if you track inter-activity gaps
+            # gap_days of the anchor activity (the "pseudo-pruning" offset)
+            # rel_gap for any activity = its gap_days - anchor's gap_days
+            # e.g. Corden gap=3, Shoot gap=10 → Shoot = Corden_date + (10-3) = +7d
+            base_gap = get_gap(
+                plot_id, base_act['activity_id'],
+                base_act['default_gap_days'], global_gap, cluster_gap
+            )
 
             if not _debug_printed:
                 _debug_printed = True
-                print(f"\n[DEBUG] Plot: {plot_label}  (NO Pruning — relative cascade)")
-                print(f"  Base: {base_label}  base_phase={base_phase}")
+                print(f"\n[DEBUG] Plot: {plot_label}  (NO Pruning — first-activity anchor)")
+                print(f"  Base: {base_label}  base_gap={base_gap}d")
                 for a in activities:
                     al = alloc_map.get(a['id'])
-                    print(f"  id={a['id']:6d}  phase={a['phase_order']:3d}  alloc={str(al):12s}  {a['activity_name']}")
+                    g  = get_gap(plot_id, a['activity_id'],
+                                 a['default_gap_days'], global_gap, cluster_gap)
+                    rel = g - base_gap
+                    marker = " <-- ANCHOR" if a['id'] == base_act['id'] else ""
+                    print(f"  id={a['id']:6d}  phase={a['phase_order']:3d}  "
+                          f"abs_gap={g:3d}d  rel_gap={rel:+d}d  alloc={str(al):12s}  "
+                          f"{a['activity_name']}{marker}")
                 print()
 
             for a in activities:
@@ -324,8 +329,10 @@ def compute_corrections(activities_raw, alloc_map, global_gap, cluster_gap):
                 is_fully      = a['allocation_status'] == 'fully_allocated'
                 alloc_date    = alloc_map.get(ja_id)
                 is_allocated  = alloc_date is not None
+                abs_gap       = get_gap(plot_id, a['activity_id'],
+                                        a['default_gap_days'], global_gap, cluster_gap)
 
-                # Fully allocated — no touch
+                # ── Fully allocated — no touch ───────────────────────────────
                 if is_fully:
                     rows_out.append({
                         'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
@@ -336,24 +343,39 @@ def compute_corrections(activities_raw, alloc_map, global_gap, cluster_gap):
                     })
                     continue
 
-                # Allocated (partial) — no date change, but note it
+                # ── Partially allocated — no date change, note it ────────────
                 if is_allocated:
                     rows_out.append({
                         'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
                         'acres': float(a['total_area']), 'allocated': 'YES',
                         'current_date': current_date, 'new_date': current_date,
                         'change': 'NO CHANGE',
-                        'reason': f'Allocated on {alloc_date} — date preserved',
+                        'reason': f'Allocated on {alloc_date} — date preserved, used as cascade reference',
                     })
                     continue
 
-                # Unallocated — relative offset from base by phase rank
-                this_phase    = a['phase_order']
-                phase_offset  = phase_idx.get(this_phase, 0) - phase_idx.get(base_phase, 0)
-                new_date      = base_date + timedelta(days=phase_offset * avg_days_per_step)
-                changed       = new_date != current_date
-                base_reason   = (f'No-pruning cascade: {base_label} + '
-                                 f'phase_offset={phase_offset}×{avg_days_per_step}d = {new_date}')
+                # ── Anchor row itself (unallocated) — never move backward ────
+                if ja_id == base_act['id']:
+                    rows_out.append({
+                        'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
+                        'acres': float(a['total_area']), 'allocated': 'NO',
+                        'current_date': current_date, 'new_date': current_date,
+                        'change': 'NO CHANGE',
+                        'reason': 'First-activity anchor — date locked (no pruning fallback)',
+                    })
+                    continue
+
+                # ── Unallocated non-anchor: relative gap from base ───────────
+                # rel_gap = this activity's abs gap minus anchor's abs gap
+                # → gives actual days between anchor and this activity
+                rel_gap     = abs_gap - base_gap
+                new_date    = base_date + timedelta(days=rel_gap)
+                changed     = new_date != current_date
+                base_reason = (
+                    f'No-pruning relative: base={base_date} '
+                    f'+ (abs_gap {abs_gap} - base_gap {base_gap}) '
+                    f'= +{rel_gap}d → {new_date}'
+                )
 
                 rows_out.append({
                     'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
@@ -406,7 +428,6 @@ def write_excel(rows, path):
     for ri, row in enumerate(rows, 2):
         change   = row['change']
         alloc    = row['allocated']
-        reason   = row.get('reason', '')
         cur_dt   = row.get('current_date')
         new_dt   = row.get('new_date')
         moved_bk = (change == 'DATE CHANGE'
@@ -419,7 +440,7 @@ def write_excel(rows, path):
 
         vals = [row.get('ja_id', ''), row['plot'], row['activity'],
                 row['acres'], alloc,
-                cur_dt, new_dt, change, reason]
+                cur_dt, new_dt, change, row.get('reason', '')]
         ws.row_dimensions[ri].height = 16
 
         for ci, val in enumerate(vals, 1):
@@ -451,11 +472,11 @@ def write_excel(rows, path):
     no_chg   = total - changed
 
     summary = [
-        ("Total",             total,    "000000"),
-        ("Date Changes",      changed,  "C00000"),
-        ("  → Moved forward", moved_fw, "C00000"),
-        ("  → Moved backward",moved_bk, "833C00"),
-        ("No change",         no_chg,   "375623"),
+        ("Total",              total,    "000000"),
+        ("Date Changes",       changed,  "C00000"),
+        ("  → Moved forward",  moved_fw, "C00000"),
+        ("  → Moved backward", moved_bk, "833C00"),
+        ("No change",          no_chg,   "375623"),
     ]
     for r, (label, val, color) in enumerate(summary, 1):
         ws.cell(row=r, column=11, value=label).font = Font(name="Arial", bold=True, color=color)
