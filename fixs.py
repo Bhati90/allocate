@@ -7,12 +7,31 @@ Run from your Django project root:
 
 Produces: schedule_corrections_preview.xlsx
 
-Fixes applied:
-  1. Plots with no Pruning row are no longer skipped —
-     the first activity (lowest phase_order) is used as the anchor instead.
-  2. Suggested dates are never moved BACKWARD —
-     if new_date < current_date the row is kept as-is with a clear reason.
-  3. Reason column distinguishes "not moved backward" from genuine no-changes.
+Logic:
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  gap_days in ActivityScheduleRule is ABSOLUTE FROM PRUNING DATE │
+  │  i.e. "this activity happens gap_days after pruning"            │
+  └─────────────────────────────────────────────────────────────────┘
+
+  PRUNING PRESENT:
+    - Anchor base = pruning alloc_date (if allocated) OR scheduled_date
+    - Pruning scheduled_date is NEVER moved backward, no matter what
+    - For each other activity:
+        new_date = pruning_base + gap_days  (absolute, not relative)
+    - Backward movement IS allowed for non-pruning activities when the
+      suggested date is earlier than current (dates moved too far forward)
+
+  PRUNING NOT PRESENT:
+    - Find last allocated activity by phase_order → use its alloc_date as base
+    - Compute dates relative to that base using phase_order delta × avg_gap
+    - Still: gap rules are meaningless without a pruning anchor, so we use
+      inter-activity relative offsets (phase_order diff × avg_gap_days between
+      consecutive activities)
+
+  ALLOCATED (any status):
+    - Use earliest alloc_date as the real "when it happened" base
+    - Never change its scheduled_date
+    - Update cascade anchor to alloc_date so downstream is correct
 """
 
 import os, sys, django
@@ -49,6 +68,7 @@ SELECT
     ac.name                        AS activity_name,
     ac.default_gap_days,
     COALESCE(asr.phase_order, 999) AS phase_order,
+    COALESCE(asr.gap_days, ac.default_gap_days, 3) AS rule_gap_days,
     p.name                         AS plot_name,
     f.farmer_name
 FROM job_activities ja
@@ -109,7 +129,6 @@ def fetch_all():
             cur.execute(CLUSTER_GAP_SQL)
             for plot_id, activity_id, gap_days in cur.fetchall():
                 key = (plot_id, activity_id)
-                # take smallest (most restrictive) if multiple clusters overlap
                 if key not in cluster_gap or gap_days < cluster_gap[key]:
                     cluster_gap[key] = gap_days
     except Exception as e:
@@ -119,7 +138,10 @@ def fetch_all():
 
 
 def get_gap(plot_id, activity_id, default_gap, global_gap, cluster_gap):
-    # Explicit None checks — gap of 0 is valid, 'or' would skip it
+    """
+    Returns the absolute gap_days from pruning date for this activity.
+    Explicit None checks — gap of 0 is valid.
+    """
     v = cluster_gap.get((plot_id, activity_id))
     if v is not None:
         return v
@@ -130,7 +152,7 @@ def get_gap(plot_id, activity_id, default_gap, global_gap, cluster_gap):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CORE LOGIC — pure Python, zero extra DB hits
+# CORE LOGIC
 # ─────────────────────────────────────────────────────────────────────────────
 def compute_corrections(activities_raw, alloc_map, global_gap, cluster_gap):
     plots = defaultdict(list)
@@ -138,179 +160,211 @@ def compute_corrections(activities_raw, alloc_map, global_gap, cluster_gap):
         plots[row['plot_id']].append(row)
 
     rows_out = []
-    _debug_printed = False   # print gap table for first plot only
+    _debug_printed = False
     skipped_no_base = 0
 
     for plot_id, activities in plots.items():
         first      = activities[0]
         plot_label = f"{first['farmer_name']} — {first['plot_name']}"
 
-        # ── Determine anchor ─────────────────────────────────────────────────
-        # Prefer Pruning; fall back to first activity if no Pruning exists.
+        # ── Identify pruning rows ────────────────────────────────────────────
         all_prunings = [a for a in activities if a['activity_name'] == PRUNING_NAME]
+        has_pruning  = bool(all_prunings)
 
-        if all_prunings:
-            # Use the latest Pruning row (highest id = most recently created/moved)
+        # ── CASE A: Pruning exists ───────────────────────────────────────────
+        if has_pruning:
+            # Use the pruning row with highest ID (most recently created/moved)
             pruning          = max(all_prunings, key=lambda a: a['id'])
             pruning_ids_skip = {a['id'] for a in all_prunings if a['id'] != pruning['id']}
-            anchor_label     = "Pruning"
-        else:
-            # No Pruning — use the first activity (lowest phase_order) as anchor
-            pruning          = activities[0]
-            pruning_ids_skip = set()
-            anchor_label     = f"First activity ({pruning['activity_name']})"
 
-        pruning_alloc_date   = alloc_map.get(pruning['id'])
-        pruning_is_allocated = pruning_alloc_date is not None
-        pruning_gap          = get_gap(plot_id, pruning['activity_id'],
-                                       pruning['default_gap_days'],
-                                       global_gap, cluster_gap)
+            pruning_alloc_date   = alloc_map.get(pruning['id'])
+            pruning_is_allocated = pruning_alloc_date is not None
 
-        # Determine anchor base date
-        if pruning_is_allocated:
-            pruning_base           = pruning_alloc_date
-            pruning_corrected_date = None
-        else:
-            sched = pruning['scheduled_date']
-            sales = pruning['sales_date']
-            if sched and sales and sched < sales:
-                pruning_base           = sales
-                pruning_corrected_date = sales   # DATE CHANGE — anchor is behind sales date
+            # Pruning base: prefer alloc_date over scheduled_date
+            if pruning_is_allocated:
+                pruning_base = pruning_alloc_date
             else:
-                pruning_base           = sched   # already future — keep
-                pruning_corrected_date = None
+                pruning_base = pruning['scheduled_date']
 
-        if not pruning_base:
-            skipped_no_base += 1
-            continue
+            if not pruning_base:
+                skipped_no_base += 1
+                continue
 
-        # Cascade anchor starts at the anchor activity
-        anchor_name = pruning['activity_name']
-        anchor_gap  = pruning_gap
-        anchor_date = pruning_base
+            # DEBUG for first plot
+            if not _debug_printed:
+                _debug_printed = True
+                print(f"\n[DEBUG] Plot: {plot_label}  (Pruning present)")
+                print(f"  Pruning base={pruning_base}  allocated={pruning_is_allocated}")
+                for a in activities:
+                    g  = get_gap(plot_id, a['activity_id'], a['default_gap_days'], global_gap, cluster_gap)
+                    al = alloc_map.get(a['id'])
+                    marker = " <-- PRUNING ANCHOR" if a["id"] == pruning["id"] else ""
+                    print(f"  id={a['id']:6d}  phase={a['phase_order']:3d}  abs_gap={g:3d}d  alloc={str(al):12s}  {a['activity_name']}{marker}")
+                print()
 
-        # DEBUG — print gap table for first plot only
-        if not _debug_printed:
-            _debug_printed = True
-            print(f"\n[DEBUG] Plot: {plot_label}")
-            print(f"  Anchor: {anchor_label}")
-            print(f"  Anchor base={pruning_base}  anchor_gap={pruning_gap}  allocated={pruning_is_allocated}")
             for a in activities:
-                g  = get_gap(plot_id, a['activity_id'], a['default_gap_days'], global_gap, cluster_gap)
-                al = alloc_map.get(a['id'])
-                marker = " <-- ANCHOR" if a["id"] == pruning["id"] else ""
-                print(f"  id={a['id']:6d}  phase={a['phase_order']:3d}  gap={g:3d}  alloc={str(al):12s}  {a['activity_name']}{marker}")
-            print()
+                ja_id         = a['id']
+                activity_name = a['activity_name']
+                current_date  = a['scheduled_date']
+                is_fully      = a['allocation_status'] == 'fully_allocated'
+                alloc_date    = alloc_map.get(ja_id)
+                is_allocated  = alloc_date is not None
+                abs_gap       = get_gap(plot_id, a['activity_id'],
+                                        a['default_gap_days'], global_gap, cluster_gap)
 
-        for a in activities:
-            ja_id         = a['id']
-            activity_name = a['activity_name']
-            current_date  = a['scheduled_date']
-            is_fully      = a['allocation_status'] == 'fully_allocated'
-            alloc_date    = alloc_map.get(ja_id)
-            is_allocated  = alloc_date is not None
-            this_gap      = get_gap(plot_id, a['activity_id'],
-                                    a['default_gap_days'], global_gap, cluster_gap)
-
-            # ── Skip duplicate pruning rows ───────────────────────────────────
-            if activity_name == PRUNING_NAME and ja_id in pruning_ids_skip:
-                rows_out.append({
-                    'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
-                    'acres': float(a['total_area']), 'allocated': 'YES' if is_allocated else 'NO',
-                    'current_date': current_date, 'new_date': current_date,
-                    'change': 'NO CHANGE',
-                    'reason': 'Duplicate Pruning row — skipped (not anchor)',
-                })
-                continue
-
-            # ── Fully allocated ───────────────────────────────────────────────
-            if is_fully:
-                if is_allocated:
-                    anchor_name = activity_name
-                    anchor_gap  = this_gap
-                    anchor_date = alloc_date
-                rows_out.append({
-                    'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
-                    'acres': float(a['total_area']), 'allocated': 'YES (Full)',
-                    'current_date': current_date, 'new_date': current_date,
-                    'change': 'NO CHANGE',
-                    'reason': f'Fully allocated on {alloc_date}',
-                })
-                continue
-
-            # ── Anchor row itself ─────────────────────────────────────────────
-            if ja_id == pruning['id']:
-                if pruning_corrected_date:
+                # ── Skip duplicate pruning rows ──────────────────────────────
+                if activity_name == PRUNING_NAME and ja_id in pruning_ids_skip:
                     rows_out.append({
                         'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
-                        'acres': float(a['total_area']), 'allocated': 'NO',
-                        'current_date': current_date, 'new_date': pruning_corrected_date,
-                        'change': 'DATE CHANGE',
-                        'reason': (f'Unallocated & {current_date} < '
-                                   f'sales {a["sales_date"]} → moved to sales date'),
+                        'acres': float(a['total_area']), 'allocated': 'YES' if is_allocated else 'NO',
+                        'current_date': current_date, 'new_date': current_date,
+                        'change': 'NO CHANGE',
+                        'reason': 'Duplicate Pruning row — skipped (not anchor)',
                     })
-                elif pruning_is_allocated:
+                    continue
+
+                # ── Fully allocated — never touch ────────────────────────────
+                if is_fully:
+                    rows_out.append({
+                        'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
+                        'acres': float(a['total_area']), 'allocated': 'YES (Full)',
+                        'current_date': current_date, 'new_date': current_date,
+                        'change': 'NO CHANGE',
+                        'reason': f'Fully allocated on {alloc_date}',
+                    })
+                    continue
+
+                # ── Partially allocated — use alloc_date, no date change ─────
+                if is_allocated:
                     rows_out.append({
                         'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
                         'acres': float(a['total_area']), 'allocated': 'YES',
                         'current_date': current_date, 'new_date': current_date,
                         'change': 'NO CHANGE',
-                        'reason': f'Allocated on {pruning_base} — anchor ({anchor_label})',
+                        'reason': f'Allocated on {alloc_date} — date preserved, used as cascade reference',
                     })
-                else:
+                    continue
+
+                # ── Pruning anchor row itself (unallocated) ──────────────────
+                if ja_id == pruning['id']:
+                    # NEVER move pruning backward — lock it as-is
                     rows_out.append({
                         'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
                         'acres': float(a['total_area']), 'allocated': 'NO',
                         'current_date': current_date, 'new_date': current_date,
                         'change': 'NO CHANGE',
-                        'reason': (f'Unallocated, {current_date} >= '
-                                   f'sales {a["sales_date"]} — future, used as anchor ({anchor_label})'),
+                        'reason': 'Pruning anchor — never moved backward (locked)',
                     })
-                continue
+                    continue
 
-            # ── Partially allocated — no date change, update anchor ───────────
-            if is_allocated:
-                anchor_name = activity_name
-                anchor_gap  = this_gap
-                anchor_date = alloc_date
-                rows_out.append({
-                    'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
-                    'acres': float(a['total_area']), 'allocated': 'YES',
-                    'current_date': current_date, 'new_date': current_date,
-                    'change': 'NO CHANGE',
-                    'reason': f'Allocated on {alloc_date}',
-                })
-                continue
+                # ── Unallocated non-pruning: absolute gap from pruning base ──
+                # gap_days in rule = days after pruning date
+                new_date    = pruning_base + timedelta(days=abs_gap)
+                changed     = new_date != current_date
+                base_reason = (f'Pruning base {pruning_base} + abs_gap {abs_gap}d '
+                               f'= {new_date}')
 
-            # ── Unallocated — compute correct date ────────────────────────────
-            gap_delta    = this_gap - anchor_gap
-            new_date     = anchor_date + timedelta(days=gap_delta)
-            base_reason  = (f'Anchor: "{anchor_name}" {anchor_date} '
-                            f'+ ({this_gap}−{anchor_gap})={gap_delta}d')
-
-            # Never move a date BACKWARD — if suggested date < current, skip
-            if current_date and new_date < current_date:
                 rows_out.append({
                     'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
                     'acres': float(a['total_area']), 'allocated': 'NO',
-                    'current_date': current_date, 'new_date': current_date,
-                    'change': 'NO CHANGE',
-                    'reason': (f'Suggested {new_date} < current {current_date} '
-                               f'— not moved backward. ({base_reason})'),
+                    'current_date': current_date, 'new_date': new_date,
+                    'change': 'DATE CHANGE' if changed else 'NO CHANGE',
+                    'reason': base_reason,
                 })
+
+        # ── CASE B: No pruning — relative cascade from last allocated ────────
+        else:
+            # Find the last allocated activity by phase_order (use alloc_date as base)
+            # If nothing allocated, use first activity's scheduled_date as base
+            allocated_acts = [a for a in activities if alloc_map.get(a['id']) is not None]
+
+            if allocated_acts:
+                # Pick the one with highest phase_order as the cascade start point
+                base_act    = max(allocated_acts, key=lambda a: a['phase_order'])
+                base_date   = alloc_map[base_act['id']]
+                base_phase  = base_act['phase_order']
+                base_label  = f"last-allocated ({base_act['activity_name']}) alloc={base_date}"
+            else:
+                base_act    = activities[0]
+                base_date   = base_act['scheduled_date']
+                base_phase  = base_act['phase_order']
+                base_label  = f"first activity ({base_act['activity_name']}) sched={base_date}"
+
+            if not base_date:
+                skipped_no_base += 1
                 continue
 
-            changed = new_date != current_date
-            rows_out.append({
-                'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
-                'acres': float(a['total_area']), 'allocated': 'NO',
-                'current_date': current_date, 'new_date': new_date,
-                'change': 'DATE CHANGE' if changed else 'NO CHANGE',
-                'reason': base_reason,
-            })
+            # Compute avg gap between consecutive activities for relative offsets
+            # We use default_gap_days since rule gaps are pruning-relative (meaningless here)
+            # Relative offset = (this_phase - base_phase) * avg_gap_per_phase_step
+            # Simplification: use each activity's own default_gap_days as its offset
+            # from the base (i.e., treat gap_days as "days after base" proportionally)
+            phases   = sorted(set(a['phase_order'] for a in activities))
+            n_phases = len(phases)
+            # Build a phase_index lookup
+            phase_idx = {p: i for i, p in enumerate(phases)}
+
+            # Average gap per phase step from default_gap_days of activities in order
+            # Use a simple per-activity approach: offset = phase_rank_diff * avg_days_per_step
+            avg_days_per_step = 7  # sensible default; adjust if you track inter-activity gaps
+
+            if not _debug_printed:
+                _debug_printed = True
+                print(f"\n[DEBUG] Plot: {plot_label}  (NO Pruning — relative cascade)")
+                print(f"  Base: {base_label}  base_phase={base_phase}")
+                for a in activities:
+                    al = alloc_map.get(a['id'])
+                    print(f"  id={a['id']:6d}  phase={a['phase_order']:3d}  alloc={str(al):12s}  {a['activity_name']}")
+                print()
+
+            for a in activities:
+                ja_id         = a['id']
+                activity_name = a['activity_name']
+                current_date  = a['scheduled_date']
+                is_fully      = a['allocation_status'] == 'fully_allocated'
+                alloc_date    = alloc_map.get(ja_id)
+                is_allocated  = alloc_date is not None
+
+                # Fully allocated — no touch
+                if is_fully:
+                    rows_out.append({
+                        'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
+                        'acres': float(a['total_area']), 'allocated': 'YES (Full)',
+                        'current_date': current_date, 'new_date': current_date,
+                        'change': 'NO CHANGE',
+                        'reason': f'Fully allocated on {alloc_date}',
+                    })
+                    continue
+
+                # Allocated (partial) — no date change, but note it
+                if is_allocated:
+                    rows_out.append({
+                        'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
+                        'acres': float(a['total_area']), 'allocated': 'YES',
+                        'current_date': current_date, 'new_date': current_date,
+                        'change': 'NO CHANGE',
+                        'reason': f'Allocated on {alloc_date} — date preserved',
+                    })
+                    continue
+
+                # Unallocated — relative offset from base by phase rank
+                this_phase    = a['phase_order']
+                phase_offset  = phase_idx.get(this_phase, 0) - phase_idx.get(base_phase, 0)
+                new_date      = base_date + timedelta(days=phase_offset * avg_days_per_step)
+                changed       = new_date != current_date
+                base_reason   = (f'No-pruning cascade: {base_label} + '
+                                 f'phase_offset={phase_offset}×{avg_days_per_step}d = {new_date}')
+
+                rows_out.append({
+                    'ja_id': ja_id, 'plot': plot_label, 'activity': activity_name,
+                    'acres': float(a['total_area']), 'allocated': 'NO',
+                    'current_date': current_date, 'new_date': new_date,
+                    'change': 'DATE CHANGE' if changed else 'NO CHANGE',
+                    'reason': base_reason,
+                })
 
     if skipped_no_base:
-        print(f"[WARN] {skipped_no_base} plots skipped — no base date available (no scheduled_date and no sales_date)")
+        print(f"[WARN] {skipped_no_base} plots skipped — no base date available")
 
     return rows_out
 
@@ -328,7 +382,7 @@ def write_excel(rows, path):
     C_FILL  = PatternFill("solid", fgColor="FFF2CC")   # yellow  = change
     N_FILL  = PatternFill("solid", fgColor="E2EFDA")   # green   = no change
     A_FILL  = PatternFill("solid", fgColor="DDEBF7")   # blue    = allocated
-    B_FILL  = PatternFill("solid", fgColor="FCE4D6")   # orange  = not moved backward
+    BK_FILL = PatternFill("solid", fgColor="FCE4D6")   # orange  = moved backward
     R_FONT  = Font(name="Arial", bold=True, color="C00000", size=10)
     G_FONT  = Font(name="Arial", color="375623", size=10)
     O_FONT  = Font(name="Arial", color="833C00", size=10)
@@ -340,7 +394,7 @@ def write_excel(rows, path):
 
     headers    = ["JA ID", "Plot", "Activity", "Acres", "Allocated?",
                   "Current Date", "New Date", "Change?", "Reason"]
-    col_widths = [9, 36, 28, 8, 12, 18, 18, 15, 70]
+    col_widths = [9, 36, 28, 8, 12, 18, 18, 15, 80]
 
     ws.row_dimensions[1].height = 26
     for ci, (h, w) in enumerate(zip(headers, col_widths), 1):
@@ -350,18 +404,22 @@ def write_excel(rows, path):
     ws.freeze_panes = "A2"
 
     for ri, row in enumerate(rows, 2):
-        change  = row['change']
-        alloc   = row['allocated']
-        reason  = row.get('reason', '')
-        is_back = 'not moved backward' in reason
+        change   = row['change']
+        alloc    = row['allocated']
+        reason   = row.get('reason', '')
+        cur_dt   = row.get('current_date')
+        new_dt   = row.get('new_date')
+        moved_bk = (change == 'DATE CHANGE'
+                    and isinstance(cur_dt, date) and isinstance(new_dt, date)
+                    and new_dt < cur_dt)
 
-        fill = (C_FILL if change == 'DATE CHANGE' else
-                B_FILL if is_back else
-                A_FILL if 'YES' in alloc else N_FILL)
+        fill = (BK_FILL if moved_bk else
+                C_FILL  if change == 'DATE CHANGE' else
+                A_FILL  if 'YES' in alloc else N_FILL)
 
         vals = [row.get('ja_id', ''), row['plot'], row['activity'],
                 row['acres'], alloc,
-                row['current_date'], row['new_date'], change, reason]
+                cur_dt, new_dt, change, reason]
         ws.row_dimensions[ri].height = 16
 
         for ci, val in enumerate(vals, 1):
@@ -374,9 +432,7 @@ def write_excel(rows, path):
             elif ci == 8:
                 c.alignment = CTR
                 if change == 'DATE CHANGE':
-                    c.font = R_FONT
-                elif is_back:
-                    c.font = O_FONT
+                    c.font = O_FONT if moved_bk else R_FONT
                 else:
                     c.font = G_FONT
             else:
@@ -384,35 +440,39 @@ def write_excel(rows, path):
 
     total    = len(rows)
     changed  = sum(1 for r in rows if r['change'] == 'DATE CHANGE')
-    backward = sum(1 for r in rows if 'not moved backward' in (r.get('reason') or ''))
+    moved_bk = sum(
+        1 for r in rows
+        if r['change'] == 'DATE CHANGE'
+        and isinstance(r.get('current_date'), date)
+        and isinstance(r.get('new_date'), date)
+        and r['new_date'] < r['current_date']
+    )
+    moved_fw = changed - moved_bk
     no_chg   = total - changed
 
     summary = [
-        ("Total",            total,    "000000"),
-        ("Date Changes",     changed,  "C00000"),
-        ("Not moved back",   backward, "833C00"),
-        ("No change",        no_chg,   "375623"),
+        ("Total",             total,    "000000"),
+        ("Date Changes",      changed,  "C00000"),
+        ("  → Moved forward", moved_fw, "C00000"),
+        ("  → Moved backward",moved_bk, "833C00"),
+        ("No change",         no_chg,   "375623"),
     ]
     for r, (label, val, color) in enumerate(summary, 1):
         ws.cell(row=r, column=11, value=label).font = Font(name="Arial", bold=True, color=color)
         ws.cell(row=r, column=12, value=val).font   = Font(name="Arial", bold=True, color=color)
-    ws.column_dimensions['K'].width = 18
+    ws.column_dimensions['K'].width = 22
     ws.column_dimensions['L'].width = 8
 
     wb.save(path)
     print(f"[OK] {path}")
-    print(f"     {total} rows  |  {changed} date changes  |  "
-          f"{backward} not moved backward  |  {no_chg - backward} genuine no-changes")
+    print(f"     {total} rows  |  {changed} date changes  "
+          f"({moved_fw} forward / {moved_bk} backward)  |  {no_chg} no-change")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # APPLY TO DB
 # ─────────────────────────────────────────────────────────────────────────────
 def apply_corrections(rows):
-    """
-    Bulk update scheduled_date for all DATE CHANGE rows.
-    Single transaction — rolls back everything on any error.
-    """
     to_update = [
         (r['new_date'], r['ja_id'])
         for r in rows
@@ -473,12 +533,7 @@ if __name__ == "__main__":
     print("\nFetching data (3 queries)...")
     activities_raw, alloc_map, global_gap, cluster_gap = fetch_all()
     total_plots = len(set(r['plot_id'] for r in activities_raw))
-    no_pruning  = sum(
-        1 for plot_acts in defaultdict(list, {
-            r['plot_id']: [] for r in activities_raw
-        }).values()
-    )
-    # Recount properly
+
     plot_buckets = defaultdict(list)
     for r in activities_raw:
         plot_buckets[r['plot_id']].append(r)
@@ -488,7 +543,7 @@ if __name__ == "__main__":
     )
     print(f"  {len(activities_raw)} activities  |  {total_plots} plots loaded")
     print(f"  {total_plots - plots_no_pruning} plots have Pruning  |  "
-          f"{plots_no_pruning} plots use first-activity fallback anchor")
+          f"{plots_no_pruning} plots use relative-cascade fallback (no pruning)")
 
     print("\nComputing corrections (pure Python)...")
     rows = compute_corrections(activities_raw, alloc_map, global_gap, cluster_gap)

@@ -400,11 +400,7 @@ def _apply_date_change(ja, new_date_str, edited_by):
         return False, f"Invalid date: '{new_date_str}'. Use YYYY-MM-DD."
 
     # Block if new date is before the original booking/sales date
-    if ja.sales_date and new_date < ja.sales_date:
-        return False, (
-            f"New date {new_date} is before the actual/booking date "
-            f"{ja.sales_date} — date not changed."
-        )
+    
 
     old_date = ja.scheduled_date
     if not old_date:
