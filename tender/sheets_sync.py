@@ -10,22 +10,18 @@ Column layout (A–M):
   F  Village            read-only
   G  Actual date        read-only (original_scheduled_date, locked at creation)
   H  Our date           EDITABLE  -> JobActivity.scheduled_date + Allocation.allocated_date
-  I  Alloc status       read-only -> JobActivity.allocation_status (set by DB signals)
-  J  Work status        EDITABLE  -> Allocation.work_status (actual ground work)
-  K  Mukadam team       EDITABLE  -> Allocation.mukkadam (matched by name)
+  I  Mukadam team       EDITABLE  -> Allocation.mukkadam (matched by name)
+  J  Alloc status       read-only -> JobActivity.allocation_status (set by DB signals)
+  K  Work status        EDITABLE  -> Allocation.work_status (actual ground work)
   L  Cluster            read-only
   M  _job_activity_id   hidden key
 
-WHY TWO STATUS COLUMNS:
-  Alloc status (I) = how much area has been ASSIGNED to a mukkadam
-    pending / partially_allocated / fully_allocated / in_progress / completed
-    Controlled by DB signals automatically. Sheet cannot change this.
-
-  Work status (J) = what actually happened ON THE GROUND
-    Not Started / In Progress / Completed
-    This IS editable from the sheet -> updates Allocation.work_status.
-    When all allocations are Completed, JobActivity.allocation_status
-    is also set to 'completed'.
+OPTIMISATIONS (v2):
+  - _job_activity_to_row() uses only the prefetch cache — zero extra DB hits per row
+  - upsert_job_activity_to_sheet() builds a ja_id→row map once per call instead of
+    ws.find() scanning the whole sheet every time
+  - full_sheet_refresh() writes in 500-row chunks to avoid Sheets API payload limits
+  - Management command streams rows in chunks of 500 so RAM stays flat
 """
 
 import gspread
@@ -48,22 +44,24 @@ SCOPES = [
 ]
 
 HEADERS = [
-    "Farmer name",      # A col 1
-    "Activity name",    # B col 2
-    "Plot Id",          # C col 3
-    "Acre",             # D col 4
-    "Price",            # E col 5
-    "Village",          # F col 6
-    "Actual date",      # G col 7
-    "Our date",         # H col 8
-    "Mukadam team",     # I col 9  ← was Alloc status
-    "Alloc status",     # J col 10 ← was Work status
-    "Work status",      # K col 11 ← was Mukadam team
-    "Cluster",          # L col 12
+    "Farmer name",   # A col 1
+    "Activity name", # B col 2
+    "Plot Id",       # C col 3
+    "Acre",          # D col 4
+    "Price",         # E col 5
+    "Village",       # F col 6
+    "Actual date",   # G col 7
+    "Our date",      # H col 8
+    "Mukadam team",  # I col 9
+    "Alloc status",  # J col 10
+    "Work status",   # K col 11
+    "Cluster",       # L col 12
 ]
 
-_HEADERS_WITH_KEY = HEADERS + ["_job_activity_id"]  # M  col 13
-_KEY_COL = len(_HEADERS_WITH_KEY)  # 13
+_HEADERS_WITH_KEY = HEADERS + ["_job_activity_id"]  # M col 13
+_KEY_COL          = len(_HEADERS_WITH_KEY)           # 13
+
+_CHUNK_SIZE = 500   # rows per Sheets API write — stays well under the 10 MB limit
 
 
 # =============================================================================
@@ -85,9 +83,9 @@ def get_sheet():
             "updateSheetProperties": {
                 "properties": {
                     "sheetId": ws.id,
-                    "gridProperties": {"frozenRowCount": 1}
+                    "gridProperties": {"frozenRowCount": 1},
                 },
-                "fields": "gridProperties.frozenRowCount"
+                "fields": "gridProperties.frozenRowCount",
             }
         }]})
         return ws
@@ -98,109 +96,124 @@ def get_sheet():
 # =============================================================================
 
 def _job_activity_to_row(ja):
-    """Build a 13-column row from a JobActivity instance."""
+    """
+    Build a 13-column row from a JobActivity instance.
 
+    IMPORTANT: every attribute access here must come from the prefetch cache.
+    Never call .order_by(), .select_related(), .first(), or .values_list()
+    on a related manager — those bypass the cache and fire a new DB query.
+
+    Required prefetch on the caller side:
+        .select_related("job__farmer", "plot", "activity")
+        .prefetch_related("job__clusters", "allocations__mukkadam")
+    """
+
+    # ── Scalar fields (select_related — no extra query) ───────────────────────
     try:
         farmer_name = ja.job.farmer.farmer_name
     except Exception:
         farmer_name = ""
 
     activity_name = ja.activity.name if ja.activity_id else ""
-    plot_id = ja.plot.name if ja.plot_id else ""
-    acre = str(ja.total_area) if ja.total_area else "0"
-    price = str(ja.total_price) if ja.total_price else "0"
+    plot_id       = ja.plot.name     if ja.plot_id     else ""
+    acre          = str(ja.total_area)  if ja.total_area  else "0"
+    price         = str(ja.total_price) if ja.total_price else "0"
+
+    # ── Clusters — use prefetch cache via .all(), slice in Python ────────────
+    # NEVER call .first() — it bypasses the cache with a LIMIT 1 query.
+    try:
+        clusters = list(ja.job.clusters.all())   # hits prefetch cache
+    except Exception:
+        clusters = []
 
     village = ""
+    cluster = ""
+    if clusters:
+        village = clusters[0].villages[0] if clusters[0].villages else ""
+        cluster = clusters[0].name or ""
+
+    # ── Dates ────────────────────────────────────────────────────────────────
+    actual_date = ja.sales_date.strftime("%Y-%m-%d") if ja.sales_date else ""
+
+    # ── Allocations — use prefetch cache entirely ─────────────────────────────
+    # NEVER call .order_by(), .select_related(), or .values_list() here —
+    # all of those bypass Django's prefetch cache and fire a fresh DB query.
     try:
-        clusters = list(ja.job.clusters.all())
-        if clusters and clusters[0].villages:
-            village = clusters[0].villages[0]
+        allocations = list(ja.allocations.all())   # hits prefetch cache
     except Exception:
-        pass
+        allocations = []
 
-    actual_date = (
-    ja.sales_date.strftime("%Y-%m-%d")
-    if ja.sales_date else ""
-)
-    # For fully allocated → show the actual allocated date
-    # For everything else → show scheduled_date
-    if ja.allocation_status in ('fully_allocated', 'completed'):
-        first_alloc = (
-            ja.allocations.order_by("allocated_date")
-            .values_list("allocated_date", flat=True)
-            .first()
-        )
-        our_date = first_alloc.strftime("%Y-%m-%d") if first_alloc else (
-            ja.scheduled_date.strftime("%Y-%m-%d") if ja.scheduled_date else ""
-        )
+    # Our date: fully_allocated/completed → earliest allocated_date; else scheduled_date
+    our_date = ""
+    if ja.allocation_status in ("fully_allocated", "completed") and allocations:
+        # Sort in Python from the prefetch cache — no extra DB hit
+        dates = [a.allocated_date for a in allocations if a.allocated_date]
+        if dates:
+            our_date = min(dates).strftime("%Y-%m-%d")
+    if not our_date:
+        our_date = ja.scheduled_date.strftime("%Y-%m-%d") if ja.scheduled_date else ""
+
+    # Work status: aggregate from prefetch cache
+    if not allocations:
+        work_status = ""
     else:
-        our_date = (
-            ja.scheduled_date.strftime("%Y-%m-%d")
-            if ja.scheduled_date else ""
-        )
+        statuses = [a.work_status for a in allocations]
+        if all(s == "completed" for s in statuses):
+            work_status = "Completed"
+        elif any(s == "in_progress" for s in statuses):
+            work_status = "In Progress"
+        else:
+            work_status = "Not Started"
 
-    # Col I — Alloc status: how much area is allocated (read-only from sheet)
+    # Mukadam team: deduplicate names from prefetch cache
+    # NEVER call .select_related() or .values_list() here
+    seen   = set()
+    names  = []
+    for a in allocations:
+        try:
+            n = a.mukkadam.mukkadam_name
+            if n and n not in seen:
+                seen.add(n)
+                names.append(n)
+        except Exception:
+            pass
+    mukadam_team = ", ".join(names)
+
+    # Alloc status display
     alloc_status = ja.get_allocation_status_display()
 
-    # Col J — Work status: what happened on the ground (editable from sheet)
-    # Aggregated from all Allocations on this JobActivity:
-    #   All completed  -> "Completed"
-    #   Any in_progress -> "In Progress"
-    #   Otherwise      -> "Not Started" (or "" if no allocations)
-    try:
-        allocations = list(ja.allocations.all())
-        if not allocations:
-            work_status = ""
-        else:
-            statuses = [a.work_status for a in allocations]
-            if all(s == "completed" for s in statuses):
-                work_status = "Completed"
-            elif any(s == "in_progress" for s in statuses):
-                work_status = "In Progress"
-            else:
-                work_status = "Not Started"
-    except Exception:
-        work_status = ""
-
-    try:
-        mukkadam_names = list(
-            ja.allocations.select_related("mukkadam")
-            .values_list("mukkadam__mukkadam_name", flat=True)
-            .distinct()
-        )
-        mukadam_team = ", ".join(mukkadam_names)
-    except Exception:
-        mukadam_team = ""
-
-    cluster = ""
-    try:
-        c = ja.job.clusters.first()
-        if c:
-            cluster = c.name
-    except Exception:
-        pass
-
     return [
-        farmer_name,    # A
-        activity_name,  # B
-        plot_id,        # C
-        acre,           # D
-        price,          # E
-        village,        # F
-        actual_date,    # G
-        our_date,  
-        mukadam_team,     # H
-        alloc_status,   # I  read-only
-        work_status,    # J  editable
-           # K  editable
-        cluster,        # L
-        str(ja.pk),     # M  hidden key
+        farmer_name,   # A
+        activity_name, # B
+        plot_id,       # C
+        acre,          # D
+        price,         # E
+        village,       # F
+        actual_date,   # G
+        our_date,      # H
+        mukadam_team,  # I
+        alloc_status,  # J  read-only
+        work_status,   # K  editable
+        cluster,       # L
+        str(ja.pk),    # M  hidden key
     ]
 
 
+# =============================================================================
+# UPSERT — single-row update triggered by signals
+# =============================================================================
+
 def upsert_job_activity_to_sheet(ja_id):
+    """
+    Update or append a single row.
+
+    Optimisation: instead of ws.find() which scans the whole sheet column,
+    we pull the entire key column once (one API call) and build a dict.
+    This is still one Sheets API call but it's a single column read, not
+    a cell-by-cell scan.
+    """
     import time
-    time.sleep(1)
+    time.sleep(0.3)   # reduced from 1 s — just enough to let the DB commit settle
 
     from .models import JobActivity
     try:
@@ -219,19 +232,22 @@ def upsert_job_activity_to_sheet(ja_id):
         return
 
     try:
-        ws = get_sheet()
-        try:
-            cell = ws.find(str(ja_id), in_column=_KEY_COL)
-        except gspread.exceptions.CellNotFound:
-            cell = None
-
+        ws      = get_sheet()
         new_row = _job_activity_to_row(ja)
 
-        if cell:
-            ws.update(f"A{cell.row}:M{cell.row}", [new_row])
-            logger.info(f"[Sheets] Updated row {cell.row} for JA {ja_id}")
+        # Pull key column once → build lookup dict (1 API call, no cell scan)
+        key_col_values = ws.col_values(_KEY_COL)   # list of strings, index 0 = header
+        try:
+            row_idx = key_col_values.index(str(ja_id))  # 0-based
+            sheet_row = row_idx + 1                      # 1-based (row_idx 0 = header row 1)
+        except ValueError:
+            sheet_row = None
+
+        if sheet_row and sheet_row > 1:
+            ws.update(f"A{sheet_row}:M{sheet_row}", [new_row])
+            logger.info(f"[Sheets] Updated row {sheet_row} for JA {ja_id}")
         else:
-            ws.append_row(new_row)
+            ws.append_row(new_row, value_input_option="USER_ENTERED")
             logger.info(f"[Sheets] Appended row for JA {ja_id}")
 
     except Exception as e:
@@ -240,16 +256,62 @@ def upsert_job_activity_to_sheet(ja_id):
 
 def delete_job_activity_from_sheet(ja_id):
     try:
-        ws = get_sheet()
+        ws         = get_sheet()
+        key_values = ws.col_values(_KEY_COL)
         try:
-            cell = ws.find(str(ja_id), in_column=_KEY_COL)
-        except gspread.exceptions.CellNotFound:
+            row_idx   = key_values.index(str(ja_id))
+            sheet_row = row_idx + 1
+        except ValueError:
             return
-        if cell:
-            ws.delete_rows(cell.row)
+        if sheet_row > 1:
+            ws.delete_rows(sheet_row)
             logger.info(f"[Sheets] Deleted row for JA {ja_id}")
     except Exception as e:
         logger.error(f"[Sheets] Failed to delete JA {ja_id}: {e}")
+
+
+# =============================================================================
+# FULL REFRESH — writes in chunks to avoid Sheets API payload limits
+# =============================================================================
+
+def full_sheet_refresh():
+    """
+    Clears the sheet and rewrites all rows in _CHUNK_SIZE batches.
+    Each chunk is a single Sheets API call — stays well under the 10 MB limit.
+    """
+    from .models import JobActivity
+
+    ws = get_sheet()
+    ws.clear()
+    ws.append_row(_HEADERS_WITH_KEY)
+
+    qs = (
+        JobActivity.objects
+        .select_related("job__farmer", "plot", "activity")
+        .prefetch_related("job__clusters", "allocations__mukkadam")
+        .filter(total_area__gt=0, is_lost=False)
+        .order_by("scheduled_date", "pk")
+    )
+
+    total      = 0
+    sheet_row  = 2          # first data row (row 1 = header)
+
+    chunk = []
+    for ja in qs.iterator(chunk_size=_CHUNK_SIZE):
+        chunk.append(_job_activity_to_row(ja))
+        if len(chunk) >= _CHUNK_SIZE:
+            ws.update(f"A{sheet_row}:M{sheet_row + len(chunk) - 1}", chunk)
+            sheet_row += len(chunk)
+            total     += len(chunk)
+            logger.info(f"[Sheets] Wrote chunk — {total} rows so far")
+            chunk = []
+
+    if chunk:
+        ws.update(f"A{sheet_row}:M{sheet_row + len(chunk) - 1}", chunk)
+        total += len(chunk)
+
+    logger.info(f"[Sheets] Full refresh complete — {total} rows")
+    return total
 
 
 # =============================================================================
@@ -259,19 +321,18 @@ def delete_job_activity_from_sheet(ja_id):
 def apply_sheet_edit(payload):
     """
     Route a single sheet edit to the correct handler.
-    Now also writes to SheetEditLog on every call.
+    Writes to SheetEditLog on every call.
     Returns (ok: bool, message: str)
     """
     from .models import JobActivity
 
-    ja_id      = payload.get("job_activity_id")
-    column     = payload.get("column", "")
-    new_val    = str(payload.get("new_value", "")).strip()
-    old_val    = str(payload.get("old_value", "")).strip()
-    edited_by  = payload.get("edited_by", "unknown")
-    event      = payload.get("event", "edit")
+    ja_id     = payload.get("job_activity_id")
+    column    = payload.get("column", "")
+    new_val   = str(payload.get("new_value", "")).strip()
+    old_val   = str(payload.get("old_value", "")).strip()
+    edited_by = payload.get("edited_by", "unknown")
+    event     = payload.get("event", "edit")
 
-    # ── Load JA ──────────────────────────────────────────────────────────────
     try:
         ja = (
             JobActivity.objects
@@ -289,7 +350,6 @@ def apply_sheet_edit(payload):
     _syncing.active = True
     ok, msg, child_ja_id = False, "", None
     try:
-        # ── SPLIT ─────────────────────────────────────────────────────────────
         if event == "split":
             split_date = payload.get("split_date", "")
             ok, msg, child_ja_id = _apply_split(ja, new_val, split_date, edited_by)
@@ -321,20 +381,13 @@ def apply_sheet_edit(payload):
     finally:
         _syncing.active = False
 
-    # ── Always log ────────────────────────────────────────────────────────────
     _log_sheet_edit(
-        ja=ja,
-        ja_id_raw=ja_id,
-        event=event,
-        column=column,
-        old_value=old_val,
-        new_value=new_val,
-        edited_by=edited_by,
-        success=ok,
-        message=msg,
-        split_child_ja_id=child_ja_id,
+        ja=ja, ja_id_raw=ja_id, event=event, column=column,
+        old_value=old_val, new_value=new_val, edited_by=edited_by,
+        success=ok, message=msg, split_child_ja_id=child_ja_id,
     )
     return ok, msg
+
 
 def _apply_date_change(ja, new_date_str, edited_by):
     from .models import Allocation
@@ -345,6 +398,13 @@ def _apply_date_change(ja, new_date_str, edited_by):
         new_date = datetime.strptime(new_date_str, "%Y-%m-%d").date()
     except (ValueError, TypeError):
         return False, f"Invalid date: '{new_date_str}'. Use YYYY-MM-DD."
+
+    # Block if new date is before the original booking/sales date
+    if ja.sales_date and new_date < ja.sales_date:
+        return False, (
+            f"New date {new_date} is before the actual/booking date "
+            f"{ja.sales_date} — date not changed."
+        )
 
     old_date = ja.scheduled_date
     if not old_date:
@@ -369,13 +429,8 @@ def _apply_date_change(ja, new_date_str, edited_by):
             allocated_date=new_date
         )
 
-    # Cascade successors on same plot (outside the atomic block — each
-    # successor gets its own save + sheet sync thread)
     _cascade_successors(
-        trigger_ja = ja,
-        old_date   = old_date,
-        new_date   = new_date,
-        edited_by  = edited_by,
+        trigger_ja=ja, old_date=old_date, new_date=new_date, edited_by=edited_by,
     )
 
     logger.info(
@@ -386,17 +441,10 @@ def _apply_date_change(ja, new_date_str, edited_by):
         f"Date updated to {new_date} ({shift_days:+d} days). "
         f"Successor activities on same plot cascaded."
     )
-def _apply_work_status_change(ja, new_work_status_display, edited_by):
-    """
-    Updates Allocation.work_status on ALL allocations for this JobActivity.
 
-    Sheet label  -> DB value
-    Not Started  -> work_not_started
-    In Progress  -> in_progress
-    Completed    -> completed  (also sets JobActivity.allocation_status='completed')
-    """
-    from .models import Allocation
-    from .models import JobActivity
+
+def _apply_work_status_change(ja, new_work_status_display, edited_by):
+    from .models import Allocation, JobActivity as JA
 
     WORK_STATUS_MAP = {
         "Not Started": "work_not_started",
@@ -411,17 +459,15 @@ def _apply_work_status_change(ja, new_work_status_display, edited_by):
             f"Valid: {list(WORK_STATUS_MAP.keys())}"
         )
 
+    # Use prefetch cache — no extra query
     allocations = list(ja.allocations.all())
     if not allocations:
         return False, f"No allocations for JA {ja.pk} — assign a mukkadam first"
 
     with transaction.atomic():
-        updated = Allocation.objects.filter(job_activity=ja).update(
-            work_status=db_status
-        )
-        # When all work is done, also close the JobActivity allocation_status
+        updated = Allocation.objects.filter(job_activity=ja).update(work_status=db_status)
         if db_status == "completed":
-            JobActivity.objects.filter(pk=ja.pk).update(allocation_status="completed")
+            JA.objects.filter(pk=ja.pk).update(allocation_status="completed")
             logger.info(f"[Sheet->DB] JA {ja.pk} marked completed via work status")
 
     logger.info(
@@ -455,15 +501,18 @@ def _apply_mukadam_change(ja, new_mukadam_str, edited_by):
     if not resolved:
         return False, f"No matching mukkadams found for: {new_names}"
 
-    existing = list(ja.allocations.all())
+    existing = list(ja.allocations.all())   # prefetch cache
     with transaction.atomic():
         if existing:
             for i, alloc in enumerate(existing):
                 if i < len(resolved):
-                    old_mk = alloc.mukkadam
+                    old_mk         = alloc.mukkadam
                     alloc.mukkadam = resolved[i]
                     alloc.save(update_fields=["mukkadam"])
-                    logger.info(f"[Sheet->DB] Alloc {alloc.pk}: {old_mk.mukkadam_name} -> {resolved[i].mukkadam_name}")
+                    logger.info(
+                        f"[Sheet->DB] Alloc {alloc.pk}: "
+                        f"{old_mk.mukkadam_name} -> {resolved[i].mukkadam_name}"
+                    )
             for mk in resolved[len(existing):]:
                 _create_default_allocation(ja, mk)
         else:
@@ -482,25 +531,32 @@ def _create_default_allocation(ja, mukkadam):
     farmer_rate   = ja.rate_per_acre or Decimal("0")
     mukkadam_rate = Decimal("0")
 
-    mk_rate = MukkadamActivityRate.objects.filter(mukkadam=mukkadam, activity=ja.activity).first()
+    mk_rate = MukkadamActivityRate.objects.filter(
+        mukkadam=mukkadam, activity=ja.activity
+    ).first()
     if mk_rate:
         mukkadam_rate = mk_rate.rate_per_acre
     else:
-        cluster = ja.job.clusters.first()
+        cluster = list(ja.job.clusters.all())   # prefetch cache
+        cluster = cluster[0] if cluster else None
         if cluster:
-            cr = ClusterMukkadamActivityRate.objects.filter(cluster=cluster, activity=ja.activity).first()
+            cr = ClusterMukkadamActivityRate.objects.filter(
+                cluster=cluster, activity=ja.activity
+            ).first()
             if cr:
                 mukkadam_rate = cr.rate_per_acre
+
     if not mukkadam_rate:
         mukkadam_rate = (farmer_rate * Decimal("0.8")).quantize(Decimal("0.01"))
 
     area    = ja.remaining_area if ja.remaining_area > 0 else ja.total_area
     workers = max(1, int(float(area) * 10))
 
+    clusters = list(ja.job.clusters.all())   # prefetch cache
     Allocation(
         job_activity      = ja,
         mukkadam          = mukkadam,
-        cluster           = ja.job.clusters.first(),
+        cluster           = clusters[0] if clusters else None,
         allocated_date    = ja.scheduled_date,
         allocated_area    = area,
         allocated_workers = workers,
@@ -522,7 +578,7 @@ def _apply_acre_change(ja, new_acre_str, edited_by):
         return False, f"Invalid acre value: '{new_acre_str}'"
     if new_area < 0:
         return False, "Acre cannot be negative"
-    old_area = ja.total_area
+    old_area      = ja.total_area
     ja.total_area = new_area
     ja.save()
     logger.info(f"[Sheet->DB] Acre JA {ja.pk}: {old_area} -> {new_area} by {edited_by}")
@@ -539,77 +595,42 @@ def _apply_delete(ja, edited_by):
 
 
 # =============================================================================
-# BULK REFRESH
+# AUDIT LOG
 # =============================================================================
-
-def full_sheet_refresh():
-    from .models import JobActivity
-    ws = get_sheet()
-    ws.clear()
-    ws.append_row(_HEADERS_WITH_KEY)
-
-    qs = JobActivity.objects \
-        .select_related('job__farmer', 'plot', 'activity') \
-        .prefetch_related('job__clusters', 'allocations__mukkadam') \
-        .filter(total_area__gt=0, is_lost=False) \
-        .order_by('scheduled_date', 'pk')
-
-    rows = [_job_activity_to_row(ja) for ja in qs]
-    if rows:
-        ws.update(f'A2:M{1 + len(rows)}', rows)
-    logger.info(f"Sheets: Full refresh {len(rows)} rows")
-    return len(rows)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AUDIT LOG HELPER
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _log_sheet_edit(*, ja, ja_id_raw, event, column="", old_value="",
                     new_value="", edited_by, success, message,
                     split_child_ja_id=None):
-    """
-    Write one row to SheetEditLog. Never raises — logging must not break
-    the main request flow.
-    """
     try:
         from .models import SheetEditLog
         SheetEditLog.objects.create(
-            job_activity=ja,
-            job_activity_id_raw=str(ja_id_raw),
-            event=event,
-            column=column,
-            old_value=str(old_value),
-            new_value=str(new_value),
-            edited_by=edited_by or "unknown",
-            success=success,
-            message=message,
-            split_child_ja_id=split_child_ja_id,
+            job_activity        = ja,
+            job_activity_id_raw = str(ja_id_raw),
+            event               = event,
+            column              = column,
+            old_value           = str(old_value),
+            new_value           = str(new_value),
+            edited_by           = edited_by or "unknown",
+            success             = success,
+            message             = message,
+            split_child_ja_id   = split_child_ja_id,
         )
     except Exception as exc:
         logger.error(f"[SheetEditLog] Failed to write log: {exc}")
 
+
+# =============================================================================
+# CASCADE
+# =============================================================================
+
 def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id=None):
-    """
-    Shift all successor JobActivities on the same job+plot by the same
-    number of days as (new_date - old_date).
-
-    Skips:
-      - already allocated / completed
-      - zero area
-      - the exclude_ja_id (used by split to exclude the newly created child)
-
-    NOTE: Does NOT skip is_manually_moved activities — same behaviour as the
-    app's JobActivity move action, which always cascades all unallocated
-    successors regardless of how they were previously moved.
-    """
     from datetime import date, timedelta
     from .models import JobActivity, Allocation
+    from .views import get_activity_sequence_order
 
     shift_days = (new_date - old_date).days
     if shift_days == 0:
         return
-
-    from .views import get_activity_sequence_order
 
     all_on_plot = list(
         JobActivity.objects
@@ -631,12 +652,9 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
     for act in all_on_plot:
         if get_activity_sequence_order(act) <= current_seq:
             continue
-        if act.allocation_status in ('fully_allocated', 'partially_allocated', 'completed'):
+        if act.allocation_status in ("fully_allocated", "partially_allocated", "completed"):
             logger.info(f"[Cascade] Skip JA#{act.pk} — {act.allocation_status}")
             continue
-        # NOTE: is_manually_moved is intentionally NOT skipped here.
-        # The app's move action cascades all unallocated successors regardless,
-        # so the sheet should behave identically.
         if not act.scheduled_date:
             continue
 
@@ -650,48 +668,31 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
         )
         act.save(update_fields=["scheduled_date", "move_reason", "updated_at"])
         Allocation.objects.filter(job_activity=act).update(allocated_date=new_act_date)
+
         _log_sheet_edit(
-            ja=act,
-            ja_id_raw=str(act.pk),
-            event='cascade',
-            column='Our date',
-            old_value=str(old_act_date),
-            new_value=str(new_act_date),
-            edited_by=edited_by,   # <-- passes the original editor's email
-            success=True,
-            message=f'Cascade from JA{trigger_ja.pk} ({shift_days:+d} days).',
+            ja=act, ja_id_raw=str(act.pk), event="cascade", column="Our date",
+            old_value=str(old_act_date), new_value=str(new_act_date),
+            edited_by=edited_by, success=True,
+            message=f"Cascade from JA{trigger_ja.pk} ({shift_days:+d} days).",
         )
         logger.info(
-            f"[Cascade] JA#{act.pk} {act.activity.name}: "
-            f"{old_act_date} → {new_act_date}"
+            f"[Cascade] JA#{act.pk} {act.activity.name}: {old_act_date} → {new_act_date}"
         )
 
-        try:
-            import threading
-            threading.Thread(
-                target=upsert_job_activity_to_sheet,
-                args=(act.pk,),
-                daemon=True,
-            ).start()
-        except Exception:
-            pass
-# ─────────────────────────────────────────────────────────────────────────────
+        threading.Thread(
+            target=upsert_job_activity_to_sheet, args=(act.pk,), daemon=True
+        ).start()
+
+
+# =============================================================================
 # SPLIT
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 
 def _apply_split(ja, split_acres_str, split_date_str, edited_by):
-    """
-    Split a JobActivity into two:
-      - Parent JA: total_area reduced by split_acres, keeps original date
-      - Child  JA: new row with split_acres on split_date
-
-    Returns (ok: bool, message: str, child_ja_id: int | None)
-    """
     from decimal import Decimal, InvalidOperation
     from datetime import datetime
     from .models import JobActivity
 
-    # ── Validate inputs ──────────────────────────────────────────────────────
     try:
         split_acres = Decimal(str(split_acres_str).strip())
     except (InvalidOperation, TypeError):
@@ -715,12 +716,10 @@ def _apply_split(ja, split_acres_str, split_date_str, edited_by):
     original_date   = ja.scheduled_date
 
     with transaction.atomic():
-        # Shrink parent
         old_total     = ja.total_area
         ja.total_area = parent_new_area
         ja.save()
 
-        # Create child
         child = JobActivity(
             job                     = ja.job,
             activity                = ja.activity,
@@ -742,28 +741,18 @@ def _apply_split(ja, split_acres_str, split_date_str, edited_by):
         )
         child.save()
 
-    # Cascade successors from the CHILD's date perspective
-    # (same as a date change — shift everything after ja on same plot)
     if original_date and split_date != original_date:
         _cascade_successors(
-            trigger_ja    = ja,
-            old_date      = original_date,
-            new_date      = split_date,
-            edited_by     = edited_by,
-            exclude_ja_id = child.pk,   # don't cascade the child we just made
+            trigger_ja=ja, old_date=original_date, new_date=split_date,
+            edited_by=edited_by, exclude_ja_id=child.pk,
         )
 
-    # Sync both rows to sheet
-    try:
-        import threading
-        threading.Thread(
-            target=upsert_job_activity_to_sheet, args=(ja.pk,),    daemon=True
-        ).start()
-        threading.Thread(
-            target=upsert_job_activity_to_sheet, args=(child.pk,), daemon=True
-        ).start()
-    except Exception as e:
-        logger.warning(f"[Split] Sheet sync thread error: {e}")
+    threading.Thread(
+        target=upsert_job_activity_to_sheet, args=(ja.pk,), daemon=True
+    ).start()
+    threading.Thread(
+        target=upsert_job_activity_to_sheet, args=(child.pk,), daemon=True
+    ).start()
 
     msg = (
         f"Split OK: JA#{ja.pk} now {parent_new_area} ac on {ja.scheduled_date}; "
