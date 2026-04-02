@@ -132,13 +132,8 @@ def build_rows(plot):
 
     # Precompute cumulative gap days from Pruning (phase_order=0 or 1)
     cum_days = {}
-    running = 0
-    prev_act = None
     for act in unique_acts:
-        if prev_act is not None:
-            running += get_gap_days(act, clusters)
-        cum_days[act.pk] = running
-        prev_act = act
+        cum_days[act.pk] = get_gap_days(act, clusters)
 
     anchor_cum = cum_days.get(anchor_activity.pk, 0) if anchor_activity else 0
 
@@ -385,6 +380,6 @@ def build_excel(output_path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    default_out = os.path.join(BASE_DIR, "activity_schedule3.xlsx")
+    default_out = os.path.join(BASE_DIR, "activity_schedule4.xlsx")
     out = sys.argv[1] if len(sys.argv) > 1 else default_out
     build_excel(out)
