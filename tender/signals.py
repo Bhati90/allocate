@@ -1,8 +1,11 @@
 import logging
-from django.db.models.signals import post_save, pre_save, post_delete
-from django.dispatch import receiver
+import threading
+from decimal import Decimal
+from django.db import transaction
 from django.db import models
 from django.db.models import Sum
+from django.db.models.signals import post_save, pre_save, post_delete
+from django.dispatch import receiver, Signal
 
 from .models import (
     Allocation, AllocationChangeLogTender, FarmerPayment, MukkadamPayment,
@@ -11,14 +14,31 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-# tender/signals.py
-from django.dispatch import Signal
+# Custom signals
 allocation_cancelled = Signal()
-activity_cancelled   = Signal() 
-job_cancelled        = Signal()  
-allocation_created   = Signal()   # create_allocation
-allocation_completed = Signal()   # mark_allocation_complete
-allocation_deleted   = Signal()   # delete_allocation # fired after mark_allocation_complete
+activity_cancelled   = Signal()
+job_cancelled        = Signal()
+allocation_created   = Signal()
+allocation_completed = Signal()
+allocation_deleted   = Signal()
+
+
+# ============================================================================
+# HELPERS — defined first so all receivers below can use them
+# ============================================================================
+
+def _async(fn, *args):
+    """Fire-and-forget in a background thread."""
+    t = threading.Thread(target=fn, args=args, daemon=True)
+    t.start()
+
+
+def _is_syncing():
+    """Check if we're inside a Sheet→DB sync (prevent infinite loop)."""
+    from .sheets_sync import _syncing
+    return getattr(_syncing, "active", False)
+
+
 # ============================================================================
 # ALLOCATION SIGNALS — audit log + availability tracking
 # ============================================================================
@@ -83,13 +103,22 @@ def log_allocation_deletion(sender, instance, **kwargs):
     )
 
 
+def _upsert_after_delay(ja_pk):
+    """Re-fetch from DB and push to sheet. Called after transaction commits."""
+    import time
+    time.sleep(0.5)  # small buffer for any replication lag
+    from .sheets_sync import upsert_job_activity_to_sheet
+    upsert_job_activity_to_sheet(ja_pk)
+
+
 @receiver(post_save, sender=Allocation)
 def update_job_activity_on_allocation(sender, instance, created, **kwargs):
     if not created:
+        # work_status / field change — sync sheet after commit
+        if not _is_syncing():
+            ja_pk = instance.job_activity_id
+            transaction.on_commit(lambda: _async(_upsert_after_delay, ja_pk))
         return
-
-    from decimal import Decimal
-    from django.db.models import Sum
 
     ja = instance.job_activity
 
@@ -98,14 +127,11 @@ def update_job_activity_on_allocation(sender, instance, created, **kwargs):
     ).aggregate(total=Sum('allocated_area'))['total'] or Decimal('0')
 
     if total_allocated <= 0:
-        new_status = 'pending'
-        is_fully = False
+        new_status, is_fully = 'pending', False
     elif total_allocated >= ja.total_area:
-        new_status = 'fully_allocated'
-        is_fully = True
+        new_status, is_fully = 'fully_allocated', True
     else:
-        new_status = 'partially_allocated'
-        is_fully = False
+        new_status, is_fully = 'partially_allocated', False
 
     JobActivity.objects.filter(pk=ja.pk).update(
         allocated_area=total_allocated,
@@ -114,6 +140,50 @@ def update_job_activity_on_allocation(sender, instance, created, **kwargs):
         is_fully_allocated=is_fully,
     )
 
+    # on_commit fires AFTER transaction commits — sheet reads correct data
+    if not _is_syncing():
+        ja_pk = ja.pk
+        transaction.on_commit(lambda: _async(_upsert_after_delay, ja_pk))
+
+
+@receiver(post_delete, sender=Allocation)
+def restore_capacity_on_deletion(sender, instance, **kwargs):
+    ja = instance.job_activity
+
+    total_still_allocated = Allocation.objects.filter(
+        job_activity=ja,
+    ).aggregate(total=Sum('allocated_area'))['total'] or Decimal('0')
+
+    if total_still_allocated <= Decimal('0'):
+        new_status, is_fully = 'pending', False
+    elif total_still_allocated >= ja.total_area:
+        new_status, is_fully = 'fully_allocated', True
+    else:
+        new_status, is_fully = 'partially_allocated', False
+
+    remaining = ja.total_area - total_still_allocated
+
+    JobActivity.objects.filter(pk=ja.pk).update(
+        allocated_area=total_still_allocated,
+        remaining_area=remaining,
+        allocation_status=new_status,
+        is_fully_allocated=is_fully,
+    )
+
+    # on_commit fires AFTER transaction commits — allocation is gone, status is correct
+    if not _is_syncing():
+        ja_pk = ja.pk
+        transaction.on_commit(lambda: _async(_upsert_after_delay, ja_pk))
+
+    try:
+        MukkadamAvailability.objects.filter(
+            mukkadam=instance.mukkadam,
+            date=instance.allocated_date
+        ).update(
+            allocated_workers=models.F('allocated_workers') - instance.allocated_workers
+        )
+    except Exception:
+        pass
 @receiver(post_save, sender=Allocation)
 def update_mukkadam_availability(sender, instance, created, **kwargs):
     if created:
@@ -131,63 +201,10 @@ def update_mukkadam_availability(sender, instance, created, **kwargs):
         )
 
 
-@receiver(post_delete, sender=Allocation)
-def restore_capacity_on_deletion(sender, instance, **kwargs):
-    from django.db.models import Sum
-    from decimal import Decimal
 
-    ja = instance.job_activity
 
-    # Recalculate from remaining allocations (not F() subtraction which can drift)
-    total_still_allocated = Allocation.objects.filter(
-        job_activity=ja,
-    ).aggregate(total=Sum('allocated_area'))['total'] or Decimal('0')
-
-    # Determine correct status
-    if total_still_allocated <= Decimal('0'):
-        new_status = 'pending'
-        is_fully = False
-    elif total_still_allocated >= ja.total_area:
-        new_status = 'fully_allocated'
-        is_fully = True
-    else:
-        new_status = 'partially_allocated'
-        is_fully = False
-
-    remaining = ja.total_area - total_still_allocated
-
-    # Raw update — no signals triggered
-    JobActivity.objects.filter(pk=ja.pk).update(
-        allocated_area=total_still_allocated,
-        remaining_area=remaining,
-        allocation_status=new_status,
-        is_fully_allocated=is_fully,
-    )
-
-    # Restore mukkadam availability
-    try:
-        MukkadamAvailability.objects.filter(
-            mukkadam=instance.mukkadam,
-            date=instance.allocated_date
-        ).update(
-            allocated_workers=models.F('allocated_workers') - instance.allocated_workers
-        )
-    except Exception:
-        pass
 # ============================================================================
 # SETTLEMENT TRIGGER
-#
-# RULES:
-#   1. Shoot selection completed + farmer verified  → calculate settlement (first time only)
-#   2. Any other activity verified after shoot done → update gross only, keep all deductions
-#   3. All activities done                          → release deposit + add post-shoot work
-#   4. status='paid'                               → NEVER recalculate deductions
-#   5. farmer_agreed reset to False                → reset stale settlement
-#
-# REMOVED (were wrong):
-#   ✗ trigger_settlement_on_shoot_selection   — date based, not completion based
-#   ✗ recalculate_settlement_on_verification  — fired on ANY activity, no shoot check
-#   ✗ trigger_settlement_after_verification   — duplicate + date based
 # ============================================================================
 
 @receiver(pre_save, sender=Allocation)
@@ -212,18 +229,15 @@ def track_farmer_agreed_change(sender, instance, **kwargs):
         instance._farmer_agreed_changed = False
 
 
-# Prevent re-entrant signal calls
 _settlement_processing = set()
 
 
 @receiver(post_save, sender=Allocation)
 def handle_settlement_on_farmer_verification(sender, instance, **kwargs):
     """Single correct settlement trigger — see rules above."""
-
     if not getattr(instance, '_farmer_agreed_changed', False):
-        return  # Nothing changed — skip
+        return
 
-    # Re-entrancy guard — prevents infinite loop if settlement.save() triggers this again
     key = str(instance.pk)
     if key in _settlement_processing:
         return
@@ -249,23 +263,18 @@ def _run_settlement_logic(instance):
 
     job      = instance.job_activity.job
     mukkadam = instance.mukkadam
-    plot     = instance.job_activity.plot    # ← per-plot settlement
+    plot     = instance.job_activity.plot
     cluster  = job.clusters.first()
 
-    # Activity name
     activity_name = (instance.job_activity.activity.name or '').lower()
     is_shoot = 'shoot selection' in activity_name or 'विरळणी' in activity_name
 
     is_now_verified = (instance.farmer_agreed is True) or (instance.payment_status == 'done')
     was_verified    = (instance._farmer_agreed_was is True) or (instance._payment_status_was == 'done')
 
-    # ── CASE A: Farmer just verified ──────────────────────────────────
     if is_now_verified:
-
         existing = MukkadamJobSettlement.objects.filter(
-            mukkadam=mukkadam,
-            job=job,
-            plot=plot,                       # ← filter by plot
+            mukkadam=mukkadam, job=job, plot=plot,
         ).first()
         existing_status = existing.status if existing else None
 
@@ -293,7 +302,6 @@ def _run_settlement_logic(instance):
             except Exception as e:
                 logger.error(f"[settlement signal] Deposit release error: {e}", exc_info=True)
 
-    # ── CASE B: Verification reset ─────────────────────────────────────
     elif was_verified and not is_now_verified:
         try:
             reset_settlement_if_stale(mukkadam, job, plot)
@@ -342,34 +350,6 @@ def log_farmer_payment_changes(sender, instance, created, **kwargs):
                 )
 
 
-# signals.py — find update_booking_on_payment, fix the arithmetic
-
-from decimal import Decimal
-
-# @receiver(post_save, sender=FarmerPayment)
-# def update_booking_on_payment(sender, instance, **kwargs):
-#     booking = instance.booking
-    
-#     # Get total paid — keep as Decimal
-#     total_paid = booking.payments.aggregate(
-#         total=Sum('amount')
-#     )['total'] or Decimal('0')
-
-#     # Cast everything to Decimal before arithmetic
-#     total_amount = Decimal(str(booking.total_amount or 0))
-    
-#     booking.advance_paid = total_paid
-#     booking.balance      = total_amount - total_paid   # both Decimal now
-
-#     if total_paid <= 0:
-#         booking.status = 'UNPAID'
-#     elif total_paid >= total_amount:
-#         booking.status = 'PAID'
-#     else:
-#         booking.status = 'PARTIALLY_PAID'
-
-#     booking.save(update_fields=['advance_paid', 'balance', 'status'])
-
 @receiver(pre_save, sender=MukkadamPayment)
 def track_mukkadam_payment_changes(sender, instance, **kwargs):
     if instance.pk:
@@ -412,7 +392,6 @@ def log_mukkadam_payment_changes(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=JobActivity)
 def update_job_total_on_activity_change(sender, instance, **kwargs):
-    from django.db.models import Sum
     total = JobActivity.objects.filter(job=instance.job).aggregate(
         total=Sum('total_price')
     )['total'] or 0
@@ -421,18 +400,19 @@ def update_job_total_on_activity_change(sender, instance, **kwargs):
 
 # ============================================================================
 # AVAILABILITY SIGNALS
+# ============================================================================
+
 @receiver(pre_save, sender=MukkadamAvailability)
 def validate_availability_capacity(sender, instance, **kwargs):
     """Ensure is_available is consistent with crew vs allocated."""
     if instance.allocated_workers > instance.available_crew_size:
         instance.is_available = False
-    # else: leave is_available as-is (don't force True, UI/logic may set holiday)
 
 
-# signals.py
-from django.db.models.signals import post_save, post_delete
-from django.dispatch import receiver
-from .models import JobActivity
+# ============================================================================
+# PLANNING CACHE SIGNALS
+# ============================================================================
+
 from .planing import invalidate_planning_cache
 
 
@@ -452,105 +432,21 @@ def on_job_activity_delete(sender, instance, **kwargs):
         invalidate_planning_cache(cid)
 
 
-
-# # signals.py
-# import threading
-# from django.db.models.signals import post_save, post_delete
-# from django.dispatch import receiver
-# from .models import JobActivity, Allocation
-
-# _syncing = threading.local()
-
-# def _async(fn, *args):
-#     import threading
-#     t = threading.Thread(target=fn, args=args, daemon=True)
-#     t.start()
-
-# @receiver(post_save, sender=JobActivity)
-# def on_job_activity_save(sender, instance, **kwargs):
-#     if getattr(_syncing, "active", False):
-#         return
-#     from .sheets_sync import upsert_job_activity_to_sheet
-#     _async(upsert_job_activity_to_sheet, instance.pk)
-
-# @receiver(post_delete, sender=JobActivity)
-# def on_job_activity_delete(sender, instance, **kwargs):
-#     from .sheets_sync import delete_job_activity_from_sheet
-#     _async(delete_job_activity_from_sheet, instance.pk)
-
-# @receiver(post_save, sender=Allocation)
-# def on_allocation_save(sender, instance, **kwargs):
-#     if getattr(_syncing, "active", False):
-#         return
-#     from .sheets_sync import upsert_job_activity_to_sheet
-#     # Re-sync the parent JobActivity row — mukkadam team + status updated
-#     _async(upsert_job_activity_to_sheet, instance.job_activity_id)
-
-# @receiver(post_delete, sender=Allocation)
-# def on_allocation_delete(sender, instance, **kwargs):
-#     if getattr(_syncing, "active", False):
-#         return
-#     from .sheets_sync import upsert_job_activity_to_sheet
-#     # Re-sync after mukkadam removed from activity
-#     _async(upsert_job_activity_to_sheet, instance.job_activity_id)
-
-
 # ============================================================================
-# GOOGLE SHEETS SYNC SIGNALS
+# GOOGLE SHEETS SYNC — JobActivity only (Allocation handled above)
 # ============================================================================
-# Add this section at the BOTTOM of your existing signals.py
-# REPLACE the old sheet-sync signals block (the one with _syncing, _async, etc.)
-# ============================================================================
-
-import threading
-from django.db.models.signals import post_save, post_delete
-from django.dispatch import receiver
-from .models import JobActivity, Allocation
-
-
-def _async(fn, *args):
-    """Fire-and-forget in a background thread."""
-    t = threading.Thread(target=fn, args=args, daemon=True)
-    t.start()
-
-
-def _is_syncing():
-    """Check if we're inside a Sheet→DB sync (prevent infinite loop)."""
-    from .sheets_sync import _syncing
-    return getattr(_syncing, "active", False)
-
-
 @receiver(post_save, sender=JobActivity)
 def sheet_sync_on_job_activity_save(sender, instance, **kwargs):
-    """Push JobActivity changes to Google Sheet."""
     if _is_syncing():
         return
-    from .sheets_sync import upsert_job_activity_to_sheet
-    _async(upsert_job_activity_to_sheet, instance.pk)
+    pk = instance.pk
+    transaction.on_commit(lambda: _async(_upsert_after_delay, pk))
 
 
 @receiver(post_delete, sender=JobActivity)
 def sheet_sync_on_job_activity_delete(sender, instance, **kwargs):
-    """Remove row from Google Sheet when JobActivity is deleted."""
     if _is_syncing():
         return
     from .sheets_sync import delete_job_activity_from_sheet
-    _async(delete_job_activity_from_sheet, instance.pk)
-
-
-@receiver(post_save, sender=Allocation)
-def sheet_sync_on_allocation_save(sender, instance, **kwargs):
-    """Re-sync the parent JobActivity row when an allocation changes."""
-    if _is_syncing():
-        return
-    from .sheets_sync import upsert_job_activity_to_sheet
-    _async(upsert_job_activity_to_sheet, instance.job_activity_id)
-
-
-@receiver(post_delete, sender=Allocation)
-def sheet_sync_on_allocation_delete(sender, instance, **kwargs):
-    """Re-sync the parent JobActivity row when an allocation is removed."""
-    if _is_syncing():
-        return
-    from .sheets_sync import upsert_job_activity_to_sheet
-    _async(upsert_job_activity_to_sheet, instance.job_activity_id)
+    pk = instance.pk
+    transaction.on_commit(lambda: _async(delete_job_activity_from_sheet, pk))
