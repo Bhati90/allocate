@@ -96,15 +96,11 @@ def determine_anchor(jas):
         return best_ja, best_date, best_ja.activity
 
     # Fallback: no allocations, no lost
+    # → anchor = FIRST activity by phase_order, project all others from it
     scheduled = [(ja, ja.scheduled_date) for ja in jas if ja.scheduled_date]
     if scheduled:
-        seen = {}
-        for ja, d in scheduled:
-            name = ja.activity.name
-            if name not in seen or d > seen[name][1]:
-                seen[name] = (ja, d)
-        best_ja, best_date = max(seen.values(), key=lambda x: x[1])
-        return best_ja, best_date, best_ja.activity
+        first_ja, first_date = min(scheduled, key=lambda x: phase_order(x[0].activity))
+        return first_ja, first_date, first_ja.activity
 
     return None, None, None
 
@@ -389,6 +385,6 @@ def build_excel(output_path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    default_out = os.path.join(BASE_DIR, "activity_schedule1.xlsx")
+    default_out = os.path.join(BASE_DIR, "activity_schedule3.xlsx")
     out = sys.argv[1] if len(sys.argv) > 1 else default_out
     build_excel(out)
