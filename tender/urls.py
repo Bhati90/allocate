@@ -21,6 +21,8 @@ from .views import (
     suggest_activity_date,cluster_activity_calendar,reset_cluster_activity_override,cluster_potential_jobs,
 )
 
+from .payment import sheet_get_allocations, sheet_update_ledger,sheet_get_other,sheet_get_settlements,sheet_get_summary,sheet_get_weekly,sheet_save_other,sheet_save_weekly,sheet_update_settlement
+
 from .webhook import booking_webhook,run_mukkadam_sync,send_farmer_bill_to_webhook,farmer_payment_webhook,sync_webhook
 from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history,mukkadam_earnings
 # Create router
@@ -78,7 +80,13 @@ path('api/settlements/', list_all_settlements, name='list-settlements'),
         mukkadam_settlement_detail,
         name='mukkadam-settlement-detail'
     ),
-
+path("api/sheet/settlements/",       sheet_get_settlements),
+path("api/sheet/update-settlement/", sheet_update_settlement),
+path("api/sheet/weekly-payments/",   sheet_get_weekly),
+path("api/sheet/save-weekly/",       sheet_save_weekly),
+path("api/sheet/other-payments/",    sheet_get_other),
+path("api/sheet/save-other/",        sheet_save_other),
+path("api/sheet/summary/",           sheet_get_summary),
 
     path('api/sales-performance/', sales_performance),
 
@@ -201,7 +209,8 @@ path('api/activity-calendar/', global_activity_catalog, name='cluster-calendar')
   path('api/tender-dashboard/', tender_dashboard, name='tender-dashboard'),
 
 path('api/sync/mukkadams/', run_mukkadam_sync),
-
+path("api/sheet/allocations/",   sheet_get_allocations, name="sheet_allocations"),
+    path("api/sheet/update-ledger/", sheet_update_ledger,   name="sheet_update_ledger"),
 path("api/sync-from-sheet/", sync_from_sheet),
 path('api/cluster/<int:cluster_id>/search_farmers/', search_farmers_for_cluster),
 path('api/cluster/<int:cluster_id>/add_farmer/', add_farmer_plots_to_cluster),
