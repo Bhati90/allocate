@@ -58,7 +58,25 @@ router.register(r'mukkadam-rates', MukkadamActivityRateViewSet, basename='mukkad
 router.register(r'clusters', ClusterViewSet, basename='cluster')
 router.register(r'leaves', LeaveViewSet, basename='leave')
 router.register(r'planning', PlanningViewSet, basename='planning')
+
+from . import sheet_views
+
 urlpatterns = [
+    path('api/sheet/mukkadam-master/',          sheet_views.mukkadam_master_list_v2),
+    path('api/sheet/mukkadam-master/update/',   sheet_views.mukkadam_master_update),
+    path('api/sheet/weekly-payments/',          sheet_views.weekly_payments_list),
+    path('api/sheet/weekly-payments/add/',      sheet_views.add_weekly_payment),
+    path('api/sheet/transport-events/',         sheet_views.transport_events_list),
+    path('api/sheet/transport-events/add/',     sheet_views.add_transport_event),
+    path('api/sheet/allocations/',              sheet_views.allocations_view),
+    path('api/sheet/job-settlements/',          sheet_views.job_settlements_list),
+    path('api/sheet/job-settlements/pay/',      sheet_views.mark_settlement_paid),
+    path('api/sheet/ledger/',                   sheet_views.ledger_all),
+    path('api/sheet/ledger/add/',               sheet_views.add_ledger_entry),
+    path('api/sheet/weekly-due-today/',         sheet_views.weekly_due_today_v2),
+    path('api/sheet/team-profile/',             sheet_views.team_profile),
+    path('api/sheet/validate-token/',           sheet_views.validate_token),
+
     path('api/', include(router.urls)),
     path('clustersp/funnel/', v.ClusterFunnelView.as_view()),
 # must be BEFORE clusters/<cluster_id>/ or it'll match as a cluster_id
