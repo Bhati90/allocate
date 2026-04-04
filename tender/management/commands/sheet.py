@@ -5,11 +5,6 @@ Bulk sync all JobActivities to Google Sheets.
 Usage:
     python manage.py sync_to_sheets            # full wipe + rewrite
     python manage.py sync_to_sheets --dry-run  # count rows only, no write
-
-Optimisations vs original:
-  - Streams DB rows in chunks of 500 with .iterator() — flat RAM regardless of row count
-  - Writes to Sheets in 500-row chunks — avoids 10 MB API payload limit
-  - Zero extra DB queries per row — _job_activity_to_row() uses only the prefetch cache
 """
 
 from django.core.management.base import BaseCommand
@@ -60,6 +55,14 @@ class Command(BaseCommand):
         ws = get_sheet()
         self.stdout.write("Clearing sheet…")
         ws.clear()
+
+        # ── Auto-expand sheet to fit all rows ────────────────────────────────
+        total_rows = qs.count() + 10   # +10 buffer
+        if ws.row_count < total_rows:
+            ws.add_rows(total_rows - ws.row_count)
+            self.stdout.write(f"  Expanded sheet to {total_rows} rows")
+        # ─────────────────────────────────────────────────────────────────────
+
         ws.append_row(_HEADERS_WITH_KEY)
 
         total     = 0

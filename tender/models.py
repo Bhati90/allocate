@@ -1689,6 +1689,8 @@ class SheetEditLog(models.Model):
         max_length=30,
         help_text="edit / delete / bulk_edit / split"
     )
+    activity = models.ForeignKey('ActivityCatalog', on_delete=models.SET_NULL, null=True, blank=True)
+    plot     = models.ForeignKey('Plot',            on_delete=models.SET_NULL, null=True, blank=True)
     column = models.CharField(max_length=100, blank=True)
     old_value = models.TextField(blank=True)
     new_value = models.TextField(blank=True)

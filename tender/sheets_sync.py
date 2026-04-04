@@ -606,6 +606,8 @@ def _log_sheet_edit(*, ja, ja_id_raw, event, column="", old_value="",
             column              = column,
             old_value           = str(old_value),
             new_value           = str(new_value),
+            activity = ja.activity if ja and ja.activity_id else None,
+            plot     = ja.plot     if ja and ja.plot_id     else None,
             edited_by           = edited_by or "unknown",
             success             = success,
             message             = message,
@@ -620,45 +622,40 @@ def _log_sheet_edit(*, ja, ja_id_raw, event, column="", old_value="",
 # =============================================================================
 
 def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id=None):
-    from datetime import date, timedelta
+    from datetime import timedelta
     from .models import JobActivity, Allocation
-    from .views import get_activity_sequence_order
 
     shift_days = (new_date - old_date).days
     if shift_days == 0:
         return
 
-    all_on_plot = list(
+    # __gte so activities on the SAME date as old_date also get moved.
+    # Trigger row excluded via .exclude(pk=trigger_ja.pk).
+    successors = list(
         JobActivity.objects
-        .filter(job=trigger_ja.job, plot=trigger_ja.plot, is_lost=False, total_area__gt=0)
+        .filter(
+            job=trigger_ja.job,
+            is_lost=False,
+            total_area__gt=0,
+            scheduled_date__gte=old_date,
+        )
         .exclude(pk=trigger_ja.pk)
         .select_related("activity")
     )
+
     if exclude_ja_id:
-        all_on_plot = [a for a in all_on_plot if a.pk != exclude_ja_id]
+        successors = [a for a in successors if a.pk != exclude_ja_id]
 
-    all_on_plot.sort(key=lambda a: (
-        get_activity_sequence_order(a),
-        a.scheduled_date or date.min,
-        a.id,
-    ))
-
-    current_seq = get_activity_sequence_order(trigger_ja)
-
-    for act in all_on_plot:
-        if get_activity_sequence_order(act) <= current_seq:
-            continue
-        if act.allocation_status in ("fully_allocated", "partially_allocated", "completed"):
-            logger.info(f"[Cascade] Skip JA#{act.pk} — {act.allocation_status}")
-            continue
-        if not act.scheduled_date:
+    for act in successors:
+        if act.allocation_status in ("fully_allocated", "partially_allocated", "completed", "in_progress"):
+            logger.info(f"[Cascade] Skip JA#{act.pk} — already {act.allocation_status}")
             continue
 
         old_act_date = act.scheduled_date
         new_act_date = old_act_date + timedelta(days=shift_days)
 
         act.scheduled_date = new_act_date
-        act.move_reason    = (
+        act.move_reason = (
             f"Cascade from JA#{trigger_ja.id} sheet move by {edited_by} "
             f"({shift_days:+d} days)"
         )
