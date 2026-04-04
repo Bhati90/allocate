@@ -631,10 +631,12 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
 
     # __gte so activities on the SAME date as old_date also get moved.
     # Trigger row excluded via .exclude(pk=trigger_ja.pk).
+    # Only cascade within the same plot — other plots are unaffected.
     successors = list(
         JobActivity.objects
         .filter(
             job=trigger_ja.job,
+            plot=trigger_ja.plot,
             is_lost=False,
             total_area__gt=0,
             scheduled_date__gte=old_date,
