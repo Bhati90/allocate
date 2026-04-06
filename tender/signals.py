@@ -110,6 +110,11 @@ def _upsert_after_delay(ja_pk):
     from .sheets_sync import upsert_job_activity_to_sheet
     upsert_job_activity_to_sheet(ja_pk)
 
+def _upsert_with_index_delay(ja_pk, index=0):
+    import time
+    time.sleep(0.5 + index * 2.0)  # stagger: 0.5s, 2.5s, 4.5s, 6.5s ...
+    from .sheets_sync import upsert_job_activity_to_sheet
+    upsert_job_activity_to_sheet(ja_pk)
 
 @receiver(post_save, sender=Allocation)
 def update_job_activity_on_allocation(sender, instance, created, **kwargs):
@@ -440,8 +445,11 @@ def sheet_sync_on_job_activity_save(sender, instance, **kwargs):
     if _is_syncing():
         return
     pk = instance.pk
-    transaction.on_commit(lambda: _async(_upsert_after_delay, pk))
-
+    # Use index stored on instance if set (bulk loop), else default 0
+    index = getattr(instance, '_sheet_sync_index', 0)
+    transaction.on_commit(
+        lambda pk=pk, idx=index: _async(_upsert_with_index_delay, pk, idx)
+    )
 
 @receiver(post_delete, sender=JobActivity)
 def sheet_sync_on_job_activity_delete(sender, instance, **kwargs):

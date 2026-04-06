@@ -458,7 +458,7 @@ def _sync_existing_job_activities(job, activities_data):
     plot = job.plot
 
     # ── 1. Handle cancelled activities from webhook ────────────────
-    for act_data in activities_data:
+    for i, act_data in enumerate(activities_data):
         api_act_id = str(act_data.get('id') or '')
         status     = (act_data.get('status') or act_data.get('activity_status') or '').upper()
 
@@ -487,7 +487,7 @@ def _sync_existing_job_activities(job, activities_data):
                 logger.info(f"[ACTIVITY SYNC] Deleted activity {act.id} (api_id={api_id}) — removed from webhook")
 
     # ── 3. Add new activities not yet on this job ──────────────────
-    for act_data in activities_data:
+    for i, act_data in enumerate(activities_data):
         api_act_id = str(act_data.get('id') or '')
         status     = (act_data.get('status') or act_data.get('activity_status') or '').upper()
 
@@ -529,7 +529,7 @@ def _sync_existing_job_activities(job, activities_data):
         rate_per_acre = (total_price / total_area).quantize(Decimal('0.01')) if total_area else Decimal('0')
 
         try:
-            JobActivity.objects.create(
+            ja = JobActivity(
                 job             = job,
                 activity        = activity_catalog,
                 plot            = plot,
@@ -542,6 +542,8 @@ def _sync_existing_job_activities(job, activities_data):
                 source          = 'api',
                 original_source = 'api',
             )
+            ja._sheet_sync_index = i   # i is the loop index (enumerate)
+            ja.save()
             logger.info(f"[ACTIVITY SYNC] Created activity {api_act_id} — {activity_name} on job {job.job_id}")
         except Exception as e:
             logger.error(f"[ACTIVITY SYNC] Failed to create activity {api_act_id}: {e}")
@@ -1578,7 +1580,7 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
         else:
             logger.warning(f"Plot {plot_id_key}: no pruning date found")
 
-        for activity_data in activities:
+        for i, activity_data in enumerate(activities):
             try:
                 activity_name = activity_data.get('activity_name', '').strip()
                 plot_code = str(activity_data.get('plot_id', '') or '')
@@ -1728,14 +1730,20 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
                 }
 
                 if api_activity_id and api_activity_id in existing_activity_ids:
-                    job.activities.filter(api_activity_id=api_activity_id).update(**activity_defaults)
+                    ja = job.activities.filter(api_activity_id=api_activity_id).first()
+                    if ja:
+                        for field, value in activity_defaults.items():
+                            setattr(ja, field, value)
+                        ja.save()
                     logger.info(f"Updated activity {api_activity_id} ('{display_name}') plot={plot_code} for job {job.job_id}")
                 else:
-                    JobActivity.objects.create(
+                    ja = JobActivity(
                         job=job,
                         api_activity_id=api_activity_id,
                         **activity_defaults
                     )
+                    ja._sheet_sync_index = i   # i is the loop index (enumerate)
+                    ja.save()
                     logger.info(f"Created activity {api_activity_id} ('{display_name}') plot={plot_code} for job {job.job_id}")
 
                 processed += 1

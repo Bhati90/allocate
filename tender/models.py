@@ -1671,7 +1671,655 @@ class PaymentProof(models.Model):
 
     def __str__(self):
         return f"{self.proof_type} proof for ref {self.reference_id}"
-    
+
+
+"""
+MUKKADAM PAYMENT TRACKING MODELS
+=================================
+Add these models to your existing models.py.
+
+Two payment flows:
+
+1. UPDOWN team:
+   - allocation done → compute amount from rate * acres
+   - add transport_cost + other_cost → final_amount
+   - mark paid → allocation.payment_status becomes 'settled'
+
+2. PERMANENT team:
+   - advance given when joining cluster
+   - weekly payments on cluster's weekly_payment_day
+   - when job ends → settle against all allocations
+     running balance = advance + weekly_sum - work_earned
+     if balance > 0 → no payment needed (already overpaid)
+     if balance < 0 → net_payable = abs(balance)
+
+MukkadamPaymentRecord  → one row per actual payment event (both permanent + updown)
+MukkadamUpdownBill     → one row per updown allocation, tracks costs + payment
+MukkadamPermanentSettlement → end-of-period settlement for permanent mukkadam
+
+SheetSyncLog → tracks every Google Sheet → Django sync event
+"""
+
+from django.db import models
+from django.contrib.auth.models import User
+from django.core.validators import MinValueValidator
+from decimal import Decimal
+
+
+# ============================================================================
+# UPDOWN BILLING
+# ============================================================================
+
+class MukkadamUpdownBill(models.Model):
+    """
+    One bill per Allocation for an updown mukkadam.
+    Created automatically when allocation is marked 'completed'.
+    Tracks extra costs on top of the base rate-based amount.
+    When paid → Allocation.payment_status flips to 'settled'.
+    """
+
+    allocation = models.OneToOneField(
+        'Allocation',
+        on_delete=models.CASCADE,
+        related_name='updown_bill',
+    )
+    mukkadam = models.ForeignKey(
+        'Mukkadam',
+        on_delete=models.CASCADE,
+        related_name='updown_bills',
+    )
+    cluster = models.ForeignKey(
+        'Cluster',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='updown_bills',
+    )
+    assignment = models.ForeignKey(
+        'ClusterMukkadamAssignment',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='updown_bills',
+        help_text="The updown assignment row that holds rate info"
+    )
+
+    # ── Base calculation ──────────────────────────────────────────────────────
+    # Pulled from allocation at bill creation time (snapshot, not live FK)
+    work_date = models.DateField(help_text="Date work was done (from allocation.allocated_date)")
+    allocated_area = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        help_text="Acres from allocation (or actual_area_done if use_actual_for_settlement)"
+    )
+    mukkadam_rate = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        help_text="Rate per acre at time of allocation (snapshot)"
+    )
+    base_amount = models.DecimalField(
+        max_digits=12, decimal_places=2,
+        help_text="allocated_area × mukkadam_rate"
+    )
+
+    # ── Extra costs (updown specific) ─────────────────────────────────────────
+    transport_cost = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal('0'),
+        help_text="Vehicle/transport cost for this trip. Can pull from assignment.transport_price as default."
+    )
+    other_cost = models.DecimalField(
+        max_digits=10, decimal_places=2, default=Decimal('0'),
+        help_text="Any other miscellaneous cost (food, tools, etc.)"
+    )
+    other_cost_remark = models.TextField(
+        blank=True,
+        help_text="Reason for other_cost"
+    )
+
+    # ── Final ─────────────────────────────────────────────────────────────────
+    final_amount = models.DecimalField(
+        max_digits=12, decimal_places=2,
+        help_text="base_amount + transport_cost + other_cost"
+    )
+
+    # ── Payment ───────────────────────────────────────────────────────────────
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('paid', 'Paid'),
+        ('cancelled', 'Cancelled'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    paid_at = models.DateTimeField(null=True, blank=True)
+    payment_mode = models.CharField(
+        max_length=30,
+        choices=[
+            ('CASH', 'Cash'),
+            ('UPI', 'UPI'),
+            ('BANK_TRANSFER', 'Bank Transfer'),
+            ('CHEQUE', 'Cheque'),
+        ],
+        blank=True,
+    )
+    payment_reference = models.CharField(max_length=255, blank=True, help_text="UPI ref / cheque no.")
+    proof_s3_key = models.CharField(max_length=500, blank=True, null=True)
+    remark = models.TextField(blank=True, help_text="Payment remark / notes")
+
+    # ── Audit ─────────────────────────────────────────────────────────────────
+    paid_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='updown_bills_paid',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # ── Sheet sync ────────────────────────────────────────────────────────────
+    sheet_row_id = models.CharField(
+        max_length=100, blank=True,
+        help_text="Row identifier in the Payments Google Sheet (e.g. 'updown_<id>')"
+    )
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'mukkadam_updown_bills'
+        ordering = ['-work_date', '-created_at']
+        indexes = [
+            models.Index(fields=['mukkadam', 'status']),
+            models.Index(fields=['cluster', 'work_date']),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.mukkadam.mukkadam_name} | "
+            f"{self.work_date} | "
+            f"₹{self.final_amount} | {self.status}"
+        )
+
+    def compute_final_amount(self):
+        """Recalculate and save final_amount. Call after changing costs."""
+        self.final_amount = self.base_amount + self.transport_cost + self.other_cost
+        return self.final_amount
+
+    def mark_paid(self, paid_by_user, mode='CASH', reference='', remark='', proof_s3_key=None):
+        """
+        Mark bill as paid.
+        Also creates a MukkadamPaymentRecord and flips allocation.payment_status.
+        """
+        from django.utils import timezone
+        self.status = 'paid'
+        self.paid_at = timezone.now()
+        self.payment_mode = mode
+        self.payment_reference = reference
+        self.remark = remark
+        self.paid_by = paid_by_user
+        if proof_s3_key:
+            self.proof_s3_key = proof_s3_key
+        self.save()
+
+        # Flip allocation payment status
+        alloc = self.allocation
+        alloc.payment_status = 'settled'
+        alloc.save(update_fields=['payment_status'])
+
+        # Create ledger entry
+        MukkadamPaymentRecord.objects.create(
+            mukkadam=self.mukkadam,
+            cluster=self.cluster,
+            payment_type='updown_bill',
+            updown_bill=self,
+            amount=self.final_amount,
+            payment_date=timezone.now().date(),
+            payment_mode=mode,
+            payment_reference=reference,
+            remark=remark,
+            proof_s3_key=proof_s3_key,
+            created_by=paid_by_user,
+        )
+
+    @classmethod
+    def create_from_allocation(cls, allocation):
+        """
+        Factory: create a bill from a completed allocation.
+        Pulls transport_price from the ClusterMukkadamAssignment if available.
+        """
+        # pick settlement area
+        area = allocation.allocated_area
+        if allocation.use_actual_for_settlement and allocation.actual_area_done:
+            area = allocation.actual_area_done
+
+        rate = allocation.mukkadam_rate
+        base = area * rate
+
+        # Try to get assignment for transport default
+        assignment = None
+        transport = Decimal('0')
+        try:
+            assignment = ClusterMukkadamAssignment.objects.get(
+                mukkadam=allocation.mukkadam,
+                cluster=allocation.cluster,
+                mukkadam_type='updown',
+            )
+            transport = assignment.transport_price or Decimal('0')
+        except ClusterMukkadamAssignment.DoesNotExist:
+            pass
+
+        bill = cls(
+            allocation=allocation,
+            mukkadam=allocation.mukkadam,
+            cluster=allocation.cluster,
+            assignment=assignment,
+            work_date=allocation.allocated_date,
+            allocated_area=area,
+            mukkadam_rate=rate,
+            base_amount=base,
+            transport_cost=transport,
+            other_cost=Decimal('0'),
+            final_amount=base + transport,
+        )
+        bill.save()
+        return bill
+
+
+# ============================================================================
+# PERMANENT MUKKADAM SETTLEMENT
+# ============================================================================
+
+class MukkadamPermanentSettlement(models.Model):
+    """
+    End-of-period settlement for a permanent mukkadam in a cluster.
+
+    Logic:
+      work_earned   = sum(allocation.mukkadam_amount) for all done allocations in period
+      advance_given = assignment.advance_amount
+      weekly_sum    = sum(MukkadamWeeklyPayment.amount) in period
+      total_paid    = advance_given + weekly_sum
+
+      running_balance = total_paid - work_earned
+        > 0 → mukkadam is in credit (we overpaid), carry forward
+        < 0 → we still owe mukkadam abs(running_balance)
+
+      net_payable = max(0, work_earned - total_paid)
+      (if total_paid >= work_earned → no payment needed)
+
+    Example from your description:
+      advance = 15000, work done = 10000
+      → balance after advance = 15000 - 10000 = +5000 credit
+      weekly = 10000 paid, work that week = 18000
+      → balance after week = 5000 + 10000 - 18000 = -3000
+      → net_payable = 3000 (we still owe 3k)
+    """
+
+    assignment = models.ForeignKey(
+        'ClusterMukkadamAssignment',
+        on_delete=models.CASCADE,
+        related_name='permanent_settlements',
+    )
+    mukkadam = models.ForeignKey(
+        'Mukkadam',
+        on_delete=models.CASCADE,
+        related_name='permanent_settlements',
+    )
+    cluster = models.ForeignKey(
+        'Cluster',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='permanent_settlements',
+    )
+
+    # ── Period covered ────────────────────────────────────────────────────────
+    period_start = models.DateField()
+    period_end = models.DateField()
+
+    # ── Work earned (from allocations) ────────────────────────────────────────
+    work_earned = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text="Sum of mukkadam_amount for all completed allocations in period"
+    )
+
+    # ── Payments made upfront ─────────────────────────────────────────────────
+    advance_applied = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text="Advance amount applied in this settlement"
+    )
+    weekly_payments_sum = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text="Sum of weekly payments in this period"
+    )
+    misc_costs_sum = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text="Any misc costs applied to this settlement"
+    )
+    total_paid_before_settlement = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text="advance_applied + weekly_payments_sum + misc_costs_sum"
+    )
+
+    # ── Carry forward from previous settlement ────────────────────────────────
+    carry_forward_credit = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text="Credit balance carried from previous settlement (positive = we overpaid)"
+    )
+
+    # ── Settlement result ─────────────────────────────────────────────────────
+    running_balance = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text=(
+            "total_paid_before_settlement + carry_forward_credit - work_earned. "
+            "Positive = credit (overpaid), Negative = we still owe mukkadam."
+        )
+    )
+    net_payable = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('0'),
+        help_text="max(0, -running_balance). Actual cash to pay now."
+    )
+    no_payment_needed = models.BooleanField(
+        default=False,
+        help_text="True if running_balance >= 0 (already covered by advance/weekly)"
+    )
+
+    # ── Linked weekly payments used ───────────────────────────────────────────
+    weekly_payments_applied = models.ManyToManyField(
+        'MukkadamWeeklyPayment',
+        blank=True,
+        related_name='permanent_settlements',
+    )
+
+    # ── Linked allocations settled ────────────────────────────────────────────
+    allocations_settled = models.ManyToManyField(
+        'Allocation',
+        blank=True,
+        related_name='permanent_settlements',
+    )
+
+    # ── Payment status ────────────────────────────────────────────────────────
+    STATUS_CHOICES = [
+        ('calculated', 'Calculated'),
+        ('no_payment_needed', 'No Payment Needed'),
+        ('payment_raised', 'Payment Raised'),
+        ('paid', 'Paid'),
+    ]
+    status = models.CharField(max_length=25, choices=STATUS_CHOICES, default='calculated')
+
+    paid_at = models.DateTimeField(null=True, blank=True)
+    payment_mode = models.CharField(
+        max_length=30,
+        choices=[
+            ('CASH', 'Cash'),
+            ('UPI', 'UPI'),
+            ('BANK_TRANSFER', 'Bank Transfer'),
+            ('CHEQUE', 'Cheque'),
+        ],
+        blank=True,
+    )
+    payment_reference = models.CharField(max_length=255, blank=True)
+    proof_s3_key = models.CharField(max_length=500, blank=True, null=True)
+    remark = models.TextField(
+        blank=True,
+        help_text=(
+            "Auto-generated remark showing breakdown: "
+            "'Advance ₹15k + Weekly ₹10k = ₹25k paid. Work ₹22k. Net ₹3k owed.'"
+        )
+    )
+
+    # ── Audit ─────────────────────────────────────────────────────────────────
+    calculated_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='permanent_settlements_calculated',
+    )
+    paid_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='permanent_settlements_paid',
+    )
+    calculated_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # ── Sheet sync ────────────────────────────────────────────────────────────
+    sheet_row_id = models.CharField(max_length=100, blank=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'mukkadam_permanent_settlements'
+        ordering = ['-period_end']
+        indexes = [
+            models.Index(fields=['mukkadam', 'period_end']),
+            models.Index(fields=['cluster', 'status']),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.mukkadam.mukkadam_name} | "
+            f"{self.period_start} → {self.period_end} | "
+            f"Net ₹{self.net_payable} | {self.status}"
+        )
+
+    def compute(self):
+        """
+        Recalculate all derived fields and build auto-remark.
+        Call this after changing any input field, then save().
+        """
+        self.total_paid_before_settlement = (
+            self.advance_applied
+            + self.weekly_payments_sum
+            + self.misc_costs_sum
+        )
+        self.running_balance = (
+            self.total_paid_before_settlement
+            + self.carry_forward_credit
+            - self.work_earned
+        )
+        if self.running_balance >= 0:
+            self.net_payable = Decimal('0')
+            self.no_payment_needed = True
+            self.status = 'no_payment_needed'
+        else:
+            self.net_payable = abs(self.running_balance)
+            self.no_payment_needed = False
+            self.status = 'calculated'
+
+        # Auto-generate remark
+        parts = []
+        if self.advance_applied:
+            parts.append(f"Advance ₹{self.advance_applied:.0f}")
+        if self.weekly_payments_sum:
+            parts.append(f"Weekly ₹{self.weekly_payments_sum:.0f}")
+        if self.misc_costs_sum:
+            parts.append(f"Misc ₹{self.misc_costs_sum:.0f}")
+        if self.carry_forward_credit:
+            parts.append(f"Carry fwd ₹{self.carry_forward_credit:.0f}")
+
+        paid_str = " + ".join(parts) + f" = ₹{self.total_paid_before_settlement:.0f} paid"
+        work_str = f"Work done ₹{self.work_earned:.0f}"
+
+        if self.no_payment_needed:
+            self.remark = (
+                f"{paid_str}. {work_str}. "
+                f"Credit ₹{self.running_balance:.0f} → no payment needed."
+            )
+        else:
+            self.remark = (
+                f"{paid_str}. {work_str}. "
+                f"Net payable ₹{self.net_payable:.0f}."
+            )
+
+    def mark_paid(self, paid_by_user, mode='CASH', reference='', remark_extra='', proof_s3_key=None):
+        """Mark settlement as paid and create MukkadamPaymentRecord."""
+        from django.utils import timezone
+        self.status = 'paid'
+        self.paid_at = timezone.now()
+        self.payment_mode = mode
+        self.payment_reference = reference
+        self.paid_by = paid_by_user
+        if proof_s3_key:
+            self.proof_s3_key = proof_s3_key
+        if remark_extra:
+            self.remark = self.remark + '\n' + remark_extra
+        self.save()
+
+        MukkadamPaymentRecord.objects.create(
+            mukkadam=self.mukkadam,
+            cluster=self.cluster,
+            payment_type='permanent_settlement',
+            permanent_settlement=self,
+            amount=self.net_payable,
+            payment_date=timezone.now().date(),
+            payment_mode=mode,
+            payment_reference=reference,
+            remark=self.remark,
+            proof_s3_key=proof_s3_key,
+            created_by=paid_by_user,
+        )
+
+
+# ============================================================================
+# UNIFIED PAYMENT RECORD
+# ============================================================================
+
+class MukkadamPaymentRecord(models.Model):
+    """
+    Single flat table: every actual cash outflow to a mukkadam.
+    One row per payment event.
+
+    payment_type covers:
+      updown_bill          → payment for updown allocation (MukkadamUpdownBill)
+      permanent_settlement → final settlement for permanent mukkadam
+      advance              → advance given when joining cluster
+      weekly               → weekly payment (MukkadamWeeklyPayment)
+      misc                 → miscellaneous (MukkadamMiscCost)
+      adjustment           → correction / manual entry
+    """
+
+    PAYMENT_TYPE_CHOICES = [
+        ('updown_bill', 'Updown Bill Payment'),
+        ('permanent_settlement', 'Permanent Settlement'),
+        ('advance', 'Advance Payment'),
+        ('weekly', 'Weekly Payment'),
+        ('misc', 'Miscellaneous'),
+        ('adjustment', 'Adjustment'),
+    ]
+
+    mukkadam = models.ForeignKey(
+        'Mukkadam', on_delete=models.CASCADE,
+        related_name='payment_records',
+    )
+    cluster = models.ForeignKey(
+        'Cluster', on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='mukkadam_payment_records',
+    )
+
+    payment_type = models.CharField(max_length=30, choices=PAYMENT_TYPE_CHOICES)
+
+    # FK to source model — only one will be set at a time
+    updown_bill = models.ForeignKey(
+        MukkadamUpdownBill, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='payment_records',
+    )
+    permanent_settlement = models.ForeignKey(
+        MukkadamPermanentSettlement, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='payment_records',
+    )
+    weekly_payment = models.ForeignKey(
+        'MukkadamWeeklyPayment', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='payment_records',
+    )
+    misc_cost = models.ForeignKey(
+        'MukkadamMiscCost', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='payment_records',
+    )
+
+    # ── Payment details ───────────────────────────────────────────────────────
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    payment_date = models.DateField()
+    payment_mode = models.CharField(
+        max_length=30,
+        choices=[
+            ('CASH', 'Cash'),
+            ('UPI', 'UPI'),
+            ('BANK_TRANSFER', 'Bank Transfer'),
+            ('CHEQUE', 'Cheque'),
+            ('OTHER', 'Other'),
+        ],
+        default='CASH',
+    )
+    payment_reference = models.CharField(max_length=255, blank=True, help_text="UPI txn ID / cheque no.")
+    proof_s3_key = models.CharField(max_length=500, blank=True, null=True)
+    remark = models.TextField(blank=True)
+
+    # ── Audit ─────────────────────────────────────────────────────────────────
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='mukkadam_payments_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # ── Sheet sync ────────────────────────────────────────────────────────────
+    sheet_row_id = models.CharField(max_length=100, blank=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'mukkadam_payment_records'
+        ordering = ['-payment_date', '-created_at']
+        indexes = [
+            models.Index(fields=['mukkadam', 'payment_date']),
+            models.Index(fields=['cluster', 'payment_type']),
+            models.Index(fields=['payment_date']),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.mukkadam.mukkadam_name} | "
+            f"{self.payment_type} | ₹{self.amount} | {self.payment_date}"
+        )
+
+
+# ============================================================================
+# GOOGLE SHEET SYNC LOG
+# ============================================================================
+
+class SheetSyncLog(models.Model):
+    """
+    One row per Google Sheet → Django sync event.
+    Lets you debug exactly what happened row-by-row.
+    """
+
+    SHEET_CHOICES = [
+        ('updown_payments', 'Updown Payments Sheet'),
+        ('permanent_settlements', 'Permanent Settlements Sheet'),
+        ('payment_records', 'Payment Records Sheet'),
+    ]
+    ACTION_CHOICES = [
+        ('create', 'Create'),
+        ('update', 'Update'),
+        ('mark_paid', 'Mark Paid'),
+        ('skip', 'Skip (no change)'),
+        ('error', 'Error'),
+    ]
+
+    sheet_name = models.CharField(max_length=50, choices=SHEET_CHOICES)
+    sheet_row_id = models.CharField(max_length=100, help_text="Row ID from sheet (e.g. 'updown_42')")
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+
+    # Which DB object was affected
+    updown_bill_id = models.IntegerField(null=True, blank=True)
+    permanent_settlement_id = models.IntegerField(null=True, blank=True)
+    payment_record_id = models.IntegerField(null=True, blank=True)
+
+    # Payload received from Apps Script
+    payload = models.JSONField(default=dict, blank=True)
+
+    # Result
+    success = models.BooleanField(default=True)
+    error_message = models.TextField(blank=True)
+
+    synced_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'sheet_sync_logs'
+        ordering = ['-synced_at']
+        indexes = [
+            models.Index(fields=['sheet_name', '-synced_at']),
+            models.Index(fields=['sheet_row_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.sheet_name} | {self.action} | {self.sheet_row_id} | {'OK' if self.success else 'ERR'}" 
 class SheetEditLog(models.Model):
     """Audit trail for every edit made via Google Sheets webhook."""
     

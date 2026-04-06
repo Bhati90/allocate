@@ -631,12 +631,10 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
 
     # __gte so activities on the SAME date as old_date also get moved.
     # Trigger row excluded via .exclude(pk=trigger_ja.pk).
-    # Only cascade within the same plot — other plots are unaffected.
     successors = list(
         JobActivity.objects
         .filter(
             job=trigger_ja.job,
-            plot=trigger_ja.plot,
             is_lost=False,
             total_area__gt=0,
             scheduled_date__gte=old_date,
@@ -755,3 +753,338 @@ def _apply_split(ja, split_acres_str, split_date_str, edited_by):
     )
     logger.info(f"[Sheet->DB] {msg} by {edited_by}")
     return True, msg, child.pk
+
+
+
+"""
+mukkadam_sheet_views.py
+=======================
+TWO focused endpoints for Phase 1 of Mukkadam Payments Google Sheet.
+
+Tab 1 – "Mukkadam Roster"
+    GET /tender/api/sheet/mukkadam-roster/
+    → Lists all ClusterMukkadamAssignment rows (permanent + updown) with all
+      relevant details. Read-only in the sheet. Synced to sheet via pullFromDjango.
+
+Tab 2 – "Weekly Payments"
+    GET  /tender/api/sheet/weekly-payments/
+    → Lists all MukkadamWeeklyPayment rows (for permanent mukkadams only).
+    POST /tender/api/sheet/weekly-payment/update/
+    → Creates a new weekly payment OR marks an existing one paid from the sheet.
+
+URLs to register in urls.py:
+    path('api/sheet/mukkadam-roster/', views.sheet_mukkadam_roster, name='sheet_mukkadam_roster'),
+    path('api/sheet/weekly-payments/', views.sheet_weekly_payments_list, name='sheet_weekly_payments_list'),
+    path('api/sheet/weekly-payment/update/', views.sheet_weekly_payment_update, name='sheet_weekly_payment_update'),
+"""
+
+import logging
+from decimal import Decimal
+from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+
+from tender.models import (
+    ClusterMukkadamAssignment,
+    MukkadamWeeklyPayment,
+    MukkadamPaymentRecord,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 1 – MUKKADAM ROSTER  (read-only in sheet)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def sheet_mukkadam_roster(request):
+    """
+    Returns every ClusterMukkadamAssignment (permanent + updown).
+    Sheet tab "Mukkadam Roster" is populated from this — all columns read-only.
+    Optional query param: ?cluster_id=<id>
+    """
+    cluster_id = request.query_params.get('cluster_id')
+    qs = (
+        ClusterMukkadamAssignment.objects
+        .select_related('mukkadam', 'cluster')
+        .filter(is_active=True)
+        .order_by('cluster__name', 'mukkadam_type', 'mukkadam__mukkadam_name')
+    )
+    if cluster_id:
+        qs = qs.filter(cluster_id=cluster_id)
+
+    rows = []
+    for a in qs:
+        m = a.mukkadam
+        c = a.cluster
+
+        # Build updown date range string for display
+        if a.mukkadam_type == 'updown':
+            if a.updown_mode == 'range' and a.updown_from_date and a.updown_to_date:
+                date_range = f"{a.updown_from_date} → {a.updown_to_date}"
+            elif a.updown_mode == 'specific' and a.updown_specific_dates:
+                date_range = ', '.join(str(d) for d in (a.updown_specific_dates or []))
+            else:
+                date_range = ''
+        else:
+            date_range = ''
+
+        rows.append({
+            # Identifiers
+            'assignment_id'     : a.id,
+            'mukkadam_id'       : m.mukkadam_id,
+
+            # Who & Where
+            'mukkadam_name'     : m.mukkadam_name,
+            'mobile'            : m.mobile_numbers or '',
+            'cluster_name'      : c.name if c else '',
+
+            # Type
+            'mukkadam_type'     : a.mukkadam_type,           # permanent / updown
+            'updown_mode'       : a.updown_mode or '',       # range / specific
+            'date_range'        : date_range,                 # for updown only
+
+            # Joining
+            'joined_date'       : str(a.joined_date) if a.joined_date else '',
+
+            # Money agreed
+            'weekly_amount'     : float(a.weekly_amount or 0),
+            'transport_price'   : float(a.transport_price or 0),
+            'advance_amount'    : float(a.advance_amount or 0),
+
+            # Crew
+            'crew_size'         : m.crew_size,
+            'max_crew_capacity' : m.max_crew_capacity,
+
+            # Weekly payment day (permanent only)
+            'weekly_payment_day': a.get_weekly_payment_day_display() if a.mukkadam_type == 'permanent' and a.weekly_payment_day is not None else '',
+
+            # Running totals
+            'total_weekly_payments': float(a.total_weekly_payments or 0),
+
+            # Status
+            'is_active'         : a.is_active,
+        })
+
+    return JsonResponse(rows, safe=False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 2 – WEEKLY PAYMENTS  (editable in sheet)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def sheet_weekly_payments_list(request):
+    """
+    Returns all MukkadamWeeklyPayment rows for permanent mukkadams.
+    Sheet tab "Weekly Payments" is populated from this.
+    Optional query param: ?cluster_id=<id>
+    """
+    cluster_id = request.query_params.get('cluster_id')
+    qs = (
+        MukkadamWeeklyPayment.objects
+        .select_related('assignment__mukkadam', 'assignment__cluster')
+        .order_by('-payment_date')
+    )
+    if cluster_id:
+        qs = qs.filter(assignment__cluster_id=cluster_id)
+
+    # Only permanent mukkadams have weekly payments
+    qs = qs.filter(assignment__mukkadam_type='permanent')
+
+    rows = []
+    for w in qs:
+        a = w.assignment
+        rows.append({
+            'weekly_id'         : w.id,
+            'assignment_id'     : a.id if a else '',
+            'mukkadam_name'     : a.mukkadam.mukkadam_name if a else '',
+            'cluster_name'      : a.cluster.name if a and a.cluster else '',
+            'payment_date'      : str(w.payment_date),
+            'crew_size'         : w.crew_size_on_date,
+            'weekly_agreed_amount': float(a.weekly_amount or 0) if a else 0,
+            'amount_paid'       : float(w.amount),
+            'mode'              : w.mode or '',
+            'payment_reference' : w.payment_reference or '',
+            'notes'             : w.notes or '',
+            'is_auto_generated' : w.is_auto_generated,
+        })
+
+    return JsonResponse(rows, safe=False)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def sheet_weekly_payment_update(request):
+    """
+    Called from Google Sheet onEdit when user fills/edits a Weekly Payment row.
+
+    Two cases:
+    A) weekly_id is present  → UPDATE existing MukkadamWeeklyPayment
+    B) weekly_id is absent   → CREATE new MukkadamWeeklyPayment from sheet row
+       (user added a new row in the sheet for a specific assignment)
+
+    Required fields for CREATE:
+        assignment_id, payment_date, amount_paid
+    Required fields for UPDATE:
+        weekly_id + any of: amount_paid, mode, payment_reference, notes
+    """
+    data = request.data
+    weekly_id = data.get('weekly_id')
+
+    try:
+        if weekly_id:
+            # ── UPDATE ──────────────────────────────────────────────────────
+            try:
+                wp = MukkadamWeeklyPayment.objects.select_related(
+                    'assignment__mukkadam', 'assignment__cluster'
+                ).get(id=weekly_id)
+            except MukkadamWeeklyPayment.DoesNotExist:
+                return JsonResponse(
+                    {'success': False, 'error': f'Weekly payment {weekly_id} not found'},
+                    status=404
+                )
+
+            if 'amount_paid' in data:
+                wp.amount = Decimal(str(data['amount_paid']))
+            if 'mode' in data and data['mode']:
+                wp.mode = data['mode']
+            if 'payment_reference' in data:
+                wp.payment_reference = data['payment_reference'] or ''
+            if 'notes' in data:
+                wp.notes = data['notes'] or ''
+            if 'crew_size' in data and data['crew_size']:
+                wp.crew_size_on_date = int(data['crew_size'])
+
+            wp.is_auto_generated = False  # manual edit via sheet
+            wp.save()
+
+            # Update running total on assignment
+            _refresh_assignment_weekly_total(wp.assignment)
+
+            # Log in MukkadamPaymentRecord if amount changed
+            if 'amount_paid' in data:
+                _upsert_payment_record(wp, request.user)
+
+            return JsonResponse({
+                'success'    : True,
+                'action'     : 'updated',
+                'weekly_id'  : wp.id,
+                'amount_paid': float(wp.amount),
+                'mukkadam'   : wp.assignment.mukkadam.mukkadam_name if wp.assignment else '',
+                'payment_date': str(wp.payment_date),
+            })
+
+        else:
+            # ── CREATE ──────────────────────────────────────────────────────
+            assignment_id = data.get('assignment_id')
+            payment_date  = data.get('payment_date')
+            amount_paid   = data.get('amount_paid')
+
+            if not assignment_id:
+                return JsonResponse(
+                    {'success': False, 'error': 'assignment_id required to create a weekly payment'},
+                    status=400
+                )
+            if not payment_date:
+                return JsonResponse(
+                    {'success': False, 'error': 'payment_date required'},
+                    status=400
+                )
+            if amount_paid is None:
+                return JsonResponse(
+                    {'success': False, 'error': 'amount_paid required'},
+                    status=400
+                )
+
+            try:
+                assignment = ClusterMukkadamAssignment.objects.select_related(
+                    'mukkadam', 'cluster'
+                ).get(id=assignment_id)
+            except ClusterMukkadamAssignment.DoesNotExist:
+                return JsonResponse(
+                    {'success': False, 'error': f'Assignment {assignment_id} not found'},
+                    status=404
+                )
+
+            # Guard: only permanent mukkadams get weekly payments
+            if assignment.mukkadam_type != 'permanent':
+                return JsonResponse(
+                    {'success': False, 'error': 'Weekly payments are only for permanent mukkadams'},
+                    status=400
+                )
+
+            wp = MukkadamWeeklyPayment.objects.create(
+                assignment       = assignment,
+                payment_date     = payment_date,
+                crew_size_on_date= int(data.get('crew_size', assignment.mukkadam.crew_size or 1)),
+                amount           = Decimal(str(amount_paid)),
+                mode             = data.get('mode', 'CASH') or 'CASH',
+                payment_reference= data.get('payment_reference', '') or '',
+                notes            = data.get('notes', '') or '',
+                is_auto_generated= False,
+            )
+
+            _refresh_assignment_weekly_total(assignment)
+            _upsert_payment_record(wp, request.user)
+
+            return JsonResponse({
+                'success'     : True,
+                'action'      : 'created',
+                'weekly_id'   : wp.id,
+                'amount_paid' : float(wp.amount),
+                'mukkadam'    : assignment.mukkadam.mukkadam_name,
+                'cluster'     : assignment.cluster.name if assignment.cluster else '',
+                'payment_date': str(wp.payment_date),
+            }, status=201)
+
+    except Exception as e:
+        logger.exception('sheet_weekly_payment_update error')
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _refresh_assignment_weekly_total(assignment):
+    """Recompute assignment.total_weekly_payments from all its weekly rows."""
+    if not assignment:
+        return
+    from django.db.models import Sum
+    total = (
+        MukkadamWeeklyPayment.objects
+        .filter(assignment=assignment)
+        .aggregate(t=Sum('amount'))['t'] or Decimal('0')
+    )
+    assignment.total_weekly_payments = total
+    assignment.save(update_fields=['total_weekly_payments'])
+
+
+def _upsert_payment_record(wp, user):
+    """
+    Create or update a MukkadamPaymentRecord row for this weekly payment.
+    Keeps the ledger accurate even for sheet-originated payments.
+    """
+    if not wp.assignment:
+        return
+    MukkadamPaymentRecord.objects.update_or_create(
+        weekly_payment=wp,
+        defaults=dict(
+            mukkadam       = wp.assignment.mukkadam,
+            cluster        = wp.assignment.cluster,
+            payment_type   = 'weekly',
+            amount         = wp.amount,
+            payment_date   = wp.payment_date,
+            payment_mode   = wp.mode,
+            payment_reference = wp.payment_reference or '',
+            remark         = wp.notes or '',
+            created_by     = user,
+        )
+    )

@@ -2,6 +2,8 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.authtoken.views import obtain_auth_token
 
+from .paymentsheet import sheet_mukkadam_roster,sheet_weekly_payment_update,sheet_weekly_payments_list, sheet_sync_permanent_settlement, sheet_sync_permanent_settlement_list, sheet_sync_updown_bill, sheet_sync_updown_bill_list
+
 from .views import (
     ActivityCatalogViewSet,
     ClusterViewSet,mukkadam_timeline,
@@ -64,7 +66,7 @@ from . import sheet_views
 urlpatterns = [
     path('api/sheet/mukkadam-master/',          sheet_views.mukkadam_master_list_v2),
     path('api/sheet/mukkadam-master/update/',   sheet_views.mukkadam_master_update),
-    path('api/sheet/weekly-payments/',          sheet_views.weekly_payments_list),
+    # REMOVED: was shadowing the new sheet_weekly_payments_list below
     path('api/sheet/weekly-payments/add/',      sheet_views.add_weekly_payment),
     path('api/sheet/transport-events/',         sheet_views.transport_events_list),
     path('api/sheet/transport-events/add/',     sheet_views.add_transport_event),
@@ -77,6 +79,10 @@ urlpatterns = [
     path('api/sheet/team-profile/',             sheet_views.team_profile),
     path('api/sheet/validate-token/',           sheet_views.validate_token),
 
+
+path('api/sheet/mukkadam-roster/',       sheet_mukkadam_roster,        name='sheet_mukkadam_roster'),
+    path('api/sheet/weekly-payments/',       sheet_weekly_payments_list,   name='sheet_weekly_payments_list'),
+    path('api/sheet/weekly-payment/update/', sheet_weekly_payment_update,  name='sheet_weekly_payment_update'),
     path('api/', include(router.urls)),
     path('clustersp/funnel/', v.ClusterFunnelView.as_view()),
 # must be BEFORE clusters/<cluster_id>/ or it'll match as a cluster_id
@@ -100,7 +106,7 @@ path('api/settlements/', list_all_settlements, name='list-settlements'),
     ),
 path("api/sheet/settlements/",       sheet_get_settlements),
 path("api/sheet/update-settlement/", sheet_update_settlement),
-path("api/sheet/weekly-payments/",   sheet_get_weekly),
+# REMOVED: duplicate of api/sheet/weekly-payments/ — was never reached
 path("api/sheet/save-weekly/",       sheet_save_weekly),
 path("api/sheet/other-payments/",    sheet_get_other),
 path("api/sheet/save-other/",        sheet_save_other),
@@ -251,7 +257,10 @@ path('api/tender-global-insights/', GlobalInsightsView.as_view(),
 
 
 path('api/users/search/', UserSearchView.as_view(), name='user-search'),
-
+path('api/sheet-sync/updown-bill/', sheet_sync_updown_bill, name='sheet_sync_updown_bill'),
+    path('api/sheet-sync/updown-bill/list/', sheet_sync_updown_bill_list, name='sheet_sync_updown_bill_list'),
+    path('api/sheet-sync/permanent-settlement/', sheet_sync_permanent_settlement, name='sheet_sync_permanent_settlement'),
+    path('api/sheet-sync/permanent-settlement/list/', sheet_sync_permanent_settlement_list, name='sheet_sync_permanent_settlement_list'),
 
 path('api/tender-global-day-insights/', GlobalDayInsightsView.as_view(),
          name='global-insights'),

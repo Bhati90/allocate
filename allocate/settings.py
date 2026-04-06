@@ -57,6 +57,9 @@ CORS_ALLOW_HEADERS = [
     'user-agent',
     'x-csrftoken',
     'x-requested-with',
+    # ── Sheet sync headers ──────────────────────────────────────────────────
+    'x-sheet-secret',            # secret auth used by MukkadamSheet.gs
+    'ngrok-skip-browser-warning', # needed when tunnelling via ngrok locally
 ]
 
 # CSRF Settings
@@ -360,6 +363,7 @@ LOGGING = {
         },
     },
 }
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = True   # permissive for local/ngrok dev; restrict to CORS_ALLOWED_ORIGINS in prod
+# NOTE: even with ALLOW_ALL_ORIGINS, CORS_ALLOW_HEADERS above is still enforced — keep x-sheet-secret in it
 
 CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
