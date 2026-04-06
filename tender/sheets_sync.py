@@ -636,6 +636,7 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
         .filter(
             job=trigger_ja.job,
             is_lost=False,
+            plot=trigger_ja.plot, 
             total_area__gt=0,
             scheduled_date__gt=old_date,
         )
