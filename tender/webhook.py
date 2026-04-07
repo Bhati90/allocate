@@ -854,8 +854,8 @@ from .models import FarmerBillWebhookLog
 logger = logging.getLogger(__name__)
 
 # ── Paste your webhook URL here ──────────────────────────────
-# FARMER_BILL_WEBHOOK_URL =''
-FARMER_BILL_WEBHOOK_URL = 'https://ops.bharatintelligence.ai/ops/allocation/bill_collect/'
+FARMER_BILL_WEBHOOK_URL =''
+# FARMER_BILL_WEBHOOK_URL = 'https://ops.bharatintelligence.ai/ops/allocation/bill_collect/'
 from rest_framework.authentication import BasicAuthentication
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -1040,9 +1040,9 @@ def send_farmer_bill_to_webhook(request):
 
 
 
-# FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = ''
+FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = ''
 # ── Paste your confirmation webhook URL here ─────────────────
-FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = 'https://ops.bharatintelligence.ai/ops/allocation/bill_collect/'
+# FARMER_PAYMENT_CONFIRMATION_WEBHOOK_URL = 'https://ops.bharatintelligence.ai/ops/allocation/bill_collect/'
 from .models import FarmerPaymentWebhookLog
 
 @api_view(['POST'])
