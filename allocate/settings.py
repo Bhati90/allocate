@@ -16,14 +16,18 @@ from decouple import config, Csv
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw$9t'
+SECRET_KEY = 'django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # DEBUG = True
 DEBUG = "False"
-
+# settings.py
+GOOGLE_SHEET_WEBHOOK_URL    = "https://script.google.com/macros/s/AKfycbzMt-yuoN4FnVPqux83BtTcqpnvqf-pBub5IU8f6TkcRRTEYpacCU5ws4eka0IqKo1N/exec"
+GOOGLE_SHEET_WEBHOOK_SECRET = "django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw"
 ALLOWED_HOSTS = ['*']
-
+# settings.py
+FARMER_BILLING_SHEET_ID = "1FgsuOFTqmzWAZ04L1-5KwRiSByj2crp1zbReVGRFQpc"  # from the URL
+GOOGLE_CREDENTIALS_PATH = BASE_DIR / "google.json"
 # ============================================
 # CORS & CSRF CONFIGURATION
 # ============================================

@@ -1229,7 +1229,122 @@ def farmer_payment_webhook(request):
         return Response({'error': str(e)}, status=500)
 
 
+# tender/views_payment_webhook.py
 
+import json
+import logging
+import requests
+
+from django.conf import settings
+from django.http import JsonResponse
+from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
+
+from .models import FarmerBillWebhookLog
+
+logger = logging.getLogger(__name__)
+
+
+def _colour_sheet(log, colour):
+    """Fire and forget — just POST to Apps Script."""
+    webhook_url = getattr(settings, "GOOGLE_SHEET_WEBHOOK_URL", None)
+    if not webhook_url:
+        return
+
+    payload = {
+        "action"       : "set_colour",
+        "farmer_id"    : log.farmer_id,
+        "job_id"       : log.job_id,
+        "activity_name": log.activity_name,
+        "colour"       : colour,
+        "payment_id"   : log.payment_id or "",
+        "amount_paid"  : str(log.amount_paid or ""),
+    }
+    try:
+        requests.post(webhook_url, json=payload, timeout=10)
+    except Exception as e:
+        logger.error(f"Sheet colour sync failed: {e}")
+
+
+# ─────────────────────────────────────────────────────────────
+# Webhook 1: Team sends payment link
+# POST /api/payment/link-sent/
+# Body: { "farmer_id", "job_id", "activity_name", "payment_link_url", "payment_link_id" }
+# ─────────────────────────────────────────────────────────────
+@csrf_exempt
+@require_POST
+def payment_link_sent(request):
+    try:
+        body = json.loads(request.body)
+    except Exception:
+        return JsonResponse({"status": "error", "message": "Invalid JSON"}, status=400)
+
+    farmer_id     = body.get("farmer_id")
+    job_id        = body.get("job_id")
+    activity_name = body.get("activity_name")
+
+    if not all([farmer_id, job_id, activity_name]):
+        return JsonResponse({"status": "error", "message": "farmer_id, job_id, activity_name are required"}, status=400)
+
+    log = (
+        FarmerBillWebhookLog.objects
+        .filter(farmer_id=farmer_id, job_id=job_id, activity_name=activity_name)
+        .order_by("-created_at")
+        .first()
+    )
+    if not log:
+        return JsonResponse({"status": "error", "message": "No matching log found"}, status=404)
+
+    log.payment_status       = "link_sent"
+    log.payment_link_sent_at = timezone.now()
+    log.payment_link_url     = body.get("payment_link_url", "")
+    log.payment_link_id      = body.get("payment_link_id", "")
+    log.save(update_fields=["payment_status", "payment_link_sent_at", "payment_link_url", "payment_link_id"])
+
+    _colour_sheet(log, "yellow")
+
+    return JsonResponse({"status": "ok", "message": "Link sent recorded", "log_id": log.id})
+
+
+# ─────────────────────────────────────────────────────────────
+# Webhook 2: Payment received
+# POST /api/payment/received/
+# Body: { "farmer_id", "job_id", "activity_name", "payment_id", "amount_paid" }
+# ─────────────────────────────────────────────────────────────
+@csrf_exempt
+@require_POST
+def payment_received(request):
+    try:
+        body = json.loads(request.body)
+    except Exception:
+        return JsonResponse({"status": "error", "message": "Invalid JSON"}, status=400)
+
+    farmer_id     = body.get("farmer_id")
+    job_id        = body.get("job_id")
+    activity_name = body.get("activity_name")
+
+    if not all([farmer_id, job_id, activity_name]):
+        return JsonResponse({"status": "error", "message": "farmer_id, job_id, activity_name are required"}, status=400)
+
+    log = (
+        FarmerBillWebhookLog.objects
+        .filter(farmer_id=farmer_id, job_id=job_id, activity_name=activity_name)
+        .order_by("-created_at")
+        .first()
+    )
+    if not log:
+        return JsonResponse({"status": "error", "message": "No matching log found"}, status=404)
+
+    log.payment_status      = "paid"
+    log.payment_received_at = timezone.now()
+    log.payment_id          = body.get("payment_id", "")
+    log.amount_paid         = body.get("amount_paid") or None
+    log.save(update_fields=["payment_status", "payment_received_at", "payment_id", "amount_paid"])
+
+    _colour_sheet(log, "green")
+
+    return JsonResponse({"status": "ok", "message": "Payment recorded", "log_id": log.id})
 
 
 # views.py or webhooks.py

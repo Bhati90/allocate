@@ -1234,33 +1234,32 @@ class FarmerBillWebhookLog(models.Model):
     sent_by_name      = models.CharField(max_length=255, blank=True, null=True)
     sent_by_email     = models.CharField(max_length=255, blank=True, null=True)
     sent_by_id        = models.CharField(max_length=100, blank=True, null=True)
-    # In FarmerBillWebhookLog model
-    activity_name = models.CharField(max_length=255, blank=True, null=True)
-    sent_at       = models.DateTimeField(auto_now_add=True, blank=True,null = True)  # if not already there
+    activity_name     = models.CharField(max_length=255, blank=True, null=True)
+    sent_at           = models.DateTimeField(auto_now_add=True, blank=True, null=True)
+
     # ── Farmer ───────────────────────────────────────────────
     farmer_id         = models.CharField(max_length=100, blank=True, null=True)
     farmer_name       = models.CharField(max_length=255, blank=True, null=True)
     farmer_phone      = models.CharField(max_length=50,  blank=True, null=True)
 
-    # Add to FarmerBillWebhookLog:
-    webhook_detail        = models.TextField(blank=True, null=True)   # parsed 'detail' message
-    webhook_booking_id    = models.CharField(max_length=100, blank=True, null=True)
-    webhook_booking_status = models.CharField(max_length=50, blank=True, null=True)
-    webhook_success       = models.BooleanField(null=True, blank=True)  # True=success, False=failed/already paid
+    # ── Webhook meta ─────────────────────────────────────────
+    webhook_detail         = models.TextField(blank=True, null=True)
+    webhook_booking_id     = models.CharField(max_length=100, blank=True, null=True)
+    webhook_booking_status = models.CharField(max_length=50,  blank=True, null=True)
+    webhook_success        = models.BooleanField(null=True, blank=True)
 
     # ── Job ──────────────────────────────────────────────────
     job_id            = models.CharField(max_length=100, blank=True, null=True)
     crop_name         = models.CharField(max_length=255, blank=True, null=True)
     plot_name         = models.CharField(max_length=255, blank=True, null=True)
 
-
-    # In FarmerBillWebhookLog model, add this field:
     cluster = models.ForeignKey(
         'Cluster',
         on_delete=models.SET_NULL,
         null=True, blank=True,
         related_name='bill_webhook_logs',
     )
+
     # ── Mukkadam ─────────────────────────────────────────────
     mukkadam_name     = models.CharField(max_length=255, blank=True, null=True)
     mukkadam_mobile   = models.CharField(max_length=50,  blank=True, null=True)
@@ -1278,15 +1277,30 @@ class FarmerBillWebhookLog(models.Model):
     # ── Timestamp ────────────────────────────────────────────
     created_at        = models.DateTimeField(auto_now_add=True)
 
+    # ════════════════════════════════════════════════════════
+    # NEW: Payment tracking
+    # ════════════════════════════════════════════════════════
+    PAYMENT_STATUS_CHOICES = [
+        ("pending",   "Pending"),    # nothing sent yet
+        ("link_sent", "Link Sent"),  # link sent → yellow
+        ("paid",      "Paid"),       # payment received → green
+        ("overdue",   "Overdue"),    # 3 days passed → red
+    ]
+    payment_status       = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default="pending", db_index=True)
+    payment_link_sent_at = models.DateTimeField(null=True, blank=True)
+    payment_link_url     = models.URLField(max_length=500, null=True, blank=True)
+    payment_link_id      = models.CharField(max_length=200, null=True, blank=True)
+    payment_received_at  = models.DateTimeField(null=True, blank=True)
+    payment_id           = models.CharField(max_length=200, null=True, blank=True)
+    amount_paid          = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
     class Meta:
         ordering = ['-created_at']
-        verbose_name     = 'Farmer Bill Webhook Log'
+        verbose_name        = 'Farmer Bill Webhook Log'
         verbose_name_plural = 'Farmer Bill Webhook Logs'
 
     def __str__(self):
         return f"{self.farmer_name} | Job #{self.job_id} | ₹{self.balance_due} | {self.created_at.date()}"
-    
-    
 class MukkadamActivityRate(models.Model):
     """
     Mukkadam-specific rate for activities

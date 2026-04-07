@@ -26,7 +26,20 @@ allocation_deleted   = Signal()
 # ============================================================================
 # HELPERS — defined first so all receivers below can use them
 # ============================================================================
+# signals.py
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from .models import FarmerBillWebhookLog
+from .farmerbill import sync_farmer_bill_to_sheet
 
+@receiver(post_save, sender=FarmerBillWebhookLog)
+def on_farmer_bill_saved(sender, instance, created, **kwargs):
+    if created:  # Only on new entries, not updates
+        try:
+            sync_farmer_bill_to_sheet(instance)
+        except Exception as e:
+            print(f"Google Sheets sync failed: {e}")
+            # Don't crash the app — sheet sync is non-critical
 def _async(fn, *args):
     """Fire-and-forget in a background thread."""
     t = threading.Thread(target=fn, args=args, daemon=True)

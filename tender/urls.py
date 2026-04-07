@@ -25,7 +25,7 @@ from .views import (
 
 from .payment import sheet_get_allocations, sheet_update_ledger,sheet_get_other,sheet_get_settlements,sheet_get_summary,sheet_get_weekly,sheet_save_other,sheet_save_weekly,sheet_update_settlement
 
-from .webhook import booking_webhook,run_mukkadam_sync,send_farmer_bill_to_webhook,farmer_payment_webhook,sync_webhook
+from .webhook import payment_link_sent,payment_received, booking_webhook,run_mukkadam_sync,send_farmer_bill_to_webhook,farmer_payment_webhook,sync_webhook
 from .mukkadamapp import mukkadam_workbook,farmer_verify_work,mukkadam_day_end_report,mukkadam_future_work,mukkadam_settlement_history,mukkadam_earnings
 # Create router
 from . import planning as v
@@ -78,6 +78,11 @@ urlpatterns = [
     path('api/sheet/weekly-due-today/',         sheet_views.weekly_due_today_v2),
     path('api/sheet/team-profile/',             sheet_views.team_profile),
     path('api/sheet/validate-token/',           sheet_views.validate_token),
+
+
+path("api/payment/link-sent-ops/",  payment_link_sent,  name="payment_link_sent"),
+    path("api/payment/received-ops/",   payment_received,   name="payment_received"),
+
 
 
 path('api/sheet/mukkadam-roster/',       sheet_mukkadam_roster,        name='sheet_mukkadam_roster'),
