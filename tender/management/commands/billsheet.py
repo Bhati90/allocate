@@ -115,7 +115,6 @@ class Command(BaseCommand):
 
         self.stdout.write("\n" + "─" * 50)
         self.stdout.write(self.style.SUCCESS(f"Done: {success} synced, {failed} failed"))
-
     def _build_payloads(self, qs):
         job_logs = defaultdict(list)
         for log in qs:
@@ -125,6 +124,7 @@ class Command(BaseCommand):
         payloads = []
         for (farmer_id, job_id), logs in job_logs.items():
             last_log = logs[-1]
+            first_log = logs[0]  # ← earliest log = when bill was first generated
 
             all_plots   = set()
             total_acres = 0.0
@@ -152,6 +152,12 @@ class Command(BaseCommand):
 
                 plots_done = f"{len(all_plots)}/{len(all_plots)}" if all_plots else "?"
 
+                # ── Format generated_at from created_at ──
+                generated_at = ""
+                if log.created_at:
+                    from django.utils.timezone import localtime
+                    generated_at = localtime(log.created_at).strftime("%d %b %Y, %I:%M %p")
+
                 payloads.append({
                     "farmer_id"    : farmer_id,
                     "farmer_name"  : log.farmer_name or "",
@@ -164,6 +170,7 @@ class Command(BaseCommand):
                     "total_paid"   : float(log.total_paid or 0),
                     "balance_due"  : float(last_log.balance_due or 0),
                     "status"       : "✅ Paid" if float(last_log.balance_due or 0) <= 0 else "Generated",
+                    "generated_at" : generated_at,   # ← ADD THIS
                 })
 
         return payloads
