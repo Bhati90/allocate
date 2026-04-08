@@ -713,8 +713,12 @@ def payment_overview(request):
 
     # ── 2. Expected total area per farmer+job+activity ────────────────────
     expected_area_rows = JobActivity.objects.filter(
-        total_area__gt=0,
-    ).select_related(
+    total_area__gt=0,
+    is_lost=False,                    # ← exclude lost activities
+).exclude(
+    allocation_status='pending',      # ← exclude pending with no allocations
+    allocations__isnull=True,         # ← (no allocations = operationally lost)
+).select_related(
         'job__farmer',
         'activity',
     ).values(
@@ -907,6 +911,7 @@ def payment_overview(request):
             job__job_id=g['job_id'],
             activity__name=act_name,
             total_area__gt=0,
+            is_lost=False,          # ← exclude lost plot activities
         ).count()
         total_plots   = max(total_plots_qs, completed_plots)
         pending_plots = max(0, total_plots - completed_plots)
@@ -2042,8 +2047,11 @@ class JobViewSet(viewsets.ModelViewSet):
 
         # ✅ Build activities queryset filtered by plot or cluster's plots
         activities_qs = JobActivity.objects.filter(
-            total_area__gt=0,    # ← exclude zero area
-            is_lost=False,       # ← exclude lost/cancelled
+            plot__clusters__id=cluster_id,
+            is_lost=False,
+        ).exclude(
+            allocation_status='pending',
+            allocations__isnull=True,
         ).select_related('activity', 'plot').prefetch_related(
             Prefetch(
                 'allocations',
@@ -9061,6 +9069,10 @@ def cluster_payment_dashboard(request, cluster_id):
             job_mukkadam_mobile = '—'
 
             for act in activities:
+                # Skip lost/cancelled activities — they don't count toward billing
+                if getattr(act, 'is_lost', False):
+                    continue
+
                 is_past = bool(act.scheduled_date and act.scheduled_date <= today)
                 if not is_past:
                     all_past = False
@@ -9079,6 +9091,8 @@ def cluster_payment_dashboard(request, cluster_id):
 
                 # ── Use prefetched allocations — ZERO extra queries ──
                 act_allocations = list(act.allocations.all())
+                if act.allocation_status == 'pending' and len(act_allocations) == 0:
+                    continue
 
                 # Set mukkadam from first allocation found
                 if job_mukkadam_name == '—' and act_allocations:
@@ -9191,6 +9205,66 @@ def cluster_payment_dashboard(request, cluster_id):
                         if act_allocations and act_allocations[0].mukkadam else None
                     ),
                 })
+
+            # ── Merge split activities: same (plot_code, activity_name) → one row ──
+            # When a JobActivity is split (e.g. 2ac plot → 1ac completed + 1ac pending),
+            # we get two separate rows for the same plot+activity. For billing we
+            # need ONE row per plot+activity with combined area and amounts.
+            merged_rows_map = {}  # key: (plot_code, activity_name)
+            for row in activity_rows:
+                key = (row['plot_code'], row['activity_name'])
+                if key not in merged_rows_map:
+                    merged_rows_map[key] = dict(row)
+                    merged_rows_map[key]['allocations'] = list(row['allocations'])
+                else:
+                    existing = merged_rows_map[key]
+                    # Sum areas and amounts
+                    existing['total_area']       += row['total_area']
+                    existing['allocated_area']   += row['allocated_area']
+                    existing['billable_amount']  += row['billable_amount']
+                    existing['estimated_amount'] += row['estimated_amount']
+                    existing['allocation_count'] += row['allocation_count']
+                    # Merge allocations
+                    existing['allocations'].extend(row['allocations'])
+                    # Merge actual_area_done
+                    if row['actual_area_done'] is not None:
+                        existing['actual_area_done'] = (
+                            (existing['actual_area_done'] or 0) + row['actual_area_done']
+                        )
+                    # Merge actual_crew_size
+                    if row['actual_crew_size'] is not None:
+                        existing['actual_crew_size'] = (
+                            (existing['actual_crew_size'] or 0) + row['actual_crew_size']
+                        )
+                    # is_past: True only if ALL splits are past
+                    existing['is_past'] = existing['is_past'] and row['is_past']
+                    # allocation_status: use worst (lowest rank) across splits
+                    STATUS_RANK = {
+                        'pending': 0, 'not_allocated': 0,
+                        'partially_allocated': 1, 'fully_allocated': 2,
+                        'in_progress': 3, 'completed': 4,
+                    }
+                    if STATUS_RANK.get(row['allocation_status'], 0) < STATUS_RANK.get(existing['allocation_status'], 0):
+                        existing['allocation_status'] = row['allocation_status']
+                    # farmer_agreed: False > None > True
+                    if row['farmer_agreed'] is False:
+                        existing['farmer_agreed'] = False
+                    elif row['farmer_agreed'] is None and existing['farmer_agreed'] is True:
+                        existing['farmer_agreed'] = None
+                    # report_submitted: True if any split has it
+                    existing['report_submitted'] = existing['report_submitted'] or row['report_submitted']
+                    # mukkadam_name: use first non-None
+                    if not existing['mukkadam_name'] and row['mukkadam_name']:
+                        existing['mukkadam_name'] = row['mukkadam_name']
+                    # scheduled_date: use earliest across splits
+                    if row['scheduled_date'] and (
+                        not existing['scheduled_date'] or row['scheduled_date'] < existing['scheduled_date']
+                    ):
+                        existing['scheduled_date'] = row['scheduled_date']
+
+            # Rebuild activity_rows from merged map; recompute total_billable from merged values
+            activity_rows  = list(merged_rows_map.values())
+            total_billable = sum(Decimal(str(r['billable_amount'])) for r in activity_rows)
 
             # ── Payment history from prefetched booking ──────────────
             advance_paid    = Decimal(str(booking.advance_paid)) if booking else Decimal('0')

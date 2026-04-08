@@ -1087,6 +1087,7 @@ const totalBilledFarmer = (f.jobs ?? []).reduce((s, j) => s + (j.summary?.total_
           const totalArea    = jobs.reduce((s, j) =>
             s + (j.activities ?? []).reduce((a, act) => a + Number(act.total_area ?? 0), 0), 0);
           const avc          = avatarColor(selectedFarmer.farmer_id);
+          
 
           return (
             <>
