@@ -3334,10 +3334,18 @@ const fetchActivities = useCallback(async () => {
 
     if (actSubTab === 'overdue') {
   setActivities(baseFetched.filter((a: any) => {
+    if (Number(a.total_area) <= 0) return false;
+    if (a.is_split && a.splits?.length > 0) {
+      return a.splits.some((sp: any) =>
+        sp.allocation_status === 'pending' &&
+        sp.scheduled_date &&
+        sp.scheduled_date < todayStr &&
+        Number(sp.total_area ?? a.total_area) > 0
+      );
+    }
     const sched = a.scheduled_date?.slice(0, 10);
     return sched && sched < todayStr &&
-      a.allocation_status === 'pending' &&
-      Number(a.total_area) > 0;
+      a.allocation_status === 'pending';
   }));
   return;
 }
@@ -3407,9 +3415,18 @@ const actCounts = {
   split:         filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) => a.is_split === true).length,
 
   overdue: filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) => {
-    if (!a.scheduled_date || a.allocation_status !== 'pending') return false;
-    return a.scheduled_date < todayStr && Number(a.total_area) > 0;
-  }).length,
+  if (Number(a.total_area) <= 0) return false;
+  if (a.is_split && a.splits?.length > 0) {
+    return a.splits.some((sp: any) =>
+      sp.allocation_status === 'pending' &&
+      sp.scheduled_date &&
+      sp.scheduled_date < todayStr &&
+      Number(sp.total_area ?? a.total_area) > 0
+    );
+  }
+  if (!a.scheduled_date || a.allocation_status !== 'pending') return false;
+  return a.scheduled_date < todayStr;
+}).length,
   // Find:
 data_issue: filteredBase.filter((a: any) => !actLocation || a.farmer_taluka === actLocation).filter((a: any) =>
   (jobNotes[String(a.activity_id)] ?? []).some((n: any) => !n.is_resolved)
@@ -4217,7 +4234,20 @@ const all = filteredBase;
     );
   };
 
-  const overdue  = all.filter(a => { const d = diffDays(a); return d !== null && d < 0  && isCountable(a); });
+  // In jobMetrics useMemo, update the overdue filter:
+const overdue = all.filter(a => {
+  const d = diffDays(a);
+  if (d === null || d >= 0) return false;
+  if (a.is_split && a.splits?.length > 0) {
+    return a.splits.some((sp: any) =>
+      sp.allocation_status === 'pending' &&
+      sp.scheduled_date &&
+      sp.scheduled_date < todayStr &&
+      Number(sp.total_area ?? 0) > 0
+    );
+  }
+  return isCountable(a);
+});
   const due0_3   = all.filter(a => { const d = diffDays(a); return d !== null && d >= 0 && d <= 3  && isCountable(a); });
   const due3_10  = all.filter(a => { const d = diffDays(a); return d !== null && d >  3 && d <= 10 && isCountable(a); });
   const due10p   = all.filter(a => { const d = diffDays(a); return d !== null && d >  10 && isCountable(a); });
@@ -7005,44 +7035,13 @@ allJobs={insightDayJobs}
 
   // ── OVERDUE tab ──────────────────────────────────────────────────────
   if (actSubTab === 'overdue') {
-    // FIX — for split activities, check if at least one pending split is overdue in that range
-const getOverdueDays = (a: any) =>
-  Math.floor((new Date(todayStr).getTime() - new Date(a.scheduled_date).getTime()) / 86400000);
+    const mild   = displayActivities.filter((a: any) => { const d = Math.floor((new Date(todayStr).getTime() - new Date(a.scheduled_date).getTime()) / 86400000); return d >= 1 && d <= 7; });
+    const severe = displayActivities.filter((a: any) => { const d = Math.floor((new Date(todayStr).getTime() - new Date(a.scheduled_date).getTime()) / 86400000); return d > 7; });
 
-const isInRange = (a: any, min: number, max: number) => {
-  if (a.is_split && a.splits?.length > 0) {
-    return a.splits.some((sp: any) => {
-      const d = Math.floor((new Date(todayStr).getTime() - new Date(sp.scheduled_date ?? a.scheduled_date).getTime()) / 86400000);
-      return d >= min && (max === Infinity ? true : d <= max) && sp.allocation_status === 'pending';
-    });
-  }
-  const d = getOverdueDays(a);
-  return d >= min && (max === Infinity ? true : d <= max);
-};
-
-const mild   = displayActivities.filter((a: any) => isInRange(a, 1, 7));
-const severe = displayActivities.filter((a: any) => isInRange(a, 8, Infinity));
-    
-// FIX — add min parameter
-const renderOverdueSection = (label: string, color: string, bg: string, border: string, items: any[], min: number) => {
+    const renderOverdueSection = (label: string, color: string, bg: string, border: string, items: any[]) => {
       if (items.length === 0) return null;
       const grp: Record<string, any[]> = {};
-      // FIX — filter splits down to only the overdue ones before grouping
-items.forEach((a: any) => {
-  const k = a.activity_name || 'Unknown';
-  if (!grp[k]) grp[k] = [];
-  if (a.is_split && a.splits?.length > 0) {
-    const overdueSplits = a.splits.filter((sp: any) => {
-      const d = Math.floor((new Date(todayStr).getTime() - new Date(sp.scheduled_date ?? a.scheduled_date).getTime()) / 86400000);
-      return d >= min && sp.allocation_status === 'pending';
-    });
-    if (overdueSplits.length > 0) {
-      grp[k].push({ ...a, splits: overdueSplits });
-    }
-  } else {
-    grp[k].push(a);
-  }
-});
+      items.forEach((a: any) => { const k = a.activity_name || 'Unknown'; if (!grp[k]) grp[k] = []; grp[k].push(a); });
       return (
         <div key={label} style={{ marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '10px 16px', borderRadius: 10, background: bg, border: `1px solid ${border}` }}>
@@ -7053,12 +7052,7 @@ items.forEach((a: any) => {
             </div>
           </div>
           {Object.entries(grp).map(([actName, acts]: [string, any[]]) => {
-            const flatActs = acts.flatMap((a: any) => a.is_split && a.splits?.length > 0 ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status,
-  scheduled_date: sp.scheduled_date ?? a.scheduled_date,
-  days_until: (sp.scheduled_date ?? a.scheduled_date)
-    ? Math.round((new Date((sp.scheduled_date ?? a.scheduled_date) + 'T00:00:00').getTime() - new Date(todayStr + 'T00:00:00').getTime()) / 86_400_000)
-    : null,
-})) : [a]);
+            const flatActs = acts.flatMap((a: any) => a.is_split && a.splits?.length > 0 ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status })) : [a]);
             return (
               <GroupedActivitySection key={actName} actName={actName} acts={acts}  actSubTab={actSubTab} filteredBase= {filteredBase}
                 totalArea={flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0)}
@@ -7087,8 +7081,8 @@ items.forEach((a: any) => {
 
     return (
       <>
-        {renderOverdueSection('🔥 1–7 Days Overdue', '#dc2626', '#fef2f2', '#fecaca', mild,  1)}
-{renderOverdueSection('💀 7+ Days Overdue',  '#7f1d1d', '#fff1f0', '#fca5a5', severe, 8)}
+        {renderOverdueSection('🔥 1–7 Days Overdue', '#dc2626', '#fef2f2', '#fecaca', mild)}
+        {renderOverdueSection('💀 7+ Days Overdue',  '#7f1d1d', '#fff1f0', '#fca5a5', severe)}
         {mild.length === 0 && severe.length === 0 && (
           <div style={{ textAlign: 'center', padding: '64px 0', color: '#16a34a', fontSize: 14, fontWeight: 600 }}>✅ No overdue jobs!</div>
         )}
@@ -7602,12 +7596,7 @@ if (actSubTab === 'data_issue') {
 
     const flatActs = acts.flatMap((a: any) =>
       a.is_split && a.splits?.length > 0
-        ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status,
-  scheduled_date: sp.scheduled_date ?? a.scheduled_date,
-  days_until: (sp.scheduled_date ?? a.scheduled_date)
-    ? Math.round((new Date((sp.scheduled_date ?? a.scheduled_date) + 'T00:00:00').getTime() - new Date(todayStr + 'T00:00:00').getTime()) / 86_400_000)
-    : null,
-}))
+        ? a.splits.map((sp: any, si: number) => ({ ...a, ...sp, allocation_status: sp.allocation_status }))
         : [a]
     );
     const totalArea  = flatActs.reduce((s: number, a: any) => s + Number(a.total_area || 0), 0);
@@ -8323,7 +8312,6 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
   onSuccess: () => void;
   jobNotes: Record<string, any[]>;
 }) {
-  const todayStr = new Date().toISOString().slice(0, 10);
   const [open, setOpen] = useState(true);
 
   // compute worker rows for each activity row (same as DayDetailModal maxWorkRows filter)
@@ -8414,9 +8402,6 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
       allocated_area:    sp.allocated_area ?? 0,
       allocation_status: sp.allocation_status,
       scheduled_date:    sp.scheduled_date ?? a.scheduled_date,
-      days_until: (sp.scheduled_date ?? a.scheduled_date)
-  ? Math.round((new Date((sp.scheduled_date ?? a.scheduled_date) + 'T00:00:00').getTime() - new Date(todayStr + 'T00:00:00').getTime()) / 86_400_000)
-  : null,
       allocation_count:  sp.allocation_count ?? 0,
       allocations: sp.allocations?.length > 0
   ? sp.allocations
