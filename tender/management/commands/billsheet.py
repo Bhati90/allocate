@@ -124,10 +124,10 @@ class Command(BaseCommand):
         payloads = []
         for (farmer_id, job_id), logs in job_logs.items():
             last_log = logs[-1]
-            first_log = logs[0]  # ← earliest log = when bill was first generated
 
             all_plots   = set()
             total_acres = 0.0
+            activity_acres = defaultdict(float)   # ← NEW
 
             for log in logs:
                 try:
@@ -139,10 +139,12 @@ class Command(BaseCommand):
                         acres = w.get("acres_done", 0)
                         if acres:
                             total_acres += float(acres)
+                            # ← NEW: accumulate per activity
+                            act = log.activity_name or "Unknown Activity"
+                            activity_acres[act] += float(acres)
                 except Exception:
                     pass
 
-            # Deduplicate — one payload per unique activity across all logs
             seen_activities = set()
             for log in logs:
                 activity = log.activity_name or "Unknown Activity"
@@ -152,25 +154,25 @@ class Command(BaseCommand):
 
                 plots_done = f"{len(all_plots)}/{len(all_plots)}" if all_plots else "?"
 
-                # ── Format generated_at from created_at ──
                 generated_at = ""
                 if log.created_at:
                     from django.utils.timezone import localtime
                     generated_at = localtime(log.created_at).strftime("%d %b %Y, %I:%M %p")
 
                 payloads.append({
-                    "farmer_id"    : farmer_id,
-                    "farmer_name"  : log.farmer_name or "",
-                    "job_id"       : job_id,
-                    "poc"          : log.sent_by_name or "",
-                    "plots_done"   : plots_done,
-                    "total_acres"  : round(total_acres, 2),
-                    "activity_name": activity,
-                    "total_billed" : float(log.total_billed or 0),
-                    "total_paid"   : float(log.total_paid or 0),
-                    "balance_due"  : float(last_log.balance_due or 0),
-                    "status"       : "✅ Paid" if float(last_log.balance_due or 0) <= 0 else "Generated",
-                    "generated_at" : generated_at,   # ← ADD THIS
+                    "farmer_id"      : farmer_id,
+                    "farmer_name"    : log.farmer_name or "",
+                    "job_id"         : job_id,
+                    "poc"            : log.sent_by_name or "",
+                    "plots_done"     : plots_done,
+                    "total_acres"    : round(total_acres, 2),
+                    "activity_name"  : activity,
+                    "activity_acres" : round(activity_acres[activity], 2),  # ← NEW
+                    "total_billed"   : float(log.total_billed or 0),
+                    "total_paid"     : float(log.total_paid or 0),
+                    "balance_due"    : float(last_log.balance_due or 0),
+                    "status"         : "✅ Paid" if float(last_log.balance_due or 0) <= 0 else "Generated",
+                    "generated_at"   : generated_at,
                 })
 
         return payloads

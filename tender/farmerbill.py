@@ -38,8 +38,9 @@ def sync_farmer_bill_to_sheet(log):
         generated_at = localtime(log.created_at).strftime("%d %b %Y, %I:%M %p")
 
     # ── Plots / Acres from full_payload ───────────────────────
-    plots_done  = ""
-    total_acres = 0.0
+    plots_done     = ""
+    total_acres    = 0.0
+    activity_acres = 0.0   # ← NEW
     try:
         work_done = (log.full_payload or {}).get("work_done", [])
         all_plots = set()
@@ -49,25 +50,27 @@ def sync_farmer_bill_to_sheet(log):
                 all_plots.add(plot)
             acres = w.get("acres_done", 0)
             if acres:
-                total_acres += float(acres)
+                total_acres    += float(acres)
+                activity_acres += float(acres)   # ← NEW (single log = single activity)
         if all_plots:
             plots_done = f"{len(all_plots)}/{len(all_plots)}"
     except Exception:
         pass
 
     payload = {
-        "farmer_id"    : str(log.farmer_id),
-        "farmer_name"  : log.farmer_name or "",
-        "job_id"       : str(log.job_id or ""),        # ← was missing
-        "poc"          : log.sent_by_name or "",        # ← was in Job ID slot
-        "plots_done"   : plots_done,
-        "total_acres"  : round(total_acres, 2),         # ← was missing
-        "activity_name": log.activity_name or "Unknown Activity",  # ← was missing
-        "total_billed" : float(log.total_billed or 0),
-        "total_paid"   : float(log.total_paid or 0),
-        "balance_due"  : float(log.balance_due or 0),
-        "status"       : "✅ Paid" if float(log.balance_due or 0) <= 0 else "Generated",
-        "generated_at" : generated_at,
+        "farmer_id"      : str(log.farmer_id),
+        "farmer_name"    : log.farmer_name or "",
+        "job_id"         : str(log.job_id or ""),
+        "poc"            : log.sent_by_name or "",
+        "plots_done"     : plots_done,
+        "total_acres"    : round(total_acres, 2),
+        "activity_name"  : log.activity_name or "Unknown Activity",
+        "activity_acres" : round(activity_acres, 2),   # ← NEW
+        "total_billed"   : float(log.total_billed or 0),
+        "total_paid"     : float(log.total_paid or 0),
+        "balance_due"    : float(log.balance_due or 0),
+        "status"         : "✅ Paid" if float(log.balance_due or 0) <= 0 else "Generated",
+        "generated_at"   : generated_at,
     }
 
     try:

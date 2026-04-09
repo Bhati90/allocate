@@ -22,7 +22,7 @@ SECRET_KEY = 'django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw'
 # DEBUG = True
 DEBUG = "False"
 # settings.py
-GOOGLE_SHEET_WEBHOOK_URL    = "https://script.google.com/macros/s/AKfycby5zxwRN0vvJjHs6ikjfY_nGLOu1hTTdjZAWi49aYwcsazITVT3ya1unf30X7BK1FPJ/exec"
+GOOGLE_SHEET_WEBHOOK_URL    = "https://script.google.com/macros/s/AKfycbyj_oAQVcT2QrTihEHv5gdOVnQDmgEKsGRkBJvwO04-rJu2TOFL26tlelzRvreA0lEF/exec"
 GOOGLE_SHEET_WEBHOOK_SECRET = "django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw"
 ALLOWED_HOSTS = ['*']
 # settings.py
