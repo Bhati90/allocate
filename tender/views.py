@@ -712,18 +712,26 @@ def payment_overview(request):
             latest_map[key] = log
 
     # ── 2. Expected total area per farmer+job+activity ────────────────────
+    # Every non-lost JA with real area counts toward the expected total,
+    # INCLUDING pending ones — they mean the work isn't done yet on that
+    # plot and the farmer should NOT be billed until all plots are complete.
+    # We only drop pure ghost rows: pending + no allocations ever attached +
+    # zero allocated area (operationally abandoned / never started).
+    from django.db.models import Q
     expected_area_rows = JobActivity.objects.filter(
-    total_area__gt=0,
-    is_lost=False,                    # ← exclude lost activities
-).exclude(
-    allocation_status='pending',      # ← exclude pending with no allocations
-    allocations__isnull=True,         # ← (no allocations = operationally lost)
-).select_related(
+        total_area__gt=0,
+        is_lost=False,
+    ).exclude(
+        # Ghost rows: pending, nothing allocated, no allocations linked
+        Q(allocation_status='pending') &
+        Q(allocated_area=0) &
+        Q(allocations__isnull=True)
+    ).select_related(
         'job__farmer',
         'activity',
     ).values(
         'job__farmer__farmer_id',
-        'job_id',               # FK column on JobActivity
+        'job__job_id',          # ← string job_id (e.g. "1774"), NOT raw FK int
         'activity__name',
     ).annotate(
         total_expected=Sum('total_area')
@@ -733,7 +741,7 @@ def payment_overview(request):
     for row in expected_area_rows:
         key = (
             str(row['job__farmer__farmer_id']),
-            str(row['job_id']),
+            str(row['job__job_id']),    # ← matches g['job_id'] set from job.job_id
             row['activity__name'],
         )
         expected_area_map[key] = expected_area_map.get(key, 0) + float(row['total_expected'] or 0)
@@ -8932,8 +8940,8 @@ def cluster_payment_dashboard(request, cluster_id):
     allocations_qs = Allocation.objects.select_related('mukkadam').order_by('allocated_date')
 
     # 3. Activities prefetch
+    # AFTER — remove plot cluster filter; job is already cluster-scoped
     activities_qs = JobActivity.objects.filter(
-        plot__clusters__id=cluster_id,
         is_lost=False,
     ).select_related('activity', 'plot').prefetch_related(
         Prefetch('allocations', queryset=allocations_qs)
@@ -9091,7 +9099,9 @@ def cluster_payment_dashboard(request, cluster_id):
 
                 # ── Use prefetched allocations — ZERO extra queries ──
                 act_allocations = list(act.allocations.all())
-                if act.allocation_status == 'pending' and len(act_allocations) == 0:
+                # AFTER — only skip if BOTH pending AND zero area (true ghost rows)
+                # A pending row with real total_area = scheduled work not yet allocated = must show
+                if act.allocation_status == 'pending' and len(act_allocations) == 0 and (not effective_total_area or effective_total_area <= 0):
                     continue
 
                 # Set mukkadam from first allocation found
