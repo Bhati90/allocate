@@ -22,11 +22,11 @@ SECRET_KEY = 'django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw'
 # DEBUG = True
 DEBUG = "False"
 # settings.py
-GOOGLE_SHEET_WEBHOOK_URL    = "https://script.google.com/macros/s/AKfycbyj_oAQVcT2QrTihEHv5gdOVnQDmgEKsGRkBJvwO04-rJu2TOFL26tlelzRvreA0lEF/exec"
+GOOGLE_SHEET_WEBHOOK_URL    = "https://script.google.com/macros/s/AKfycbwanWdf-vpTXhIgNRfZxfNypUlEIPdQC6v01_0SOcsoBmMcXDjq2oeA_CaAI6sIZR-QDw/exec"
 GOOGLE_SHEET_WEBHOOK_SECRET = "django-insecure-l6c$=vdsv7n-ng7cd_^6fvi7lig^+_a2!dzg5oy1^a6qklw"
 ALLOWED_HOSTS = ['*']
 # settings.py
-FARMER_BILLING_SHEET_ID = "1FgsuOFTqmzWAZ04L1-5KwRiSByj2crp1zbReVGRFQpc"  # from the URL
+FARMER_BILLING_SHEET_ID = "1dZXYmhJKXCnZES2EnyUlb6EvoP3jJXBfgZqfKgGwUvY"  # from the URL
 GOOGLE_CREDENTIALS_PATH = BASE_DIR / "google.json"
 # ============================================
 # CORS & CSRF CONFIGURATION

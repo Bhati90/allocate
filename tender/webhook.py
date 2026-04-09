@@ -431,14 +431,12 @@ def _compute_scheduled_date(activity_catalog, job_clusters, plot, act_data, toda
 
     return today  # last resort
 
-@api_view(['POST'])
-def run_mukkadam_sync(request):
-    sync_tender_mukkadams()
-    return JsonResponse({"success": True})
+
 def _sync_existing_job_activities(job, activities_data):
     from datetime import date
     from decimal import Decimal
-    from .models import ActivityCatalog, JobActivity
+    from collections import defaultdict
+    from .models import ActivityCatalog, JobActivity, Plot
 
     today = date.today()
 
@@ -450,67 +448,125 @@ def _sync_existing_job_activities(job, activities_data):
 
     existing_api_id_map = {
         a.api_activity_id: a
-        for a in job.activities.all()
+        for a in job.activities.select_related('activity', 'plot').all()
         if a.api_activity_id
     }
 
     job_clusters = list(job.clusters.all())
-    plot = job.plot
 
-    # ── 1. Handle cancelled activities from webhook ────────────────
-    for i, act_data in enumerate(activities_data):
+    # ── 1. Cancel/delete removed activities ───────────────────────
+    for act_data in activities_data:
         api_act_id = str(act_data.get('id') or '')
-        status     = (act_data.get('status') or act_data.get('activity_status') or '').upper()
-
+        status = (act_data.get('status') or act_data.get('activity_status') or '').upper()
         if status == 'CANCELLED' and api_act_id in existing_api_id_map:
             act = existing_api_id_map[api_act_id]
-            if act.allocation_status == 'completed':
-                logger.info(f"[ACTIVITY SYNC] Activity {act.id} (api_id={api_act_id}) cancelled in webhook but completed — skipped")
-            else:
+            if act.allocation_status != 'completed':
                 for alloc in act.allocations.exclude(status='completed'):
                     alloc.status = 'cancelled'
                     alloc.save(update_fields=['status'])
                 act.delete()
                 del existing_api_id_map[api_act_id]
-                logger.info(f"[ACTIVITY SYNC] Deleted activity {act.id} (api_id={api_act_id}) — cancelled in webhook")
 
-    # ── 2. Hard delete activities no longer in webhook ─────────────
-    for api_id, act in list(existing_api_id_map.items()):  # 👈 list() snapshot
+    for api_id, act in list(existing_api_id_map.items()):
         if api_id not in incoming_api_ids:
-            if act.allocation_status == 'completed':
-                logger.info(f"[ACTIVITY SYNC] Activity {act.id} (api_id={api_id}) removed but completed — skipped")
-            else:
+            if act.allocation_status != 'completed':
                 for alloc in act.allocations.exclude(status='completed'):
                     alloc.status = 'cancelled'
                     alloc.save(update_fields=['status'])
                 act.delete()
-                logger.info(f"[ACTIVITY SYNC] Deleted activity {act.id} (api_id={api_id}) — removed from webhook")
+                logger.info(f"[ACTIVITY SYNC] Deleted api_id={api_id} — removed from webhook")
 
-    # ── 3. Add new activities not yet on this job ──────────────────
+    # ── 2. Verify existing acre totals per (plot, activity_name) ──
+    # Group incoming by (plot_code, activity_name) → sum acres
+    incoming_acre_totals = defaultdict(Decimal)
+    for act_data in activities_data:
+        key = (
+            str(act_data.get('plot_id') or ''),
+            act_data.get('activity_name', '').strip()
+        )
+        incoming_acre_totals[key] += Decimal(str(act_data.get('acres') or 0))
+
+    # Group existing by (plot_code, activity_name) → sum total_area
+    existing_acre_totals = defaultdict(Decimal)
+    for ja in job.activities.select_related('plot', 'activity').all():
+        key = (
+            str(ja.plot.plot_code if ja.plot else ''),
+            ja.activity.name
+        )
+        existing_acre_totals[key] += ja.total_area
+
+    for key, incoming_total in incoming_acre_totals.items():
+        existing_total = existing_acre_totals.get(key, Decimal('0'))
+        if existing_total and existing_total != incoming_total:
+            logger.warning(
+                f"[ACTIVITY SYNC] Acre mismatch for plot={key[0]} activity={key[1]}: "
+                f"existing={existing_total} incoming={incoming_total} — skipping (managed by allocations)"
+            )
+
+    # ── 3. Ensure plot exists + create new activities ──────────────
     for i, act_data in enumerate(activities_data):
-        api_act_id = str(act_data.get('id') or '')
-        status     = (act_data.get('status') or act_data.get('activity_status') or '').upper()
+        api_act_id    = str(act_data.get('id') or '')
+        status        = (act_data.get('status') or act_data.get('activity_status') or '').upper()
+        activity_name = act_data.get('activity_name', '').strip()
 
-        if status == 'CANCELLED':
+        if status == 'CANCELLED' or not api_act_id or not activity_name:
             continue
 
-        if not api_act_id:
-            continue
+        # ── Always ensure plot exists first ───────────────────────
+        plot_code = str(act_data.get('plot_id') or '')
+        act_plot  = None
+        if plot_code:
+            act_plot, plot_created = get_or_create_plot(
+                plot_code,
+                job.farmer,
+                act_data.get('acres', 0),
+                crop_name=act_data.get('plot_crop') or act_data.get('crop_name') or '',
+                variety=act_data.get('plot_variety') or act_data.get('variety') or '',
+            )
+            if plot_created:
+                logger.info(f"[ACTIVITY SYNC] Created new plot {plot_code} for job {job.job_id}")
+                for c in act_plot.clusters.all():
+                    job.clusters.add(c)
 
-        # 👇 skip only if exists AND is active (not cancelled)
+        # ── Skip if activity already exists ───────────────────────
         existing = existing_api_id_map.get(api_act_id)
         if existing and not existing.is_lost:
+            # Just update booking-related price fields on the activity
+            # (rate may have changed in booking)
+            total_price    = Decimal(str(act_data.get('total_price') or 0))
+            transport_cost = Decimal(str(act_data.get('transport_cost') or 0))
+            other_cost     = Decimal(str(act_data.get('other_cost') or 0))
+            total_area     = Decimal(str(act_data.get('acres') or 0))
+            rate_per_acre  = (
+                (total_price / total_area).quantize(Decimal('0.01'))
+                if total_area > 0 else Decimal('0')
+            )
+
+            update_fields = []
+            if existing.total_price != total_price:
+                existing.total_price = total_price
+                update_fields.append('total_price')
+            if existing.rate_per_acre != rate_per_acre:
+                existing.rate_per_acre = rate_per_acre
+                update_fields.append('rate_per_acre')
+            if existing.transport_cost != transport_cost:
+                existing.transport_cost = transport_cost
+                update_fields.append('transport_cost')
+            if existing.other_cost != other_cost:
+                existing.other_cost = other_cost
+                update_fields.append('other_cost')
+            if update_fields:
+                existing.subtotal = existing.total_price + existing.transport_cost + existing.other_cost
+                update_fields.append('subtotal')
+                existing.save(update_fields=update_fields)
+                logger.info(f"[ACTIVITY SYNC] Updated price fields for api_id={api_act_id} fields={update_fields}")
             continue
 
-        # If existing but is_lost=True — delete old row first, then re-create
+        # ── Re-create if is_lost ───────────────────────────────────
         if existing and existing.is_lost:
             existing.delete()
-            logger.info(f"[ACTIVITY SYNC] Deleted is_lost activity {existing.id} (api_id={api_act_id}) — re-creating")
 
-        activity_name = act_data.get('activity_name', '').strip()
-        if not activity_name:
-            continue
-
+        # ── Create new activity ────────────────────────────────────
         activity_catalog = ActivityCatalog.objects.filter(
             name__iexact=activity_name
         ).first()
@@ -520,296 +576,53 @@ def _sync_existing_job_activities(job, activities_data):
                 defaults={'source': 'api'}
             )
 
-        scheduled_date = _compute_scheduled_date(
-            activity_catalog, job_clusters, plot, act_data, today
+        total_area     = Decimal(str(act_data.get('acres') or 0))
+        total_price    = Decimal(str(act_data.get('total_price') or 0))
+        transport_cost = Decimal(str(act_data.get('transport_cost') or 0))
+        other_cost     = Decimal(str(act_data.get('other_cost') or 0))
+        rate_per_acre  = (
+            (total_price / total_area).quantize(Decimal('0.01'))
+            if total_area > 0 else Decimal('0')
         )
 
-        total_area    = Decimal(str(act_data.get('acres') or 0))
-        total_price   = Decimal(str(act_data.get('total_price') or 0))
-        rate_per_acre = (total_price / total_area).quantize(Decimal('0.01')) if total_area else Decimal('0')
+        scheduled_date = _compute_scheduled_date(
+            activity_catalog, job_clusters,
+            act_plot or job.plot, act_data, today
+        )
 
         try:
             ja = JobActivity(
                 job             = job,
                 activity        = activity_catalog,
-                plot            = plot,
+                plot            = act_plot or job.plot,
                 api_activity_id = api_act_id,
                 total_area      = total_area,
                 allocated_area  = Decimal('0'),
                 remaining_area  = total_area,
                 scheduled_date  = scheduled_date,
                 rate_per_acre   = rate_per_acre,
+                total_price     = total_price,
+                transport_cost  = transport_cost,
+                other_cost      = other_cost,
+                subtotal        = total_price + transport_cost + other_cost,
                 source          = 'api',
                 original_source = 'api',
             )
-            ja._sheet_sync_index = i   # i is the loop index (enumerate)
+            ja._sheet_sync_index = i
             ja.save()
-            logger.info(f"[ACTIVITY SYNC] Created activity {api_act_id} — {activity_name} on job {job.job_id}")
+            logger.info(f"[ACTIVITY SYNC] Created api_id={api_act_id} — {activity_name} plot={plot_code}")
         except Exception as e:
-            logger.error(f"[ACTIVITY SYNC] Failed to create activity {api_act_id}: {e}")
-@csrf_exempt
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def booking_webhook(request):
+            logger.error(f"[ACTIVITY SYNC] Failed to create {api_act_id}: {e}")
 
-    webhook_data    = request.data
+    # ── 4. Recompute job total from all activities ─────────────────
+    from django.db.models import Sum
+    new_total = job.activities.aggregate(t=Sum('total_price'))['t'] or Decimal('0')
+    Job.objects.filter(job_id=job.job_id).update(
+        total_activities_amount=new_total,
+        is_complex=job.activities.count() > 1,
+    )
+    logger.info(f"[ACTIVITY SYNC] Job {job.job_id} total recomputed → ₹{new_total}")
 
-    job_id          = str(webhook_data.get('id', ''))
-    print(job_id)
-    print(webhook_data)
-    booking_data    = webhook_data.get('booking') or {}
-    activities_data = webhook_data.get('activities') or []
-
-    try:
-        # ── Job exists → sync booking + activities ───────────
-        job = Job.objects.select_related('booking').prefetch_related(
-            'clusters', 'activities__activity'
-        ).get(job_id=job_id)
-
-        with transaction.atomic():
-            # 1. Sync booking — update if changed, never change booking_id
-            sync_booking(job, booking_data)
-
-            # 2. Sync activities — add new, delete removed (except completed)
-            if activities_data:
-                _sync_existing_job_activities(job, activities_data)
-
-        return JsonResponse({
-            'status': 'success',
-            'action': 'updated',
-            'job_id': job_id,
-        }, status=200)
-
-    except Job.DoesNotExist:
-        # ── New job → full create ────────────────────────────
-        log_data = {
-            'webhook_data':         webhook_data,
-            'status':               'failed',
-            'error_type':           None,
-            'error_message':        None,
-            'farmer_id':            None,
-            'job_id':               None,
-            'cluster_matched':      False,
-            'cluster_id':           None,
-            'activities_processed': 0,
-            'activities_failed':    0,
-            'plots_created':        0,
-        }
-
-        farmer_id = str(webhook_data.get('farmer_id', ''))
-        plot_code = str(webhook_data.get('plot_id') or '')
-
-        if not plot_code and activities_data:
-            for act in activities_data:
-                pid = str(act.get('plot_id') or '')
-                if pid not in ('', 'None', 'null'):
-                    plot_code = pid
-                    break
-
-        farmer_details, api_error = fetch_farmer_details(farmer_id)
-        if api_error:
-            farmer_details = {}
-
-        with transaction.atomic():
-            farmer = sync_farmer(farmer_id, farmer_details or {}, webhook_data,
-                                 target_plot_code=plot_code)
-
-            crop_name, variety = '', ''
-            if farmer_details and plot_code:
-                for pd in farmer_details.get('plots', []):
-                    pid = str(pd.get('plot_id') or pd.get('id') or '')
-                    if pid == plot_code:
-                        crop_name = pd.get('crop', '') or ''
-                        variety   = pd.get('variety', '') or ''
-                        break
-
-            from django.utils.dateparse import parse_datetime, parse_date
-            pruning_date = None
-            for act in activities_data:
-                name = act.get('activity_name', '')
-                if 'pruning' in name.lower() or 'छाटणी' in name:
-                    raw = act.get('date_time') or act.get('scheduled_date')
-                    if raw:
-                        try:
-                            pruning_date = (
-                                parse_datetime(str(raw)).date()
-                                if 'T' in str(raw)
-                                else parse_date(str(raw))
-                            )
-                        except Exception:
-                            pass
-                    break
-
-            plot = None
-            if plot_code:
-                plot, created = get_or_create_plot(
-                    plot_code, farmer,
-                    activities_data[0].get('acres', 0) if activities_data else 0,
-                    crop_name=crop_name, variety=variety,
-                )
-                if created:
-                    log_data['plots_created'] += 1
-
-                update_fields = []
-                if pruning_date:
-                    plot.pruning_date = pruning_date
-                    update_fields.append('pruning_date')
-                if crop_name and not plot.crop_name:
-                    plot.crop_name = crop_name
-                    plot.variety   = variety
-                    update_fields.extend(['crop_name', 'variety'])
-                if update_fields:
-                    plot.save(update_fields=update_fields)
-
-            job, _ = sync_job(job_id, farmer, webhook_data, plot=plot,
-                              crop_name=crop_name, variety=variety)
-
-            if plot:
-                for c in plot.clusters.all():
-                    job.clusters.add(c)
-                    log_data['cluster_matched'] = True
-                    log_data['cluster_id'] = c.id
-
-            sync_booking(job, booking_data)
-            sync_activities(job, farmer, activities_data, log_data)
-
-        log_data['status'] = 'success' if log_data['activities_failed'] == 0 else 'partial'
-        WebhookLog.objects.create(**log_data)
-
-        return JsonResponse({
-            'status':               'success',
-            'action':               'created',
-            'job_id':               job_id,
-            'activities_processed': log_data['activities_processed'],
-        }, status=200)
-
-    except Exception as e:
-        logger.error(f"Webhook failed: {e}", exc_info=True)
-        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-
-def sync_webhook(request):
-    webhook_data = request.data
-    job_id = str(webhook_data.get('id', ''))
-    booking_data = webhook_data.get('booking', {})
-
-    try:
-        # ── Job exists ──────────────────────────────────────
-        job = Job.objects.get(job_id=job_id)
-        
-        # Only check booking
-        sync_booking(job, booking_data)
-        
-        return JsonResponse({
-            'status': 'success',
-            'action': 'booking_checked',
-            'job_id': job_id,
-        }, status=200)
-
-    except Job.DoesNotExist:
-        # ── Brand new job — full create ──────────────────────
-        log_data = {
-            'webhook_data': webhook_data,
-            'status': 'failed',
-            'error_type': None,
-            'error_message': None,
-            'farmer_id': None,
-            'job_id': None,
-            'cluster_matched': False,
-            'cluster_id': None,
-            'activities_processed': 0,
-            'activities_failed': 0,
-            'plots_created': 0,
-        }
-
-        farmer_id = str(webhook_data.get('farmer_id', ''))
-        plot_code = str(webhook_data.get('plot_id') or '')
-        activities_data = webhook_data.get('activities', [])
-
-        if not plot_code and activities_data:
-            for act in activities_data:
-                pid = str(act.get('plot_id') or '')
-                if pid not in ('', 'None', 'null'):
-                    plot_code = pid
-                    break
-
-        farmer_details, api_error = fetch_farmer_details(farmer_id)
-        if api_error:
-            farmer_details = {}
-
-        with transaction.atomic():
-            farmer = sync_farmer(farmer_id, farmer_details or {}, webhook_data,
-                                 target_plot_code=plot_code)
-
-            crop_name, variety = '', ''
-            if farmer_details and plot_code:
-                for plot_data in farmer_details.get('plots', []):
-                    pid = str(plot_data.get('plot_id') or plot_data.get('id') or '')
-                    if pid == plot_code:
-                        crop_name = plot_data.get('crop', '') or ''
-                        variety   = plot_data.get('variety', '') or ''
-                        break
-
-            from django.utils.dateparse import parse_datetime, parse_date
-            pruning_date_for_plot = None
-            for act in activities_data:
-                name = act.get('activity_name', '')
-                if 'pruning' in name.lower() or 'छाटणी' in name:
-                    raw = act.get('date_time') or act.get('scheduled_date')
-                    if raw:
-                        try:
-                            pruning_date_for_plot = parse_datetime(str(raw)).date() if 'T' in str(raw) else parse_date(str(raw))
-                        except Exception:
-                            pass
-                    break
-
-            plot = None
-            if plot_code:
-                plot, created = get_or_create_plot(
-                    plot_code, farmer,
-                    activities_data[0].get('acres', 0) if activities_data else 0,
-                    crop_name=crop_name, variety=variety,
-                )
-                if created:
-                    log_data['plots_created'] += 1
-
-                update_fields = []
-                if pruning_date_for_plot:
-                    plot.pruning_date = pruning_date_for_plot
-                    update_fields.append('pruning_date')
-                if crop_name and not plot.crop_name:
-                    plot.crop_name = crop_name
-                    plot.variety   = variety
-                    update_fields.extend(['crop_name', 'variety'])
-                if update_fields:
-                    plot.save(update_fields=update_fields)
-
-            job, _ = sync_job(job_id, farmer, webhook_data, plot=plot,
-                              crop_name=crop_name, variety=variety)
-
-            if plot:
-                for c in plot.clusters.all():
-                    job.clusters.add(c)
-                    log_data['cluster_matched'] = True
-                    log_data['cluster_id'] = c.id
-
-            sync_booking(job, booking_data)
-            sync_activities(job, farmer, activities_data, log_data)
-
-            
-
-        log_data['status'] = 'success' if log_data['activities_failed'] == 0 else 'partial'
-        WebhookLog.objects.create(**log_data)
-
-        return JsonResponse({
-            'status': 'success',
-            'action': 'created',
-            'job_id': job_id,
-            'activities_processed': log_data['activities_processed'],
-        }, status=200)
-
-    except Exception as e:
-        logger.error(f"Webhook failed: {e}", exc_info=True)
-        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
 
 def fetch_plot_crop_details(farmer_id: str, plot_code: str):
@@ -1970,33 +1783,110 @@ def sync_tender_mukkadams():
 def run_mukkadam_sync(request):
     sync_tender_mukkadams()
     return JsonResponse({"success": True})
+def _sync_plot_details_from_activities(job, activities_data):
+    """Update crop/variety on plots if incoming data has it and plot is missing it."""
+    if not activities_data:
+        return
 
+    plot_updates = {}  # plot_code → {crop_name, variety}
+    for act in activities_data:
+        plot_code = str(act.get('plot_id') or '')
+        crop_name = act.get('plot_crop') or act.get('crop_name') or ''
+        variety   = act.get('plot_variety') or act.get('variety') or ''
+        if plot_code and crop_name and plot_code not in plot_updates:
+            plot_updates[plot_code] = {'crop_name': crop_name, 'variety': variety}
+
+    from .models import Plot
+    for plot_code, info in plot_updates.items():
+        Plot.objects.filter(
+            plot_code=plot_code,
+            crop_name=''  # only update if missing
+        ).update(
+            crop_name=info['crop_name'],
+            variety=info['variety'],
+        )
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def booking_webhook(request):
-    webhook_data = request.data
-    
-    # ✅ Add this debug line temporarily
+    webhook_data    = request.data
     print("RAW DATA:", webhook_data)
-    print("JOB ID:", webhook_data.get('id'))
-    
 
-    webhook_data = request.data
-    job_id       = str(webhook_data.get('id', ''))
-    booking_data = webhook_data.get('booking', {})
+    job_id          = str(webhook_data.get('id', ''))
+    booking_data    = webhook_data.get('booking') or {}
+    activities_data = webhook_data.get('activities') or []
 
     try:
-        # ── Job exists → only check booking ─────────────────
-        job = Job.objects.get(job_id=job_id)
-        sync_booking(job, booking_data)
+        # ── Job exists → sync booking + activities + job fields ──────
+        job = Job.objects.select_related('booking').prefetch_related(
+            'clusters', 'activities__activity'
+        ).get(job_id=job_id)
+
+        with transaction.atomic():
+            # 1. Sync booking
+            if booking_data:
+                sync_booking(job, booking_data)
+
+            # 2. Sync activities (add new, remove deleted, skip completed)
+            if activities_data:
+                _sync_existing_job_activities(job, activities_data)
+
+            # 3. Sync job-level fields that may have changed
+            update_fields = []
+
+            new_total = Decimal(str(webhook_data.get('total_activities_amount', 0)))
+            if job.total_activities_amount != new_total:
+                job.total_activities_amount = new_total
+                update_fields.append('total_activities_amount')
+
+            new_priority = webhook_data.get('priority') or job.priority
+            if job.priority != new_priority:
+                job.priority = new_priority
+                update_fields.append('priority')
+
+            new_is_field_verified = webhook_data.get('is_field_verified', job.is_field_verified)
+            if job.is_field_verified != new_is_field_verified:
+                job.is_field_verified = new_is_field_verified
+                update_fields.append('is_field_verified')
+
+            new_internal_notes = webhook_data.get('internal_notes') or ''
+            if job.internal_notes != new_internal_notes:
+                job.internal_notes = new_internal_notes
+                update_fields.append('internal_notes')
+
+            new_activity_notes = webhook_data.get('activity_notes') or ''
+            if job.activity_notes != new_activity_notes:
+                job.activity_notes = new_activity_notes
+                update_fields.append('activity_notes')
+
+            # Sync scheduled_date if changed
+            raw_date = webhook_data.get('scheduled_date')
+            if raw_date:
+                try:
+                    from django.utils.dateparse import parse_datetime, parse_date
+                    parsed = parse_datetime(str(raw_date)) or parse_date(str(raw_date))
+                    new_date = parsed.date() if hasattr(parsed, 'date') else parsed
+                    if job.scheduled_date != new_date:
+                        job.scheduled_date = new_date
+                        update_fields.append('scheduled_date')
+                except Exception:
+                    pass
+
+            if update_fields:
+                job.save(update_fields=update_fields)
+                logger.info(f"Job {job_id} updated fields: {update_fields}")
+
+            # 4. Sync plot-level crop/variety if activities carry that info
+            _sync_plot_details_from_activities(job, activities_data)
+
         return JsonResponse({
             'status': 'success',
-            'action': 'booking_checked',
+            'action': 'updated',
             'job_id': job_id,
         }, status=200)
 
     except Job.DoesNotExist:
+        # ... your existing new-job creation flow unchanged ...
         # ── New job → full create ────────────────────────────
         log_data = {
             'webhook_data': webhook_data,
@@ -2100,6 +1990,9 @@ def booking_webhook(request):
     except Exception as e:
         logger.error(f"Webhook failed: {e}", exc_info=True)
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
+
 def sync_webhook(request):
     webhook_data = request.data
     job_id = str(webhook_data.get('id', ''))
