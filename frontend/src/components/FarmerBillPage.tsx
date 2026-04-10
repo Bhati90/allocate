@@ -129,172 +129,140 @@ export function groupActivitiesByName(jobs: Job[]): ActivityGroup[] {
     });
   });
 
-  // Sort so completed activities come before pending duplicates
+  // ── PRE-PASS: sum total_area across ALL JA rows per (jobId, actName, plotName, plotCode) ──
+  // A single plot can have multiple JA rows (e.g. 1.5ac completed + 7ac pending).
+  // We must know the TRUE expected total before deduplication drops the pending rows.
+  const plotTotalAreaMap = new Map<string, number>();
+  const plotCompletedAreaMap = new Map<string, number>();
+  const plotAllAllocsMap = new Map<string, Alloc[]>();
+
+  flat.forEach(act => {
+    if (Number(act.total_area ?? 0) <= 0) return;
+    const key = `${act.job_id}__${act.activity_name}__${act.plot_name}__${act.plot_code}`;
+
+    // Sum total_area across all JA rows for this plot+activity
+    plotTotalAreaMap.set(key, (plotTotalAreaMap.get(key) ?? 0) + Number(act.total_area ?? 0));
+
+    // Accumulate completed area across all JA rows
+    const completedArea = (act.allocations ?? [])
+      .filter(a => a.work_status === 'completed')
+      .reduce((s, a) => s + Number(a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0), 0);
+    plotCompletedAreaMap.set(key, (plotCompletedAreaMap.get(key) ?? 0) + completedArea);
+
+    // Accumulate all allocs for this plot
+    const existing = plotAllAllocsMap.get(key) ?? [];
+    plotAllAllocsMap.set(key, [...existing, ...(act.allocations ?? [])]);
+  });
+
+  // Sort so completed activities come before pending duplicates of the same plot
   flat.sort((a, b) => {
     const scoreA = a.allocations?.some(x => x.work_status === 'completed') ? 3
-      : (a.allocation_count ?? 0) > 0 ? 2
-      : a.allocation_status === 'fully_allocated' ? 1
-      : 0;
+      : (a as any).allocation_count > 0 ? 2
+      : a.allocation_status === 'fully_allocated' ? 1 : 0;
     const scoreB = b.allocations?.some(x => x.work_status === 'completed') ? 3
-      : (b.allocation_count ?? 0) > 0 ? 2
-      : b.allocation_status === 'fully_allocated' ? 1
-      : 0;
+      : (b as any).allocation_count > 0 ? 2
+      : b.allocation_status === 'fully_allocated' ? 1 : 0;
     return scoreB - scoreA;
   });
 
-
-
   const map = new Map<string, ActivityGroup>();
 
-flat.forEach(act => {
+  flat.forEach(act => {
     const mapKey = `${act.job_id}__${act.activity_name}`;
     if (!map.has(mapKey)) {
       map.set(mapKey, {
         activityName: act.activity_name,
         jobId:        act.job_id,
         plots: [],
-        totalPlots: 0,
-        donePlots: 0,
-        allDone: false,
+        totalPlots:    0,
+        donePlots:     0,
+        allDone:       false,
         totalBillable: 0,
-        totalArea: 0,
+        totalArea:     0,
         totalConfirmed: 0,
-        totalEstimate: 0,
+        totalEstimate:  0,
         rate: act.rate_per_acre,
       });
     }
     const group = map.get(mapKey)!;
-    // Skip duplicate plot+activity
+
+    // Skip duplicate plot — already processed via pre-pass
     const alreadyExists = group.plots.some(
       p => p.plotName === act.plot_name && p.plotCode === act.plot_code
     );
     if (alreadyExists) return;
 
-    const tArea = Number(act.total_area ?? 0);
-    const aArea = Number(act.allocated_area ?? 0);
+    // Skip zero-area rows (ghost/AI placeholder rows)
+    // BUT only skip if this plot has NO real area in any JA row
+    const plotKey = `${act.job_id}__${act.activity_name}__${act.plot_name}__${act.plot_code}`;
+    const trueTotalArea = plotTotalAreaMap.get(plotKey) ?? 0;
+    if (trueTotalArea <= 0) return;
+
     const rate  = Number(act.rate_per_acre ?? 0);
+    const aArea = Number(act.allocated_area ?? 0);
 
-    // Skip activities with no resolvable area — bad/incomplete data
-    // Backend now always resolves via Plot.area_acres so tArea should never be 0
-    if (tArea <= 0) return;
+    // ── Use PRE-SUMMED values — the only reliable source ─────────────────
+    const totalCompletedArea = plotCompletedAreaMap.get(plotKey) ?? 0;
+    const allAllocs          = plotAllAllocsMap.get(plotKey) ?? [];
 
-    const allocs = act.allocations ?? [];
-
-
-    allocs.forEach((a: Alloc, i: number) => {
-      // console.log(`  alloc[${i}]`, {
-      //   allocation_id:      a.allocation_id,
-      //   work_status:        a.work_status,
-      //   allocated_area:     a.allocated_area,
-      //   actual_area_done:   a.actual_area_done,
-      //   admin_override_area: a.admin_override_area,
-      //   effArea: a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0,
-      // });
-    });
-
-    // ── All allocations completed check ──────────────────────────────────────
-
-    // ── isDone: sum of completed effective area must cover the plot's total_area ──
-    // Only work_status='completed' allocations count
-    // allocated/scheduled area does NOT mean work is done
-    const completedAllocArea = allocs
-      .filter((a: Alloc) => a.work_status === 'completed')
-      .reduce((s: number, a: Alloc) => {
-        // Priority: admin_override > actual_area_done > allocated_area
-        const effArea = a.admin_override_area ?? a.actual_area_done ?? a.allocated_area ?? 0;
-        return s + Number(effArea);
-      }, 0);
-
-    // ── All allocations completed check ──────────────────────────────────────
-    // Most reliable for split allocations — if every alloc on this plot
-    // is work_status='completed', the plot is done regardless of area math
-    const allAllocsCompleted =
-      allocs.length > 0 &&
-      allocs.every((a: Alloc) => a.work_status === 'completed');
-
-    // ── Float-safe area comparison ───────────────────────────────────────────
-    // Split allocs like 0.38+0.38+0.37 sum to 1.1299999 due to float precision
-    // which fails strict >= 1.13 — use small tolerance to handle this
     const AREA_TOLERANCE = 0.05;
-    const completedAreaCoversPlot =
-      tArea > 0 && completedAllocArea >= tArea - AREA_TOLERANCE;
 
-    // Done when ANY of:
-    // 1. ALL allocations are work_status='completed' (handles split allocs)
-    // 2. Completed area covers total area within float tolerance
-    // 3. Backend explicitly marks allocation_status='completed'
-    // REMOVED: fully_allocated — that is scheduling status, not work completion
-    // REMOVED: areaDone using allocated_area — scheduling, not work completion
-    // Done when ANY of:
-    // 1. ALL allocations are work_status='completed' (handles split allocs)
-    // 2. Completed area covers total area within float tolerance
-    // 3. Backend explicitly marks allocation_status='completed'
-    // REMOVED: fully_allocated — that is scheduling status, not work completion
-    // REMOVED: areaDone using allocated_area — scheduling, not work completion
+    // isDone: completed area must cover the TRUE total (sum of all JA rows for this plot)
+    const completedAreaCoversPlot = totalCompletedArea >= trueTotalArea - AREA_TOLERANCE;
+    const allAllocsCompleted =
+      allAllocs.length > 0 && allAllocs.every(a => a.work_status === 'completed');
+
     const isDone =
-      allAllocsCompleted ||
-      completedAreaCoversPlot ||
-      act.allocation_status === 'completed';
+      completedAreaCoversPlot ||                  // primary: area math against true total
+      (allAllocsCompleted && completedAreaCoversPlot) ||  // belt+suspenders
+      act.allocation_status === 'completed';       // backend explicit override
 
+    const apiBillable = Number(act.billable_amount ?? 0);
+    const apiEstimate  = Number((act as any).estimated_amount ?? 0);
 
-    // ── END DEBUG ─────────────────────────────────────────────────────────────
-    // ── billableAmount: API value is most accurate ───────────────────────────
-    // REPLACE the billable lines
-const apiBillable = Number(act.billable_amount ?? 0);
-const apiEstimate  = Number(act.estimated_amount ?? 0);  // pending portion
-
-const displayBillable = apiBillable; // always use API value, no fallback compute
-    // Fallback: compute from effective area if API gives 0
-    const effectiveArea = aArea > 0 ? aArea : tArea;
-
-
-    // ── doneDate: latest completed allocation date ───────────────────────────
-    const latestAlloc = allocs
-      .filter((a: Alloc) => a.work_status === 'completed')
-      .sort((a: Alloc, b: Alloc) =>
-        (b.allocated_date ?? '').localeCompare(a.allocated_date ?? '')
-      )[0];
+    // doneDate: latest completed allocation date across all JA rows for this plot
+    const latestAlloc = allAllocs
+      .filter(a => a.work_status === 'completed')
+      .sort((a, b) => (b.allocated_date ?? '').localeCompare(a.allocated_date ?? ''))[0];
     const doneDate =
       latestAlloc?.allocated_date ??
-      allocs[0]?.allocated_date ??
+      allAllocs[0]?.allocated_date ??
       act.scheduled_date ??
       null;
 
-    // ── mukkadam: from activity level first, then first allocation ───────────
     const mukkadamName =
       (act as any).mukkadam_name ||
-      allocs[0]?.mukkadam_name ||
+      allAllocs.find(a => (a as any).mukkadam_name)?.mukkadam_name ||
       '—';
-    const hasAnyCompleted = allocs.some((a: Alloc) => a.work_status === 'completed');
+
     group.plots.push({
-      plotName:       act.plot_name,
-      plotCode:       act.plot_code,
-      jobId:          act.job_id,
-      activityId:     act.activity_id,
-      allocatedArea:  aArea,
-      totalArea:      tArea,
-      displayArea:    tArea > 0 ? tArea : aArea,
+      plotName:      act.plot_name,
+      plotCode:      act.plot_code,
+      jobId:         act.job_id,
+      activityId:    act.activity_id,
+      allocatedArea: aArea,
+      totalArea:     trueTotalArea,           // ← summed true total
+      displayArea:   trueTotalArea,           // ← always use true total
       rate,
       isDone,
-      billableAmount: displayBillable,
-      isEstimate: apiEstimate > 0,
+      billableAmount: apiBillable,
+      isEstimate:     apiEstimate > 0,
       doneDate:       isDone ? doneDate : null,
       mukkadam:       mukkadamName,
     });
 
     group.totalPlots++;
     if (isDone) group.donePlots++;
-    group.totalBillable += displayBillable;
+    group.totalBillable  += apiBillable;
     group.totalConfirmed += apiBillable;
-group.totalEstimate  += apiEstimate;
-    group.totalArea     += tArea > 0 ? tArea : aArea;
+    group.totalEstimate  += apiEstimate;
+    group.totalArea      += trueTotalArea;    // ← summed true total
   });
 
   map.forEach(g => {
     g.allDone = g.totalPlots > 0 && g.donePlots === g.totalPlots;
   });
 
-  // Sort: fully done → in-progress → not started
   return Array.from(map.values()).sort((a, b) => {
     const scoreA = a.allDone ? 2 : a.donePlots > 0 ? 1 : 0;
     const scoreB = b.allDone ? 2 : b.donePlots > 0 ? 1 : 0;

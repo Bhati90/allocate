@@ -8413,13 +8413,18 @@ function GroupedActivitySection({ actName,actSubTab,filteredBase, acts,ov1_7, to
   }
   return [a];
 }).map((a: any) => {
+  const todayStr = new Date().toISOString().slice(0, 10);
               // console.log(acts[0])
               const isExp       = expandedActJob === String(a._display_id ?? a.activity_id);
               const isPending   = a.allocation_status === 'pending';
               const isCompleted = a.allocations?.some((al: any) => al.work_status === 'completed');
               const isUpcoming  = a.days_until !== null && a.days_until >= 0  && a.days_until <= 10;
-              const isOverdue   = a.days_until !== null && a.days_until < 0   && !isCompleted  && a.allocation_status === 'pending';
-              const overdueDays = a.days_until !== null ? Math.abs(a.days_until) : 0;
+              const schedDate   = a.scheduled_date?.slice(0, 10);
+              const diffDays    = schedDate
+                ? Math.floor((new Date(todayStr).getTime() - new Date(schedDate).getTime()) / 86400000)
+                : null;
+              const isOverdue   = diffDays !== null && diffDays > 0 && !isCompleted && a.allocation_status === 'pending';
+              const overdueDays = diffDays !== null ? Math.abs(diffDays) : 0;
               const workerTeamRows = getWorkerRows(a.activity_name);
 const rowNotes: any[] = jobNotes[String(a.activity_id)] ?? [];
                   const unresolvedNotes = rowNotes.filter((n: any) => !n.is_resolved);
