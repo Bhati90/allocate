@@ -696,22 +696,24 @@ def payment_overview(request):
     from datetime import date, timedelta
     from decimal import Decimal
     from collections import defaultdict
-    from django.db.models import Sum, Q
+    from django.db.models import Sum, Prefetch
 
     today    = date.today()
     week_ago = today - timedelta(days=7)
 
-    # ── 1. All sent bill logs (latest per farmer+job+activity) ───────────
-    sent_logs = FarmerBillWebhookLog.objects.all().order_by('-sent_at')
+    # ── 1. Latest bill log per (farmer_id, job_id, activity_name) ────────
+    sent_logs = FarmerBillWebhookLog.objects.only(
+        'farmer_id', 'job_id', 'activity_name', 'sent_at',
+        'balance_due', 'sent_by_name', 'webhook_status'
+    ).order_by('-sent_at')
+
     latest_map = {}
     for log in sent_logs:
         key = (str(log.farmer_id), str(log.job_id or ''), log.activity_name or '')
         if key not in latest_map:
             latest_map[key] = log
 
-    # ── 2. Start from JobActivity — the source of truth ──────────────────
-    # Every non-lost, non-zero-area JA = expected work that must be completed
-    # before we can bill this farmer for this activity.
+    # ── 2. All JAs with prefetch (no N+1) ────────────────────────────────
     all_jas = (
         JobActivity.objects
         .filter(total_area__gt=0, is_lost=False)
@@ -721,11 +723,17 @@ def payment_overview(request):
             'plot',
             'job',
         )
-        .prefetch_related('allocations')
+        .prefetch_related(
+            Prefetch(
+                'allocations',
+                queryset=Allocation.objects.select_related('mukkadam')
+            ),
+            'job__clusters',
+            'plot__clusters',
+        )
     )
 
-    # Group ALL JAs by (farmer_id, job_id, activity_name)
-    # Each group = one billable unit (one activity across all plots for one job)
+    # ── 3. Group JAs by (farmer_id, job_id, activity_name) ───────────────
     groups = defaultdict(lambda: {
         'farmer_id':    None,
         'farmer_name':  None,
@@ -737,9 +745,10 @@ def payment_overview(request):
         'activity':     None,
         'rate':         0,
         'mukkadam':     None,
-        # per-plot tracking
-        'plot_rows': [],   # list of dicts, one per JA row
+        'plot_rows':    [],
     })
+
+    AREA_TOLERANCE = 0.05
 
     for ja in all_jas:
         farmer    = ja.job.farmer
@@ -749,69 +758,56 @@ def payment_overview(request):
         key       = (farmer_id, job_id, act_name)
         g         = groups[key]
 
-        # Fill header fields (idempotent — same for all JAs in this group)
-        g['farmer_id']   = farmer_id
-        g['farmer_name'] = farmer.farmer_name
-        g['phone']       = farmer.phone_number or ''
-        g['job_id']      = ja.job.job_id
-        g['booking_type']= ja.job.booking_type or 'tender'
-        g['activity']    = act_name
-        g['rate']        = float(ja.rate_per_acre or 0)
+        # Header fields
+        g['farmer_id']    = farmer_id
+        g['farmer_name']  = farmer.farmer_name
+        g['phone']        = farmer.phone_number or ''
+        g['job_id']       = ja.job.job_id
+        g['booking_type'] = ja.job.booking_type or 'tender'
+        g['activity']     = act_name
+        g['rate']         = float(ja.rate_per_acre or 0)
 
-        # Cluster — from job (first cluster)
+        # Cluster — from prefetched job clusters
         if not g['cluster_id']:
-            cluster = ja.job.clusters.first()
-            if cluster:
-                g['cluster_id']   = cluster.id
-                g['cluster_name'] = cluster.name
+            job_clusters = list(ja.job.clusters.all())  # uses prefetch cache
+            if job_clusters:
+                g['cluster_id']   = job_clusters[0].id
+                g['cluster_name'] = job_clusters[0].name
 
-        # Mukkadam — best effort from completed allocations first
+        # Allocations — use prefetch cache, call list() once
+        all_allocs_list   = list(ja.allocations.all())
+        completed_allocs  = [a for a in all_allocs_list if a.work_status == 'completed']
+        all_done_allocs   = (
+            len(all_allocs_list) > 0 and
+            all(a.work_status == 'completed' for a in all_allocs_list)
+        )
+
+        # Mukkadam — no extra queries
         if not g['mukkadam']:
-            completed_alloc = ja.allocations.filter(
-                work_status='completed'
-            ).select_related('mukkadam').first()
-            if completed_alloc and completed_alloc.mukkadam:
-                g['mukkadam'] = completed_alloc.mukkadam.mukkadam_name
-            else:
-                any_alloc = ja.allocations.select_related('mukkadam').first()
-                if any_alloc and any_alloc.mukkadam:
-                    g['mukkadam'] = any_alloc.mukkadam.mukkadam_name
+            mukk_alloc = next(
+                (a for a in completed_allocs if a.mukkadam_id), None
+            ) or next(
+                (a for a in all_allocs_list if a.mukkadam_id), None
+            )
+            if mukk_alloc:
+                g['mukkadam'] = mukk_alloc.mukkadam.mukkadam_name
 
-        # ── Per-plot row ──────────────────────────────────────────────────
-        plot_name = ja.plot.name if ja.plot else f'JA-{ja.id}'
-        tArea     = float(ja.total_area or 0)
-
-        # Completed area on THIS JA's allocations
-        AREA_TOLERANCE = 0.05
-        completed_allocs = ja.allocations.filter(work_status='completed')
-        completed_area   = sum(
+        # Per-plot row
+        plot_name     = ja.plot.name if ja.plot else f'JA-{ja.id}'
+        tArea         = float(ja.total_area or 0)
+        completed_area = sum(
             float(a.admin_override_area or a.actual_area_done or a.allocated_area or 0)
             for a in completed_allocs
         )
-        all_allocs       = ja.allocations.all()
-        all_done_allocs  = all_allocs.count() > 0 and all(
-            a.work_status == 'completed' for a in all_allocs
-        )
-
-        # This JA row is "done" if completed area covers its total_area
         ja_done = (
-            all_done_allocs and completed_area >= tArea - AREA_TOLERANCE
-        ) or (
-            completed_area >= tArea - AREA_TOLERANCE
-        ) or (
-            ja.allocation_status == 'completed'
+            (all_done_allocs and completed_area >= tArea - AREA_TOLERANCE) or
+            (completed_area >= tArea - AREA_TOLERANCE) or
+            (ja.allocation_status == 'completed')
         )
-
-        # Latest completed date on this JA
         latest_done_date = None
         for a in completed_allocs:
-            if a.allocated_date and (
-                not latest_done_date or a.allocated_date > latest_done_date
-            ):
+            if a.allocated_date and (not latest_done_date or a.allocated_date > latest_done_date):
                 latest_done_date = a.allocated_date
-
-        # Billable amount: rate × completed area (only completed counts)
-        completed_amount = round(completed_area * g['rate'], 2)
 
         g['plot_rows'].append({
             'plot_name':        plot_name,
@@ -819,12 +815,11 @@ def payment_overview(request):
             'total_area':       tArea,
             'completed_area':   completed_area,
             'ja_done':          ja_done,
-            'completed_amount': completed_amount,
+            'completed_amount': round(completed_area * g['rate'], 2),
             'done_date':        str(latest_done_date) if latest_done_date else None,
         })
 
-    # ── 3. Classify each group ────────────────────────────────────────────
-    # ── 3. Classify each group ────────────────────────────────────────────
+    # ── 4. Classify each group ────────────────────────────────────────────
     farmer_list = []
 
     for (farmer_id, job_id, act_name), g in groups.items():
@@ -844,7 +839,6 @@ def payment_overview(request):
 
         log = latest_map.get((farmer_id, str(job_id), act_name))
 
-        # ── ALL plots (done + pending), with status per plot ──────────────
         all_plot_details = [
             {
                 'plot_name':      r['plot_name'],
@@ -857,7 +851,6 @@ def payment_overview(request):
             }
             for r in plot_rows
         ]
-        # For backward compat — only done plot names (used by summary views)
         plots_done_names = [r['plot_name'] for r in plot_rows if r['ja_done']]
 
         base = {
@@ -869,8 +862,8 @@ def payment_overview(request):
             'activity':        act_name,
             'rate':            g['rate'],
             'booking_type':    g['booking_type'],
-            'plots':           plots_done_names,      # done-only names (summary)
-            'all_plots':       all_plot_details,      # ← ALL plots with per-plot detail
+            'plots':           plots_done_names,
+            'all_plots':       all_plot_details,
             'n_plots':         n_plots,
             'completed_plots': done_plots,
             'acres':           total_completed,
@@ -880,19 +873,16 @@ def payment_overview(request):
             'job_id':          job_id,
             'completed_date':  latest_date,
         }
-        # ... rest unchanged
 
         if all_plots_done and total_amount > 0:
-            # ── Ready to bill or already billed ──────────────────────────
             if log:
                 balance  = float(log.balance_due or 0)
                 sent_at  = log.sent_at.date() if log.sent_at else today
                 days_ago = (today - sent_at).days
-
                 status = (
-                    'collected'  if balance <= 0.01 else
-                    'overdue'    if days_ago > 7 else
-                    'this_week'  if sent_at >= week_ago else
+                    'collected' if balance <= 0.01 else
+                    'overdue'   if days_ago > 7    else
+                    'this_week' if sent_at >= week_ago else
                     'next_week'
                 )
                 farmer_list.append({**base,
@@ -916,13 +906,10 @@ def payment_overview(request):
                     'sent_by':           None,
                     'webhook_status':    None,
                 })
-
         elif any_plot_done:
-            # ── Partial: some plots done, some not ───────────────────────
-            pending_amount = round(full_job_amount - total_amount, 2)
             farmer_list.append({**base,
-                'pending_plots':   n_plots - done_plots,
-                'pending_amount':  pending_amount,
+                'pending_plots':    n_plots - done_plots,
+                'pending_amount':   round(full_job_amount - total_amount, 2),
                 'completed_amount': total_amount,
                 'status':            'partial',
                 'bill_status':       None,
@@ -933,29 +920,31 @@ def payment_overview(request):
                 'sent_by':           None,
                 'webhook_status':    None,
             })
-        # else: nothing done yet — don't show in billing overview at all
 
-    # ── 4. Pipeline counts ────────────────────────────────────────────────
-    ready_list   = [f for f in farmer_list if f['status'] == 'ready_to_bill']
-    billed_list  = [f for f in farmer_list if f['status'] == 'billed']
-    partial_list = [f for f in farmer_list if f['status'] == 'partial']
-    overdue_list = [f for f in farmer_list if f.get('expected_payment') == 'overdue']
-    thisweek_list= [f for f in farmer_list if f.get('expected_payment') == 'this_week']
-    nextweek_list= [f for f in farmer_list if f.get('expected_payment') == 'next_week']
+    # ── 5. Pipeline counts ────────────────────────────────────────────────
+    ready_list    = [f for f in farmer_list if f['status'] == 'ready_to_bill']
+    billed_list   = [f for f in farmer_list if f['status'] == 'billed']
+    partial_list  = [f for f in farmer_list if f['status'] == 'partial']
+    overdue_list  = [f for f in farmer_list if f.get('expected_payment') == 'overdue']
+    thisweek_list = [f for f in farmer_list if f.get('expected_payment') == 'this_week']
+    nextweek_list = [f for f in farmer_list if f.get('expected_payment') == 'next_week']
 
-    # ── 5. Recent payments ────────────────────────────────────────────────
-    recent_payments_qs = FarmerPayment.objects.filter(
-        paid_status=True,
-        paid_at__date__gte=today - timedelta(days=30),
-    ).select_related('booking__job__farmer', 'booking__job').order_by('-paid_at')[:15]
+    # ── 6. Recent payments ────────────────────────────────────────────────
+    recent_payments_qs = (
+        FarmerPayment.objects
+        .filter(paid_status=True, paid_at__date__gte=today - timedelta(days=30))
+        .select_related('booking__job__farmer', 'booking__job')
+        .prefetch_related('booking__job__clusters')
+        .order_by('-paid_at')[:15]
+    )
 
     recent_payments = []
     for p in recent_payments_qs:
         try:
             farmer_name  = p.booking.job.farmer.farmer_name
             job_id_      = p.booking.job.job_id
-            cluster_obj  = p.booking.job.clusters.first()
-            cluster_name = cluster_obj.name if cluster_obj else '—'
+            cluster_obj  = list(p.booking.job.clusters.all())
+            cluster_name = cluster_obj[0].name if cluster_obj else '—'
         except Exception:
             farmer_name = job_id_ = cluster_name = '—'
         recent_payments.append({
@@ -973,51 +962,74 @@ def payment_overview(request):
         paid_at__date__gte=week_ago,
     ).aggregate(s=Sum('amount'))['s'] or 0
 
-    # ── 6. Cluster billing summary ────────────────────────────────────────
+    # ── 7. Cluster billing summary ────────────────────────────────────────
+    # Build farmer_list lookup by cluster_id to avoid per-cluster loops
+    cluster_farmer_map = defaultdict(list)
+    for f in farmer_list:
+        if f['cluster_id']:
+            cluster_farmer_map[f['cluster_id']].append(f)
+
+    # Get all job_ids per cluster in one query
+    from django.db.models import Prefetch as P2
+    cluster_job_ids_map = defaultdict(list)
+    for row in Job.objects.filter(
+        clusters__isnull=False
+    ).values('job_id', 'clusters'):
+        cluster_job_ids_map[row['clusters']].append(row['job_id'])
+
+    # Aggregate all FarmerPayment by job_id in one query
+    payment_agg = (
+        FarmerPayment.objects
+        .filter(paid_status=True)
+        .values('booking__job_id')
+        .annotate(total=Sum('amount'))
+    )
+    payment_by_job = {str(row['booking__job_id']): float(row['total']) for row in payment_agg}
+
     clusters = Cluster.objects.all().order_by('name')
     cluster_billing = []
     for c in clusters:
-        job_ids = list(Job.objects.filter(clusters=c).values_list('job_id', flat=True))
-        total_billed = sum(
-            f['amount'] for f in farmer_list
-            if f['cluster_id'] == c.id and f['status'] == 'billed'
-        )
-        total_collected = float(
-            FarmerPayment.objects.filter(
-                booking__job_id__in=job_ids, paid_status=True,
-            ).aggregate(s=Sum('amount'))['s'] or 0
-        )
+        c_farmers = cluster_farmer_map.get(c.id, [])
+        job_ids   = cluster_job_ids_map.get(c.id, [])
+        total_collected = sum(payment_by_job.get(str(jid), 0) for jid in job_ids)
+        total_billed    = sum(f['amount'] for f in c_farmers if f['status'] == 'billed')
+
         cluster_billing.append({
-            'cluster_id':    c.id,
-            'cluster':       c.name,
-            'farmers':       Farmer.objects.filter(clusters=c).count(),
-            'billed':        total_billed,
-            'collected':     total_collected,
-            'due':           max(0, total_billed - total_collected),
-            'bills_pending': sum(1 for f in farmer_list if f['cluster_id'] == c.id and f['status'] == 'ready_to_bill'),
-            'bills_sent':    sum(1 for f in farmer_list if f['cluster_id'] == c.id and f['status'] == 'billed'),
-            'bills_awaiting':sum(1 for f in farmer_list if f['cluster_id'] == c.id and f.get('expected_payment') == 'overdue'),
+            'cluster_id':     c.id,
+            'cluster':        c.name,
+            'farmers':        Farmer.objects.filter(clusters=c).count(),
+            'billed':         total_billed,
+            'collected':      total_collected,
+            'due':            max(0, total_billed - total_collected),
+            'bills_pending':  sum(1 for f in c_farmers if f['status'] == 'ready_to_bill'),
+            'bills_sent':     sum(1 for f in c_farmers if f['status'] == 'billed'),
+            'bills_awaiting': sum(1 for f in c_farmers if f.get('expected_payment') == 'overdue'),
+            'total_job_value': sum(f['job_value'] for f in c_farmers),
         })
 
     return Response({
         'today': str(today),
         'pipeline': {
-            'ready_to_bill': {'count': len(ready_list),  'amount': sum(f['amount'] for f in ready_list)},
-            'partial':       {'count': len(partial_list),'amount': sum(f.get('completed_amount', 0) for f in partial_list)},
-            'bills_sent':    {'count': len(billed_list), 'amount': sum(f['balance_due'] for f in billed_list)},
-            'overdue':       {
-                'count': len(overdue_list),
-                'amount': sum(f['balance_due'] for f in overdue_list),
+            'ready_to_bill': {'count': len(ready_list),   'amount': sum(f['amount'] for f in ready_list),   'plots': sum(f['n_plots'] for f in ready_list)},
+            'partial':       {'count': len(partial_list), 'amount': sum(f.get('completed_amount', 0) for f in partial_list)},
+            'bills_sent':    {'count': len(billed_list),  'amount': sum(f['balance_due'] for f in billed_list)},
+            'overdue': {
+                'count':    len(overdue_list),
+                'amount':   sum(f['balance_due'] for f in overdue_list),
                 'avg_days': round(sum(f['days_since_billed'] or 0 for f in overdue_list) / max(len(overdue_list), 1)),
             },
             'collected_7d':  {'count': len(recent_payments), 'amount': float(collected_7d)},
+        },
+        'forecast': {
+            'this_week':    {'count': len(thisweek_list), 'amount': sum(f['balance_due'] for f in thisweek_list)},
+            'next_week':    {'count': len(nextweek_list), 'amount': sum(f['balance_due'] for f in nextweek_list)},
+            'ready_to_bill':{'count': len(ready_list),   'amount': sum(f['amount'] for f in ready_list)},
+            'overdue':      {'count': len(overdue_list), 'amount': sum(f['balance_due'] for f in overdue_list)},
         },
         'farmer_list':     farmer_list,
         'recent_payments': recent_payments,
         'cluster_billing': cluster_billing,
     })
-
-
 @api_view(['DELETE'])
 def reset_cluster_activity_rate(request, cluster_id, activity_id):
     """
@@ -9709,6 +9721,9 @@ def cluster_payment_dashboard(request, cluster_id):
         'farmers':            farmer_data,
         'mukkadams':          mukkadam_data,
     })
+
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def mukkadam_payment_overview(request):
