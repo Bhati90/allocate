@@ -5,9 +5,17 @@ from .task import push_to_sales_webhook, push_to_cancel_webhook
 # tender/handlers.py
 print("🔥 handlers.py imported")   # 👈 add this at the very top
 import logging
+from .nr import ops, err, ctx
 ...
 @receiver(activity_cancelled)
 def on_activity_cancelled(sender, payload, **kwargs):
+    ops("handler_activity_cancelled",
+        activity_id=str(payload.get('activity_id', '')),
+        job_id=str(payload.get('job_id', '')),
+        farmer_id=str(payload.get('farmer_id', '')),
+        activity_name=str(payload.get('activity_name', '')),
+        cancel_reason=str(payload.get('cancel_reason', ''))[:80],
+        allocs_cancelled=str(payload.get('cancelled_allocations_count', 0)))
     push_to_cancel_webhook("activity_cancelled", payload)  
 
 def _base_payload(allocation):

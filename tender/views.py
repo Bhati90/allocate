@@ -7,7 +7,7 @@ from django.db import transaction
 from datetime import datetime, timedelta
 from .models import *
 from rest_framework.permissions import IsAuthenticated
-
+from .nr import ops, err, ctx, ops_bg,err_bg
 
 from .serializers import *
 from .utils import check_can_allocate, get_mukkadam_availability, get_mukkadam_remaining_workers
@@ -2159,6 +2159,8 @@ class JobViewSet(viewsets.ModelViewSet):
         return Response(financials)
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
+        ctx(flow="activity_cancel", ja_id=pk,
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         job           = self.get_object()
         reason        = request.data.get('reason', '').strip()
         cancel_allocs = bool(request.data.get('cancel_allocations', False))  # 👈 frontend decides
@@ -2892,6 +2894,9 @@ class JobActivityViewSet(viewsets.ModelViewSet):
         return self.update(request, *args, **kwargs)
     @action(detail=True, methods=['post'])
     def move(self, request, pk=None):
+        ctx(flow="activity_move", ja_id=pk,
+            user=str(request.user.id if request.user.is_authenticated else "anon"))
+
         from datetime import date, timedelta
         from decimal import Decimal
 
@@ -2921,6 +2926,9 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Area must be greater than 0'}, status=400)
 
         if area > activity.remaining_area:
+            ops("activity_move_blocked", ja_id=pk,
+        reason="area_exceeds_remaining",
+        requested=str(area), remaining=str(activity.remaining_area))
             return Response(
                 {'error': f'Area ({area}) exceeds remaining area ({activity.remaining_area} ac)'},
                 status=400,
@@ -2986,6 +2994,12 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 activity.last_moved_by = request.user
                 activity.last_moved_at = timezone.now()
             activity.save()
+            ops("activity_move_shrunk", ja_id=activity.id,
+    job_id=str(activity.job.job_id),
+    area_split=str(area),
+    from_date=str(original_date),
+    to_date=new_date,
+    reason=reason)
 
             ActivityLogTender.objects.create(
                 action       = 'JOB_ACTIVITY_UPDATED',
@@ -3040,6 +3054,12 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 last_moved_by           = request.user if request.user.is_authenticated else None,
                 last_moved_at           = timezone.now() if request.user.is_authenticated else None,
             )
+            ops("activity_move_split_created",
+    parent_ja_id=activity.id,
+    new_ja_id=new_activity.id,
+    area=str(area),
+    scheduled_date=new_date,
+    job_id=str(activity.job.job_id))
 
             ActivityLogTender.objects.create(
                 action       = 'JOB_ACTIVITY_CREATED',
@@ -3124,6 +3144,12 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                         'scheduled_date', 'move_reason',
                         'last_moved_by', 'last_moved_at', 'updated_at',
                     ])
+                    ops("activity_move_cascade_shifted",
+    trigger_ja_id=activity.id,
+    affected_ja_id=act.id,
+    old_date=str(old_date),
+    new_date=str(new_act_date),
+    shift_days=shift_days)
 
                     Allocation.objects.filter(job_activity=act).update(allocated_date=new_act_date)
 
@@ -3134,6 +3160,15 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                         'new_date': str(new_act_date),
                         'shift_days': shift_days,
                     })
+
+        ops("activity_move_done",
+    ja_id=activity.id,
+    job_id=str(activity.job.job_id),
+    area=str(area),
+    from_date=str(original_date),
+    to_date=new_date,
+    cascaded=len(shifted_activities),
+    warnings=len(warnings))
 
         return Response(
             {
@@ -3279,6 +3314,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
+        ctx(flow="activity_cancel", ja_id=pk,
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         activity = self.get_object()
 
         # ── Make sure all related objects are loaded ──
@@ -3311,7 +3348,12 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                             reason=reason, user=request.user
                         )
                     )
-                    alloc.delete()  # ← delete instead of cancel
+                    alloc.delete()
+                    ops("activity_cancel_alloc_deleted",
+    ja_id=activity.id,
+    allocation_id=alloc.id,
+    mukkadam=alloc.mukkadam.mukkadam_name,
+    area=str(alloc.allocated_area))  # ← delete instead of cancel
 
                 for alloc in activity.allocations.filter(
                     status='completed'
@@ -3349,6 +3391,14 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 activity.last_moved_by = request.user
                 activity.last_moved_at = timezone.now()
             activity.save(update_fields=['is_lost', 'lost_reason', 'last_moved_by', 'last_moved_at'])
+            ops("activity_cancelled",
+    ja_id=activity.id,
+    job_id=str(activity.job.job_id),
+    activity_name=activity.activity.name,
+    cancel_allocs=cancel_allocs,
+    allocs_cancelled=len(cancelled_allocations),
+    skipped=len(skipped_allocations),
+    reason=reason)
         # ── Fire signals outside transaction ──
         from .signals import allocation_cancelled, activity_cancelled
 
@@ -3358,6 +3408,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 allocation_cancelled.send(sender=None, payload=payload)
             except Exception as e:
                 logger.error(f"[SIGNAL] allocation_cancelled failed: {e}")
+                err("activity_cancel_signal_fail",
+        ja_id=activity.id, signal="allocation_cancelled")
 
         # Fire single activity-level cancel signal
         try:
@@ -3381,6 +3433,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
             })
         except Exception as e:
             logger.error(f"[SIGNAL] activity_cancelled failed: {e}")
+            err("activity_cancel_signal_fail",
+        ja_id=activity.id, signal="activity_cancelled")
 
         return Response({
             'success':               True,
@@ -3394,6 +3448,8 @@ class JobActivityViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['delete'])
     def hard_delete(self, request, pk=None):
+        ctx(flow="activity_hard_delete", ja_id=pk,
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         activity = JobActivity.objects.select_related(
             'job__farmer',
             'job__booking',
@@ -3402,6 +3458,9 @@ class JobActivityViewSet(viewsets.ModelViewSet):
         ).get(id=pk)
 
         if activity.allocation_status == 'completed':
+            ops("hard_delete_blocked", ja_id=pk,
+        reason="completed_activity",
+        job_id=str(activity.job.job_id))
             return Response({'error': 'Cannot delete a completed activity'}, status=400)
 
         reason = request.data.get('reason', '').strip()
@@ -3413,6 +3472,12 @@ class JobActivityViewSet(viewsets.ModelViewSet):
                 alloc.save(update_fields=['status'])
 
             activity.delete()
+            ops("activity_hard_deleted",
+    ja_id=pk,
+    job_id=str(activity.job.job_id),
+    activity_name=activity.activity.name,
+    reason=reason or "none",
+    user=str(request.user))
 
         logger.info(
             f"[HARD DELETE] Activity {pk} ({activity.activity.name}) "
@@ -4575,13 +4640,24 @@ class ClusterViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user if self.request.user.is_authenticated else None
         serializer.save(created_by=user, last_modified_by=user)
+        ops("cluster_created",                          # ADD
+        cluster_id=str(serializer.instance.id),
+        cluster_name=serializer.instance.name,
+        created_by=str(user.id if user else "anon"))
 
     def perform_update(self, serializer):
         user = self.request.user if self.request.user.is_authenticated else None
         serializer.save(last_modified_by=user)
+        ops("cluster_updated",                          # ADD
+        cluster_id=str(serializer.instance.id),
+        cluster_name=serializer.instance.name,
+        updated_by=str(user.id if user else "anon"))
 
     @action(detail=True, methods=['post'], url_path='remove_farmer')
     def remove_farmer(self, request, pk=None):
+        ctx(flow="cluster_remove_farmer",
+        cluster_id=pk,
+        user=str(request.user.id))
         """
         POST /api/clusters/{id}/remove_farmer/
         Body: { "farmer_id": "F001" }
@@ -4604,6 +4680,8 @@ class ClusterViewSet(viewsets.ModelViewSet):
         try:
             farmer = Farmer.objects.get(farmer_id=farmer_id)
         except Farmer.DoesNotExist:
+            ops("cluster_remove_farmer_not_found",          # ADD
+        cluster_id=pk, farmer_id=farmer_id)
             return Response({'error': 'Farmer not found'}, status=404)
 
         now = timezone.now()
@@ -4629,6 +4707,14 @@ class ClusterViewSet(viewsets.ModelViewSet):
         jobs_count = farmer_jobs.count()
         for job in farmer_jobs:
             job.clusters.remove(cluster)
+            ops("cluster_farmer_removed",                       # ADD
+    cluster_id=pk,
+    cluster_name=cluster.name,
+    farmer_id=farmer_id,
+    farmer_name=farmer.farmer_name,
+    plots_removed=plots_count,
+    jobs_removed=jobs_count,
+    by=request.user.username)
 
         # 4. Log the action
         logger.info(
@@ -4651,6 +4737,9 @@ class ClusterViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'], url_path='remove_mukkadam')
     def remove_mukkadam(self, request, pk=None):
+        ctx(flow="cluster_remove_mukkadam",
+        cluster_id=pk,
+        user=str(request.user.id))
         if not request.user.is_authenticated:
             return Response({'error': 'Authentication required'}, status=401)
 
@@ -4678,6 +4767,8 @@ class ClusterViewSet(viewsets.ModelViewSet):
         )
 
         if not updated:
+            ops("cluster_remove_mukkadam_not_found",        # ADD
+        cluster_id=pk, mukkadam_id=mukkadam_id)
             return Response({'error': 'Active assignment not found'}, status=404)
 
         # Log the action
@@ -4687,6 +4778,12 @@ class ClusterViewSet(viewsets.ModelViewSet):
             f"from cluster='{cluster.name}' (id={cluster.id}) "
             f"| at={now.isoformat()}"
         )
+
+        ops("cluster_mukkadam_removed",                     # ADD
+    cluster_id=pk,
+    cluster_name=cluster.name,
+    mukkadam_id=mukkadam_id,
+    by=request.user.username)
 
         return Response({
             'success': True,
@@ -4720,6 +4817,8 @@ class ClusterViewSet(viewsets.ModelViewSet):
         
 
     def list(self, request, *args, **kwargs):
+        ctx(flow="cluster_list",
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         from datetime import date
         from django.db.models import Sum
         from decimal import Decimal
@@ -4767,9 +4866,21 @@ class ClusterViewSet(viewsets.ModelViewSet):
                     )
                     total_collected += sum(Decimal(str(p.amount)) for p in fps)
                 except Exception:
+                    err("cluster_list_payment_fail",                # ADD
+        cluster_id=str(c.id),
+        job_id=str(job.job_id))
                     pass
 
             total_due = total_billed - total_collected
+            ops("cluster_financials_computed",                  # ADD
+    cluster_id=str(c.id),
+    cluster_name=c.name,
+    total_billed=str(total_billed),
+    total_collected=str(total_collected),
+    total_due=str(total_due),
+    bills_sent=bills_sent,
+    bills_pending=bills_pending,
+    response_pending=response_pending)
 
             serialized['total_billed']    = float(total_billed)
             serialized['total_collected'] = float(total_collected)
@@ -4857,6 +4968,9 @@ class ClusterViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def add_activity(self, request, pk=None):
+        ctx(flow="cluster_add_activity",
+        cluster_id=pk,
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         """
         Add an activity to this cluster with custom rates
         Can either use existing activity_id or create new one with activity_name
@@ -4883,6 +4997,9 @@ class ClusterViewSet(viewsets.ModelViewSet):
             try:
                 activity = ActivityCatalog.objects.get(id=data['activity_id'])
             except ActivityCatalog.DoesNotExist:
+                ops("cluster_add_activity_not_found",           # ADD
+        cluster_id=pk,
+        activity_id=str(data.get('activity_id')))
                 return Response(
                     {'error': 'Activity not found'},
                     status=status.HTTP_404_NOT_FOUND
@@ -4906,6 +5023,10 @@ class ClusterViewSet(viewsets.ModelViewSet):
                     gap_days=data['gap_days'],
                     phase_order=ActivityScheduleRule.objects.count() + 1
                 )
+                ops("cluster_activity_catalog_created",         # ADD
+        cluster_id=pk,
+        activity_name=data['activity_name'],
+        gap_days=data['gap_days'])
         else:
             return Response(
                 {'error': 'Either activity_id or activity_name is required'},
@@ -4935,6 +5056,16 @@ class ClusterViewSet(viewsets.ModelViewSet):
                 'productivity_per_worker': data['mukkadam_productivity_per_worker']
             }
         )
+
+        ops("cluster_activity_added",                       # ADD
+    cluster_id=pk,
+    cluster_name=cluster.name,
+    activity_id=str(activity.id),
+    activity_name=activity.name,
+    farmer_rate=str(data['farmer_rate_per_acre']),
+    mukkadam_rate=str(data['mukkadam_rate_per_acre']),
+    gap_days=data['gap_days'],
+    new_activity_created=created)
         
         return Response({
             'success': True,
@@ -4976,6 +5107,9 @@ class ClusterViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'], url_path='set_weekly_payment_day')
     def set_weekly_payment_day(self, request, pk=None):
+        ctx(flow="cluster_set_payment_day",
+        cluster_id=pk,
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         """
         Set the weekly payment day for a specific mukkadam in this cluster.
         
@@ -5008,6 +5142,9 @@ class ClusterViewSet(viewsets.ModelViewSet):
                 is_active=True
             )
         except ClusterMukkadamAssignment.DoesNotExist:
+            ops("cluster_payment_day_not_found",            # ADD
+        cluster_id=pk,
+        mukkadam_id=str(mukkadam_id))
             return Response(
                 {'error': 'Mukkadam is not assigned to this cluster'},
                 status=status.HTTP_404_NOT_FOUND
@@ -5015,6 +5152,13 @@ class ClusterViewSet(viewsets.ModelViewSet):
 
         assignment.weekly_payment_day = weekly_payment_day
         assignment.save()
+        ops("cluster_payment_day_set",                      # ADD
+    cluster_id=pk,
+    cluster_name=cluster.name,
+    mukkadam_id=str(mukkadam_id),
+    mukkadam_name=assignment.mukkadam.mukkadam_name,
+    day=weekly_payment_day,
+    day_name=day_name)
 
         day_name = dict(ClusterMukkadamAssignment.WEEKDAY_CHOICES)[weekly_payment_day]
 
@@ -5030,6 +5174,10 @@ class ClusterViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'], url_path='update_mukkadam')
     def update_mukkadam(self, request, pk=None):
+        ctx(flow="cluster_update_mukkadam",
+        cluster_id=pk,
+        mukkadam_id=str(mukkadam_id) if mukkadam_id else "unknown",
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         cluster = self.get_object()
 
         mukkadam_id        = request.data.get('mukkadam_id')
@@ -5056,6 +5204,8 @@ class ClusterViewSet(viewsets.ModelViewSet):
             ).order_by('id').last()  # gets the most recently created one
 
             if not assignment:
+                ops("cluster_update_mukkadam_not_found",        # ADD
+        cluster_id=pk, mukkadam_id=str(mukkadam_id))
                 return Response({'error': 'Assignment not found'}, status=404)
         except ClusterMukkadamAssignment.DoesNotExist:
             return Response({'error': 'Assignment not found'}, status=404)
@@ -5171,6 +5321,11 @@ class ClusterViewSet(viewsets.ModelViewSet):
             ).order_by('allocated_date').first()
 
             if conflict:
+                ops("cluster_update_mukkadam_conflict",         # ADD
+        cluster_id=pk,
+        mukkadam_id=str(mukkadam_id),
+        conflict_date=str(conflict.allocated_date),
+        allocation_id=conflict.id)
                 return Response(
                     {
                         'error': 'Cannot change availability',
@@ -5217,6 +5372,15 @@ class ClusterViewSet(viewsets.ModelViewSet):
             assignment.updown_specific_dates = []
 
         assignment.save()
+        ops("cluster_mukkadam_updated",                     # ADD
+    cluster_id=pk,
+    cluster_name=cluster.name,
+    mukkadam_id=str(mukkadam_id),
+    mukkadam_name=assignment.mukkadam.mukkadam_name,
+    mukkadam_type=assignment.mukkadam_type,
+    transport_price=str(transport_price or ""),
+    weekly_payment_day=str(weekly_payment_day or ""),
+    advance_amount=str(advance_amount or ""))
 
         if request.user and request.user.is_authenticated:
             assignment.last_modified_by = request.user
@@ -5236,6 +5400,9 @@ class ClusterViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['patch'], url_path='update_locations')
     def update_locations(self, request, pk=None):
+        ctx(flow="cluster_update_locations",
+        cluster_id=pk,
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         """
         PATCH /api/clusters/{id}/update_locations/
         Body: {
@@ -5269,6 +5436,15 @@ class ClusterViewSet(viewsets.ModelViewSet):
             cluster.last_modified_by = request.user
 
         cluster.save()
+        ops("cluster_locations_updated",                    # ADD
+    cluster_id=pk,
+    cluster_name=cluster.name,
+    fields_updated=str([
+        f for f in ['name','district_codes','taluka_codes',
+                    'village_codes','districts','talukas','villages']
+        if f in request.data
+    ]),
+    by=str(request.user.id if request.user.is_authenticated else "anon"))
         return Response(ClusterSerializer(cluster).data)
 
 from decimal import Decimal, ROUND_HALF_UP
@@ -5525,6 +5701,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def create_allocation(self, request):
+        ctx(flow="create_allocation",
+        ja_id=str(request.data.get('job_activity_id')),
+        mukkadam_id=str(request.data.get('mukkadam_id')),
+        cluster_id=str(request.data.get('cluster_id')))
         """
         Create allocation with:
         - Productivity + availability validation (existing)
@@ -5582,6 +5762,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 )
             # All other "errors" become warnings only — don't block
             warnings['soft_warning'] = message
+            ops("allocation_soft_warning",
+    ja_id=job_activity_id,
+    mukkadam_id=mukkadam_id,
+    warning=message)
 
         try:
             with transaction.atomic():
@@ -5601,6 +5785,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
                 # ── 3) Rule 5: Block if in-progress ──────────────────────────────
                 if job_activity.allocation_status == 'in_progress':
+                    ops("create_allocation_blocked",
+        ja_id=job_activity_id, reason="in_progress")
                     return Response(
                         {'error': 'Activity is in-progress and cannot be allocated.'},
                         status=status.HTTP_400_BAD_REQUEST,
@@ -5616,6 +5802,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 ).exists()
 
                 if job_activity.allocation_status == 'completed' and has_paid_completion:
+                    ops("create_allocation_blocked",
+        ja_id=job_activity_id, reason="completed_and_paid")
                     return Response(
                         {'error': 'Activity is completed and paid — no further allocations allowed.'},
                         status=status.HTTP_400_BAD_REQUEST,
@@ -5742,6 +5930,15 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     last_modified_by  = request.user if request.user.is_authenticated else None,
                     last_modified_at  = timezone.now() if request.user.is_authenticated else None,
                 )
+                ops("allocation_created_view",
+    allocation_id=allocation.id,
+    ja_id=job_activity_id,
+    mukkadam_id=mukkadam_id,
+    area=str(allocated_area),
+    date=str(allocated_date),
+    is_first=is_first_allocation,
+    force=force,
+    cluster_id=cluster_id)
 
                 # ── 12) Update JobActivity.allocated_area (aggregate as source of truth) ──
                 total_allocated = Allocation.objects.filter(
@@ -5849,7 +6046,12 @@ class AllocationViewSet(viewsets.ModelViewSet):
                             'new_date':      str(new_succ_date),
                             'gap_used':      gap,
                         })
-
+                ops("allocation_cascade_done",
+    allocation_id=allocation.id,
+    ja_id=job_activity_id,
+    cascaded=len(cascade_shifted),
+    warnings=len(cascade_warnings),
+    is_first=is_first_allocation)
                 # ── 14) Notify mukkadam ───────────────────────────────────────────
                 notify_mukkadam(
                     mobile_number=mukkadam.mobile_numbers,
@@ -5888,6 +6090,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 return Response(response_data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
+            err("create_allocation_fail",
+        ja_id=job_activity_id,
+        mukkadam_id=mukkadam_id,
+        error=str(e)[:100])
             return Response(
                 {'error': f'Failed to create allocation: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -6388,6 +6594,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def change_date(self, request, pk=None):
+        ctx(flow="change_date",
+        allocation_id=pk,
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         from datetime import timedelta
         from django.db.models import Sum
 
@@ -6507,6 +6716,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 ).exists()
 
                 if is_holiday:
+                    ops("change_date_blocked",
+        allocation_id=pk, reason="holiday",
+        date=str(new_date),
+        mukkadam_id=str(mukkadam.mukkadam_id))
                     return Response(
                         {'error': f'{new_date} is a holiday for this mukkadam'},
                         status=status.HTTP_400_BAD_REQUEST,
@@ -6540,6 +6753,12 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         last_modified_by  = request.user if request.user.is_authenticated else None,
                         last_modified_at  = timezone.now(),
                     )
+                    ops("change_date_partial_move",
+    allocation_id=pk,
+    new_allocation_id=new_allocation.id,
+    area=str(new_area),
+    old_date=str(original_date),
+    new_date=str(new_date))
                 else:
                     # Full move — update in place
                     allocation.allocated_date    = new_date
@@ -6548,6 +6767,12 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     allocation.last_modified_by  = request.user if request.user.is_authenticated else None
                     allocation.last_modified_at  = timezone.now()
                     allocation.save()
+                    ops("change_date_full_move",
+    allocation_id=pk,
+    area=str(new_area),
+    old_date=str(original_date),
+    new_date=str(new_date),
+    day_delta=day_delta)
                     new_allocation = None
 
                 # ---------- 3) If date changed — split JobActivity + cascade ----------
@@ -6617,6 +6842,13 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         last_moved_by           = request.user if request.user.is_authenticated else None,
                         last_moved_at           = timezone.now() if request.user.is_authenticated else None,
                     )
+                    ops("change_date_ja_split",
+    original_ja_id=job_act.id,
+    new_ja_id=new_job_activity.id,
+    area=str(new_area),
+    from_date=str(original_date),
+    to_date=str(new_date),
+    job_id=str(job_act.job.job_id))
 
                     # ── Re-point allocation to new JobActivity ──
                     if new_allocation:
@@ -6685,6 +6917,12 @@ class AllocationViewSet(viewsets.ModelViewSet):
                             'new_date':      str(new_act_date),
                             'shift_days':    day_delta,
                         })
+                        ops("change_date_cascade_shifted",
+    trigger_ja_id=job_act.id,
+    affected_ja_id=act.id,
+    old_date=str(old_date),
+    new_date=str(new_act_date),
+    shift_days=day_delta)
 
                 else:
                     # Same date — partial allocation move only
@@ -6692,6 +6930,13 @@ class AllocationViewSet(viewsets.ModelViewSet):
                         JobActivity.objects.filter(pk=job_act.pk).update(
                             allocated_area=models.F('allocated_area') - new_area,
                         )
+
+            ops("change_date_done",
+    allocation_id=pk,
+    day_delta=day_delta,
+    new_ja_id=new_job_activity.id if new_job_activity else None,
+    cascaded=len(shifted_activities),
+    warnings=len(warnings))
 
             return Response({
                 'success':             True,
@@ -6705,6 +6950,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
             })
 
         except Exception as e:
+            err("change_date_fail",
+        allocation_id=pk,
+        error=str(e)[:100])
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     
@@ -6748,6 +6996,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'])
     def update_allocation(self, request, pk=None):
+        ctx(flow="update_allocation",
+        allocation_id=pk,
+        cluster_id=str(cluster_id))
         """
         Update an existing allocation
         PATCH /api/allocations/{id}/update_allocation/?cluster_id={cluster_id}
@@ -6806,6 +7057,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 )
                 
                 if not can_allocate:
+                    ops("update_allocation_blocked",
+        allocation_id=pk,
+        reason=message[:80],
+        mukkadam_id=str(mukkadam_id))
                     # ROLLBACK: Restore old values if validation fails
                     old_job_activity.allocated_area += allocation.allocated_area
                     old_job_activity.save()
@@ -6829,6 +7084,10 @@ class AllocationViewSet(viewsets.ModelViewSet):
                     )
                     new_mukkadam_rate = mukkadam_rate_obj.rate_per_acre
                 except MukkadamRate.DoesNotExist:
+                    ops("update_allocation_blocked",
+        allocation_id=pk,
+        reason="mukkadam_rate_missing",
+        mukkadam_id=str(mukkadam_id))
                     # ROLLBACK
                     old_job_activity.allocated_area += allocation.allocated_area
                     old_job_activity.save()
@@ -6850,6 +7109,13 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 allocation.cluster = cluster
                 # farmer_rate stays the same
                 allocation.save()
+                ops("allocation_updated_view",
+    allocation_id=pk,
+    ja_id=old_job_activity.id,
+    new_mukkadam_id=str(mukkadam_id),
+    area=str(allocated_area),
+    date=str(allocated_date),
+    cluster_id=str(cluster_id))
                 
                 # 5) Update job activity with new area
                 old_job_activity.allocated_area += allocated_area
@@ -6882,6 +7148,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
                 return Response(response_data)
                 
         except Mukkadam.DoesNotExist:
+            err("update_allocation_fail",
+        allocation_id=pk,
+        error=str(e)[:100])
             return Response(
                 {'error': 'Mukkadam not found'},
                 status=status.HTTP_404_NOT_FOUND
@@ -7068,6 +7337,9 @@ class AllocationViewSet(viewsets.ModelViewSet):
     #     )
     @action(detail=True, methods=['delete'])
     def delete_allocation(self, request, pk=None):
+        ctx(flow="delete_allocation",
+        allocation_id=pk,
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
         from datetime import timedelta
         from django.db.models import Sum
 
@@ -7075,6 +7347,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
         # ── Rule 5: Block if in-progress ─────────────────────────────────────
         if allocation.work_status == 'in_progress':
+            ops("delete_allocation_blocked",
+        allocation_id=pk, reason="in_progress")
             return Response(
                 {'error': 'Allocation is in-progress and cannot be deleted.'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -7082,6 +7356,8 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
         # ── Rule 5: Block if completed + paid ────────────────────────────────
         if allocation.work_status == 'completed' and allocation.payment_status in ('done', 'settled'):
+            ops("delete_allocation_blocked",
+        allocation_id=pk, reason="completed_and_paid")
             return Response(
                 {'error': 'Allocation is completed and paid — deletion not allowed.'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -7146,6 +7422,13 @@ class AllocationViewSet(viewsets.ModelViewSet):
 
             # ── Delete the allocation ─────────────────────────────────────────
             allocation.delete()
+            ops("allocation_deleted_view",
+    allocation_id=pk,
+    ja_id=job_activity.id,
+    job_id=str(job_activity.job.job_id),
+    mukkadam_id=str(deleted_payload['mukkadam_id']),
+    area=str(deleted_payload['allocated_area']),
+    date=str(deleted_payload['allocated_date']))
 
             # ── Fire custom signal ────────────────────────────────────────────
             from .signals import allocation_deleted
@@ -7704,9 +7987,13 @@ class UserSearchView(APIView):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def add_farmer_plots_to_cluster(request, cluster_id):
+    ctx(flow="add_farmer_plots_to_cluster",
+        cluster_id=str(cluster_id),
+        user=str(request.user.id if request.user.is_authenticated else "anon"))
     try:
         cluster = Cluster.objects.get(id=cluster_id)
     except Cluster.DoesNotExist:
+        ops("add_farmer_plots_cluster_not_found", cluster_id=str(cluster_id))
         return Response({'error': 'Cluster not found'}, status=404)
 
     farmer_id = request.data.get('farmer_id')
@@ -7720,6 +8007,8 @@ def add_farmer_plots_to_cluster(request, cluster_id):
     try:
         farmer = Farmer.objects.get(farmer_id=farmer_id)
     except Farmer.DoesNotExist:
+        ops("add_farmer_plots_farmer_not_found",
+        cluster_id=str(cluster_id), farmer_id=str(farmer_id))
         return Response({'error': 'Farmer not found'}, status=404)
 
     with transaction.atomic():
@@ -7757,8 +8046,18 @@ def add_farmer_plots_to_cluster(request, cluster_id):
             job = Job.objects.get(pk=job_pk)  # pk == job_id
             job.clusters.add(cluster)
             adjust_job_activities_for_cluster(job, cluster)
+            ops("job_activities_adjusted_for_cluster",    # ADD
+    job_id=str(job_pk),
+    cluster_id=str(cluster_id))
             jobs_fixed += 1
-
+    ops("farmer_plots_added_to_cluster",
+    cluster_id=str(cluster_id),
+    cluster_name=cluster.name,
+    farmer_id=str(farmer_id),
+    farmer_name=farmer.farmer_name,
+    plots_added=len(added_plots),
+    jobs_fixed=jobs_fixed,
+    by=str(request.user.id))
     return Response({
         'success': True,
         'farmer_name': farmer.farmer_name,
@@ -7821,9 +8120,13 @@ def search_mukkadams_for_cluster(request, cluster_id):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def add_mukkadam_to_cluster(request, cluster_id):
+    ctx(flow="add_mukkadam_to_cluster",
+        cluster_id=str(cluster_id),
+        mukkadam_id=str(request.data.get('mukkadam_id', '')))
     try:
         cluster = Cluster.objects.get(id=cluster_id)
     except Cluster.DoesNotExist:
+        ops("add_mukkadam_cluster_not_found", cluster_id=str(cluster_id))
         return Response({'error': 'Cluster not found'}, status=404)
 
     mukkadam_id       = request.data.get('mukkadam_id')
@@ -7858,6 +8161,8 @@ def add_mukkadam_to_cluster(request, cluster_id):
     try:
         mukkadam = Mukkadam.objects.get(mukkadam_id=mukkadam_id)
     except Mukkadam.DoesNotExist:
+        ops("add_mukkadam_not_found",
+        cluster_id=str(cluster_id), mukkadam_id=str(mukkadam_id))
         return Response({'error': 'Mukkadam not found'}, status=404)
 
     # Permanent mukkadams can only be in a cluster once
@@ -7865,6 +8170,10 @@ def add_mukkadam_to_cluster(request, cluster_id):
         if ClusterMukkadamAssignment.objects.filter(
             mukkadam=mukkadam, cluster=cluster, is_active=True, mukkadam_type='permanent'
         ).exists():
+            ops("add_mukkadam_blocked_duplicate",
+        cluster_id=str(cluster_id),
+        mukkadam_id=str(mukkadam_id),
+        reason="already_permanent")
             return Response({'error': 'Mukkadam is already permanently assigned to this cluster'}, status=400)
 
     # Updown mukkadams — check date overlap to prevent duplicate periods
@@ -7886,6 +8195,11 @@ def add_mukkadam_to_cluster(request, cluster_id):
                 if ex.updown_mode == 'specific':
                     overlap = set(updown_specific_dates) & set(ex.updown_specific_dates or [])
                     if overlap:
+                        ops("add_mukkadam_blocked_overlap",
+    cluster_id=str(cluster_id),
+    mukkadam_id=str(mukkadam_id),
+    reason="updown_overlap",
+    mode=updown_mode)
                         return Response({
                             'error': f'Overlapping dates already exist: {", ".join(sorted(overlap))}'
                         }, status=400)
@@ -7908,6 +8222,14 @@ def add_mukkadam_to_cluster(request, cluster_id):
         last_modified_by=request.user if request.user.is_authenticated else None,
     
     )
+    ops("mukkadam_added_to_cluster",
+    cluster_id=str(cluster_id),
+    cluster_name=cluster.name,
+    mukkadam_id=str(mukkadam_id),
+    mukkadam_name=mukkadam.mukkadam_name,
+    mukkadam_type=mukkadam_type,
+    transport_price=str(transport_price),
+    updown_mode=str(updown_mode or ""))
 
     if advance_amount is not None:
         assignment.advance_amount = Decimal(str(advance_amount))
@@ -7941,6 +8263,10 @@ from django.db.models import Prefetch, Sum
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def tender_dashboard(request):
+    ctx(flow="tender_dashboard",
+        cluster_id=str(cluster_id or "all"),
+        date=str(selected_date or "today"),
+        filters=str(activity_filters))
     from datetime import date, timedelta
     
     cluster_id     = request.query_params.get('cluster_id')
@@ -8159,6 +8485,11 @@ def tender_dashboard(request):
             'resolved_status':      resolved_status,
         })
 
+
+    ops("tender_dashboard_mukkadams_built",
+    cluster_id=str(cluster_id or "all"),
+    count=len(mukkadams_data),
+    date=str(selected_date or "today"))
     # ============ FARMERS ============
     farmers_qs = Farmer.objects.prefetch_related(
         'clusters',
@@ -8374,6 +8705,10 @@ def tender_dashboard(request):
             'newest_job_date':  str(max((j.created_at for j in all_jobs), default=None)) if all_jobs else None,
         })
 
+    ops("tender_dashboard_farmers_built",
+    cluster_id=str(cluster_id or "all"),
+    count=len(farmers_data),
+    filters=str(activity_filters))
     # ============ SUMMARY STATS ============
     from django.db.models import Sum, Q
 
@@ -8416,6 +8751,14 @@ def tender_dashboard(request):
     total_advance_paid   = booking_stats['total_advance_paid']  or 0
     paid_count           = booking_qs.filter(status='PAID').count()
     partial_paid_count   = booking_qs.filter(status='PARTIALLY_PAID').count()
+
+
+    ops("tender_dashboard_served",
+    cluster_id=str(cluster_id or "all"),
+    mukkadams=len(mukkadams_data),
+    farmers=len(farmers_data),
+    total_jobs=str(jobs_qs.count()),
+    total_acres=str(float(total_acres)))
 
     return Response({
         'summary': {
@@ -8922,6 +9265,7 @@ def record_farmer_payment(request, farmer_id, job_id):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def cluster_payment_dashboard(request, cluster_id):
+    ctx(flow="cluster_payment_dashboard", cluster_id=str(cluster_id))
     from datetime import date, timedelta
     from decimal import Decimal
     from collections import defaultdict
@@ -9001,6 +9345,10 @@ def cluster_payment_dashboard(request, cluster_id):
                     if getattr(p, 'proof_s3_key', None):
                         all_s3_keys.append(p.proof_s3_key)
             except Exception:
+                err("payment_dashboard_payment_fail",
+        cluster_id=str(cluster_id),
+        farmer_id=str(farmer.farmer_id),
+        job_id=str(job.job_id))
                 pass
 
     all_assignments = ClusterMukkadamAssignment.objects.filter(
@@ -9045,6 +9393,9 @@ def cluster_payment_dashboard(request, cluster_id):
             all_s3_keys.append(c.proof_s3_key)
 
     global_proof_map = get_presigned_urls_batch(list(set(all_s3_keys))) if all_s3_keys else {}
+    ops("payment_dashboard_s3_batch",
+    cluster_id=str(cluster_id),
+    keys_count=len(all_s3_keys))
 
     weekly_by_mukkadam          = defaultdict(list)
     settle_payments_by_mukkadam = defaultdict(list)
@@ -9393,6 +9744,11 @@ def cluster_payment_dashboard(request, cluster_id):
             'total_balance':   float(total_balance),
             'jobs':            job_rows,
         })
+        ops("payment_dashboard_farmer_built",
+    cluster_id=str(cluster_id),
+    farmer_id=str(farmer.farmer_id),
+    job_count=len(job_rows),
+    total_balance=str(float(total_balance)))
 
     # ─────────────────────────────────────────────────────────────
     # MUKKADAMS — using pre-fetched data
@@ -9572,12 +9928,15 @@ def cluster_payment_dashboard(request, cluster_id):
                     })
 
         try:
-            from .services.settlement import build_week_ledger
+            from .ervices.settlement import build_week_ledger
             ledger_data    = build_week_ledger(mukkadam, assignment)
             week_ledger    = ledger_data['week_ledger']
             pending_work   = ledger_data['pending_work']
             ledger_summary = ledger_data['summary']
         except Exception:
+            err("payment_dashboard_ledger_fail",
+        cluster_id=str(cluster_id),
+        mukkadam_id=str(mukkadam.mukkadam_id))
             week_ledger    = []
             pending_work   = []
             ledger_summary = {}
@@ -9731,10 +10090,23 @@ def cluster_payment_dashboard(request, cluster_id):
                 'total_paid_out':  float(total_paid_out),
             },
         })
+        ops("payment_dashboard_mukkadam_built",
+    cluster_id=str(cluster_id),
+    mukkadam_id=str(mukkadam.mukkadam_id),
+    settlements=len(settlement_rows),
+    weekly_paid=str(total_weekly_paid),
+    pending=str(float(total_net)))
 
     total_farmer_due   = sum(max(0, f['total_balance']) for f in farmer_data)
     total_mukkadam_due = sum(max(0, m['summary']['pending_payment']) for m in mukkadam_data)
 
+
+    ops("payment_dashboard_served",
+    cluster_id=str(cluster_id),
+    farmers=len(farmer_data),
+    mukkadams=len(mukkadam_data),
+    farmer_due=str(float(total_farmer_due)),
+    mukkadam_due=str(float(total_mukkadam_due)))
     return Response({
         'cluster_id':         cluster_id,
         'farmer_count':       len(farmer_data),
@@ -10061,6 +10433,8 @@ def verify_otp_with_demand(phone_normalized, otp):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def send_start_otp(request):
+    ctx(flow="send_start_otp",
+        allocation_id=str(request.data.get('allocation_id', '')))
     """
     POST /api/attendance/send-start-otp/
     Mukkadam taps "Start Work" in app.
@@ -10094,6 +10468,10 @@ def send_start_otp(request):
 
     ok, err = send_otp_to_phone(farmer_phone)
     if not ok:
+        err("otp_send_fail",
+        allocation_id=str(allocation_id),
+        phone_hint=f"XXXXXX{str(farmer.phone_number)[-4:]}",
+        error=str(err))
         return Response({'error': f'OTP service failed: {err}'}, status=503)
 
     # Store OTP request — phone is FARMER's phone
@@ -10104,6 +10482,11 @@ def send_start_otp(request):
         allocation = allocation,
         otp_type   = 'start',   # ADD otp_type field to MukkadamOTPRequest
     )
+    ops("start_otp_sent",
+    allocation_id=str(allocation_id),
+    mukkadam_name=allocation.mukkadam.mukkadam_name,
+    farmer_name=farmer.farmer_name,
+    phone_hint=f"XXXXXX{str(farmer.phone_number)[-4:]}")
 
     return Response({
         'success':        True,
@@ -10118,6 +10501,8 @@ def send_start_otp(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def verify_start_otp(request):
+    ctx(flow="verify_start_otp",
+        allocation_id=str(request.data.get('allocation_id', '')))
     """
     POST /api/attendance/verify-start-otp/
     Farmer shares OTP → mukkadam enters in app.
@@ -10158,6 +10543,9 @@ def verify_start_otp(request):
 
     ok, err = verify_otp_with_demand(farmer_phone, otp)
     if not ok:
+        ops("start_otp_verify_failed",
+        allocation_id=str(allocation_id),
+        detail=str(err))
         return Response({'error': 'Invalid OTP', 'detail': err}, status=400)
 
     # Mark used
@@ -10170,6 +10558,11 @@ def verify_start_otp(request):
     allocation.work_status       = 'in_progress'
     allocation.status            = 'in_progress'
     allocation.save(update_fields=['actual_start_time', 'actual_crew_size', 'work_status', 'status'])
+    ops("work_started",
+    allocation_id=str(allocation.id),
+    mukkadam_name=allocation.mukkadam.mukkadam_name,
+    start_time=allocation.actual_start_time.isoformat(),
+    crew_size=str(allocation.actual_crew_size))
 
     return Response({
         'success':           True,
@@ -10185,6 +10578,8 @@ def verify_start_otp(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def mark_allocation_complete(request, allocation_id):
+    ctx(flow="mark_allocation_complete",
+        allocation_id=str(allocation_id))
     try:
         allocation = Allocation.objects.select_related(
             'job_activity__activity',
@@ -10220,6 +10615,12 @@ def mark_allocation_complete(request, allocation_id):
             update_fields.append('actual_crew_size')
 
         allocation.save(update_fields=update_fields)
+        ops("allocation_marked_complete",
+    allocation_id=str(allocation_id),
+    mukkadam_name=mukkadam.mukkadam_name if mukkadam else "unknown",
+    actual_area=str(actual_area or ""),
+    actual_crew=str(actual_crew or ""),
+    is_updown=str(bool(updown_assignment)))
 
         # ── Updown check via assignment (mukkadam_type is on assignment, not mukkadam model) ──
         updown_assignment = (
@@ -10244,6 +10645,8 @@ def mark_allocation_complete(request, allocation_id):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def submit_day_end_report(request):
+    ctx(flow="submit_day_end_report",
+        allocation_id=str(request.data.get('allocation_id', '')))
     """
     POST /api/attendance/submit-day-end-report/
     Mukkadam submits end-of-day data + triggers OTP to farmer.
@@ -10291,6 +10694,13 @@ def submit_day_end_report(request):
         'actual_end_time', 'report_submitted', 'report_submitted_at',
         'work_status', 'payment_status', 'status'
     ])
+    ops("day_end_report_submitted",
+    allocation_id=str(allocation_id),
+    mukkadam_name=allocation.mukkadam.mukkadam_name,
+    actual_area=str(actual_area_done),
+    actual_crew=str(actual_crew_size),
+    work_status="completed",
+    payment_status="dispute")
 
     # Send OTP to farmer's phone for end verification
     farmer = allocation.job_activity.job.farmer
@@ -10308,6 +10718,10 @@ def submit_day_end_report(request):
                 otp_type   = 'end',
             )
             otp_sent = True
+        ops("end_otp_sent" if otp_sent else "end_otp_send_skipped",
+allocation_id=str(allocation_id),
+farmer_name=farmer.farmer_name,
+otp_sent=str(otp_sent))
 
     return Response({
         'success':             True,
@@ -10323,6 +10737,8 @@ def submit_day_end_report(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def verify_end_otp(request):
+    ctx(flow="verify_end_otp",
+        allocation_id=str(request.data.get('allocation_id', '')))
     """
     POST /api/attendance/verify-end-otp/
     Farmer shares end-of-day OTP → mukkadam enters → payment_status = done
@@ -10364,6 +10780,9 @@ def verify_end_otp(request):
 
     ok, err = verify_otp_with_demand(farmer_phone, otp)
     if not ok:
+        ops("end_otp_verify_failed",
+        allocation_id=str(allocation_id),
+        detail=str(err))
         return Response({'error': 'Invalid OTP', 'detail': err}, status=400)
 
     # Mark used
@@ -10379,6 +10798,10 @@ def verify_end_otp(request):
         'farmer_agreed', 'farmer_response_at',
         'use_actual_for_settlement', 'payment_status'
     ])
+    ops("farmer_verified_end",
+    allocation_id=str(allocation_id),
+    payment_status="done",
+    area_used=str(float(allocation.actual_area_done or allocation.allocated_area)))
 
     # Trigger settlement recalculation
     try:
@@ -10387,6 +10810,8 @@ def verify_end_otp(request):
         cluster = allocation.cluster
         create_or_update_settlement(allocation.mukkadam, job, cluster)
     except Exception:
+        err("end_otp_settlement_fail",
+        allocation_id=str(allocation_id))
         pass  # Don't fail the response if settlement calc fails
 
     return Response({
@@ -10536,6 +10961,8 @@ from rest_framework import status
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def send_farmer_otp(request):
+    ctx(flow="send_farmer_otp",
+        allocation_id=str(request.data.get('allocation_id', '')))
     """
     BI team resends end-OTP to farmer from the dashboard.
     Uses the exact same flow as submit_day_end_report.
@@ -10561,6 +10988,9 @@ def send_farmer_otp(request):
     # Send OTP using existing function — same as submit_day_end_report
     ok, err = send_otp_to_phone(farmer_phone)
     if not ok:
+        err("farmer_otp_send_fail",
+        allocation_id=str(allocation_id),
+        error=str(err))
         return Response({'error': f'OTP send failed: {err}'}, status=500)
 
     # Create OTP request record — same as submit_day_end_report
@@ -10571,6 +11001,10 @@ def send_farmer_otp(request):
         allocation = allocation,
         otp_type   = 'end',
     )
+    ops("farmer_otp_sent",
+    allocation_id=str(allocation_id),
+    farmer_name=farmer.farmer_name,
+    phone_hint=f"******{farmer_phone[-4:]}")
 
     return Response({
         'success': True,
@@ -10582,6 +11016,8 @@ def send_farmer_otp(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def verify_farmer_otp(request):
+    ctx(flow="verify_farmer_otp",
+        allocation_id=str(request.data.get('allocation_id', '')))
     """
     BI team enters OTP that farmer shared verbally — same verification as verify_end_otp.
     On success: farmer_agreed=True, payment_status=done, triggers settlement.
@@ -10619,6 +11055,9 @@ def verify_farmer_otp(request):
     # Verify using existing function — same as verify_end_otp
     ok, err = verify_otp_with_demand(farmer_phone, otp)
     if not ok:
+        ops("farmer_otp_verify_failed",
+        allocation_id=str(allocation_id),
+        detail=str(err))
         return Response({'error': 'Invalid OTP', 'detail': err}, status=400)
 
     # Mark OTP used
@@ -10634,6 +11073,10 @@ def verify_farmer_otp(request):
         'farmer_agreed', 'farmer_response_at',
         'use_actual_for_settlement', 'payment_status',
     ])
+    ops("farmer_otp_verified",
+    allocation_id=str(allocation_id),
+    payment_status="done",
+    area_used=str(float(allocation.actual_area_done or allocation.allocated_area)))
 
     # Trigger settlement recalculation — same as verify_end_otp
     try:
@@ -10642,6 +11085,8 @@ def verify_farmer_otp(request):
         cluster = allocation.cluster
         create_or_update_settlement(allocation.mukkadam, job, cluster)
     except Exception:
+        err("farmer_otp_settlement_fail",
+        allocation_id=str(allocation_id))
         pass
 
     return Response({
@@ -10651,6 +11096,8 @@ def verify_farmer_otp(request):
         'area_used':      float(allocation.actual_area_done or allocation.allocated_area),
         'message':        'Farmer verified. Payment status marked as done.',
     })
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def save_payment_proof(request):
@@ -10874,6 +11321,9 @@ class MakeCallViews(APIView):
 
     
     def post(self, request):
+        ctx(flow="make_call",
+        user_id=str(request.data.get('user_id', 'anon')),
+        purpose=str(request.data.get('purpose', 'web_dialpad')))
         to_number = request.data.get('to_number')
         from_number = request.data.get('from_number') or self.CENTRAL_PHONE
 
@@ -10907,6 +11357,10 @@ class MakeCallViews(APIView):
 
             
             if not call_result['success']:
+                err("exotel_call_fail",
+        to_number=to_number,
+        user_id=str(user_id),
+        error=str(call_result.get('error', '')))
                 return Response({
                     'success': False,
                     'message': 'Failed to initiate call',
@@ -10928,6 +11382,13 @@ class MakeCallViews(APIView):
             }
             
             call = FarmerCall.objects.create(**call_data)
+            ops("call_initiated",
+    call_sid=call_result['call_sid'],
+    call_id=str(call.id),
+    to_number=to_number,
+    from_number=from_number,
+    purpose=purpose,
+    user_id=str(user_id or 'anon'))
             
             logger.info(f"✅ Web dialpad call by user {user_id}: {call.call_sid} → {to_number}")
             logger.info(f"   S3 Key stored: {call.s3_key}")
@@ -10943,6 +11404,10 @@ class MakeCallViews(APIView):
             
         except Exception as e:
             logger.error(f"❌ Error making call: {str(e)}", exc_info=True)
+            err("make_call_fail",
+        to_number=to_number,
+        user_id=str(user_id or 'anon'),
+        error=str(e)[:100])
             return Response({
                 'success': False,
                 'message': str(e)
@@ -11212,361 +11677,3 @@ def _get_cross_job_deductions(mukkadam, assignment, current_job):
     weekly_to_deduct  = max(Decimal('0'), total_weekly - weekly_used)
 
     return advance_to_deduct, weekly_to_deduct, credit_prev, deposit_prev
-
-# views.py
-from django.views.decorators.csrf import csrf_exempt
-from django.http import JsonResponse
-from django.conf import settings
-import json, hmac, hashlib
-
-# ============================================================================
-# GOOGLE SHEETS → DJANGO WEBHOOK
-# ============================================================================
-# Add this to your views.py (REPLACE the old sync_from_sheet view)
-# Also add to urls.py:
-#     path('api/sync-from-sheet/', sync_from_sheet, name='sync_from_sheet'),
-# ============================================================================
-
-import json
-import logging
-from django.views.decorators.csrf import csrf_exempt
-from django.http import JsonResponse
-from django.conf import settings
-
-logger = logging.getLogger(__name__)
-
-
-@csrf_exempt
-def sync_from_sheet(request):
-    """
-    Webhook endpoint called by Google Apps Script when a cell is edited.
-
-    Expects POST with JSON body:
-    {
-        "secret": "your_shared_secret",
-        "event": "edit" | "delete",
-        "job_activity_id": "123",
-        "column": "Our date",
-        "old_value": "2025-06-01",
-        "new_value": "2025-06-05",
-        "edited_by": "user@example.com"
-    }
-
-    For row deletion:
-    {
-        "secret": "your_shared_secret",
-        "event": "delete",
-        "job_activity_id": "123",
-        "edited_by": "user@example.com"
-    }
-
-    For bulk edits (multiple columns changed at once):
-    {
-        "secret": "your_shared_secret",
-        "event": "bulk_edit",
-        "job_activity_id": "123",
-        "changes": {
-            "Our date": "2025-06-05",
-            "Mukadam team": "Raju, Shyam"
-        },
-        "edited_by": "user@example.com"
-    }
-    """
-    if request.method != "POST":
-        return JsonResponse({"error": "POST only"}, status=405)
-
-    # ── Auth ──
-    try:
-        data = json.loads(request.body)
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON"}, status=400)
-
-    
-    # ── Route by event type ──
-    event = data.get("event", "edit")
-
-    try:
-        from .sheets_sync import apply_sheet_edit
-
-        if event == "delete":
-            payload = {
-                "job_activity_id": data.get("job_activity_id"),
-                "column": "_DELETE_",
-                "new_value": "",
-                "old_value": "",
-                "edited_by": data.get("edited_by", "sheet"),
-            }
-            ok, msg = apply_sheet_edit(payload)
-            return JsonResponse({"success": ok, "message": msg},
-                                status=200 if ok else 400)
-
-        elif event == "bulk_edit":
-            changes = data.get("changes", {})
-            results = []
-            for col, new_val in changes.items():
-                payload = {
-                    "job_activity_id": data.get("job_activity_id"),
-                    "column": col,
-                    "new_value": new_val,
-                    "old_value": "",
-                    "edited_by": data.get("edited_by", "sheet"),
-                }
-                ok, msg = apply_sheet_edit(payload)
-                results.append({"column": col, "success": ok, "message": msg})
-            all_ok = all(r["success"] for r in results)
-            return JsonResponse({"success": all_ok, "results": results},
-                                status=200 if all_ok else 207)
-        elif event == "split":
-            # new_value = split_acres, split_date is a separate field
-            payload = {
-                "event": "split",
-                "job_activity_id": data.get("job_activity_id"),
-                "column": "Acre",           # for logging clarity
-                "new_value": data.get("split_acres", ""),
-                "old_value": "",
-                "split_date": data.get("split_date", ""),
-                "edited_by": data.get("edited_by", "sheet"),
-            }
-            ok, msg = apply_sheet_edit(payload)
-            return JsonResponse({"success": ok, "message": msg},
-                                status=200 if ok else 400)
-        else:  # single "edit"
-            payload = {
-                "job_activity_id": data.get("job_activity_id"),
-                "column": data.get("column", ""),
-                "new_value": data.get("new_value", ""),
-                "old_value": data.get("old_value", ""),
-                "edited_by": data.get("edited_by", "sheet"),
-            }
-            ok, msg = apply_sheet_edit(payload)
-            return JsonResponse({"success": ok, "message": msg},
-                                status=200 if ok else 400)
-
-    except Exception as e:
-        logger.error(f"[Sheet→DB webhook] Unhandled error: {e}", exc_info=True)
-        return JsonResponse({"error": str(e)}, status=500)
-
-
-def _update_from_sheet(row):
-    """
-    Sheet can update: Our date, Status, notes on JobActivity.
-    Looks up by _job_activity_id (hidden column O in sheet).
-    """
-    from .models import JobActivity
-    import threading
-
-    ja_id = row.get("_job_activity_id")
-    if not ja_id:
-        logger.warning("[Webhook] No _job_activity_id in row, skipping")
-        return
-
-    try:
-        ja = JobActivity.objects.get(pk=ja_id)
-    except JobActivity.DoesNotExist:
-        logger.warning(f"[Webhook] JobActivity {ja_id} not found")
-        return
-
-    updated_fields = []
-
-    # Our date → scheduled_date
-    our_date = row.get("Our date", "").strip()
-    if our_date:
-        from datetime import date
-        try:
-            ja.scheduled_date = date.fromisoformat(our_date)
-            updated_fields.append("scheduled_date")
-        except ValueError:
-            pass
-
-    if updated_fields:
-        # Set flag to prevent signal loop
-        import tender.signals as sig
-        sig._syncing.active = True
-        try:
-            ja.save(update_fields=updated_fields + ["updated_at"])
-        finally:
-            sig._syncing.active = False
-
-        logger.info(f"[Webhook] Updated JA {ja_id} fields: {updated_fields}")
-def _update_job_from_sheet(row):
-    from .models import Job
-    job_id = row.get("job_id")
-    if not job_id:
-        return
-    Job.objects.filter(job_id=job_id).update(
-        status=row.get("status", "pending"),
-        priority=row.get("priority", "MEDIUM"),
-        payment_status=row.get("payment_status", "pending"),
-    )
-
-def _update_farmer_from_sheet(row):
-    from .models import Farmer
-    Farmer.objects.filter(farmer_id=row.get("farmer_id")).update(
-        farmer_name=row.get("farmer_name", ""),
-        phone_number=row.get("phone_number", ""),
-    )
-
-
-@csrf_exempt
-def split_from_sheet(request):
-    """
-    Called by Apps Script to split a JobActivity into two.
-    Delegates entirely to the existing JobActivityViewSet.move() logic.
-
-    POST body:
-    {
-        "job_activity_id": "42",
-        "split_acres":     "1",
-        "split_date":      "2025-07-02",
-        "reason":          "Split via sheet by user@gmail.com",
-        "edited_by":       "user@gmail.com"
-    }
-    """
-    if request.method != "POST":
-        return JsonResponse({"error": "POST only"}, status=405)
-
-    secret = request.headers.get("X-Webhook-Secret", "")
-    if secret != settings.SHEETS_WEBHOOK_SECRET:
-        return JsonResponse({"error": "Unauthorized"}, status=403)
-
-    try:
-        data = json.loads(request.body)
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON"}, status=400)
-
-    ja_id       = data.get("job_activity_id")
-    split_acres = data.get("split_acres", "")
-    split_date  = data.get("split_date", "")
-    edited_by   = data.get("edited_by", "sheet")
-    reason      = data.get("reason") or f"Split via Google Sheet by {edited_by}"
-
-    if not ja_id or not split_acres or not split_date:
-        return JsonResponse({"error": "job_activity_id, split_acres and split_date are required"}, status=400)
-
-    # ── Reuse the move() logic directly ──────────────────────────────────────
-    from .models import JobActivity
-    from decimal import Decimal
-    from datetime import date
-    from django.db import transaction
-    from django.utils import timezone
-
-    try:
-        activity = (
-            JobActivity.objects
-            .select_related("job__farmer", "plot", "activity")
-            .prefetch_related("job__clusters")
-            .get(pk=int(ja_id))
-        )
-    except (JobActivity.DoesNotExist, ValueError):
-        return JsonResponse({"error": f"JobActivity {ja_id} not found"}, status=404)
-
-    try:
-        area = Decimal(str(split_acres).strip())
-    except Exception:
-        return JsonResponse({"error": f"Invalid split_acres: {split_acres}"}, status=400)
-
-    if area <= 0:
-        return JsonResponse({"error": "split_acres must be > 0"}, status=400)
-
-    if area >= activity.total_area:
-        return JsonResponse({
-            "error": f"split_acres ({area}) must be less than total_area ({activity.total_area})"
-        }, status=400)
-
-    try:
-        new_date_obj = date.fromisoformat(str(split_date).strip())
-    except ValueError:
-        return JsonResponse({"error": f"Invalid split_date: {split_date}. Use YYYY-MM-DD"}, status=400)
-
-    # ── Build a fake request object the move() helper can work with ──────────
-    # Instead of duplicating all the move() code, we call it via a mock request.
-    # Simpler: just inline the core logic (no cascade needed from sheet split).
-
-    original_date    = activity.scheduled_date
-    parent_new_area  = activity.total_area - area
-
-    try:
-        with transaction.atomic():
-            # Shrink parent
-            old_total            = activity.total_area
-            activity.total_area  = parent_new_area
-            activity.move_reason = reason
-            activity.is_manually_moved = True
-            activity.save()
-
-            # Create child
-            from .models import ActivityLogTender
-            child = JobActivity.objects.create(
-                job                     = activity.job,
-                activity                = activity.activity,
-                plot                    = activity.plot,
-                is_strict               = activity.is_strict,
-                total_area              = area,
-                allocated_area          = Decimal('0'),
-                remaining_area          = area,
-                scheduled_date          = new_date_obj,
-                original_scheduled_date = activity.original_scheduled_date or original_date,
-                original_gap_days       = activity.original_gap_days,
-                rate_per_acre           = activity.rate_per_acre,
-                transport_cost          = activity.transport_cost,
-                other_cost              = activity.other_cost,
-                estimated_workers       = max(1, int(float(area) * 10)),
-                location                = activity.location,
-                is_manually_moved       = True,
-                moved_from_activity     = activity,
-                source                  = 'manual',
-                original_source         = activity.original_source,
-                move_reason             = reason,
-                api_activity_id         = activity.api_activity_id,
-            )
-
-            # Log both
-            ActivityLogTender.objects.create(
-                action       = 'JOB_ACTIVITY_UPDATED',
-                job          = activity.job,
-                job_activity = activity,
-                performed_by = None,
-                details      = {
-                    'event':         'split_source_shrunk',
-                    'description':   f'Shrunk {old_total} → {parent_new_area} ac. {area} ac split to {split_date}.',
-                    'split_to_date': split_date,
-                    'edited_by':     edited_by,
-                    'move_reason':   reason,
-                },
-            )
-            ActivityLogTender.objects.create(
-                action       = 'JOB_ACTIVITY_CREATED',
-                job          = child.job,
-                job_activity = child,
-                performed_by = None,
-                details      = {
-                    'event':              'split_activity_created',
-                    'description':        f'{area} ac on {split_date} split from JA#{activity.pk}.',
-                    'source_activity_id': activity.pk,
-                    'edited_by':          edited_by,
-                    'move_reason':        reason,
-                },
-            )
-
-        # Sync both rows to sheet in background
-        try:
-            import threading
-            from .sheets_sync import upsert_job_activity_to_sheet
-            threading.Thread(target=upsert_job_activity_to_sheet, args=(activity.pk,), daemon=True).start()
-            threading.Thread(target=upsert_job_activity_to_sheet, args=(child.pk,),    daemon=True).start()
-        except Exception as e:
-            logger.warning(f"[split_from_sheet] sheet sync thread error: {e}")
-
-        return JsonResponse({
-            "success":           True,
-            "message":           f"{area} ac split to {split_date}. Parent JA#{activity.pk} now {parent_new_area} ac.",
-            "parent_ja_id":      activity.pk,
-            "parent_area":       float(parent_new_area),
-            "child_ja_id":       child.pk,
-            "child_area":        float(area),
-            "child_date":        split_date,
-        })
-
-    except Exception as e:
-        logger.error(f"[split_from_sheet] Error: {e}", exc_info=True)
-        return JsonResponse({"error": str(e)}, status=500)

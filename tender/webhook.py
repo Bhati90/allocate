@@ -38,7 +38,7 @@ from tender.models import (
     Farmer, Job, Plot, JobActivity, JobBooking,
     FarmerPayment, Cluster, ActivityCatalog, WebhookLog, Mukkadam
 )
-
+from .nr import ops, err, ctx
 logger = logging.getLogger(__name__)
 
 FARMER_API_BASE_URL = "https://demand.bharatintelligence.ai/fir"
@@ -61,6 +61,9 @@ def fetch_farmer_details(farmer_id: str):
         return response.json(), None
     except requests.RequestException as e:
         logger.error(f"Failed to fetch farmer {farmer_id}: {str(e)}")
+        err("farmer_api_fail", farmer_id=farmer_id,
+            status=getattr(e.response, "status_code", None))   # ADD
+        ops("farmer_api_down_continue", farmer_id=farmer_id)   # ADD
         return None, str(e)
 
 
@@ -108,6 +111,8 @@ def sync_farmer(farmer_id: str, farmer_details: dict, webhook_data: dict,
         farmer_id=str(farmer_id),
         defaults=defaults
     )
+    ops("farmer_sync", farmer_id=str(farmer_id),
+    action="created" if created else "updated")  # ADD THIS
 
     # ✅ Only sync the specific plot from the job, not all plots
     if farmer_details and 'plots' in farmer_details and target_plot_code:
@@ -238,48 +243,10 @@ def sync_job(job_id: str, farmer: Farmer, webhook_data: dict,
         job_id=str(job_id),
         defaults=defaults
     )
+    ops("job_sync", job_id=str(job_id), action="created" if created else "updated",
+    booking_type=booking_type, farmer_id=str(farmer.farmer_id))  # ADD THIS
+
     return job, created
-def get_scheduled_date_for_activity(activity_catalog, job, pruning_date):
-    from datetime import timedelta
-    from .models import ClusterActivityScheduleRule, ActivityScheduleRule
-
-    if not pruning_date:
-        logger.warning(f"No pruning_date passed for '{activity_catalog.name}'")
-        return None
-
-    gap_days = None
-    clusters = job.clusters.all()
-
-    # 1. Cluster-specific
-    if clusters.exists():
-        cluster_rule = ClusterActivityScheduleRule.objects.filter(
-            cluster__in=clusters,
-            activity=activity_catalog
-        ).first()
-        if cluster_rule:
-            gap_days = cluster_rule.gap_days
-            logger.info(f"'{activity_catalog.name}': cluster rule → {gap_days} days")
-        else:
-            logger.info(f"'{activity_catalog.name}': no cluster rule found for clusters {[c.name for c in clusters]}")
-
-    # 2. Global
-    if gap_days is None:
-        try:
-            global_rule = ActivityScheduleRule.objects.get(activity=activity_catalog)
-            gap_days = global_rule.gap_days
-            logger.info(f"'{activity_catalog.name}': global rule → {gap_days} days")
-        except ActivityScheduleRule.DoesNotExist:
-            logger.warning(f"'{activity_catalog.name}': no global ActivityScheduleRule found")
-
-    # 3. Fallback
-    if gap_days is None:
-        gap_days = activity_catalog.default_gap_days or 3
-        logger.info(f"'{activity_catalog.name}': fallback default_gap_days → {gap_days} days")
-
-    result = pruning_date + timedelta(days=gap_days)
-    logger.info(f"'{activity_catalog.name}': {pruning_date} + {gap_days}d = {result}")
-    return result
-
 
 
 # ALLOCATION_API_BASE_URL = "http://localhost:8000"  # your other backend
@@ -288,92 +255,6 @@ ALLOCATION_API_BASE_URL = "https://supply.bharatintelligence.ai"
 ALLOCATION_API_TOKEN = "Token 55d78dc15410726cbf90b3350690937f4e85ddf8"
 # ALLOCATION_API_TOKEN = "Token b5920d610d85bff62bb0ab70f971ed6a44eb1b8c"
 from tender.models import Mukkadam, MukkadamActivityRate, ActivityCatalog
-
-def sync_tender_mukkadams():
-    try:
-        response = requests.get(
-            f"{ALLOCATION_API_BASE_URL}/api/mukkadam/?is_tender_mukkadam=true",
-            timeout=15
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        mukkadams_list = data if isinstance(data, list) else data.get('results', data.get('data', []))
-        
-        for m in mukkadams_list:
-            mukkadam_id = m.get('id')
-            if not mukkadam_id:
-                continue
-            
-            mukkadam, _ = Mukkadam.objects.update_or_create(
-                mukkadam_id=int(mukkadam_id),
-                defaults={
-                    'mukkadam_name': m.get('mukkadam_name', ''),
-                    'mobile_numbers': m.get('mobile_numbers', ''),
-                    'crew_size': int(m.get('crew_size') or 0),
-                    'max_crew_capacity': int(m.get('max_crew_capacity') or 0),
-                    'has_smartphone': m.get('has_smartphone', 'no'),
-                    'work_mode': m.get('work_mode', ''),
-                    'start_date': m.get('start_date') or None,
-                    'end_date': m.get('end_date') or None,
-                    'state': m.get('state', ''),
-                    'state_code': m.get('state_code', ''),
-                    'district': m.get('district', ''),
-                    'district_code': m.get('district_code', ''),
-                    'taluka': m.get('taluka', ''),
-                    'taluka_code': m.get('taluka_code', ''),
-                    'village': m.get('village', ''),
-                    'village_code': m.get('village_code', ''),
-                    'tender_activities': m.get('tender_activities', {}),
-                    'rate_card': m.get('rate_card', {}),
-                    'api_raw_data': m,
-                }
-            )
-
-            # ✅ Sync activity_rates from tender_activities JSON
-            tender_activities = m.get('tender_activities', {})
-            activities_list = tender_activities.get('activities', [])
-
-            for act_data in activities_list:
-                name = (act_data.get('name') or '').strip()
-                price = act_data.get('price') or 0
-
-                if not name:  # skip empty entries
-                    continue
-
-                try:
-                    price = Decimal(str(price))
-                except Exception:
-                    price = Decimal('0')
-
-                # Get or create activity catalog entry
-                activity_catalog, _ = ActivityCatalog.objects.get_or_create(
-                    name=name,
-                    defaults={
-                        'source': 'webhook',
-                        'default_rate_per_acre': price,
-                        'estimated_workers_per_acre': 10,
-                        'default_gap_days': 3,
-                    }
-                )
-
-                # ✅ Create or update rate record
-                MukkadamActivityRate.objects.update_or_create(
-                    mukkadam=mukkadam,
-                    activity=activity_catalog,
-                    defaults={
-                        'rate_per_acre': price,
-                        'productivity_per_worker': Decimal('0.15'),  # default
-                    }
-                )
-
-            logger.info(f"Synced mukkadam {mukkadam_id} with {len([a for a in activities_list if a.get('name','').strip()])} activity rates")
-
-    except Exception as e:
-        logger.error(f"Failed to sync mukkadams: {str(e)}")
-# ============================================================
-# MAIN WEBHOOK VIEW
-# ============================================================
 
 
 def _compute_scheduled_date(activity_catalog, job_clusters, plot, act_data, today):
@@ -566,7 +447,12 @@ def _sync_existing_job_activities(job, activities_data):
                 existing.subtotal = existing.total_price + existing.transport_cost + existing.other_cost
                 update_fields.append('subtotal')
                 existing.save(update_fields=update_fields)
+                ops("activity_updated", job_id=str(job.job_id),
+        api_id=api_act_id, fields=str(update_fields))  # KEEP only here
+                ops("activity_updated", job_id=str(job.job_id),           # ADD
+                    api_id=api_act_id)                                    # ADD
                 logger.info(f"[ACTIVITY SYNC] Updated price fields for api_id={api_act_id} fields={update_fields}")
+                      # ADD
             continue
 
         # ── Re-create if is_lost ───────────────────────────────────
@@ -631,6 +517,8 @@ def _sync_existing_job_activities(job, activities_data):
             )
             ja._sheet_sync_index = i
             ja.save()
+            ops("activity_created", job_id=str(job.job_id),           # ADD
+                api_id=api_act_id, activity=activity_name)            # ADD
             logger.info(f"[ACTIVITY SYNC] Created api_id={api_act_id} — {activity_name} plot={plot_code} date={scheduled_date}")
         except Exception as e:
             logger.error(f"[ACTIVITY SYNC] Failed to create {api_act_id}: {e}")
@@ -856,6 +744,10 @@ def send_farmer_bill_to_webhook(request):
             webhook_booking_status = webhook_booking_status,
             webhook_success        = webhook_success,
         )
+        ops("farmer_bill_sent", farmer_id=farmer.get('id'),
+    job_id=job.get('id'), activity=activity_name,
+    webhook_success=str(webhook_success),
+    balance_due=str(bill.get('balance_due_now')))  # ADD THIS
 
         return Response({
             'success':         True,
@@ -868,6 +760,8 @@ def send_farmer_bill_to_webhook(request):
 
     except Exception as e:
         logger.error(f"Webhook error: {e}")
+        err("farmer_bill_webhook_fail", farmer_id=farmer.get('id'),
+        job_id=job.get('id'))  # ADD THIS
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -964,6 +858,8 @@ def farmer_payment_webhook(request):
         ).exists()
 
         if already_exists:
+            ops("farmer_payment_duplicate", booking_id=booking_id,
+        amount=str(amount))  # ADD THIS
             log.status = 'duplicate'
             log.save()
             return Response({
@@ -985,7 +881,9 @@ def farmer_payment_webhook(request):
             paid_at    = paid_at or datetime.now(),
             paid_status = True,
         )
-
+        ops("farmer_payment_recorded", booking_id=booking_id,
+    amount=str(amount), mode=mode,
+    booking_status=booking.status)  # ADD THIS
         # ── Update JobBooking status ──────────────────────────
         all_payments = FarmerPayment.objects.filter(booking=booking, paid_status=True)
         total_paid   = sum(p.amount for p in all_payments)
@@ -1053,6 +951,7 @@ def farmer_payment_webhook(request):
         }, status=200)
 
     except Exception as e:
+        err("farmer_payment_webhook_fail", booking_id=booking_id)  # ADD THIS
         logger.error(f"farmer_payment_webhook error: {e}")
         if log:
             log.status = 'failed'
@@ -1230,19 +1129,6 @@ FARMER_API_TOKEN = "e8fa8310c9af344ca22ec6bd23960d609b09c704"
 # HELPERS
 # ============================================================
 
-def fetch_farmer_details(farmer_id: str):
-    """Fetch farmer details from external API"""
-    try:
-        response = requests.get(
-            f"{FARMER_API_BASE_URL}/api/get_farmer_details/{farmer_id}/",
-            headers={"Authorization": f"Token {FARMER_API_TOKEN}"},
-            timeout=10
-        )
-        response.raise_for_status()
-        return response.json(), None
-    except requests.RequestException as e:
-        logger.error(f"Failed to fetch farmer {farmer_id}: {str(e)}")
-        return None, str(e)
 
 
 def get_or_create_activity_catalog(activity_name: str):
@@ -1289,6 +1175,8 @@ def sync_farmer(farmer_id: str, farmer_details: dict, webhook_data: dict,
         farmer_id=str(farmer_id),
         defaults=defaults
     )
+    ops("farmer_sync", farmer_id=str(farmer_id),
+    action="created" if created else "updated")  # ADD THIS
 
     # ✅ Only sync the specific plot from the job, not all plots
     if farmer_details and 'plots' in farmer_details and target_plot_code:
@@ -1338,6 +1226,10 @@ def get_or_create_plot(plot_code: str, farmer: Farmer, activity_area: float,
             f"Plot {plot_code} belongs to farmer {plot.farmer_id}, "
             f"but webhook sent farmer {farmer.farmer_id}. Keeping original."
         )
+        ops("plot_owner_conflict_kept",                         # ADD
+        plot_code=plot_code,                                # ADD
+        existing_farmer=plot.farmer_id,                    # ADD
+        incoming_farmer=farmer.farmer_id)   
 
     # ✅ Update crop info if missing
     if not created and crop_name and not plot.crop_name:
@@ -1389,6 +1281,8 @@ def sync_booking(job: Job, booking_data: dict):
 
         if changed_fields:
             booking.save(update_fields=changed_fields)
+            ops("booking_updated", booking_id=str(booking_id),
+    fields=str(changed_fields)) 
             logger.info(f"Booking {booking_id} updated: {changed_fields}")
         else:
             logger.info(f"Booking {booking_id} unchanged — skipped")
@@ -1403,6 +1297,8 @@ def sync_booking(job: Job, booking_data: dict):
             balance=balance,
             assignee_number=booking_data.get('assignee_number', '') or '',
         )
+        ops("booking_created", booking_id=str(booking_id), job_id=str(job.job_id),
+    status=status, total=str(total_amount))  # ADD THIS
         logger.info(f"Booking {booking_id} created for job {job.job_id}")
 
     # ✅ Payments — only create new ones
@@ -1444,9 +1340,14 @@ def get_scheduled_date_for_activity(activity_catalog, job, pruning_date):
 
     if not pruning_date:
         logger.warning(f"No pruning_date passed for '{activity_catalog.name}'")
+        ops("schedule_rule", rule="no_pruning_date",            # ADD
+        activity=activity_catalog.name, job_id=str(job.job_id))  # ADD
         return None
 
-    gap_days = None
+    gap_days = cluster_rule.gap_days
+    ops("schedule_rule", rule="cluster",                   # ADD
+        activity=activity_catalog.name, gap=gap_days,     # ADD
+        cluster=clusters[0].name) 
     clusters = job.clusters.all()
 
     # 1. Cluster-specific
@@ -1456,7 +1357,10 @@ def get_scheduled_date_for_activity(activity_catalog, job, pruning_date):
             activity=activity_catalog
         ).first()
         if cluster_rule:
-            gap_days = cluster_rule.gap_days
+            gap_days = global_rule.gap_days
+            ops("schedule_rule", rule="cluster",
+                activity=activity_catalog.name, gap=gap_days,
+                cluster=list(clusters)[0].name)  # ADD THIS HERE
             logger.info(f"'{activity_catalog.name}': cluster rule → {gap_days} days")
         else:
             logger.info(f"'{activity_catalog.name}': no cluster rule found for clusters {[c.name for c in clusters]}")
@@ -1465,7 +1369,9 @@ def get_scheduled_date_for_activity(activity_catalog, job, pruning_date):
     if gap_days is None:
         try:
             global_rule = ActivityScheduleRule.objects.get(activity=activity_catalog)
-            gap_days = global_rule.gap_days
+            gap_days = activity_catalog.default_gap_days or 3
+            ops("schedule_rule", rule="global",
+                activity=activity_catalog.name, gap=gap_days)  
             logger.info(f"'{activity_catalog.name}': global rule → {gap_days} days")
         except ActivityScheduleRule.DoesNotExist:
             logger.warning(f"'{activity_catalog.name}': no global ActivityScheduleRule found")
@@ -1473,6 +1379,8 @@ def get_scheduled_date_for_activity(activity_catalog, job, pruning_date):
     # 3. Fallback
     if gap_days is None:
         gap_days = activity_catalog.default_gap_days or 3
+        ops("schedule_rule", rule="catalog_default",
+            activity=activity_catalog.name, gap=gap_days) 
         logger.info(f"'{activity_catalog.name}': fallback default_gap_days → {gap_days} days")
 
     result = pruning_date + timedelta(days=gap_days)
@@ -1539,6 +1447,7 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
 
                 if not activity_name:
                     logger.warning(f"Skipping activity with no name: {activity_data}")
+                    err("activity_create_fail", job_id=str(job.job_id),api_id=api_activity_id, activity=activity_name)  # ADD THIS
                     failed += 1
                     continue
 
@@ -1609,6 +1518,7 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
                             else:
                                 scheduled_date = parse_date(str(raw_datetime))
                         except Exception as e:
+                            
                             logger.warning(f"Could not parse pruning date: {e}")
 
                     # ✅ Save pruning_date on the plot itself
@@ -1682,6 +1592,12 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
                         for field, value in activity_defaults.items():
                             setattr(ja, field, value)
                         ja.save()
+                        
+                        ops("activity_synced", job_id=str(job.job_id),
+                            api_id=api_activity_id, activity=display_name,
+                            action="updated", plot=plot_code)  # ADD THIS
+                        
+                        
                     logger.info(f"Updated activity {api_activity_id} ('{display_name}') plot={plot_code} for job {job.job_id}")
                 else:
                     ja = JobActivity(
@@ -1691,12 +1607,17 @@ def sync_activities(job, farmer, activities_data, log_data, job_plot=None):
                     )
                     ja._sheet_sync_index = i   # i is the loop index (enumerate)
                     ja.save()
+                    ops("activity_synced", job_id=str(job.job_id),
+    api_id=api_activity_id, activity=display_name,
+    action="created", plot=plot_code)  # ADD THIS
                     logger.info(f"Created activity {api_activity_id} ('{display_name}') plot={plot_code} for job {job.job_id}")
 
                 processed += 1
 
             except Exception as e:
                 logger.error(f"Failed to process activity {activity_data}: {str(e)}", exc_info=True)
+                err("activity_sync_fail", job_id=str(job.job_id),
+        activity=activity_data.get('activity_name',''))  # ADD THIS
                 failed += 1
 
     log_data['activities_processed'] += processed
@@ -1751,6 +1672,8 @@ def sync_tender_mukkadams():
                     'api_raw_data': m,
                 }
             )
+            ops("mukkadam_synced", mukkadam_id=str(mukkadam_id),
+    activity_count=len([a for a in activities_list if a.get('name','').strip()]))  # ADD THIS
 
             # ✅ Sync activity_rates from tender_activities JSON
             tender_activities = m.get('tender_activities', {})
@@ -1790,10 +1713,14 @@ def sync_tender_mukkadams():
                 )
 
             logger.info(f"Synced mukkadam {mukkadam_id} with {len([a for a in activities_list if a.get('name','').strip()])} activity rates")
+            ops("mukkadam_sync_done", count=len(mukkadams_list))   # ADD — after the loop
 
     except Exception as e:
         logger.error(f"Failed to sync mukkadams: {str(e)}")
-# ============================================================
+        err("mukkadam_sync_fail", error=str(e)) 
+            
+        
+# ==========================================get_sch==================
 # MAIN WEBHOOK VIEW
 # ============================================================
 
@@ -1832,6 +1759,7 @@ def booking_webhook(request):
     print("RAW DATA:", webhook_data)
 
     job_id          = str(webhook_data.get('id', ''))
+    ctx(flow="booking_webhook", job_id=job_id)
     booking_data    = webhook_data.get('booking') or {}
     activities_data = webhook_data.get('activities') or []
 
@@ -1893,6 +1821,7 @@ def booking_webhook(request):
 
             if update_fields:
                 job.save(update_fields=update_fields)
+                ops("job_updated", job_id=job_id, fields=str(update_fields))  # ADD THIS
                 logger.info(f"Job {job_id} updated fields: {update_fields}")
 
             # 4. Sync plot-level crop/variety if activities carry that info
@@ -1906,6 +1835,7 @@ def booking_webhook(request):
 
     except Job.DoesNotExist:
         # ... your existing new-job creation flow unchanged ...
+        
         # ── New job → full create ────────────────────────────
         log_data = {
             'webhook_data': webhook_data,
@@ -1969,6 +1899,9 @@ def booking_webhook(request):
                     activities_data[0].get('acres', 0) if activities_data else 0,
                     crop_name=crop_name, variety=variety,
                 )
+                ops("plot_sync", plot_code=plot_code,
+    action="created" if created else "found",
+    farmer_id=str(farmer.farmer_id))  # ADD THIS
                 if created:
                     log_data['plots_created'] += 1
 
@@ -1998,6 +1931,9 @@ def booking_webhook(request):
             
         log_data['status'] = 'success' if log_data['activities_failed'] == 0 else 'partial'
         WebhookLog.objects.create(**log_data)
+        ops("job_created", job_id=job_id, farmer_id=farmer_id,
+    plot_code=plot_code, activities=log_data['activities_processed'],
+    cluster_matched=log_data['cluster_matched'])  # ADD THIS
 
         return JsonResponse({
             'status': 'success',
@@ -2008,6 +1944,7 @@ def booking_webhook(request):
 
     except Exception as e:
         logger.error(f"Webhook failed: {e}", exc_info=True)
+        err("booking_webhook_fail", job_id=job_id)  # ADD THIS
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
 
@@ -2015,6 +1952,7 @@ def booking_webhook(request):
 def sync_webhook(request):
     webhook_data = request.data
     job_id = str(webhook_data.get('id', ''))
+    ctx(flow="booking_sync", job_id=job_id)                   # ADD
     booking_data = webhook_data.get('booking', {})
 
     try:

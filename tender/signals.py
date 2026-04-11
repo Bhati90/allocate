@@ -6,7 +6,7 @@ from django.db import models
 from django.db.models import Sum
 from django.db.models.signals import post_save, pre_save, post_delete
 from django.dispatch import receiver, Signal
-
+from .nr import ops, err, ctx
 from .models import (
     Allocation, AllocationChangeLogTender, FarmerPayment, MukkadamPayment,
     PaymentChangeLog, JobActivity, MukkadamAvailability, Job
@@ -37,8 +37,15 @@ def on_farmer_bill_saved(sender, instance, created, **kwargs):
     if created:  # Only on new entries, not updates
         try:
             sync_farmer_bill_to_sheet(instance)
+            ops("farmer_bill_sheet_synced",           # ADD
+        log_id=instance.pk,
+        farmer_id=str(instance.farmer_id),
+        activity=instance.activity_name)
         except Exception as e:
             print(f"Google Sheets sync failed: {e}")
+            err("farmer_bill_sheet_sync_fail",        # ADD
+        log_id=instance.pk,
+        farmer_id=str(instance.farmer_id))
             # Don't crash the app — sheet sync is non-critical
 def _async(fn, *args):
     """Fire-and-forget in a background thread."""
@@ -91,6 +98,12 @@ def log_allocation_changes(sender, instance, created, **kwargs):
             changed_by=instance.created_by,
             allocation_snapshot=AllocationSerializer(instance).data
         )
+        ops("allocation_signal_created",          # ADD
+        allocation_id=instance.pk,
+        ja_id=instance.job_activity_id,
+        mukkadam_id=str(instance.mukkadam_id),
+        area=str(instance.allocated_area),
+        date=str(instance.allocated_date))
     else:
         if hasattr(instance, '_changed_fields') and instance._changed_fields:
             for change in instance._changed_fields:
@@ -103,6 +116,11 @@ def log_allocation_changes(sender, instance, created, **kwargs):
                     changed_by=instance.created_by,
                     allocation_snapshot=AllocationSerializer(instance).data
                 )
+                ops("allocation_signal_updated",          # ADD
+        allocation_id=instance.pk,
+        field=change['field'],
+        old=change['old'],
+        new=change['new'])
 
 
 @receiver(post_delete, sender=Allocation)
@@ -114,6 +132,12 @@ def log_allocation_deletion(sender, instance, **kwargs):
         change_reason=f'Allocation {instance.id} deleted',
         allocation_snapshot=AllocationSerializer(instance).data
     )
+    ops("allocation_signal_deleted",          # ADD
+        allocation_id=instance.pk,
+        ja_id=instance.job_activity_id,
+        mukkadam_id=str(instance.mukkadam_id),
+        area=str(instance.allocated_area),
+        date=str(instance.allocated_date))
 
 
 def _upsert_after_delay(ja_pk):
@@ -136,9 +160,15 @@ def update_job_activity_on_allocation(sender, instance, created, **kwargs):
         if not _is_syncing():
             ja_pk = instance.job_activity_id
             transaction.on_commit(lambda: _async(_upsert_after_delay, ja_pk))
+            ops("allocation_updated_sheet_queued",    # ADD
+        allocation_id=instance.pk,
+        ja_id=instance.job_activity_id,
+        work_status=instance.work_status,
+        payment_status=instance.payment_status)
         return
 
     ja = instance.job_activity
+    old_status = ja.allocation_status   
 
     total_allocated = Allocation.objects.filter(
         job_activity=ja
@@ -157,6 +187,11 @@ def update_job_activity_on_allocation(sender, instance, created, **kwargs):
         allocation_status=new_status,
         is_fully_allocated=is_fully,
     )
+    if old_status != new_status:                              # ADD
+        ops("ja_status_changed", ja_id=ja.pk,                # ADD
+            old=old_status, new=new_status,                  # ADD
+            allocated=str(total_allocated),                  # ADD
+            total=str(ja.total_area))     
 
     # on_commit fires AFTER transaction commits — sheet reads correct data
     if not _is_syncing():
@@ -187,7 +222,11 @@ def restore_capacity_on_deletion(sender, instance, **kwargs):
         allocation_status=new_status,
         is_fully_allocated=is_fully,
     )
-
+    ops("allocation_deleted_capacity_restored",  # ADD
+    allocation_id=instance.pk,
+    ja_id=ja.pk,
+    still_allocated=str(total_still_allocated),
+    new_status=new_status)
     # on_commit fires AFTER transaction commits — allocation is gone, status is correct
     if not _is_syncing():
         ja_pk = ja.pk
@@ -201,6 +240,10 @@ def restore_capacity_on_deletion(sender, instance, **kwargs):
             allocated_workers=models.F('allocated_workers') - instance.allocated_workers
         )
     except Exception:
+        err("mukkadam_availability_restore_fail", # ADD
+        allocation_id=instance.pk,
+        mukkadam_id=str(instance.mukkadam_id),
+        date=str(instance.allocated_date))
         pass
 @receiver(post_save, sender=Allocation)
 def update_mukkadam_availability(sender, instance, created, **kwargs):
@@ -217,6 +260,11 @@ def update_mukkadam_availability(sender, instance, created, **kwargs):
         MukkadamAvailability.objects.filter(pk=availability.pk).update(
             allocated_workers=models.F('allocated_workers') + instance.allocated_workers
         )
+        ops("mukkadam_availability_updated",         # ADD
+    allocation_id=instance.pk,
+    mukkadam_id=str(instance.mukkadam_id),
+    date=str(instance.allocated_date),
+    workers_added=str(instance.allocated_workers))
 
 
 
@@ -265,10 +313,13 @@ def handle_settlement_on_farmer_verification(sender, instance, **kwargs):
         _run_settlement_logic(instance)
     except Exception as e:
         logger.error(f"[settlement signal] Unhandled error for allocation {instance.pk}: {e}", exc_info=True)
+        err("settlement_signal_fail",             # ADD
+        allocation_id=instance.pk,
+        error=str(e))
     finally:
         _settlement_processing.discard(key)
 
-
+                  # ADD
 def _run_settlement_logic(instance):
     from .ervices.settlement import (
         is_settlement_triggered,
@@ -278,6 +329,7 @@ def _run_settlement_logic(instance):
         reset_settlement_if_stale,
     )
     from .models import MukkadamJobSettlement
+    
 
     job      = instance.job_activity.job
     mukkadam = instance.mukkadam
@@ -290,6 +342,13 @@ def _run_settlement_logic(instance):
     is_now_verified = (instance.farmer_agreed is True) or (instance.payment_status == 'done')
     was_verified    = (instance._farmer_agreed_was is True) or (instance._payment_status_was == 'done')
 
+    ops("settlement_triggered",
+        allocation_id=instance.pk,
+        job_id=str(job.job_id),
+        mukkadam=mukkadam.mukkadam_name,
+        was_verified=str(was_verified),
+        is_verified=str(is_now_verified))
+
     if is_now_verified:
         existing = MukkadamJobSettlement.objects.filter(
             mukkadam=mukkadam, job=job, plot=plot,
@@ -298,13 +357,20 @@ def _run_settlement_logic(instance):
 
         if existing_status == 'paid':
             logger.info(f"[settlement] Job {job.job_id} plot {getattr(plot,'id','?')} already paid — checking all_done only")
+            ops("settlement_already_paid", job_id=str(job.job_id),  # ADD
+    plot=str(getattr(plot, "id", "?")))                  # ADD
 
         elif is_shoot and existing_status not in ('calculated', 'no_payment_needed'):
             try:
                 create_or_update_settlement(mukkadam, job, plot, cluster)
                 logger.info(f"[settlement] Shoot billing: mukkadam={mukkadam.mukkadam_name} job={job.job_id} plot={getattr(plot,'id','?')}")
+                ops("settlement_shoot_billed", job_id=str(job.job_id),  # ADD
+    mukkadam=mukkadam.mukkadam_name)      
             except Exception as e:
                 logger.error(f"[settlement signal] Shoot billing error: {e}", exc_info=True)
+                err("settlement_shoot_fail",              # ADD
+        job_id=str(job.job_id),
+        mukkadam=mukkadam.mukkadam_name)
 
         elif not is_shoot and existing_status in ('calculated', 'no_payment_needed'):
             try:
@@ -312,6 +378,8 @@ def _run_settlement_logic(instance):
                 logger.info(f"[settlement] Gross updated: job={job.job_id} plot={getattr(plot,'id','?')}")
             except Exception as e:
                 logger.error(f"[settlement signal] Gross update error: {e}", exc_info=True)
+                err("settlement_gross_update_fail",       # ADD
+        job_id=str(job.job_id))
 
         if is_all_activities_done(job, mukkadam, plot):
             try:
@@ -319,6 +387,8 @@ def _run_settlement_logic(instance):
                 logger.info(f"[settlement] All done — deposit released: job={job.job_id} plot={getattr(plot,'id','?')}")
             except Exception as e:
                 logger.error(f"[settlement signal] Deposit release error: {e}", exc_info=True)
+                err("settlement_deposit_fail",            # ADD
+        job_id=str(job.job_id))
 
     elif was_verified and not is_now_verified:
         try:
@@ -326,6 +396,8 @@ def _run_settlement_logic(instance):
             logger.info(f"[settlement] Stale settlement reset: job={job.job_id} plot={getattr(plot,'id','?')}")
         except Exception as e:
             logger.error(f"[settlement signal] Reset error: {e}", exc_info=True)
+            err("settlement_reset_fail",              # ADD
+        job_id=str(job.job_id))
 
 
 # ============================================================================
@@ -352,6 +424,11 @@ def log_farmer_payment_changes(sender, instance, created, **kwargs):
             changed_by=instance.created_by,
             payment_snapshot=FarmerPaymentSerializer(instance).data
         )
+        ops("farmer_payment_signal_created",      # ADD
+        payment_id=instance.pk,
+        booking_id=str(instance.booking_id),
+        amount=str(instance.amount),
+        mode=instance.mode)
     elif hasattr(instance, '_old_instance'):
         old = instance._old_instance
         for field in ['amount', 'mode', 'paid_at', 'paid_status']:
@@ -366,6 +443,11 @@ def log_farmer_payment_changes(sender, instance, created, **kwargs):
                     changed_by=instance.created_by,
                     payment_snapshot=FarmerPaymentSerializer(instance).data
                 )
+                ops("farmer_payment_signal_updated",  # ADD
+            payment_id=instance.pk,
+            field=field,
+            old=str(getattr(old, field)),
+            new=str(getattr(instance, field)))
 
 
 @receiver(pre_save, sender=MukkadamPayment)
@@ -373,6 +455,7 @@ def track_mukkadam_payment_changes(sender, instance, **kwargs):
     if instance.pk:
         try:
             instance._old_instance = MukkadamPayment.objects.get(pk=instance.pk)
+            
         except MukkadamPayment.DoesNotExist:
             pass
 
@@ -388,6 +471,10 @@ def log_mukkadam_payment_changes(sender, instance, created, **kwargs):
             changed_by=instance.created_by,
             payment_snapshot=MukkadamPaymentSerializer(instance).data
         )
+        ops("mukkadam_payment_signal_created",    # ADD
+        payment_id=instance.pk,
+        amount=str(instance.amount),
+        mode=instance.mode)
     elif hasattr(instance, '_old_instance'):
         old = instance._old_instance
         for field in ['amount', 'mode', 'paid_at']:
@@ -402,6 +489,11 @@ def log_mukkadam_payment_changes(sender, instance, created, **kwargs):
                     changed_by=instance.created_by,
                     payment_snapshot=MukkadamPaymentSerializer(instance).data
                 )
+                ops("mukkadam_payment_signal_updated",# ADD
+            payment_id=instance.pk,
+            field=field,
+            old=str(getattr(old, field)),
+            new=str(getattr(instance, field)))
 
 
 # ============================================================================
@@ -414,6 +506,10 @@ def update_job_total_on_activity_change(sender, instance, **kwargs):
         total=Sum('total_price')
     )['total'] or 0
     Job.objects.filter(pk=instance.job.pk).update(total_activities_amount=total)
+    ops("job_total_recalculated",                # ADD
+    job_id=str(instance.job.job_id),
+    ja_id=instance.pk,
+    new_total=str(total))
 
 
 # ============================================================================
@@ -425,6 +521,11 @@ def validate_availability_capacity(sender, instance, **kwargs):
     """Ensure is_available is consistent with crew vs allocated."""
     if instance.allocated_workers > instance.available_crew_size:
         instance.is_available = False
+        ops("availability_forced_unavailable",   # ADD
+        mukkadam_id=str(instance.mukkadam_id),
+        date=str(instance.date),
+        crew=str(instance.available_crew_size),
+        allocated=str(instance.allocated_workers))
 
 
 # ============================================================================
@@ -442,12 +543,20 @@ def _get_cluster_ids(instance: JobActivity):
 def on_job_activity_save(sender, instance, **kwargs):
     for cid in _get_cluster_ids(instance):
         invalidate_planning_cache(cid)
+        ops("planning_cache_invalidated",        # ADD
+        ja_id=instance.pk,
+        cluster_id=str(cid),
+        trigger="ja_save")
 
 
 @receiver(post_delete, sender=JobActivity)
 def on_job_activity_delete(sender, instance, **kwargs):
     for cid in _get_cluster_ids(instance):
         invalidate_planning_cache(cid)
+        ops("planning_cache_invalidated",        # ADD
+        ja_id=instance.pk,
+        cluster_id=str(cid),
+        trigger="ja_delete")
 
 
 # ============================================================================
@@ -460,6 +569,10 @@ def sheet_sync_on_job_activity_save(sender, instance, **kwargs):
     pk = instance.pk
     # Use index stored on instance if set (bulk loop), else default 0
     index = getattr(instance, '_sheet_sync_index', 0)
+    ops("sheet_sync_queued",                     # ADD
+    ja_id=pk,
+    index=index,
+    trigger="ja_save")
     transaction.on_commit(
         lambda pk=pk, idx=index: _async(_upsert_with_index_delay, pk, idx)
     )
@@ -470,4 +583,7 @@ def sheet_sync_on_job_activity_delete(sender, instance, **kwargs):
         return
     from .sheets_sync import delete_job_activity_from_sheet
     pk = instance.pk
+    ops("sheet_sync_delete_queued",              # ADD
+    ja_id=pk,
+    trigger="ja_delete")
     transaction.on_commit(lambda: _async(delete_job_activity_from_sheet, pk))

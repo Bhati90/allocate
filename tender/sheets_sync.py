@@ -23,7 +23,7 @@ OPTIMISATIONS (v2):
   - full_sheet_refresh() writes in 500-row chunks to avoid Sheets API payload limits
   - Management command streams rows in chunks of 500 so RAM stays flat
 """
-
+from .nr import ops, err, ctx, ops_bg, err_bg
 import gspread
 import threading
 import logging
@@ -88,6 +88,8 @@ def get_sheet():
                 "fields": "gridProperties.frozenRowCount",
             }
         }]})
+        ops("sheet_worksheet_created",           # ADD
+        sheet_id=settings.GOOGLE_SHEET_ID)
         return ws
 
 
@@ -225,10 +227,13 @@ def upsert_job_activity_to_sheet(ja_id):
         )
     except JobActivity.DoesNotExist:
         logger.warning(f"[Sheets] JobActivity {ja_id} not found")
+        err_bg("sheet_ja_not_found", ja_id=ja_id)   # ADD
         return
 
     if ja.is_lost or not ja.total_area or ja.total_area <= 0:
         delete_job_activity_from_sheet(ja_id)
+        ops_bg("sheet_row_auto_removed", ja_id=ja_id,
+       is_lost=str(ja.is_lost), area=str(ja.total_area)) # ADD
         return
 
     try:
@@ -246,12 +251,17 @@ def upsert_job_activity_to_sheet(ja_id):
         if sheet_row and sheet_row > 1:
             ws.update(f"A{sheet_row}:M{sheet_row}", [new_row])
             logger.info(f"[Sheets] Updated row {sheet_row} for JA {ja_id}")
+            ops_bg("sheet_row_synced", ja_id=ja_id,     # FIX + KEEP
+        action="update", sheet_row=sheet_row)
         else:
             ws.append_row(new_row, value_input_option="USER_ENTERED")
+            ops_bg("sheet_row_synced", ja_id=ja_id,     # ADD to else branch
+        action="append")
             logger.info(f"[Sheets] Appended row for JA {ja_id}")
 
     except Exception as e:
         logger.error(f"[Sheets] Failed to sync JA {ja_id}: {e}")
+        err_bg("sheet_upsert_fail", ja_id=ja_id)    
 
 
 def delete_job_activity_from_sheet(ja_id):
@@ -262,12 +272,18 @@ def delete_job_activity_from_sheet(ja_id):
             row_idx   = key_values.index(str(ja_id))
             sheet_row = row_idx + 1
         except ValueError:
+            ops_bg("sheet_row_delete_not_found",         # ADD
+        ja_id=ja_id)
             return
         if sheet_row > 1:
             ws.delete_rows(sheet_row)
+            ops_bg("sheet_row_deleted", ja_id=ja_id)               # ADD
+
             logger.info(f"[Sheets] Deleted row for JA {ja_id}")
+            
     except Exception as e:
         logger.error(f"[Sheets] Failed to delete JA {ja_id}: {e}")
+        err_bg("sheet_delete_fail", ja_id=ja_id)   
 
 
 # =============================================================================
@@ -295,7 +311,8 @@ def full_sheet_refresh():
 
     total      = 0
     sheet_row  = 2          # first data row (row 1 = header)
-
+    ops("sheet_chunk_written", rows_so_far=total,   # ADD
+    chunk_size=len(chunk))
     chunk = []
     for ja in qs.iterator(chunk_size=_CHUNK_SIZE):
         chunk.append(_job_activity_to_row(ja))
@@ -311,6 +328,8 @@ def full_sheet_refresh():
         total += len(chunk)
 
     logger.info(f"[Sheets] Full refresh complete — {total} rows")
+    ops("sheet_full_refresh", rows_written=total)           # ADD
+    
     return total
 
 
@@ -333,6 +352,9 @@ def apply_sheet_edit(payload):
     edited_by = payload.get("edited_by", "unknown")
     event     = payload.get("event", "edit")
 
+    ctx(flow="sheet_edit", ja_id=ja_id, column=column,  # ADD
+        event=event, edited_by=edited_by)   
+
     try:
         ja = (
             JobActivity.objects
@@ -342,6 +364,8 @@ def apply_sheet_edit(payload):
         )
     except (JobActivity.DoesNotExist, ValueError, TypeError):
         msg = f"JobActivity {ja_id} not found"
+        err("sheet_edit_ja_not_found",               # ADD
+        ja_id=ja_id, column=column, event=event)
         _log_sheet_edit(ja=None, ja_id_raw=ja_id, event=event,
                         column=column, old_value=old_val, new_value=new_val,
                         edited_by=edited_by, success=False, message=msg)
@@ -356,6 +380,8 @@ def apply_sheet_edit(payload):
 
         elif column == "Our date":
             ok, msg = _apply_date_change(ja, new_val, edited_by)
+            ops("sheet_edit_readonly_column",            # ADD
+        ja_id=ja_id, column=column, by=edited_by)
 
         elif column == "Work status":
             ok, msg = _apply_work_status_change(ja, new_val, edited_by)
@@ -377,6 +403,9 @@ def apply_sheet_edit(payload):
 
     except Exception as exc:
         ok, msg = False, f"Unhandled error: {exc}"
+        err("sheet_edit_unhandled_fail",             # ADD
+        ja_id=ja_id, column=column,
+        event=event, error=str(exc)[:100])
         logger.error(f"[apply_sheet_edit] {msg}", exc_info=True)
     finally:
         _syncing.active = False
@@ -386,6 +415,9 @@ def apply_sheet_edit(payload):
         old_value=old_val, new_value=new_val, edited_by=edited_by,
         success=ok, message=msg, split_child_ja_id=child_ja_id,
     )
+    ops("sheet_edit_result", ja_id=ja_id, column=column, # ADD
+        event=event, edited_by=edited_by,               # ADD
+        success=ok, message=msg[:80])    
     return ok, msg
 
 
@@ -393,10 +425,14 @@ def _apply_date_change(ja, new_date_str, edited_by):
     from .models import Allocation
 
     if not new_date_str:
+        ops("sheet_date_change_empty",               # ADD
+        ja_id=ja.pk, by=edited_by)
         return False, "Date value is empty"
     try:
         new_date = datetime.strptime(new_date_str, "%Y-%m-%d").date()
     except (ValueError, TypeError):
+        ops("sheet_date_change_invalid",             # ADD
+        ja_id=ja.pk, raw=new_date_str, by=edited_by)
         return False, f"Invalid date: '{new_date_str}'. Use YYYY-MM-DD."
 
     # Block if new date is before the original booking/sales date
@@ -412,6 +448,8 @@ def _apply_date_change(ja, new_date_str, edited_by):
 
     shift_days = (new_date - old_date).days
     if shift_days == 0:
+        ops("sheet_date_change_noop",                # ADD
+        ja_id=ja.pk, date=str(new_date), by=edited_by)
         return True, "Date unchanged"
 
     with transaction.atomic():
@@ -424,6 +462,11 @@ def _apply_date_change(ja, new_date_str, edited_by):
         alloc_moved = Allocation.objects.filter(job_activity=ja).update(
             allocated_date=new_date
         )
+
+    ops("manual_date_move", ja_id=ja.pk,
+    old=str(old_date), new=str(new_date),
+    shift=shift_days, by=edited_by,
+    allocs_moved=alloc_moved)                    # ADD this field
 
     _cascade_successors(
         trigger_ja=ja, old_date=old_date, new_date=new_date, edited_by=edited_by,
@@ -450,6 +493,8 @@ def _apply_work_status_change(ja, new_work_status_display, edited_by):
 
     db_status = WORK_STATUS_MAP.get(new_work_status_display)
     if not db_status:
+        ops("sheet_work_status_unknown",             # ADD
+        ja_id=ja.pk, raw=new_work_status_display, by=edited_by)
         return False, (
             f"Unknown work status: '{new_work_status_display}'. "
             f"Valid: {list(WORK_STATUS_MAP.keys())}"
@@ -458,10 +503,15 @@ def _apply_work_status_change(ja, new_work_status_display, edited_by):
     # Use prefetch cache — no extra query
     allocations = list(ja.allocations.all())
     if not allocations:
+        ops("sheet_work_status_no_allocs",           # ADD
+        ja_id=ja.pk, by=edited_by)
         return False, f"No allocations for JA {ja.pk} — assign a mukkadam first"
 
     with transaction.atomic():
         updated = Allocation.objects.filter(job_activity=ja).update(work_status=db_status)
+        ops("sheet_work_status_changed",                 # ADD
+    ja_id=ja.pk, new_status=db_status,
+    allocs_updated=updated, by=edited_by)
         if db_status == "completed":
             JA.objects.filter(pk=ja.pk).update(allocation_status="completed")
             logger.info(f"[Sheet->DB] JA {ja.pk} marked completed via work status")
@@ -494,7 +544,13 @@ def _apply_mukadam_change(ja, new_mukadam_str, edited_by):
 
     if unresolved:
         logger.warning(f"[Sheet->DB] Unresolved mukkadams: {unresolved}")
+    ops("manual_mukkadam", ja_id=ja.pk,                     # ADD
+    resolved=", ".join(m.mukkadam_name for m in resolved), # ADD
+    unresolved=", ".join(unresolved), by=edited_by)     # ADD
+
     if not resolved:
+        ops("mukkadam_unresolved", ja_id=ja.pk,             # ADD
+            raw_names=new_mukadam_str, by=edited_by)        # ADD
         return False, f"No matching mukkadams found for: {new_names}"
 
     existing = list(ja.allocations.all())   # prefetch cache
@@ -544,6 +600,10 @@ def _create_default_allocation(ja, mukkadam):
 
     if not mukkadam_rate:
         mukkadam_rate = (farmer_rate * Decimal("0.8")).quantize(Decimal("0.01"))
+        ops("mukkadam_rate_fallback",                           # ADD
+            mukkadam=mukkadam.mukkadam_name,                   # ADD
+            farmer_rate=str(farmer_rate),                      # ADD
+            computed=str(mukkadam_rate))                       # ADD
 
     area    = ja.remaining_area if ja.remaining_area > 0 else ja.total_area
     workers = max(1, int(float(area) * 10))
@@ -564,6 +624,10 @@ def _create_default_allocation(ja, mukkadam):
         status            = "scheduled",
         work_status       = "work_not_started",
     ).save()
+    ops("sheet_default_allocation_created",          # ADD
+    ja_id=ja.pk,
+    mukkadam=mukkadam.mukkadam_name,
+    area=str(area), workers=workers)
     logger.info(f"[Sheet->DB] Created alloc JA {ja.pk}, mukkadam={mukkadam.mukkadam_name}")
 
 
@@ -571,12 +635,17 @@ def _apply_acre_change(ja, new_acre_str, edited_by):
     try:
         new_area = Decimal(str(new_acre_str).strip())
     except Exception:
+        ops("sheet_acre_invalid",                    # ADD
+        ja_id=ja.pk, raw=new_acre_str, by=edited_by)
         return False, f"Invalid acre value: '{new_acre_str}'"
     if new_area < 0:
         return False, "Acre cannot be negative"
     old_area      = ja.total_area
     ja.total_area = new_area
     ja.save()
+    ops("sheet_acre_changed",                        # ADD
+    ja_id=ja.pk, old=str(old_area),
+    new=str(new_area), by=edited_by)
     logger.info(f"[Sheet->DB] Acre JA {ja.pk}: {old_area} -> {new_area} by {edited_by}")
     return True, f"Acre updated from {old_area} to {new_area}"
 
@@ -586,6 +655,8 @@ def _apply_delete(ja, edited_by):
     with transaction.atomic():
         ja.allocations.all().delete()
         ja.delete()
+        ops("sheet_ja_deleted",                          # ADD
+    ja_id=ja_id, by=edited_by)
     logger.info(f"[Sheet->DB] Deleted JA {ja_id} by {edited_by}")
     return True, f"JobActivity {ja_id} deleted"
 
@@ -615,6 +686,9 @@ def _log_sheet_edit(*, ja, ja_id_raw, event, column="", old_value="",
         )
     except Exception as exc:
         logger.error(f"[SheetEditLog] Failed to write log: {exc}")
+        err("sheet_edit_log_fail",                   # ADD
+            ja_id=str(ja_id_raw), event=event,
+            column=column, error=str(exc)[:80])
 
 
 # =============================================================================
@@ -649,7 +723,9 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
 
     for act in successors:
         if act.allocation_status in ("fully_allocated", "partially_allocated", "completed", "in_progress"):
-            logger.info(f"[Cascade] Skip JA#{act.pk} — already {act.allocation_status}")
+            logger.info(f"[Cascade] Skip JA#{act.pk}...")
+            ops("cascade_skip", ja_id=act.pk,                       # ADD
+                reason=act.allocation_status)                       # ADD
             continue
 
         old_act_date = act.scheduled_date
@@ -661,6 +737,9 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
             f"({shift_days:+d} days)"
         )
         act.save(update_fields=["scheduled_date", "move_reason", "updated_at"])
+        ops("cascade_shift", trigger=trigger_ja.pk,             # ADD
+        affected=act.pk, shift=shift_days,                  # ADD
+        old=str(old_act_date), new=str(new_act_date))       # ADD
         Allocation.objects.filter(job_activity=act).update(allocated_date=new_act_date)
 
         _log_sheet_edit(
@@ -676,6 +755,16 @@ def _cascade_successors(trigger_ja, old_date, new_date, edited_by, exclude_ja_id
         threading.Thread(
             target=upsert_job_activity_to_sheet, args=(act.pk,), daemon=True
         ).start()
+
+        # after the for loop ends, add:
+    ops("cascade_complete",                          # ADD
+        trigger_ja_id=trigger_ja.pk,
+        shift_days=shift_days,
+        total_shifted=sum(
+            1 for act in successors
+            if act.allocation_status not in
+            ("fully_allocated","partially_allocated","completed","in_progress")
+        ))
 
 
 # =============================================================================
@@ -693,9 +782,14 @@ def _apply_split(ja, split_acres_str, split_date_str, edited_by):
         return False, f"Invalid split_acres: '{split_acres_str}'", None
 
     if split_acres <= 0:
+        ops("sheet_split_invalid",                   # ADD
+        ja_id=ja.pk, reason="zero_or_negative", by=edited_by)
         return False, "split_acres must be > 0", None
 
     if split_acres >= ja.total_area:
+        ops("sheet_split_invalid",                   # ADD
+        ja_id=ja.pk, reason="exceeds_total",
+        split=str(split_acres), total=str(ja.total_area), by=edited_by)
         return False, (
             f"split_acres ({split_acres}) must be less than total_area "
             f"({ja.total_area}). Use 'Acre' edit to just change the total."
@@ -734,6 +828,13 @@ def _apply_split(ja, split_acres_str, split_date_str, edited_by):
             move_reason             = f"Split {split_acres} ac from JA#{ja.pk} by {edited_by}",
         )
         child.save()
+        ops("sheet_split_done",                          # ADD
+    parent_ja_id=ja.pk,
+    child_ja_id=child.pk,
+    split_acres=str(split_acres),
+    parent_remaining=str(parent_new_area),
+    split_date=str(split_date),
+    by=edited_by)
 
     if original_date and split_date != original_date:
         _cascade_successors(
