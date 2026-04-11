@@ -689,7 +689,6 @@ def mukkadam_timeline(request):
         'cluster_ids': cluster_ids,
         'mukkadams':   result,
     })
-
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def payment_overview(request):
@@ -745,7 +744,7 @@ def payment_overview(request):
         'activity':     None,
         'rate':         0,
         'mukkadam':     None,
-        'plot_rows':    [],
+        'plot_rows':    [],   # keyed by plot_code internally
     })
 
     AREA_TOLERANCE = 0.05
@@ -769,20 +768,16 @@ def payment_overview(request):
 
         # Cluster — from prefetched job clusters
         if not g['cluster_id']:
-            job_clusters = list(ja.job.clusters.all())  # uses prefetch cache
+            job_clusters = list(ja.job.clusters.all())
             if job_clusters:
                 g['cluster_id']   = job_clusters[0].id
                 g['cluster_name'] = job_clusters[0].name
 
-        # Allocations — use prefetch cache, call list() once
-        all_allocs_list   = list(ja.allocations.all())
-        completed_allocs  = [a for a in all_allocs_list if a.work_status == 'completed']
-        all_done_allocs   = (
-            len(all_allocs_list) > 0 and
-            all(a.work_status == 'completed' for a in all_allocs_list)
-        )
+        # Allocations — use prefetch cache
+        all_allocs_list  = list(ja.allocations.all())
+        completed_allocs = [a for a in all_allocs_list if a.work_status == 'completed']
 
-        # Mukkadam — no extra queries
+        # Mukkadam
         if not g['mukkadam']:
             mukk_alloc = next(
                 (a for a in completed_allocs if a.mukkadam_id), None
@@ -792,43 +787,73 @@ def payment_overview(request):
             if mukk_alloc:
                 g['mukkadam'] = mukk_alloc.mukkadam.mukkadam_name
 
-        # Per-plot row
-        plot_name     = ja.plot.name if ja.plot else f'JA-{ja.id}'
-        tArea         = float(ja.total_area or 0)
-        completed_area = sum(
+        # ── Plot identity — use plot_code as dedup key ──────────────────
+        plot_code = (ja.plot.plot_code if ja.plot and ja.plot.plot_code else None) or f'JA-{ja.id}'
+        plot_name = ja.plot.name if ja.plot else f'JA-{ja.id}'
+
+        # Ground truth area = plot.area_acres (NEVER sum of JA total_area)
+        plot_area = float(ja.plot.area_acres) if ja.plot and ja.plot.area_acres else float(ja.total_area or 0)
+
+        # Completed area from this JA's allocations
+        ja_completed_area = sum(
             float(a.admin_override_area or a.actual_area_done or a.allocated_area or 0)
             for a in completed_allocs
         )
-        ja_done = (
-            (all_done_allocs and completed_area >= tArea - AREA_TOLERANCE) or
-            (completed_area >= tArea - AREA_TOLERANCE) or
-            (ja.allocation_status == 'completed')
-        )
-        latest_done_date = None
-        for a in completed_allocs:
-            if a.allocated_date and (not latest_done_date or a.allocated_date > latest_done_date):
-                latest_done_date = a.allocated_date
 
-        g['plot_rows'].append({
-            'plot_name':        plot_name,
-            'plot_code':        ja.plot.plot_code if ja.plot else '',
-            'total_area':       tArea,
-            'completed_area':   completed_area,
-            'ja_done':          ja_done,
-            'completed_amount': round(completed_area * g['rate'], 2),
-            'done_date':        str(latest_done_date) if latest_done_date else None,
-        })
+        # Latest done date from this JA's completed allocations
+        ja_latest_done_date = None
+        for a in completed_allocs:
+            if a.allocated_date and (not ja_latest_done_date or a.allocated_date > ja_latest_done_date):
+                ja_latest_done_date = a.allocated_date
+
+        # ── Find existing plot_row for this plot_code or create new ─────
+        existing = next((r for r in g['plot_rows'] if r['plot_code'] == plot_code), None)
+
+        if existing:
+            # Accumulate completed area across split JAs — cap at plot_area
+            existing['completed_area'] = min(
+                existing['completed_area'] + ja_completed_area,
+                plot_area,
+            )
+            # Update done date to latest
+            if ja_latest_done_date and (
+                not existing['done_date'] or
+                str(ja_latest_done_date) > existing['done_date']
+            ):
+                existing['done_date'] = str(ja_latest_done_date)
+            # Recompute ja_done and amount after merge
+            existing['ja_done'] = (
+                existing['completed_area'] >= plot_area - AREA_TOLERANCE or
+                ja.allocation_status == 'completed'
+            )
+            existing['completed_amount'] = round(existing['completed_area'] * g['rate'], 2)
+        else:
+            # Cap completed area at plot_area even for a fresh row
+            capped_completed = min(ja_completed_area, plot_area)
+            ja_done = (
+                capped_completed >= plot_area - AREA_TOLERANCE or
+                ja.allocation_status == 'completed'
+            )
+            g['plot_rows'].append({
+                'plot_name':        plot_name,
+                'plot_code':        plot_code,
+                'total_area':       plot_area,        # ← plot.area_acres, not JA total_area
+                'completed_area':   capped_completed,
+                'ja_done':          ja_done,
+                'completed_amount': round(capped_completed * g['rate'], 2),
+                'done_date':        str(ja_latest_done_date) if ja_latest_done_date else None,
+            })
 
     # ── 4. Classify each group ────────────────────────────────────────────
     farmer_list = []
 
     for (farmer_id, job_id, act_name), g in groups.items():
         plot_rows       = g['plot_rows']
-        total_expected  = sum(r['total_area'] for r in plot_rows)
+        total_expected  = sum(r['total_area'] for r in plot_rows)      # sum of plot.area_acres per unique plot
         total_completed = sum(r['completed_area'] for r in plot_rows)
         all_plots_done  = all(r['ja_done'] for r in plot_rows)
         any_plot_done   = any(r['ja_done'] for r in plot_rows)
-        n_plots         = len(plot_rows)
+        n_plots         = len(plot_rows)                                # unique plot count
         done_plots      = sum(1 for r in plot_rows if r['ja_done'])
         total_amount    = sum(r['completed_amount'] for r in plot_rows if r['ja_done'])
         latest_date     = max(
@@ -963,13 +988,11 @@ def payment_overview(request):
     ).aggregate(s=Sum('amount'))['s'] or 0
 
     # ── 7. Cluster billing summary ────────────────────────────────────────
-    # Build farmer_list lookup by cluster_id to avoid per-cluster loops
     cluster_farmer_map = defaultdict(list)
     for f in farmer_list:
         if f['cluster_id']:
             cluster_farmer_map[f['cluster_id']].append(f)
 
-    # Get all job_ids per cluster in one query
     from django.db.models import Prefetch as P2
     cluster_job_ids_map = defaultdict(list)
     for row in Job.objects.filter(
@@ -977,7 +1000,6 @@ def payment_overview(request):
     ).values('job_id', 'clusters'):
         cluster_job_ids_map[row['clusters']].append(row['job_id'])
 
-    # Aggregate all FarmerPayment by job_id in one query
     payment_agg = (
         FarmerPayment.objects
         .filter(paid_status=True)
@@ -1030,6 +1052,7 @@ def payment_overview(request):
         'recent_payments': recent_payments,
         'cluster_billing': cluster_billing,
     })
+
 @api_view(['DELETE'])
 def reset_cluster_activity_rate(request, cluster_id, activity_id):
     """
