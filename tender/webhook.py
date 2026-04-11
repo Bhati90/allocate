@@ -377,15 +377,6 @@ def sync_tender_mukkadams():
 
 
 def _compute_scheduled_date(activity_catalog, job_clusters, plot, act_data, today):
-    """
-    Priority:
-    1. pruning_date + cluster gap override  (if cluster + plot.pruning_date exist)
-    2. pruning_date + global gap            (if plot.pruning_date exists)
-    3. date from webhook act_data           (fallback)
-    4. today                               (last resort)
-
-    Never returns a date before today.
-    """
     from datetime import timedelta
     from django.utils.dateparse import parse_datetime, parse_date
     from .models import ClusterActivityScheduleRule, ActivityScheduleRule
@@ -393,7 +384,6 @@ def _compute_scheduled_date(activity_catalog, job_clusters, plot, act_data, toda
     pruning_date = plot.pruning_date if plot else None
 
     if pruning_date:
-        # Try cluster-level gap first
         gap_days = None
 
         for cluster in job_clusters:
@@ -405,7 +395,6 @@ def _compute_scheduled_date(activity_catalog, job_clusters, plot, act_data, toda
                 gap_days = rule.gap_days
                 break
 
-        # Fall back to global gap
         if gap_days is None:
             global_rule = ActivityScheduleRule.objects.filter(
                 activity=activity_catalog
@@ -413,7 +402,7 @@ def _compute_scheduled_date(activity_catalog, job_clusters, plot, act_data, toda
             gap_days = global_rule.gap_days if global_rule else activity_catalog.default_gap_days
 
         computed = pruning_date + timedelta(days=gap_days)
-        return max(computed, today)  # never in the past
+        return computed  # ✅ REMOVED max(computed, today) — trust the gap calculation
 
     # No pruning date — use webhook date
     raw = act_data.get('date_time') or act_data.get('scheduled_date')
@@ -425,18 +414,39 @@ def _compute_scheduled_date(activity_catalog, job_clusters, plot, act_data, toda
                 else parse_date(str(raw))
             )
             if parsed:
-                return max(parsed, today)
+                return parsed  # ✅ also removed max here
         except Exception:
             pass
 
-    return today  # last resort
-
+    return today  # last resort only when truly no date available
 
 def _sync_existing_job_activities(job, activities_data):
     from datetime import date
     from decimal import Decimal
     from collections import defaultdict
+    from django.utils.dateparse import parse_datetime, parse_date
     from .models import ActivityCatalog, JobActivity, Plot
+
+    # ✅ PRE-PASS: save pruning dates on all plots BEFORE computing any dates
+    for act_data in activities_data:
+        name = act_data.get('activity_name', '')
+        if 'pruning' in name.lower() or 'छाटणी' in name:
+            plot_code = str(act_data.get('plot_id') or '')
+            raw = act_data.get('date_time') or act_data.get('scheduled_date')
+            if plot_code and raw:
+                try:
+                    pruning_date = (
+                        parse_datetime(str(raw)).date()
+                        if 'T' in str(raw)
+                        else parse_date(str(raw))
+                    )
+                    if pruning_date:
+                        Plot.objects.filter(plot_code=plot_code).update(
+                            pruning_date=pruning_date
+                        )
+                        logger.info(f"[PRE-PASS] Set pruning_date={pruning_date} on plot {plot_code}")
+                except Exception as e:
+                    logger.warning(f"[PRE-PASS] Could not set pruning_date for plot {plot_code}: {e}")
 
     today = date.today()
 
@@ -477,7 +487,6 @@ def _sync_existing_job_activities(job, activities_data):
                 logger.info(f"[ACTIVITY SYNC] Deleted api_id={api_id} — removed from webhook")
 
     # ── 2. Verify existing acre totals per (plot, activity_name) ──
-    # Group incoming by (plot_code, activity_name) → sum acres
     incoming_acre_totals = defaultdict(Decimal)
     for act_data in activities_data:
         key = (
@@ -486,7 +495,6 @@ def _sync_existing_job_activities(job, activities_data):
         )
         incoming_acre_totals[key] += Decimal(str(act_data.get('acres') or 0))
 
-    # Group existing by (plot_code, activity_name) → sum total_area
     existing_acre_totals = defaultdict(Decimal)
     for ja in job.activities.select_related('plot', 'activity').all():
         key = (
@@ -528,11 +536,10 @@ def _sync_existing_job_activities(job, activities_data):
                 for c in act_plot.clusters.all():
                     job.clusters.add(c)
 
-        # ── Skip if activity already exists ───────────────────────
+        # ── Skip if activity already exists and not lost ───────────
         existing = existing_api_id_map.get(api_act_id)
         if existing and not existing.is_lost:
-            # Just update booking-related price fields on the activity
-            # (rate may have changed in booking)
+            # Update booking-related price fields only
             total_price    = Decimal(str(act_data.get('total_price') or 0))
             transport_cost = Decimal(str(act_data.get('transport_cost') or 0))
             other_cost     = Decimal(str(act_data.get('other_cost') or 0))
@@ -585,9 +592,23 @@ def _sync_existing_job_activities(job, activities_data):
             if total_area > 0 else Decimal('0')
         )
 
+        # ── Reload plot from DB to get fresh pruning_date ─────────
+        # (pre-pass above may have just updated it via .update())
+        if act_plot:
+            act_plot.refresh_from_db()
+
         scheduled_date = _compute_scheduled_date(
-            activity_catalog, job_clusters,
-            act_plot or job.plot, act_data, today
+            activity_catalog,
+            job_clusters,
+            act_plot or job.plot,
+            act_data,
+            today,
+        )
+
+        logger.info(
+            f"[ACTIVITY SYNC] Date for '{activity_name}' plot={plot_code}: "
+            f"pruning_date={act_plot.pruning_date if act_plot else None} "
+            f"→ scheduled_date={scheduled_date}"
         )
 
         try:
@@ -610,7 +631,7 @@ def _sync_existing_job_activities(job, activities_data):
             )
             ja._sheet_sync_index = i
             ja.save()
-            logger.info(f"[ACTIVITY SYNC] Created api_id={api_act_id} — {activity_name} plot={plot_code}")
+            logger.info(f"[ACTIVITY SYNC] Created api_id={api_act_id} — {activity_name} plot={plot_code} date={scheduled_date}")
         except Exception as e:
             logger.error(f"[ACTIVITY SYNC] Failed to create {api_act_id}: {e}")
 
@@ -622,8 +643,6 @@ def _sync_existing_job_activities(job, activities_data):
         is_complex=job.activities.count() > 1,
     )
     logger.info(f"[ACTIVITY SYNC] Job {job.job_id} total recomputed → ₹{new_total}")
-
-
 
 def fetch_plot_crop_details(farmer_id: str, plot_code: str):
     """Fetch crop/variety for a specific plot from farmer API"""
