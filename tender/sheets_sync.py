@@ -655,7 +655,7 @@ def _apply_delete(ja, edited_by):
     with transaction.atomic():
         ja.allocations.all().delete()
         ja.delete()
-        ops("sheet_ja_deleted",                          # ADD
+    ops("sheet_ja_deleted",                          # ADD
     ja_id=ja_id, by=edited_by)
     logger.info(f"[Sheet->DB] Deleted JA {ja_id} by {edited_by}")
     return True, f"JobActivity {ja_id} deleted"

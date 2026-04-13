@@ -54,6 +54,12 @@ def on_allocation_created(sender, allocation, **kwargs):
         **_base_payload(allocation),
         "allocated_at": str(allocation.created_at),
     }
+    ops("handler_allocation_created",
+        allocation_id=str(allocation.id),
+        job_id=str(payload.get('job_id', '')),
+        mukkadam_id=str(payload.get('mukkadam_id', '')),
+        area=str(payload.get('allocated_area', '')),
+        date=str(payload.get('allocated_date', '')))
     push_to_sales_webhook("allocated", payload)
 
 
@@ -67,15 +73,34 @@ def on_allocation_completed(sender, allocation, **kwargs):
         "actual_crew_size": allocation.actual_crew_size,
         "work_status":      allocation.work_status,
     }
+    ops("handler_allocation_completed",
+        allocation_id=str(allocation.id),
+        job_id=str(payload.get('job_id', '')),
+        mukkadam_id=str(payload.get('mukkadam_id', '')),
+        actual_area=str(payload.get('actual_area_done', '')),
+        work_status=str(allocation.work_status))
     push_to_sales_webhook("completed", payload)
 
 @receiver(allocation_cancelled)
 def on_allocation_cancelled(sender, payload, **kwargs):
+    ops("handler_allocation_cancelled",
+        allocation_id=str(payload.get('allocation_id', '')),
+        job_id=str(payload.get('job_id', '')),
+        mukkadam_id=str(payload.get('mukkadam_id', '')),
+        area=str(payload.get('allocated_area', '')),
+        cancel_reason=str(payload.get('cancel_reason', ''))[:80])
     push_to_cancel_webhook("allocation_cancelled", payload)  # 👈 cancel API
 
 
 @receiver(allocation_deleted)
 def on_allocation_deleted(sender, payload, **kwargs):
+    ops("handler_allocation_deleted",
+        allocation_id=str(payload.get('allocation_id', '')),
+        job_id=str(payload.get('job_id', '')),
+        mukkadam_id=str(payload.get('mukkadam_id', '')),
+        area=str(payload.get('allocated_area', '')),
+        date=str(payload.get('allocated_date', '')),
+        deleted_by=str(payload.get('deleted_by_name', '')))
     # payload is pre-built in delete_allocation view
     # because allocation is already deleted by the time signal fires
     push_to_sales_webhook("deleted", payload)
@@ -83,4 +108,12 @@ def on_allocation_deleted(sender, payload, **kwargs):
 
 @receiver(job_cancelled)
 def on_job_cancelled(sender, payload, **kwargs):
+    ops("handler_job_cancelled",
+        job_id=str(payload.get('job_id', '')),
+        farmer_id=str(payload.get('farmer_id', '')),
+        farmer_name=str(payload.get('farmer_name', '')),
+        cancel_reason=str(payload.get('cancel_reason', ''))[:80],
+        activities_cancelled=str(payload.get('cancelled_activities', '')),
+        allocs_cancelled=str(payload.get('cancelled_allocations_count', 0)),
+        cancel_allocs=str(payload.get('allocations_cancelled', False)))
     push_to_cancel_webhook("job_cancelled", payload)  # 👈 cancel API
